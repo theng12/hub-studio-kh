@@ -182,10 +182,14 @@ run_smoke() {
 
 mkdir -p "$RELOCATION_PARENT"
 RELOCATED="$RELOCATION_PARENT/Voice Runtime"
+chmod u+w "$STAGE"
 mv "$STAGE" "$RELOCATED"
+chmod a-w "$RELOCATED"
 run_smoke "$RELOCATED"
 mkdir -p "$(dirname "$OUTPUT_DIR")"
+chmod u+w "$RELOCATED"
 mv "$RELOCATED" "$OUTPUT_DIR"
+chmod a-w "$OUTPUT_DIR"
 run_smoke "$OUTPUT_DIR"
 
 trap - EXIT
