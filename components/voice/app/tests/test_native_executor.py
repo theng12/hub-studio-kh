@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 from types import SimpleNamespace
 import threading
 import time
@@ -118,6 +121,83 @@ def test_normal_commands_reuse_the_same_spawned_executor_cache():
     assert first.state == second.state == "done"
     assert first.generation == second.generation == 1
     assert first.value["pid"] == second.value["pid"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group watchdog")
+def test_standalone_executor_child_exits_when_supervisor_dies_without_signalling_unrelated_process(tmp_path):
+    pid_file = tmp_path / "native-child.pid"
+    supervisor = tmp_path / "supervisor.py"
+    supervisor.write_text(
+        f"""
+import os
+from pathlib import Path
+import sys
+import time
+
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+from backend.native_executor import ExclusiveNativeExecutor
+
+
+def hanging_native_call(_payload, _cancel_requested):
+    while True:
+        time.sleep(0.05)
+
+
+if __name__ == "__main__":
+    executor = ExclusiveNativeExecutor(hanging_native_call)
+    executor._start()
+    Path(sys.argv[1]).write_text(str(executor._process.pid))
+    while True:
+        time.sleep(1)
+"""
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["STUDIOHUB_RELEASE_MANIFEST"] = str(tmp_path / "release-manifest.json")
+    supervisor_process = subprocess.Popen([sys.executable, str(supervisor), str(pid_file)], env=environment)
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 8
+        while not pid_file.exists() and supervisor_process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert supervisor_process.poll() is None
+        child_pid = int(pid_file.read_text())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if os.getpgid(child_pid) == child_pid:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("standalone native executor did not isolate its process group")
+        assert unrelated.poll() is None
+
+        supervisor_process.kill()
+        supervisor_process.wait(timeout=5)
+
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("standalone native executor survived its supervisor")
+        assert unrelated.poll() is None
+    finally:
+        if supervisor_process.poll() is None:
+            supervisor_process.kill()
+            supervisor_process.wait(timeout=5)
+        if child_pid is not None:
+            try:
+                if os.getpgid(child_pid) == child_pid:
+                    os.killpg(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if unrelated.poll() is None:
+            unrelated.terminate()
+            unrelated.wait(timeout=5)
 
 
 def test_spawned_native_child_does_not_construct_the_server_history_manager():

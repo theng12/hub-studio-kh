@@ -46,6 +46,13 @@ def validate_runtime(runtime: Path) -> None:
         raise ValueError('Runtime has no bin/python3')
 
 
+def validate_native_shell(native_shell: Path) -> None:
+    if not native_shell.is_file():
+        raise FileNotFoundError(f'native shell binary does not exist: {native_shell}')
+    if not os.access(native_shell, os.X_OK):
+        raise ValueError(f'native shell binary is not executable: {native_shell}')
+
+
 def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None) -> None:
     names = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-z', '--',
         source.relative_to(ROOT).as_posix()]).decode().split('\0')
@@ -60,11 +67,14 @@ def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None
         shutil.copyfile(path, target)
 
 
-def stage(runtime: Path, output: Path) -> Path:
+def stage(runtime: Path, output: Path, native_shell: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
     validate_runtime(runtime)
+    if native_shell is not None:
+        native_shell = native_shell.expanduser().resolve()
+        validate_native_shell(native_shell)
     source = ROOT / 'components/voice'
     provenance = json.loads((ROOT / 'research/voice-adoption.json').read_text())
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
@@ -100,12 +110,25 @@ def stage(runtime: Path, output: Path) -> Path:
         '"$BUNDLE_BIN/../Resources/runtimes/voice/bin/python3" -I -B '
         '"$BUNDLE_BIN/../Resources/voice_worker.py" "$@"\n')
     executable.chmod(0o755)
+    plist = {'CFBundleExecutable': 'StudioHubVoice',
+        'CFBundleIdentifier': 'local.studiohub.voiceproof',
+        'CFBundleName': 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',
+        'CFBundleShortVersionString': version, 'CFBundleVersion': '1',
+        'LSMinimumSystemVersion': '14.0', 'LSUIElement': True}
+    if native_shell is not None:
+        native_executable = contents / 'MacOS/StudioHub'
+        shutil.copyfile(native_shell, native_executable)
+        native_executable.chmod(0o755)
+        plist.update({
+            'CFBundleExecutable': 'StudioHub',
+            'CFBundleIdentifier': 'local.studiohub.standalone',
+            'CFBundleName': 'Studio Hub',
+            'NSMicrophoneUsageDescription':
+                'Studio Hub uses the microphone to record audio for transcription.',
+        })
+        plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:
-        plistlib.dump({'CFBundleExecutable': 'StudioHubVoice',
-            'CFBundleIdentifier': 'local.studiohub.voiceproof',
-            'CFBundleName': 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',
-            'CFBundleShortVersionString': version, 'CFBundleVersion': '1',
-            'LSMinimumSystemVersion': '14.0', 'LSUIElement': True}, stream)
+        plistlib.dump(plist, stream)
     # Hash all shipped code/resources including the worker, shell and plist.
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)
@@ -118,5 +141,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--native-shell', type=Path)
     args = parser.parse_args()
-    print(stage(args.runtime, args.output))
+    print(stage(args.runtime, args.output, native_shell=args.native_shell))

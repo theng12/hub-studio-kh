@@ -2,9 +2,24 @@
 
 Independent application project for **new Apple Silicon fleet nodes**. Existing Pinokio installations retain their current flow.
 
-**Status: the local Voice proof passes 665 tests and real Qwen speech/Whisper transcription after relocation.** See [qualification evidence](qualification/voice-runtime.md) for remaining Sonoma and fleet requirements.
+**Status: the Voice engine proof passed 665 tests and real Qwen speech/Whisper transcription after relocation. Native app preview implementation is in progress.** See [qualification evidence](qualification/voice-runtime.md) for remaining Sonoma and fleet requirements.
 
-The first implementation packages the adopted Voice backend, its web interface, an isolated Python/MLX runtime for the Qwen/Whisper pilot, and FFmpeg/FFprobe into a relocatable `.app` structure. This is a command-line Voice worker proof; the native window, bundled Hub/Image services, and GenStudio fleet integration are later milestones. macOS 14 Sonoma is the compatibility target, subject to clean-machine qualification.
+The first implementation packages the adopted Voice backend, its web interface, an isolated Python/MLX runtime for the Qwen/Whisper pilot, and FFmpeg/FFprobe into a relocatable `.app` structure. The original artifact is a command-line Voice worker proof. The native preview adds a window and six functional sections: Audio, Transcription, Image, Music, Video, Chat. Audio and Transcription reuse Voice; the other four engines and bundled Hub/GenStudio integration remain pending. macOS 14 Sonoma is the compatibility target, subject to clean-machine qualification.
+
+## Build the native preview
+
+```sh
+bash native/build.sh
+python3 -B packaging/stage_voice.py --runtime .build/voice-runtime --native-shell .build/StudioHub --output 'dist/Studio Hub Preview.app'
+```
+
+Open the app in Finder, choose a model library (or use its default folder), then use Audio or Transcription. The other four sections accurately report that their engines are not installed in this preview. Closing the window keeps the engine running; use the menu-bar icon to reopen it. Explicit Quit explains interruption before stopping the engine. Start at login is opt-in through macOS service management; login/reboot behavior still requires packaged-app qualification.
+
+Use an existing complete Hugging Face cache by choosing its parent folder containing `hub`. For an empty library, use the existing Studio Models flow to download models. A polished standalone model import wizard remains future work. Keep the selected drive connected. To change the model folder or offline mode, stop the engine first.
+
+This preview keeps browser-only presets and model-filter preferences for the current app session. Node settings, model folder, generated outputs and voice files remain on disk. Durable browser preferences will be integrated with Hub before the full app is considered ready.
+
+The native executable also accepts `--data-dir`, `--models-dir` and `--offline` for isolated local testing. The build uses Swift/AppKit/SwiftUI/WebKit from the developer tools; target nodes need none of those build tools installed.
 
 ## Build and run the Voice proof
 

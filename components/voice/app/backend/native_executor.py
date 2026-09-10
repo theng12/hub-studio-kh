@@ -28,11 +28,37 @@ class NativeRunOutcome:
     terminated: bool = False
 
 
-def _worker_main(commands, results, cancel_requested, generation: int, native_call) -> None:
+def _watch_parent(expected_parent_pid: int) -> None:
+    """Kill this isolated worker group after its standalone owner disappears."""
+    if os.name != "posix":
+        return
+    own_pid = os.getpid()
+    while True:
+        time.sleep(0.1)
+        if os.getppid() == expected_parent_pid:
+            continue
+        try:
+            own_group = os.getpgid(own_pid)
+        except ProcessLookupError:
+            return
+        if own_group != own_pid:
+            return
+        try:
+            os.killpg(own_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+
+def _worker_main(commands, results, cancel_requested, generation: int, native_call,
+                expected_parent_pid: int | None = None) -> None:
     # On POSIX the executor owns a separate process group, so a forced stop
     # cannot signal the server's group. FFmpeg remains parent-owned.
     if os.name == "posix":
         os.setsid()
+    if (expected_parent_pid is not None
+            and os.environ.get("STUDIOHUB_RELEASE_MANIFEST")):
+        threading.Thread(target=_watch_parent, args=(expected_parent_pid,),
+                         name="standalone-parent-watchdog", daemon=True).start()
     while True:
         command = commands.get()
         if command is None:
@@ -71,13 +97,14 @@ class ExclusiveNativeExecutor:
         if self._process is not None and self._process.is_alive():
             return
         self._generation += 1
+        parent_pid = os.getpid()
         self._commands = self._ctx.Queue()
         self._results = self._ctx.Queue()
         self._cancel_requested = self._ctx.Event()
         self._process = self._ctx.Process(
             target=_worker_main,
             args=(self._commands, self._results, self._cancel_requested,
-                  self._generation, self._native_call),
+                  self._generation, self._native_call, parent_pid),
             name=f"voice-native-{self._generation}",
             daemon=True,
         )

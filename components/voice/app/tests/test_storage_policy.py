@@ -112,7 +112,8 @@ def test_release_notes_follow_installed_changelog():
     # Package identity comes from the standalone release manifest. In a
     # development checkout it is intentionally unknown, while installed
     # changelog entries still retain their concrete release version.
-    assert data["releases"][0]["version"] == "0.1.0"
+    expected_version = (Path(__file__).resolve().parents[4] / "VERSION").read_text().strip()
+    assert data["releases"][0]["version"] == expected_version
     assert data["releases"][0]["details"]
 
 

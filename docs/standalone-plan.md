@@ -4,9 +4,9 @@ Date: 2026-09-10. Status: local Voice proof implemented; clean-machine qualifica
 
 ## Decision
 
-Develop one independent `Studio Hub.app` for new Apple Silicon nodes. Package the existing Hub, Image, and Voice services behind one application window, with isolated engine processes and dependencies. Leave all installed Pinokio nodes and their maintenance flow intact. Adopt the standalone app only after a real clean-machine pilot passes.
+Develop one independent `Studio Hub.app` for new Apple Silicon nodes. Present Audio, Transcription, Image, Music, Video, and Chat in one native application window. Hub provides scheduling, model/node management and fleet connections behind these functions; retain isolated engine processes and dependencies. Leave all installed Pinokio nodes and their maintenance flow intact. Adopt the standalone app only after a real clean-machine pilot passes.
 
-Hub + Image + Voice is the proposed initial scope, pending any owner correction. The working folder and app name are provisional. No further owner decision blocks planning or a later approved local feasibility build.
+The owner confirmed six functional sections: Audio, Transcription, Image, Music, Video, Chat. Audio initially means speech generation/voice workflows; Transcription means speech-to-text and subtitles. These share Voice internally. Image, Music, Video generation, and Chat reuse their existing sibling engines where qualified. This supersedes the earlier three-component-only scope; it does not require six independent runtimes or concurrent model loading. The working folder and app name remain provisional.
 
 The minimum compatibility target is **macOS 14 Sonoma**, with testing on newer supported macOS releases as well. MLX documents macOS 14+ Apple Silicon support, and MLX 0.31.2 has macOS 14 arm64 wheels. This does not certify every engine, native dependency, or model on Sonoma. The exact oldest supported release must be determined by the assembled app and physical-machine tests. Do not lower a binary's deployment metadata to disguise a newer OS requirement. [MLX installation](https://ml-explore.github.io/mlx/build/html/install.html), [MLX wheel metadata](https://pypi.org/pypi/mlx/0.31.2/json), [Metal wheel metadata](https://pypi.org/pypi/mlx-metal/0.31.2/json).
 
@@ -16,12 +16,12 @@ The minimum compatibility target is **macOS 14 Sonoma**, with testing on newer s
 |---|---|
 | Users | New fleet machines; no automatic migration of installed nodes |
 | Hardware | Apple Silicon; each model still has its own memory requirements |
-| Studios | Hub, Image, Voice; retain distinct runtimes where dependencies differ |
+| Functions | Audio, Transcription, Image, Music, Video, Chat; one Hub and isolated workers as needed |
 | Installation | Copy an app containing tested runtimes and native tools; no Pinokio, Homebrew, system Python, or developer toolchain required on the node |
 | Models | Import or download complete, validated model packages separately |
 | GenStudio | Existing authenticated generation workflow, verified against packaged runtime identity and mixed fleet behavior |
 | Updates | App replacement for the pilot; no Git pull or package installation on nodes |
-| Excluded | Intel, Windows/Linux, old-node migration, Chat/Music/Video implementation, UI redesign, model conversion promises, public App Store submission |
+| Excluded | Intel, Windows/Linux, old-node migration, unrelated UI redesign, model conversion promises, public App Store submission |
 
 An external SSD is useful for large model libraries and offline transfers. It does not solve incompatible native binaries or insufficient unified memory. Package size and RAM recommendations will come from measurements, not estimates presented as requirements.
 
@@ -32,13 +32,18 @@ flowchart LR
   G[GenStudio] -->|Authenticated existing API| H[Bundled Hub service]
   U[Studio Hub app window] --> H
   H --> I[Isolated Image engine]
-  H --> V[Isolated Voice engine]
+  H --> V[Voice engine: Audio + Transcription]
+  H --> C[Chat engine]
+  H --> A[Music engine]
+  H --> F[Video engine]
   H --> D[Node state outside app]
   I --> M[Selected model library]
   V --> M
 ```
 
-Use a thin native macOS shell with the existing web UI as the first packaging candidate. Prove a bundled Python worker before building the window; do not rewrite the studios in Swift or MLX merely to make an app. Hub remains the scheduler. Separate environments prevent incompatible dependency sets from being forced into one Python environment. Reuse existing resource limits; separate processes do not create additional physical GPU capacity.
+The owner selected a thin native SwiftUI/AppKit shell with WKWebView for the existing web UI. The bundled Python worker has passed the local proof; retain it rather than rewriting the studios in Swift or MLX merely to make an app. Hub remains the scheduler. Separate environments prevent incompatible dependency sets from being forced into one Python environment. Reuse existing resource limits; separate processes do not create additional physical GPU capacity.
+
+The owner currently has no paid Apple Developer Program membership. Continue local development and internal testing without making membership a build prerequisite. Xcode and local Mac development are available without paid enrollment; Developer ID and notarization require membership. A transferred, unnotarized internal build may need the normal per-app Open Anyway approval in macOS Privacy & Security, subject to machine policy. Verify this on a test Mac; do not disable Gatekeeper globally or claim frictionless fleet distribution. Paid membership and notarization remain a later distribution decision. [Apple membership comparison](https://developer.apple.com/support/compare-memberships/) · [Apple app-opening guidance](https://support.apple.com/en-ca/102445).
 
 Proposed bundle layout:
 
@@ -48,7 +53,10 @@ Studio Hub.app/Contents/
   Resources/
     hub/                 # adopted tracked source and built UI
     image/
-    voice/
+    voice/               # Audio + Transcription
+    chat/
+    music/
+    video/
     runtimes/            # isolated relocatable runtimes
     tools/               # required native executables, e.g. FFmpeg
     release-manifest.json
@@ -74,7 +82,7 @@ Source baselines are pinned in `research/source-checkouts.json`: Hub 2.21.3, Ima
 | Sibling repository discovery | Explicit locations of bundled components; stable node identity outside bundle |
 | Git-based updater and commit inspection | Truthful packaged release identity with component commits and runtime artifact hashes |
 | Existing model qualification | Rerun relevant checks against the new runtime and record exact evidence |
-| Three dependency trees | Keep necessary isolation; deduplicate only after proving compatibility |
+| Engine dependency trees | Keep necessary isolation; deduplicate only after proving compatibility |
 
 Graphify located Voice's updater/storage dependencies; current source confirmed the assumptions in `auto_update.py`, `settings.py`, `voices.py`, `generation.py`, `cache.py` and `main.py`. The graph covers Voice only, and some recorded locations are stale. A separate source-based Hub contract inventory accompanies this plan.
 
@@ -116,7 +124,15 @@ Build the minimal app window around the existing UI, engine startup/status, mode
 
 Pass: a fresh user can copy the app, open it, select/import models and complete a local job without a terminal. Moving/replacing the app retains node state and model location. A failed startup remains diagnosable.
 
-### 4. Qualify distribution and a controlled pilot
+### 4. Add Chat, Music and Video and extend packaged Hub routing
+
+Use the source-linked inventory in `research/function-scope-inventory.md` to adopt tracked sources at exact revisions. Current Hub production routing tracks Image and Voice only; six visible functions are not proof of six working fleet operations. Extend the adopted Hub additively with each packaged engine, preserving registration, admission, shared memory limits, authentication, leases and release identity. Any required changes to a separate GenStudio repository need their own scoped integration work.
+
+Implement text Chat first using its existing MLX path, then Music using its current Torch/MPS path, then a measured Video candidate. Prefer MLX where implemented and qualified; do not promise an MLX-only app or rewrite Music engines to enforce that preference. Video here means generation from Video Studio; separate Render Studio adoption is not implied. Models and runtime environments stay isolated as required, and are loaded only when needed.
+
+For each function require a real local input/output job from the relocated bundle, complete imported model assets, cancellation, missing-model handling, memory release, safe shutdown and authenticated Hub contract tests. A navigation item alone is not an implemented function. Publish only measured supported model/hardware combinations. Video may require more memory or narrower output settings than Audio/Chat.
+
+### 5. Qualify distribution and a controlled pilot
 
 Measure bundle size and hardware requirements. Build a signed, notarized distribution artifact when signing access and submission authority are available. Sign all executable components appropriately and test the downloaded/quarantined artifact on clean machines; do not require globally disabling Gatekeeper. [Apple direct distribution](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
 
@@ -126,7 +142,7 @@ Pilot on new nodes only. Require completed generation/transcription/image tests,
 
 ## Owner input needed later
 
-Nothing else is required to finish this plan. Proposed defaults are one app, three initial studios, Apple Silicon, Sonoma qualification target, separate model storage, foreground operation first and manual pilot updates.
+The owner approved proceeding with the native app and six functional sections. Continue local implementation with one app, Apple Silicon, Sonoma qualification target, separate model storage, menu-bar operation and optional login startup. Deliver Audio/Transcription + Hub/Image as the first usable subset, followed by Chat/Music/Video; all six are part of the target app. Hardware qualification and external enrollment remain separate acceptance conditions.
 
 - **Before clean-machine qualification:** identify one available Sonoma Apple Silicon test Mac and a newer-OS test Mac; confirm their memory. Do not downgrade or erase a machine to manufacture a test environment without authorization.
 - **Before real fleet integration:** choose a disposable new pilot node/site and authorize enrollment/testing. A mixed-fleet compatibility fixture is read-only/local preparation.
@@ -135,4 +151,4 @@ Nothing else is required to finish this plan. Proposed defaults are one app, thr
 
 ## Completion definition for this planning task
 
-The separate folder, source evidence, architectural boundaries, staged implementation work and concrete pass/fail checks exist and agree with the owner's direction. This does not mean an app has been built, dependencies are portable, every model supports Sonoma, or GenStudio integration has passed. The owner authorized milestone 1 implementation on 2026-09-10. Later milestones remain gated by its qualification results.
+The separate folder, source evidence, architectural boundaries, staged implementation work and concrete pass/fail checks exist and agree with the owner's direction. The local Voice runtime and native Audio/Transcription preview have been built; this does not establish support for every model, physical Sonoma qualification, or GenStudio integration. The owner authorized milestone 1 implementation on 2026-09-10. Local shell and integration work may continue from the successful local Voice proof; Sonoma/fleet readiness claims remain gated by physical qualification. The owner subsequently approved the native shell and six-function scope.
