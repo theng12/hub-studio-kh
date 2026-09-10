@@ -1,3 +1,5 @@
+> Superseded by the [0.2.0 native preview](native-preview.md). A later process audit found orphan native children from these pre-fix smoke runs; the earlier all-workers-exited statement was incorrect. They were stopped after verifying their exact bundle path and test-state cwd. Version 0.2.0 adds parent-loss cleanup and a regression for this defect. Keep this report as historical evidence, not a current lifecycle qualification.
+
 # Voice runtime qualification
 
 **Local Voice proof passed on 2026-09-10. Sonoma and fleet adoption remain unqualified.**

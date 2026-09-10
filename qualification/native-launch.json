@@ -1,0 +1,9 @@
+{
+  "native_final_version": "0.2.0",
+  "native_gui_pid": 60094,
+  "owned_worker_pid": 60201,
+  "native_startup_health_passed": true,
+  "parent_loss_readiness_removed": true,
+  "start_at_login_enabled": false,
+  "gui_automation_opened_extra_first_run_instance": true
+}

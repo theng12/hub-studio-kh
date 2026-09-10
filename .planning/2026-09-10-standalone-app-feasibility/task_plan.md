@@ -44,7 +44,7 @@ Owner approved starting implementation and using sub-agents. Prior planning-only
 2. Build isolated relocatable Voice runtime and external data paths — complete (local proof).
 3. Verify local relocation/imports/API and perform independent review — complete; 665 tests and final Qwen/Whisper smoke pass.
 4. Record qualification evidence and remaining hardware/model/integration work — complete; qualification/voice-runtime.md records exact artifact and limitations.
-5. Native app shell and six-function navigation — in progress; root owns Swift code, native_packaging owns optional staging/readiness, function_scope_inventory owns source inventory and review.
+5. Native app shell and six-function navigation — complete as local Audio/Transcription preview 0.2.0; 676 regression tests, native boundary/build checks and final relocation/model smoke passed. See qualification/native-preview.md.
 6. Hub/Image integration, then Chat/Music/Video — pending.
 7. Full local contract tests, physical qualification and distribution — pending.
 
@@ -52,4 +52,4 @@ Owner approved starting implementation and using sub-agents. Prior planning-only
 Standalone AGENTS: preserve old nodes; read-only source baselines; external state; local checks; no hosted compute or deployment. Source Voice instructions apply as reference release discipline; no legacy launcher is being edited. New standalone project already isolates all work. Existing plan is the accepted scope; no competing plan is needed.
 
 ## Next acceptance condition
-Milestone 1 is locally proven, not fully qualified. Obtain a clean physical Sonoma Apple Silicon test machine and repeat the recorded artifact offline before claiming Sonoma/fleet readiness. Hub/Image, native shell, GenStudio integration and distribution remain later milestones.
+Milestone 1 is locally proven, not fully qualified. Obtain a clean physical Sonoma Apple Silicon test machine and repeat the recorded artifact offline before claiming Sonoma/fleet readiness. Next implementation: bundled Hub + Image, then Chat/Music/Video and GenStudio integration. Physical Sonoma, login/reboot and distribution qualification remain pending.

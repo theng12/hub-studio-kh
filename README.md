@@ -2,7 +2,7 @@
 
 Independent application project for **new Apple Silicon fleet nodes**. Existing Pinokio installations retain their current flow.
 
-**Status: the Voice engine proof passed 665 tests and real Qwen speech/Whisper transcription after relocation. Native app preview implementation is in progress.** See [qualification evidence](qualification/voice-runtime.md) for remaining Sonoma and fleet requirements.
+**Status: native Audio/Transcription preview 0.2.0 is built. All 676 regression tests passed, with real Qwen speech and Whisper transcription after relocation.** See [native preview evidence](qualification/native-preview.md) for exact scope and remaining Sonoma/fleet requirements.
 
 The first implementation packages the adopted Voice backend, its web interface, an isolated Python/MLX runtime for the Qwen/Whisper pilot, and FFmpeg/FFprobe into a relocatable `.app` structure. The original artifact is a command-line Voice worker proof. The native preview adds a window and six functional sections: Audio, Transcription, Image, Music, Video, Chat. Audio and Transcription reuse Voice; the other four engines and bundled Hub/GenStudio integration remain pending. macOS 14 Sonoma is the compatibility target, subject to clean-machine qualification.
 

@@ -22,3 +22,19 @@ Independent review covered worker readiness, process ownership, parent-loss clea
 - Physical network isolation, model/license redistribution review, and distribution packaging. No Developer ID/notarization submission, deployment or fleet enrollment occurred.
 
 See [accepted plan](../docs/standalone-plan.md), [function inventory](../research/function-scope-inventory.md), and the historical [0.1.0 worker proof](voice-runtime.md). This preview is not a qualified fleet release.
+
+## Final local build evidence
+
+- Artifact: `dist/Studio Hub Preview.app`, version **0.2.0**, approximately **1.7 GB allocated**. Built from clean commit `5b4ddf4215508a3be6d90bd0614f5a51b9ffe9c6`.
+- App tree SHA-256: `81d3e3717b5359c3c7206eed54d522b6ab82d04b35827d33d76425c9cc020d75`. [Release manifest](native-release-manifest.json).
+- Combined adopted backend, frontend and packaging suite: **676 passed**, five upstream warnings, 41.43 seconds (`.build/native-final-regression-complete.log`).
+- Native boundary checks passed and optimized arm64 build succeeded (`.build/native-build.log`); Swift 6.4 / SDK27.0, Mach-O deployment target14.0. Native executable occupies 544 KiB allocated and links system frameworks.
+- Focused packaging/lifecycle suite: **15 passed**, including real Uvicorn shutdown cleanup.
+- Final native binary launched its real bundled worker; health reported version0.2.0 and the implementation commit above. Terminating this task-owned GUI process caused the owned worker to exit and remove readiness. [Launch evidence](native-launch.json). UI automation separately opened a first-run instance without arguments; it remained unconfigured and was stopped. No login registration occurred.
+- The earlier full-window generation/transcription/save/upload result is [recorded separately](native-gui.json), without conflating the development app and final artifact.
+
+Final relocation smoke passed: two worker launches, exact release/API identity, validated imported model hashes, real Qwen speech and Whisper transcription, and unchanged bundle digest after both launches. [Smoke report](native-smoke.json), [transcription](native-transcription.json). First startup: 11.75 seconds; relocated startup: 2.907 seconds. Generation including model load: 28.638 seconds; speech plus transcription: 50.124 seconds. Audio: 241964 bytes, SHA-256 `36b937640719dc84fd2385ae0c1224eecec77302b6f15068d460ac068e9e597b`. These are shared-host observations, not fleet performance estimates.
+
+Shutdown logged Python resource_tracker cleanup of 13 semaphore objects; no task-owned worker/native processes remained afterwards. This warning remains in the retained smoke log for follow-up during long-run lifecycle qualification.
+
+Final cleanup found native children from older, pre-fix 0.1.0 smoke runs and the development GUI run. Exact executable paths, parent IDs and test-state working directories were verified before stopping them; the historical report is corrected. No child from the final 0.2.0 smoke remained. Removed two disposable app copies (about 3.4 GB allocated), retaining the final app, historical proof, logs, audio and JSON evidence. The delivered app digest was rechecked after its native launch and matched the recorded value.
