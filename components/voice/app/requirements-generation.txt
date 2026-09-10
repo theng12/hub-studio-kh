@@ -1,0 +1,115 @@
+# Heavy generation dependencies — installed by install_generation.js, NOT install.js.
+# Splitting these out keeps the Phase 1 install fast and small.
+#
+# We deliberately AVOID Coqui TTS (deprecated and pins old torch) and
+# audiocraft (pins torch==2.1.0). Where a TTS model needs a custom runner
+# we'll vendor it under app/backend/voice_engines/<engine>.py instead.
+#
+# Engines covered by these deps alone (no extra installs needed):
+# - VoxCPM2     → mlx-audio
+# - Bark        → mlx-audio + transformers tokenizer
+# - F5-TTS      → diffusers + transformers + a small vendor module
+# - Chatterbox  → transformers
+# - Kokoro      → mlx-audio + multilingual misaki extras
+# - Spark-TTS   → transformers
+# Engines needing extra installs (added when their family is enabled):
+# - Piper       → uses piper-tts wheel (added in Phase 2.1)
+# - XTTS-v2     → uses TTS package (Coqui — license-restricted; opt-in)
+
+torch>=2.6
+torchaudio>=2.6
+# transformers + tokenizers PINNED (v1.27.20). These are a coupled, version-
+# sensitive pair shared by every transformers-assisted engine (Bark tokenizer,
+# F5-TTS, Voxtral) AND the Whisper STT processor fallback. Floating them
+# (`>=4.55`) let different Macs resolve different latest versions at different
+# `Install Generation` times — and a mismatch against the pinned mlx-audio
+# commit below surfaced as `ImportError: cannot import name 'ReasoningEffort'
+# from 'transformers'` during Whisper transcription on some machines. Pinning
+# this exact pair (the known-good combo verified end-to-end with mlx-audio
+# @2c9461f) makes every server converge to one working environment. Bump these
+# + the mlx-audio commit together, as a matched set, after verifying.
+# 5.14.1 is the floor mlx-audio v0.4.7 (Audio8/arktts) declares; tokenizers
+# 0.22.2 is still inside its accepted <=0.23.0,>=0.22.0 range, so it holds.
+transformers==5.14.1
+tokenizers==0.22.2
+diffusers>=0.30
+accelerate>=0.30
+sentencepiece>=0.2
+soundfile>=0.12
+# Live unified-memory preflight and recovery telemetry for direct generation.
+psutil>=7.0
+
+# ─── numba / llvmlite / numpy — matched set (Python 3.12 / 3.13 safe) ───
+# librosa (pulled in by f5-tts) needs numba, and numba compiles
+# llvmlite. numpy is otherwise unconstrained here, so the resolver floats it to
+# the newest release (2.5+). But every modern numba caps numpy (e.g. numba
+# 0.61/0.66 require numpy<2.3), so with numpy at 2.5 ALL modern numbas are
+# excluded and the resolver walks numba *backwards* to 0.53.1 — a Python<3.10
+# release whose llvmlite 0.36.0 has no 3.12 wheel and fails to build from source
+# ("RuntimeError: Cannot install on Python version 3.12.x; only >=3.6,<3.10").
+# Capping numpy to what a current numba supports lets the resolver pick a modern
+# numba (0.6x) with a prebuilt llvmlite wheel — no source build, works on
+# 3.12/3.13. KEEP this numpy cap when bumping other pins.
+numba>=0.59
+numpy>=1.26,<2.3
+
+# ─── Kokoro v1.0 (MLX) ───
+# Explicit extras keep every bundled voice language usable on a fresh install:
+# en includes the portable espeak-ng loader used by en/es/fr/hi/it/pt, while
+# zh adds Mandarin tokenization. Misaki's `ja` extra installs the empty UniDic
+# downloader package and then fails until a separate ~500 MB dictionary fetch;
+# use fugashi's bundled compact dictionary instead so Japanese works immediately.
+misaki[en,zh]==0.9.4
+fugashi[unidic-lite]>=1.5,<2
+jaconv>=0.4,<1
+mojimoji>=0.0.13,<1
+pyopenjtalk>=0.4,<1
+
+# ─── MLX stack (mlx-audio + friends) — PINNED (Voice Studio 1.27.20) ───
+# mlx-audio is a git install (not on PyPI) and tracks master, so an unpinned
+# `@ git+…` floats to whatever the latest commit is at install time. Different
+# Macs installing on different days got different mlx-audio code — and a newer
+# mlx-audio against an older transformers (or vice versa) is what produced the
+# `ReasoningEffort` ImportError. Pinning mlx-audio to an exact commit + mlx /
+# mlx-lm to exact versions, together with transformers==5.14.1 above, locks the
+# whole stack to one verified-working set. To upgrade: bump the commit + the
+# transformers pin together, run Install Generation, verify TTS + STT, then
+# commit the new known-good pins.
+mlx==0.31.2
+mlx-lm==0.31.3
+# v0.4.7: adds arktts (Audio8-TTS-Preview) — DualAR zero-shot/clone TTS — on
+# top of v0.4.6's Fish Audio S2 Pro, OmniVoice loader, and Chatterbox fixes.
+# Keep the exact release commit so every fleet worker uses the same model
+# loader and quantization behavior. Declares transformers>=5.14.0 (see above);
+# mlx/mlx-lm floors (>=0.31.1) are already satisfied by the pins above.
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384
+
+# ─── v1.5.0: Voxtral-4B-TTS (MLX) ───
+# Voxtral's tekken tokenizer is loaded via mistral-common, and the audio path
+# needs the [audio] extra (soundfile + audio helpers). Without it, generation
+# fails at tokenizer-load with: "Voxtral TTS tekken tokenizers require
+# mistral-common[audio]". The speech-request encoder landed after 1.9.1;
+# 1.11.5 is the exact release validated by a real local Voxtral generation.
+# mlx-audio imports it lazily so the engine module imports fine without it —
+# but generation does not. Marvis (sesame engine) needs no extra dep beyond
+# mlx-lm/mlx-audio already pinned above.
+mistral-common[audio]==1.11.5
+
+# ─── F5-TTS (SWivid flow-matching, Phase 2.2) ───
+# Official PyPI package. Pulls vocos (vocoder), cached_path, torchdiffeq, and
+# x_transformers as transitive deps. Used by `_generate_f5_tts` worker; the
+# pre-downloaded SWivid/F5-TTS snapshot already in cache/HF_HOME is auto-found
+# via the HF_HOME env var. Non-commercial license — fine for personal use.
+f5-tts>=1.1.0
+
+# Lightweight TTS-specific helpers.
+#
+# IMPORTANT: do NOT declare `phonemizer` here. misaki (Kokoro's G2P) pulls
+# `phonemizer-fork` as a transitive dep — a fork that adds `EspeakWrapper.
+# set_data_path()` (the upstream phonemizer never had it). Both packages
+# install into the same `phonemizer/` namespace, so declaring vanilla
+# `phonemizer` causes pip to overwrite the fork → misaki crashes on import.
+# If you actually need plain phonemizer for some future engine, vendor it
+# under a different module name instead of co-installing.
+inflect>=7.0             # number → words normalization
+unidecode>=1.3           # romanize accented input for engines that need ASCII

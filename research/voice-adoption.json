@@ -1,0 +1,18 @@
+{
+  "upstream_repository": "https://github.com/theng12/voicestudio-mac",
+  "commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+  "version": "2.7.2",
+  "paths": [
+    "app",
+    "VERSION",
+    "CHANGELOG.md",
+    "README.md",
+    "MODEL_CATALOG_GUIDE.md",
+    "model-audits",
+    "audit_contract_runtime.py",
+    "audit_truth.py",
+    "pytest.ini",
+    "release_metadata_check.py"
+  ],
+  "method": "git archive of tracked source only; no live environments or state"
+}
