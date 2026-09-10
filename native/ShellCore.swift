@@ -5,9 +5,6 @@ enum StudioFunction: String, CaseIterable, Identifiable {
     case audio = "Audio", transcription = "Transcription", image = "Image"
     case music = "Music", video = "Video", chat = "Chat"
     var id: String { rawValue }
-    var route: String? {
-        switch self { case .audio: return "generate"; case .transcription: return "subtitles"; default: return nil }
-    }
     var symbol: String {
         switch self {
         case .audio: return "waveform"
@@ -16,6 +13,28 @@ enum StudioFunction: String, CaseIterable, Identifiable {
         case .music: return "music.note"
         case .video: return "film"
         case .chat: return "bubble.left.and.bubble.right"
+        }
+    }
+}
+
+
+enum StudioPage: String, CaseIterable, Identifiable {
+    case overview = "Overview", audio = "Audio", transcription = "Transcription", image = "Image"
+    case music = "Music", video = "Video", chat = "Chat"
+    case models = "Models", jobs = "Jobs", connections = "Connections", settings = "Settings"
+    var id: String { rawValue }
+    static let workspaces: [Self] = [.audio, .transcription, .image, .music, .video, .chat]
+    static let management: [Self] = [.models, .jobs, .connections, .settings]
+    var function: StudioFunction? { StudioFunction(rawValue: rawValue) }
+    var symbol: String {
+        if let function { return function.symbol }
+        switch self {
+        case .overview: return "square.grid.2x2"
+        case .models: return "externaldrive"
+        case .jobs: return "list.bullet.rectangle"
+        case .connections: return "network"
+        case .settings: return "gearshape"
+        default: return "circle"
         }
     }
 }
@@ -102,6 +121,18 @@ struct WorkerReady: Decodable {
     }
 }
 
+func openPrivateLog(_ url: URL) throws -> FileHandle {
+    let descriptor = open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
+    guard descriptor >= 0 else { throw ShellFailure(message: "Cannot open the local service log safely.") }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+          fchmod(descriptor, 0o600) == 0 else {
+        close(descriptor)
+        throw ShellFailure(message: "The local service log must be a private regular file.")
+    }
+    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+}
+
 final class InstanceLock {
     private let descriptor: Int32
     init(directory: URL) throws {
@@ -114,12 +145,4 @@ final class InstanceLock {
         }
     }
     deinit { close(descriptor) }
-}
-
-enum WorkerOrigin {
-    static func allows(_ url: URL, base: URL) -> Bool {
-        guard base.scheme == "http", base.host == "127.0.0.1", let port = base.port else { return false }
-        if url.scheme == "blob" { return url.absoluteString.hasPrefix("blob:http://127.0.0.1:\(port)/") }
-        return url.scheme == "http" && url.host == "127.0.0.1" && url.port == port && url.user == nil && url.password == nil
-    }
 }

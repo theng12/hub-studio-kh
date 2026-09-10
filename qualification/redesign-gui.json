@@ -1,0 +1,29 @@
+{
+  "run": "native redesign development harness; final artifact checked separately",
+  "audio_job_id": "c56f0f41d938",
+  "audio_bytes": 364844,
+  "audio_sha256": "079d58432d27232b97447d0cddbc77832ace2de6e240bb0d26b03839cba44268",
+  "sample_rate": 24000,
+  "frames": 182400,
+  "duration_seconds": 7.6,
+  "transcript": {
+    "duration": 7.6,
+    "language": "en",
+    "model": "mlx-community/whisper-large-v3-turbo",
+    "sourceFilename": "redesigned-audio.wav",
+    "srt": "1\n00:00:00,000 --> 00:00:06,960\nThis is the redesigned studio hub. Audio and transcription have their own workspaces.\n",
+    "text": "This is the redesigned studio hub. Audio and transcription have their own workspaces.",
+    "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:06.960\nThis is the redesigned studio hub. Audio and transcription have their own workspaces.\n"
+  },
+  "native_actions": [
+    "Generate Audio",
+    "Save WAV",
+    "Choose File in Transcription",
+    "Transcribe",
+    "Export SRT",
+    "Quit and Stop"
+  ],
+  "source_text": "This is the redesigned Studio Hub. Audio and transcription have their own workspaces.",
+  "persisted_audio_draft": true,
+  "srt_export_matches": true
+}

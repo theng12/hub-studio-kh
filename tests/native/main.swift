@@ -30,17 +30,22 @@ for bad in ["https://example.com", "http://localhost:45678", "http://127.0.0.1:4
 }
 do { _ = try WorkerReady.decode(ready, expectedPID: 999); fatalError("wrong process readiness accepted") } catch {}
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
-require(StudioFunction.audio.route == "generate" && StudioFunction.transcription.route == "subtitles", "shared voice routes")
-require(StudioFunction.video.route == nil, "unbundled engine cannot advertise availability")
+require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
+require(StudioPage.management == [.models, .jobs, .connections, .settings], "central management navigation")
 let firstLock = try InstanceLock(directory: state)
 do { _ = try InstanceLock(directory: state); fatalError("duplicate app owns same state") } catch {}
 withExtendedLifetime(firstLock) {}
-for root in ["http://127.0.0.1:45678", "http://127.0.0.1:45678/"] {
-    let origin = URL(string: root)!
-    require(WorkerOrigin.allows(URL(string: "blob:http://127.0.0.1:45678/file")!, base: origin), "blob downloads must accept normalized origin")
-    require(WorkerOrigin.allows(URL(string: "http://127.0.0.1:45678/api/file")!, base: origin), "local endpoint")
-    require(!WorkerOrigin.allows(URL(string: "https://example.com/download")!, base: origin), "external redirect cannot display in app")
-    require(!WorkerOrigin.allows(URL(string: "http://127.0.0.1:12345")!, base: origin), "unrelated local server cannot load")
-    require(!WorkerOrigin.allows(URL(string: "blob:http://127.0.0.1:456789/file")!, base: origin), "prefix collision cannot load")
-}
+let logURL = state.appendingPathComponent("worker.log")
+try Data("before".utf8).write(to: logURL)
+try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: logURL.path)
+let log = try openPrivateLog(logURL)
+try log.write(contentsOf: Data("after".utf8))
+try log.close()
+let logText = try String(contentsOf: logURL, encoding: .utf8)
+require(logText == "beforeafter", "log must append without truncating")
+let permissions = try FileManager.default.attributesOfItem(atPath: logURL.path)[.posixPermissions] as! NSNumber
+require(permissions.intValue == 0o600, "existing log must be private")
+let linkedLog = state.appendingPathComponent("linked.log")
+try FileManager.default.createSymbolicLink(at: linkedLog, withDestinationURL: logURL)
+do { _ = try openPrivateLog(linkedLog); fatalError("symlink log accepted") } catch {}
 print("Native boundary checks passed")
