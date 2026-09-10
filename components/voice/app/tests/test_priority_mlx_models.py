@@ -30,6 +30,19 @@ def _repos(family: str) -> list[str]:
     return [entry.repo for entry in catalog.CATALOG if entry.family == family]
 
 
+@pytest.fixture
+def no_cached_kokoro_snapshot(monkeypatch):
+    """Keep picker contract tests independent of a machine model cache."""
+    def missing_snapshot(_self, _repo):
+        raise RuntimeError("no test snapshot")
+
+    monkeypatch.setattr(
+        generation.GenerationManager,
+        "_mlx_audio_snapshot_path",
+        missing_snapshot,
+    )
+
+
 def test_priority_catalog_is_focused_and_clone_capable() -> None:
     qwen = _repos("qwen3-tts")
     assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit" in qwen
@@ -312,7 +325,9 @@ def test_kokoro_catalog_is_single_mlx_multilingual_release() -> None:
     assert {voice["lang"] for voice in generation.KOKORO_VOICES} == set("abefhijpz")
 
 
-def test_kokoro_voice_picker_sets_language_and_validates_blends() -> None:
+def test_kokoro_voice_picker_sets_language_and_validates_blends(
+    no_cached_kokoro_snapshot,
+) -> None:
     manager = object.__new__(generation.GenerationManager)
     kwargs: dict = {}
     label = manager._mlx_kwargs_voice_picker(
@@ -343,7 +358,7 @@ def test_kokoro_voice_picker_sets_language_and_validates_blends() -> None:
     ],
 )
 def test_kokoro_voice_picker_accepts_public_english_aliases(
-    voice: str, language: str, expected: str
+    voice: str, language: str, expected: str, no_cached_kokoro_snapshot
 ) -> None:
     manager = object.__new__(generation.GenerationManager)
     kwargs: dict = {}

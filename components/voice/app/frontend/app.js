@@ -3013,7 +3013,7 @@ function studio() {
       if (!this.canSubmit) return;
       if (!this.gen.available) {
         this.pushToast({ kind: "warn", icon: "⚠", title: "Engine not installed",
-          body: "Click Install Generation in the Pinokio sidebar." });
+          body: "Replace this app with a tested standalone release that includes the generation runtime, then relaunch." });
         return;
       }
       if (!this.selectedModel) {
@@ -3286,7 +3286,7 @@ function studio() {
         this.pushToast({ kind: "info", icon: "🗑", title: "Generation deleted" });
       } catch (e) {
         this.pushToast({ kind: "error", icon: "✗", title: "Couldn't delete",
-          body: "This needs the latest backend — run Update once from the Pinokio sidebar." });
+          body: "This needs the latest backend — replace the app with a tested standalone release, then relaunch." });
       }
     },
 
@@ -3379,7 +3379,7 @@ function studio() {
           body: `Deleted ${d.deleted} file${d.deleted === 1 ? "" : "s"} (${humanBytes(d.freed_bytes || 0)}) — kept ${label === "older than 30 days" ? "recent" : "the newest 50"}.` });
       } catch (e) {
         this.pushToast({ kind: "error", icon: "✗", title: "Couldn't prune",
-          body: "This needs the latest backend — run Update once from the Pinokio sidebar." });
+          body: "This needs the latest backend — replace the app with a tested standalone release, then relaunch." });
       }
     },
 

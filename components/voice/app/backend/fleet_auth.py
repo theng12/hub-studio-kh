@@ -10,10 +10,11 @@ from urllib.parse import urlsplit
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
-API_ROOT = LAUNCHER_ROOT.parent
-HUB_TOKEN_FILE = API_ROOT / "studiohub-mac" / ".fleet_token"
-SHARED_TOKEN_FILE = API_ROOT / ".kh_studio_token"
+from . import paths
+
+LAUNCHER_ROOT = paths.legacy_source_root()
+HUB_TOKEN_FILE = paths.data_path("fleet_token")
+SHARED_TOKEN_FILE = HUB_TOKEN_FILE
 COOKIE_NAME = "kh_studio_token"
 PUBLIC_PATHS = {"/", "/api/health", "/api/version", "/api/release-notes", "/api/capabilities", "/api/update-status"}
 
@@ -111,5 +112,5 @@ def manifest(*, modality: str, title: str, version: str, operations: list[str], 
         "operations": operations,
         "catalog_endpoint": "/api/catalog",
         "diagnostics_endpoint": diagnostics,
-        "update": {"script": "update.js", "supports_drain": True},
+        "update": {"available": False, "mode": "app_replacement"},
     }

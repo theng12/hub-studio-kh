@@ -1,0 +1,27 @@
+# Bounded runtime proof: adopted Voice base plus every non-F5 direct generation
+# dependency. F5-TTS and its dedicated numba/librosa/TorchCodec tree are excluded
+# because the pilot qualifies Qwen MLX generation and Whisper MLX transcription;
+# TorchCodec's macOS wheel requires unbundled shared FFmpeg ABI libraries.
+-r ../../components/voice/app/requirements.txt
+
+torch>=2.6
+torchaudio>=2.6
+transformers==5.14.1
+tokenizers==0.22.2
+diffusers>=0.30
+accelerate>=0.30
+sentencepiece>=0.2
+soundfile>=0.12
+psutil>=7.0
+numpy>=1.26,<2.3
+misaki[en,zh]==0.9.4
+fugashi[unidic-lite]>=1.5,<2
+jaconv>=0.4,<1
+mojimoji>=0.0.13,<1
+pyopenjtalk>=0.4,<1
+mlx==0.31.2
+mlx-lm==0.31.3
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384
+mistral-common[audio]==1.11.5
+inflect>=7.0
+unidecode>=1.3

@@ -30,8 +30,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from . import paths
 
-VOICES_DIR = Path(__file__).resolve().parent.parent / "voices"
+
+VOICES_DIR = paths.data_path("voices")
 METADATA_FILENAME = "metadata.json"
 REFERENCE_BASENAME = "reference"            # actual file: reference.<ext>
 TRANSCRIPT_FILENAME = "transcript.txt"

@@ -626,17 +626,16 @@ def test_kokoro_adapter_preserves_suffix_for_huggingface_voicepack_symlink(
     assert kwargs["voice"].endswith(".safetensors")
 
 
-def test_catalog_exposes_candidate_evidence_without_exposure_authority(
+def test_catalog_omits_unqualified_candidate_evidence_in_standalone(
     monkeypatch,
 ) -> None:
     target = "mlx-community/Kokoro-82M-bf16"
-    revision = GROUP_A_RECORDS[target]["runtime_revision"]
     monkeypatch.setattr(
         main,
         "_cache_with_companions",
         lambda repo: {
             "state": "cached" if repo == target else "absent",
-            "snapshot_revision": revision if repo == target else None,
+            "snapshot_revision": "a" * 40 if repo == target else None,
         },
     )
     monkeypatch.setattr(
@@ -656,20 +655,13 @@ def test_catalog_exposes_candidate_evidence_without_exposure_authority(
     item = {
         row["repo"]: row for row in main.get_catalog()["models"]
     }[target]
-    candidate = item["genstudio_candidate"]
-    assert candidate["approved_operations"] == ["voice.tts"]
-    assert candidate["capacity"] == {"max_concurrency": 1, "available_slots": 1}
+    assert "genstudio_candidate" not in item
+    assert "genstudio_candidate_runtime_match" not in item
     assert "streaming" not in item["capabilities"]
-    assert item["min_unified_memory_gb"] == candidate["hardware"][
-        "minimum_unified_memory_gb"
-    ]
-    assert candidate["hardware"]["minimum_unified_memory_gb"] == 8
-    assert "8 GB" in item["recommended_hardware"]
-    assert item["genstudio_candidate_runtime_match"] is True
     assert "approved_for_genstudio" not in item
 
 
-def test_transcription_availability_exposes_exact_audited_revisions(
+def test_transcription_availability_omits_unqualified_candidate_evidence(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(transcription, "_have_mlx_audio_stt", lambda: True)
@@ -678,24 +670,16 @@ def test_transcription_availability_exposes_exact_audited_revisions(
         transcription.cache,
         "status_snapshot",
         lambda repo: {
-            "state": "cached" if repo in GROUP_A_RECORDS else "absent",
-            "snapshot_revision": GROUP_A_RECORDS.get(repo, {}).get(
-                "runtime_revision"
-            ),
+            "state": "cached" if repo == "mlx-community/whisper-large-v3-turbo" else "absent",
+            "snapshot_revision": "a" * 40 if repo == "mlx-community/whisper-large-v3-turbo" else None,
         },
     )
 
     models = {row["repo"]: row for row in transcription.availability()["models"]}
     for repo in ("mlx-community/whisper-large-v3-turbo",):
         assert models[repo]["cached"] is True
-        assert models[repo]["genstudio_candidate_runtime_match"] is True
-        assert models[repo]["genstudio_candidate"]["approved_operations"] == [
-            "audio.transcription"
-        ]
-        assert models[repo]["genstudio_candidate"]["capacity"] == {
-            "max_concurrency": 1,
-            "available_slots": 1,
-        }
+        assert "genstudio_candidate_runtime_match" not in models[repo]
+        assert "genstudio_candidate" not in models[repo]
     assert "genstudio_candidate" not in models[
         "mlx-community/whisper-small-mlx"
     ]
@@ -725,9 +709,3 @@ def test_whisper_postroll_is_bounded_by_the_source_media() -> None:
     assert len(segments) == 1
     assert segments[0]["end"] == 3.278
     assert segments[0]["words"][-1]["end"] == 3.278
-
-
-GROUP_A_RECORDS = {
-    model_id: model_audits.candidate_summary(model_id) or {}
-    for model_id in GROUP_A
-}

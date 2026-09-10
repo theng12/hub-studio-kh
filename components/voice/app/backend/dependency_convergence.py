@@ -80,7 +80,7 @@ def generation_build_environment(*, runner: Callable[..., object] = subprocess.r
     failure = (
         "No working Apple compiler/macOS SDK pair found. Continuing with available packages. "
         "If a native build fails, update or reinstall Command Line Tools for this macOS version, "
-        "then retry Install Generation."
+        "then replace the app with a tested standalone release that includes the runtime."
     )
     try:
         result = runner(

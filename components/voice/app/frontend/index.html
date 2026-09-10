@@ -83,11 +83,9 @@
       <div>
         <strong>Generation engine not installed.</strong>
         <p class="muted">
-          Click <strong>Install Generation</strong> (or <strong>Reinstall Generation</strong>
-          if it's already been run once) in the Pinokio sidebar — same button, label
-          flips automatically. Look for the ✨ wand icon next to <em>Settings</em>.
-          Installs <em>torch</em>, <em>mlx-audio</em>, <em>transformers</em>, and supporting
-          libraries (~3–4 GB). After install completes, Stop → Start the server.
+          Install a tested packaged release that includes the generation runtime.
+          The app bundle is immutable, so replace it with the matching release artifact
+          when the runtime is missing or incompatible.
         </p>
         <p class="error-text" x-show="gen.error" x-text="gen.error"></p>
       </div>
@@ -106,7 +104,7 @@
 
     <p class="muted soft-hint" x-show="gen.available && cachedModels.length > 0 && !genWiredFamilies.length" x-cloak>
       💡 You have models cached but no generation pipelines wired up. Make sure
-      <code>mlx-audio</code> is installed (Install Generation → check the install log).
+      you are running a packaged release that includes <code>mlx-audio</code>.
     </p>
 
     <!-- ─── Dependency diagnostics (collapsible) ─── -->
@@ -124,8 +122,8 @@
       </summary>
       <div class="diag-body">
         <p class="muted">
-          Each engine needs a specific set of packages. If something below shows ❌, run
-          <strong>Install Generation</strong> from the Pinokio sidebar (it shows as <strong>Reinstall Generation</strong> if you've already run it once — same button), then <strong>Stop → Start</strong> the server.
+          Each engine needs a specific set of packages. If something below shows ❌,
+          replace the app with a tested packaged release, then relaunch it.
           <span x-show="diag.device">Currently using device <code x-text="diag.device"></code>.</span>
         </p>
 
@@ -141,15 +139,12 @@
               that model's engine to run.
             </p>
             <p>
-              Normally this is a one-time install. Re-run <strong>Reinstall Generation</strong>
-              after a Reset, on a new machine, when release notes request it, or when
-              this panel reports an incompatible package. Restart the server afterward.
+              The generation runtime ships with the app. Replace the app with a tested
+              release when this panel reports an incompatible package, then relaunch it.
             </p>
             <p>
-              The "Install Generation" script bundles all the libraries together for
-              simplicity. If you only ever plan to use one engine (say, Kokoro), the
-              extra packages still install but they're idle — they don't slow
-              anything down.
+              The packaged runtime includes the supported engine libraries together.
+              Engines you do not use remain idle and do not affect the active workflow.
             </p>
           </div>
         </details>
@@ -260,9 +255,8 @@
                 each library has to be importable for that model's engine to run.
               </p>
               <p class="muted">
-                <strong>One-time fix</strong> (per launcher): click <strong>Install Generation</strong>
-                (or <strong>Reinstall Generation</strong> if it's already been run)
-                in the Pinokio sidebar, then <strong>Stop → Start</strong> this server.
+                <strong>One-time fix</strong>: replace the app with a tested packaged
+                release, then relaunch it.
                 After that, every model in this family works permanently. See the
                 <a class="link-accent" @click.prevent="document.querySelector('details.diag')?.setAttribute('open','')">
                   🩺 Dependency check
@@ -1716,7 +1710,8 @@
       <h2>Scan candidates</h2>
       <p class="muted">
         Folders listed in <code>VOICESTUDIO_EXTRA_MODEL_DIRS</code> are searched.
-        Set this in the ENVIRONMENT file (colon-separated paths) and restart the server.
+        Configure this in the packaged app's launch environment (colon-separated paths)
+        and relaunch the app.
       </p>
       <button class="ghost" @click="scanImports()">Re-scan</button>
 
@@ -2136,7 +2131,7 @@
       <div class="banner info" x-show="stt.available === false" x-cloak>
         <div>
           <strong>Speech-to-text engine not available.</strong>
-          <p class="muted">Run <strong>Install Generation</strong> from the Pinokio sidebar, then Stop → Start.</p>
+          <p class="muted">Replace the app with a tested packaged release, then relaunch it.</p>
         </div>
       </div>
     </section>
@@ -2356,8 +2351,8 @@
     <section class="page-head">
       <h1>Settings</h1>
       <p class="muted">
-        Persistent app-wide configuration. Stored in <code>app/backend/settings.json</code>
-        (gitignored, never leaves your machine).
+        Persistent app-wide configuration. Stored in the external Studio Hub Voice state
+        folder (never inside the immutable app bundle).
       </p>
     </section>
 
@@ -2384,8 +2379,8 @@
     <section class="card auto-update-card" x-show="autoUpdate.loaded" x-cloak>
       <div class="auto-update-head">
         <div>
-          <h2>Automatic updates</h2>
-          <p class="muted">Optional, recoverable updates that wait for voice generation, transcription, and downloads to finish.</p>
+          <h2>App updates</h2>
+          <p class="muted">Standalone releases are installed by replacing the app bundle. Git and launchd updates are unavailable here.</p>
         </div>
         <span class="auto-update-state" :class="autoUpdate.state" x-text="autoUpdate.state"></span>
       </div>
@@ -2394,7 +2389,7 @@
         <div class="auto-update-mode-options">
           <label class="auto-update-mode-option" :class="{active:autoUpdate.draft.mode==='off'}">
             <input type="radio" name="auto-update-mode" value="off" x-model="autoUpdate.draft.mode">
-            <span><strong>Off</strong><small>Update manually from the Pinokio sidebar.</small></span>
+            <span><strong>Off</strong><small>Replace the app bundle with a tested release.</small></span>
           </label>
           <label class="auto-update-mode-option" :class="{active:autoUpdate.draft.mode==='notify'}">
             <input type="radio" name="auto-update-mode" value="notify" x-model="autoUpdate.draft.mode">
@@ -2456,7 +2451,7 @@
           <li><strong>No access to private or future gated voice models.</strong> A token lets Voice Studio download repositories your Hugging Face account is authorized to use.</li>
         </ul>
         <p class="muted">
-          The token is stored locally in <code>app/backend/settings.json</code>.
+          The token is stored in the external Studio Hub Voice state folder, outside the app bundle.
           It never leaves your Mac except as an <code>Authorization</code> header sent
           directly to <code>huggingface.co</code> during downloads. We never log it.
         </p>
@@ -2664,8 +2659,8 @@
     <section class="card">
       <h2>Where settings live</h2>
       <p class="muted">
-        <code>app/backend/settings.json</code> — JSON file, this server reads it on every
-        request. Changes apply immediately, no server restart needed.
+        The external Studio Hub Voice state folder contains the JSON settings this server
+        reads on every request. Changes apply immediately, no server restart needed.
       </p>
     </section>
   </main>
@@ -2690,7 +2685,7 @@
         <div><span class="models-eyebrow">Release notes</span><h2 id="whats-new-title">What's New</h2><p class="muted" x-text="releaseNotes.length ? 'Installed version: v' + releaseNotesCurrent : 'Loading release notes…'"></p></div>
         <button class="ghost" @click="showWhatsNew=false" aria-label="Close release notes">Close</button>
       </div>
-      <p class="muted" x-show="releaseNotesCurrent==='2.4.3'">Machine-local environment settings now survive clean updates, and dirty-file errors show the complete filename without weakening update safety.</p>
+      <p class="muted" x-show="releaseNotesCurrent==='2.4.3'">Machine-local environment settings now survive app replacement, and dirty-file errors show the complete filename without weakening update safety.</p>
       <template x-if="!releaseNotes.length"><p class="release-empty">Release details are loading. If this stays empty, the installed changelog is unavailable.</p></template>
       <template x-for="release in releaseNotes" :key="release.version + release.heading">
         <article class="release-entry">
@@ -2777,9 +2772,9 @@
   <!-- ── KH auto-update banner ──────────────────────────────────────────────
        Self-contained (no Alpine coupling). Reads /api/update-status and, if this
        install is behind or its generation stack is missing, shows a dismissible
-       notice pointing at the one-click Update / Install Generation button in the
-       Pinokio sidebar. Degrades silently if the endpoint isn't present yet
-       (e.g. a running service that hasn't restarted onto the new build). -->
+       notice pointing at the packaged app replacement workflow. Degrades silently if
+       the endpoint isn't present yet (e.g. a running service that hasn't restarted
+       onto the new build). -->
   <script>
   (function () {
     function build(s) {
@@ -2787,11 +2782,11 @@
       if (s.generation_required && s.generation_ok === false) {
         key = "kh-gen-missing"; bg = "#f3b562"; fg = "#1a1204";
         msg = "\u26A0 Generation engine not installed \u2014 the Generate tab won\u2019t work. " +
-              "In the Pinokio sidebar, click Install Generation (or Update).";
+              "Install a packaged release that includes the generation runtime.";
       } else if (s.update_available && s.latest_version) {
         key = "kh-upd-" + s.latest_version; bg = "#6aa7ff"; fg = "#04122a";
         msg = "\u2B06 Update available (v" + s.app_version + " \u2192 v" + s.latest_version + "). " +
-              "In the Pinokio sidebar, click Update.";
+              "Replace the app bundle with a tested release.";
       } else { return; }
       try { if (localStorage.getItem(key) === "1") return; } catch (e) {}
       var bar = document.createElement("div");

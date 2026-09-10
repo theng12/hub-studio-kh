@@ -1,7 +1,7 @@
 # Standalone Studio App Planning
 
 ## Goal
-Prepare a reviewable architecture and feasibility-first implementation plan for a new standalone Apple Silicon Studio application. This turn creates planning artifacts only.
+Implement the accepted feasibility-first plan for a new standalone Apple Silicon Studio application, beginning with the relocatable Voice worker proof.
 
 ## Owner direction
 - Separate project outside existing Pinokio repositories.
@@ -19,7 +19,7 @@ Prepare a reviewable architecture and feasibility-first implementation plan for 
 4. Review consistency and deliver plan — complete.
 
 ## Implementation status
-Not started. No app packaging, source adoption, existing-node migration or deployment authorized by this planning task.
+Local implementation authorized by the owner on 2026-09-10. Voice source adoption, external state paths, launcher, staging and API relocation checks are implemented; the full runtime/model qualification is in progress. Existing-node migration and deployment are outside scope.
 
 ## Decisions
 Proposed first scope: Hub + Image + Voice; working assumption; optional clarification had no reply during drafting. Working folder/name studiohub-standalone is provisional. Architecture, packaging and qualification choices will be recorded in the design.
@@ -38,8 +38,8 @@ Proposed first scope: Hub + Image + Voice; working assumption; optional clarific
 Owner approved starting implementation and using sub-agents. Prior planning-only restrictions are superseded for local implementation.
 
 ## Implementation phases
-1. Initialize isolated repository, adopt tracked Voice source, inventory runtime — in_progress.
-2. Build isolated relocatable Voice runtime and external data paths — pending.
+1. Initialize isolated repository, adopt tracked Voice source, inventory runtime — complete.
+2. Build isolated relocatable Voice runtime and external data paths — in_progress.
 3. Verify local relocation/imports/API and perform independent review — pending.
 4. Record qualification evidence and remaining hardware/model/integration work — pending.
 5. Hub/Image integration, shell and distribution follow the feasibility outcome; not yet started.

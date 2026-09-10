@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-import re
 
 import pytest
 
@@ -55,11 +54,5 @@ def test_release_guard_requires_a_numeric_version_increase() -> None:
         )
 
 
-def test_all_launcher_stops_use_canonical_app_local_uris() -> None:
-    for name in ("update.js", "install_generation.js"):
-        source = (ROOT / name).read_text(encoding="utf-8")
-        assert 'uri: "{{path.resolve(cwd, \'start.js\')}}"' in source
-        assert not re.search(
-            r'method:\s*"script\.stop",\s*params:\s*\{\s*uri:\s*"start\.js"',
-            source,
-        )
+# Pinokio launcher URI checks were intentionally removed from the standalone
+# suite: the packaged backend has no update.js or install_generation.js.

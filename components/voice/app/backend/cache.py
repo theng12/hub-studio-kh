@@ -14,6 +14,8 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
 
+from . import paths
+
 
 _IMMUTABLE_REVISION = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
@@ -23,11 +25,13 @@ def hf_home() -> Path:
     Resolve HF_HOME the same way huggingface_hub does, but as an absolute path.
     Defaults match the library's defaults so we agree with `hf download`.
     """
-    raw = os.environ.get("HF_HOME") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    raw = (os.environ.get("STUDIOHUB_MODELS_DIR")
+           or os.environ.get("HF_HOME")
+           or os.environ.get("HUGGINGFACE_HUB_CACHE"))
     if raw:
         return Path(raw).expanduser().resolve()
     # huggingface_hub default
-    return (Path.home() / ".cache" / "huggingface").resolve()
+    return paths.models_dir()
 
 
 def hub_dir() -> Path:

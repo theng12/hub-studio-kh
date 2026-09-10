@@ -8,12 +8,14 @@ import threading
 import time
 from pathlib import Path
 
+from . import paths
+
 from fastapi import HTTPException
 
 from . import restart_health
 
 
-SETTINGS_FILE = Path(__file__).resolve().parent / "memory_policy.json"
+SETTINGS_FILE = paths.data_path("memory_policy.json")
 MODES = {
     "performance": {"idle_seconds": None, "label": "Performance"},
     "balanced": {"idle_seconds": 600, "label": "Balanced"},

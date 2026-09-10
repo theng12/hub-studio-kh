@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-
 AUDIT_ROOT = Path(__file__).resolve().parents[2] / "model-audits"
 _IMMUTABLE_REVISION = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _CONTRACT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -108,9 +107,9 @@ def candidate_summary(model_id: str) -> Optional[dict[str, Any]]:
     record = audit_record(model_id)
     if record is None:
         return None
-    # Return a detached JSON-compatible object so callers cannot mutate the
-    # file-backed evidence shared with another request.
-    return json.loads(json.dumps(record["genstudio_candidate"]))
+    # Standalone packaging carries source audits as reference evidence only;
+    # they must be requalified against the packaged runtime before exposure.
+    return None
 
 
 def input_limits(model_id: str) -> dict[str, Any]:

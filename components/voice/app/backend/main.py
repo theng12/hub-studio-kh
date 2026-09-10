@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (cache, catalog, fleet_auth, job_details, memory_policy, model_storage,
-               reference_audio, settings as app_settings, storage_policy)
+               paths, reference_audio, settings as app_settings, storage_policy)
 from .generation import (
     manager as gen_manager,
     OUTPUT_DIR,
@@ -65,32 +65,95 @@ PROCESS_TITLE_APPLIED = apply_process_title()
 
 
 # ───────────── App release version ─────────────
-# Read once at module load — `VERSION` lives at the project root (a sibling
-# of `app/`). Surfaced via `/api/version` for the WebUI footer and the
-# (future) update-available check. Independent of FastAPI's `app.version`,
-# which is the internal API version.
+# Read once at module load from the standalone release manifest. The copied
+# upstream VERSION file is provenance only and must not become package identity.
+
+def _load_release_manifest() -> dict | None:
+    path = paths.release_manifest_path()
+    if path is None:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "studiohub.standalone-release"
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or not re.fullmatch(r"\d+\.\d+\.\d+", str(value.get("version") or ""))
+        or type(value.get("development_build")) is not bool
+        or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("implementation_commit") or ""))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("payload_sha256") or ""))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("runtime_sha256") or ""))
+        or not isinstance(value.get("components"), dict)
+    ):
+        return None
+    return value
+
+
+_RELEASE_MANIFEST = _load_release_manifest()
+
 
 def _read_app_version() -> str:
-    try:
-        version_file = Path(__file__).resolve().parent.parent.parent / "VERSION"
-        return version_file.read_text().strip()
-    except Exception:
-        return "unknown"
+    manifest = _RELEASE_MANIFEST
+    return str(manifest["version"]) if manifest else "unknown"
 
 APP_VERSION = _read_app_version()
 
 
 def _read_app_commit() -> str:
-    root = Path(__file__).resolve().parent.parent.parent
-    try:
-        result = subprocess.run(
-            ["/usr/bin/git", "rev-parse", "HEAD"], cwd=root, text=True,
-            capture_output=True, timeout=5, check=False,
-        )
-        commit = result.stdout.strip()
-        return commit if re.fullmatch(r"[0-9a-f]{40}", commit) else "unknown"
-    except (OSError, subprocess.SubprocessError):
+    manifest = _RELEASE_MANIFEST
+    if manifest is None:
         return "unknown"
+    if manifest.get("development_build") is True:
+        return "unknown"
+    commit = str(manifest.get("implementation_commit") or "")
+    return commit if re.fullmatch(r"[0-9a-f]{40}", commit) else "unknown"
+
+
+def _release_identity() -> dict:
+    manifest = _RELEASE_MANIFEST
+    if manifest is None:
+        return {
+            "version": "unknown",
+            "implementation_commit": "unknown",
+            "development_build": None,
+            "payload_sha256": "unknown",
+            "runtime_sha256": "unknown",
+            "components": {},
+        }
+    def digest_value(raw) -> str:
+        value = str(raw or "")
+        return value if re.fullmatch(r"[0-9a-f]{64}", value) else "unknown"
+
+    def digest(name: str) -> str:
+        return digest_value(manifest.get(name))
+    components = {}
+    for name, value in manifest["components"].items():
+        if not isinstance(name, str) or not isinstance(value, dict):
+            continue
+        components[name] = {
+            "upstream_commit": (
+                str(value.get("upstream_commit"))
+                if re.fullmatch(r"[0-9a-f]{40}", str(value.get("upstream_commit") or ""))
+                else "unknown"
+            ),
+            "upstream_version": (
+                str(value.get("upstream_version"))
+                if re.fullmatch(r"\d+\.\d+\.\d+", str(value.get("upstream_version") or ""))
+                else "unknown"
+            ),
+            "source_sha256": digest_value(value.get("source_sha256")),
+        }
+    return {
+        "version": str(manifest["version"]),
+        "implementation_commit": APP_COMMIT,
+        "development_build": bool(manifest.get("development_build")),
+        "payload_sha256": digest("payload_sha256"),
+        "runtime_sha256": digest("runtime_sha256"),
+        "components": components,
+    }
 
 
 APP_COMMIT = _read_app_commit()
@@ -356,6 +419,7 @@ def health() -> dict:
         "version": app.version,
         "app_version": APP_VERSION,
         "app_commit": APP_COMMIT,
+        "release": _release_identity(),
         "hf_home": str(cache.hf_home()),
         "hub_dir": str(cache.hub_dir()),
         "busy": gen_manager.has_active_jobs() or _GEN_LOCK.locked(),
@@ -376,49 +440,18 @@ def capabilities() -> dict:
 
 
 # ── Update / generation health (auto-check surfaced by the web-UI banner) ──
-# Detect-in-app, apply-via-sidebar: the frontend banner reads this and points
-# the user at the single "Update" (or "Install Generation") button in the
-# Pinokio sidebar. We never git-pull from here — a sandboxed web page can't
-# reliably drive Pinokio's script runner, and the backend restarting itself
-# mid-request is fragile.
+# Packaged releases report whether replacement is available, while the backend
+# never mutates its immutable bundle or starts an updater subprocess.
 import importlib.util as _ilu
-import threading as _threading
-import time as _time
-import urllib.request as _urlreq
 
-_UPDATE_REPO = "theng12/voicestudio-mac"
 _GEN_MODULE = "diffusers"
-_update_state = {"checked_at": 0.0, "latest": None}
-
-
-def _parse_ver(v):
-    try:
-        return tuple(int(x) for x in str(v).strip().lstrip("v").split(".")[:3])
-    except Exception:
-        return (0,)
-
-
-def _refresh_latest_version():
-    try:
-        url = f"https://raw.githubusercontent.com/{_UPDATE_REPO}/main/VERSION"
-        with _urlreq.urlopen(url, timeout=5) as r:
-            _update_state["latest"] = r.read().decode("utf-8").strip()
-    except Exception:
-        pass
-    finally:
-        _update_state["checked_at"] = _time.time()
 
 
 @app.get("/api/update-status")
 def update_status() -> dict:
-    """What the web-UI banner needs: are we behind the published version, and is
-    the generation stack actually installed? The remote version is fetched from
-    the repo's raw VERSION file at most every ~6h, in a background thread, so a
-    slow or unreachable GitHub never blocks the request."""
-    if _time.time() - _update_state["checked_at"] > 6 * 3600:
-        _threading.Thread(target=_refresh_latest_version, daemon=True).start()
-    latest = _update_state["latest"]
-    behind = bool(latest and _parse_ver(latest) > _parse_ver(APP_VERSION))
+    """Report packaged runtime availability without remote updater activity."""
+    latest = None
+    behind = False
     gen_required = _GEN_MODULE is not None
     gen_ok = (_ilu.find_spec(_GEN_MODULE) is not None) if gen_required else None
     return {
@@ -432,22 +465,28 @@ def update_status() -> dict:
 
 @app.get("/api/version")
 def app_release_version() -> dict:
-    """Application release version + title. Read from the VERSION file at the
-    project root. Frontend renders this in the footer and (eventually) compares
-    against a remote `latest.json` for update-available signaling."""
+    """Application release identity and title for the packaged runtime."""
     return {
         "app_version": APP_VERSION,
         "title": app.title,
+        "release": _release_identity(),
     }
 
 
 @app.get("/api/release-notes")
 def release_notes() -> dict:
-    """Return recent installed release notes from the checked-out changelog."""
+    """Return recent release notes from the standalone package changelog."""
+    # The staged bundle places the root changelog next to the adopted Voice
+    # app. In the source checkout that file remains at the standalone repo
+    # root, while components/voice/CHANGELOG.md is upstream provenance.
+    candidates = [paths.BUNDLE_ROOT / "CHANGELOG.md"]
+    source_root_changelog = paths.APP_ROOT.parents[2] / "CHANGELOG.md"
+    if paths.release_manifest_path() is None:
+        candidates.insert(0, source_root_changelog)
     try:
-        changelog = Path(__file__).resolve().parent.parent.parent / "CHANGELOG.md"
+        changelog = next(path for path in candidates if path.is_file())
         text = changelog.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, StopIteration):
         return {"current_version": APP_VERSION, "releases": []}
 
     releases = []
@@ -770,15 +809,12 @@ def imports_link(body: ImportBody) -> dict:
 # ───────────── API: reveal in OS file manager ─────────────
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
-_LAUNCHER_ROOT = _APP_ROOT.parent
 
 
 def _reveal_allowed_roots() -> list[Path]:
     return [
         cache.hf_home().resolve(),
-        (_APP_ROOT / "output").resolve(),
-        (_APP_ROOT / "uploads").resolve(),
-        _LAUNCHER_ROOT.resolve(),
+        paths.data_dir().resolve(),
     ]
 
 
@@ -881,7 +917,10 @@ def _list_local_ips() -> list[dict]:
     return out
 
 
-def _detect_bind_port(default: int = 47870) -> int:
+def _detect_bind_port(default: int = 0) -> int:
+    env_port = os.environ.get("STUDIOHUB_BIND_PORT", "").strip()
+    if env_port.isdigit():
+        return int(env_port)
     args = sys.argv
     try:
         i = args.index("--port")
@@ -894,7 +933,10 @@ def _detect_bind_port(default: int = 47870) -> int:
     return default
 
 
-def _detect_bind_host(default: str = "0.0.0.0") -> str:
+def _detect_bind_host(default: str = "127.0.0.1") -> str:
+    env_host = os.environ.get("STUDIOHUB_BIND_HOST", "").strip()
+    if env_host:
+        return env_host
     args = sys.argv
     try:
         i = args.index("--host")
@@ -921,10 +963,10 @@ def connectivity(request: Request) -> dict:
         "scheme": request.url.scheme,
         "client_url": str(request.base_url).rstrip("/"),
         "addresses": _list_local_ips(),
-        "share_local_enabled": (os.environ.get("PINOKIO_SHARE_LOCAL", "").strip().lower() == "true"),
-        "share_local_port_fixed": os.environ.get("PINOKIO_SHARE_LOCAL_PORT", "").strip() or None,
-        "share_passcode_set": bool(os.environ.get("PINOKIO_SHARE_PASSCODE", "").strip()),
-        "pinokio_ui_port": 42000,
+        "share_local_enabled": False,
+        "share_local_port_fixed": None,
+        "share_passcode_set": False,
+        "pinokio_ui_port": None,
     }
 
 
@@ -1186,7 +1228,7 @@ def start_txt2speech(body: Txt2SpeechBody, request: Request) -> dict:
     if not gen_manager.is_available():
         raise HTTPException(
             status_code=503,
-            detail="TTS generation engine not installed. Run 'Install Generation' from the Pinokio sidebar.",
+            detail="TTS generation runtime is unavailable. Replace this app with a tested standalone release that includes it, then relaunch.",
         )
     if cache.cache_state(body.repo) != "cached":
         raise HTTPException(

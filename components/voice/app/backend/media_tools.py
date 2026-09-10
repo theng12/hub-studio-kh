@@ -5,17 +5,19 @@ import os
 import subprocess
 from pathlib import Path
 
+from . import paths
+
 
 _TOOLS = frozenset({"ffmpeg", "ffprobe"})
 
 
 def find_executable(name: str) -> Path | None:
-    """Return a runnable media executable from this app's Conda environment."""
+    """Return a runnable media executable from the packaged tools root."""
     if name not in _TOOLS:
         raise ValueError(f"Unsupported media tool: {name}")
-    environment = Path(__file__).resolve().parents[2] / "conda_env"
+    environment = paths.tools_dir()
     suffix = ".exe" if os.name == "nt" else ""
-    for directory in (environment / "bin", environment / "Library" / "bin", environment / "Scripts"):
+    for directory in (environment, environment / "bin", environment / "Library" / "bin", environment / "Scripts"):
         candidate = directory / f"{name}{suffix}"
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate

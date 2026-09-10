@@ -22,9 +22,11 @@ import os
 import re
 import time
 
+from . import paths
 
-LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
-WATCHDOG_LOG = LAUNCHER_ROOT / "logs" / "service" / "watchdog.log"
+
+LAUNCHER_ROOT = paths.legacy_source_root()
+WATCHDOG_LOG = paths.data_path("logs", "service", "watchdog.log")
 _MAX_LOG_BYTES = 256 * 1024
 _RESTART_LINE = re.compile(
     r"^\[watchdog\] (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "

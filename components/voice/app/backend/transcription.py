@@ -761,17 +761,16 @@ class TranscriptionManager:
             attempts.append(f"WhisperProcessor → {type(e).__name__}: {e}")
 
         joined = " | ".join(attempts)
-        # A "cannot import name" / ImportError means deps drifted, NOT a network
-        # problem — point the user at the pinned reinstall instead of a raw trace.
+        # A "cannot import name" / ImportError means deps drifted, not a network
+        # problem — point the user at a replacement release instead of a raw trace.
         if "ImportError" in joined or "cannot import name" in joined:
             raise RuntimeError(
                 "Whisper transcription is blocked by a Python dependency mismatch "
                 "in this server's environment — the tokenizer import from "
                 f"{base} failed ({joined}). This happens when transformers / "
                 "mlx-audio drift to incompatible versions across machines. "
-                "FIX: re-run 'Install Generation' from the Pinokio sidebar (it now "
-                "pins a known-good set), then Stop → Start. Manual equivalent: "
-                "uv pip install 'transformers==5.9.0' 'tokenizers==0.22.2'."
+                "Replace this app with a tested standalone release that includes "
+                "the Whisper runtime, then relaunch."
             )
         raise RuntimeError(
             f"Whisper model {repo} ships no HF processor and the fallback from "

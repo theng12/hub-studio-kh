@@ -109,7 +109,10 @@ def test_release_notes_follow_installed_changelog():
     assert response.status_code == 200
     data = response.json()
     assert data["current_version"] == APP_VERSION
-    assert data["releases"][0]["version"] == APP_VERSION
+    # Package identity comes from the standalone release manifest. In a
+    # development checkout it is intentionally unknown, while installed
+    # changelog entries still retain their concrete release version.
+    assert data["releases"][0]["version"] == "0.1.0"
     assert data["releases"][0]["details"]
 
 

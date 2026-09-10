@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from . import paths
+
 
 VALIDATOR_REVISION = "voicestudio.qwen-clone-quality.v1"
 TERMINAL_GATE_REVISION = "voicestudio.qwen-clone-quality.v2"
@@ -33,7 +35,7 @@ RETRYABLE_OUTPUT_CODES = frozenset({
     "QWEN_OUTPUT_TEXT_MISMATCH",
     "QWEN_OUTPUT_REPETITION_DETECTED",
 })
-_CACHE_DIR = Path(__file__).resolve().parent.parent / "reference_cache" / "qwen_quality"
+_CACHE_DIR = paths.data_path("reference_cache", "qwen_quality")
 
 
 @dataclass

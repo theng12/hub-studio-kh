@@ -1,6 +1,6 @@
 # Standalone Studio app: design and feasibility plan
 
-Date: 2026-09-10. Status: proposed design; implementation has not started.
+Date: 2026-09-10. Status: accepted direction; milestone 1 implementation authorized and in progress. See `qualification/voice-runtime.md` for measured results and remaining acceptance checks.
 
 ## Decision
 
@@ -135,4 +135,4 @@ Nothing else is required to finish this plan. Proposed defaults are one app, thr
 
 ## Completion definition for this planning task
 
-The separate folder, source evidence, architectural boundaries, staged implementation work and concrete pass/fail checks exist and agree with the owner's direction. This does not mean an app has been built, dependencies are portable, every model supports Sonoma, or GenStudio integration has passed. Implementation starts with milestone 1 when the owner proceeds with the plan.
+The separate folder, source evidence, architectural boundaries, staged implementation work and concrete pass/fail checks exist and agree with the owner's direction. This does not mean an app has been built, dependencies are portable, every model supports Sonoma, or GenStudio integration has passed. The owner authorized milestone 1 implementation on 2026-09-10. Later milestones remain gated by its qualification results.

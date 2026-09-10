@@ -35,6 +35,9 @@ assert not attempted, attempted
         capture_output=True,
         text=True,
         env=env,
-        timeout=5,
+        # The bundled runtime has a larger site-packages set than the source
+        # development environment; importing the lightweight backend can take
+        # several seconds while metadata is scanned under load.
+        timeout=20,
     )
     assert result.returncode == 0, result.stderr

@@ -1,6 +1,6 @@
 """Automatic retention and hard-cap cleanup for generated audio backups.
 
-Only completed audio files in ``app/output`` are eligible. Shared voice
+Only completed audio files in the external ``output`` directory are eligible. Shared voice
 masters, cloning references, uploads, model caches, credentials, and active
 jobs live elsewhere or are explicitly protected.
 """
@@ -15,8 +15,10 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from . import paths
 
-SETTINGS_FILE = Path(__file__).resolve().parent / "storage_policy.json"
+
+SETTINGS_FILE = paths.data_path("storage_policy.json")
 POLICY_VERSION = 2
 DEFAULTS = {"enabled": True, "retention_days": 30, "max_gb": 80.0}
 OUTPUT_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}

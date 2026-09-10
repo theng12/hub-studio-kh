@@ -1,0 +1,7 @@
+# Exact macOS 14 artifacts are required because MLX publishes different wheels
+# for macOS 14, 15, and 26 under the same package version.
+mlx @ https://files.pythonhosted.org/packages/c3/47/5f33906cb03d6a378a697cd2d2641a26b37dea17ee3d9124d7e39e8eca01/mlx-0.31.2-cp312-cp312-macosx_14_0_arm64.whl#sha256=e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f
+mlx-metal @ https://files.pythonhosted.org/packages/3f/69/fe3b783ebe999f3118234e1e940feb622518bfb1dea6ac5d13b1d36a8449/mlx_metal-0.31.2-py3-none-macosx_14_0_arm64.whl#sha256=b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc
+# orjson also publishes a faster arm64-only wheel that requires macOS 15.
+# Select its current universal2 wheel, whose arm64 slice targets macOS 11.
+orjson @ https://files.pythonhosted.org/packages/80/bf/76f4f1665f6983385938f0e2a5d7efa12a58171b8456c252f3bae8a4cf75/orjson-3.11.7-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl#sha256=bd03ea7606833655048dab1a00734a2875e3e86c276e1d772b2a02556f0d895f

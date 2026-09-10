@@ -17,10 +17,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import media_tools, model_audits
+from . import media_tools, model_audits, paths
 
 
-ROOT = Path(__file__).resolve().parents[1] / "reference_cache"
+ROOT = paths.data_path("reference_cache")
 PREPARATION_REVISION = "voicestudio.reference-audio.v1"
 MAX_BYTES = 25_000_000
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".webm"}

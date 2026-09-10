@@ -33,7 +33,12 @@ def test_pinned_download_passes_exact_revision_to_hugging_face(monkeypatch) -> N
     assert pruned == [job]
 
 
-def test_stalled_download_is_replaced_without_removing_its_partial(monkeypatch) -> None:
+def test_stalled_download_is_replaced_without_removing_its_partial(
+    monkeypatch, tmp_path
+) -> None:
+    # The standalone runtime receives an explicit model root. Keep this unit
+    # test independent of any real regression-model cache supplied to pytest.
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     manager = downloads.DownloadManager()
     job = downloads.DownloadJob(job_id="stalled", repo="example/model", state="running")
     job.started_at = 100.0

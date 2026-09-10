@@ -77,9 +77,9 @@ COMPLIANCE TABLE (keep current when adding workers):
 
 ═════════════════════════════════════════════════════════════════════════
 
-Outputs land in `app/output/<job_id>.wav` and are persisted to
-`app/output/.history.json` (same shape as MusicStudio's gen history) so they
-survive server restarts.
+Outputs land in the external Voice state `output/<job_id>.wav` and are
+persisted to `output/.history.json` (same shape as MusicStudio's gen history)
+so they survive server restarts without mutating the app bundle.
 """
 from __future__ import annotations
 
@@ -116,6 +116,7 @@ from . import (
     reference_audio,
     resource_telemetry,
     text_normalization,
+    paths,
 )
 from .native_executor import ExclusiveNativeExecutor
 from .voicestudio_genstudio_integration import final_tts_result
@@ -128,7 +129,7 @@ from .voicestudio_genstudio_integration import final_tts_result
 # Serialize all generations.
 _GEN_LOCK = threading.Lock()
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+OUTPUT_DIR = paths.data_path("output")
 HISTORY_FILE = OUTPUT_DIR / ".history.json"
 HISTORY_MAX = 200
 _AUDIO_OUTPUT_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
@@ -1150,7 +1151,7 @@ def _join_qwen_clone_wavs(segment_paths: list[Path], output_path: Path,
 
 
 def _find_ffmpeg_executable() -> Optional[Path]:
-    """Resolve FFmpeg from the Voice Studio-managed Conda environment."""
+    """Resolve FFmpeg from the packaged tools root."""
     return media_tools.find_executable("ffmpeg")
 
 
@@ -2225,8 +2226,9 @@ class GenerationManager:
 
     @staticmethod
     def _service_installed() -> bool:
-        root = Path(__file__).resolve().parents[2]
-        return (root / "service" / ".installed").is_file()
+        # The packaged worker is supervised by its host process.  It must not
+        # discover or act on a copied Pinokio launchd marker inside the bundle.
+        return False
 
     def _evict_loaded_models(self, reason: str = "memory-recovery") -> dict:
         """Drop both cached engines before a memory retry or supervised restart."""
@@ -2995,15 +2997,15 @@ class GenerationManager:
         if family == "f5-tts":
             if not _have_f5_tts():
                 raise RuntimeError(
-                    "The `f5-tts` package isn't installed. Run 'Install Generation' "
-                    "from the Pinokio sidebar (this installs f5-tts + vocos + cached_path)."
+                    "The `f5-tts` runtime is unavailable in this packaged app. "
+                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
                 )
             self._generate_f5_tts(job, model, output_path)
         elif family in MLX_AUDIO_FAMILIES:
             if not _have_mlx_audio():
                 raise RuntimeError(
-                    "The `mlx-audio` package isn't installed. Run 'Install Generation' "
-                    "from the Pinokio sidebar (this installs the MLX + mlx-audio stack)."
+                    "The `mlx-audio` runtime is unavailable in this packaged app. "
+                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
                 )
             self._generate_mlx_audio(job, model, output_path, postprocess_speed=postprocess_speed)
         else:

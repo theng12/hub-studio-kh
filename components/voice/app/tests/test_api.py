@@ -1,5 +1,3 @@
-import re
-
 from fastapi.testclient import TestClient
 
 from backend import main
@@ -30,22 +28,22 @@ def test_startup_does_not_bootout_the_launchagent_during_its_update(monkeypatch)
     assert calls == ["scheduled-after-update"]
 
 
-def test_health_attests_to_the_loaded_app_commit():
+def test_health_reports_unknown_commit_without_a_release_manifest():
     client = TestClient(main.app)
 
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert re.fullmatch(r"[0-9a-f]{40}", response.json()["app_commit"])
+    assert response.json()["app_commit"] == "unknown"
 
 
-def test_auto_update_status_advertises_exact_managed_commit_capability():
+def test_auto_update_status_reports_standalone_capability_limits():
     client = TestClient(main.app, headers={"X-Studio-Token": main.FLEET_TOKEN})
 
     response = client.get("/api/auto-update/status")
 
     assert response.status_code == 200
-    assert response.json()["capabilities"]["managed_exact_commit"] is True
+    assert response.json()["capabilities"]["managed_exact_commit"] is False
 
 
 def test_managed_update_route_requires_auth_and_threads_full_tuple(monkeypatch):

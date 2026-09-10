@@ -10,7 +10,7 @@ REPO = "example/model"
 
 
 def _repo(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     root = cache.repo_cache_dir(REPO)
     (root / "blobs").mkdir(parents=True)
     snapshot = root / "snapshots" / ("a" * 40)
@@ -44,7 +44,7 @@ def test_snapshot_revision_ignores_a_mutable_main_snapshot_folder(
 def test_unversioned_weight_snapshot_is_preserved_but_not_advertised_cached(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     root = cache.repo_cache_dir(REPO)
     snapshot = root / "snapshots" / "main"
     snapshot.mkdir(parents=True)
@@ -64,7 +64,7 @@ def test_unversioned_weight_snapshot_is_preserved_but_not_advertised_cached(
 def test_selected_immutable_snapshot_must_itself_contain_weights(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     root = cache.repo_cache_dir(REPO)
     immutable = root / "snapshots" / ("a" * 40)
     immutable.mkdir(parents=True)
@@ -82,7 +82,7 @@ def test_selected_immutable_snapshot_must_itself_contain_weights(
 
 
 def test_disk_bytes_counts_real_snapshot_files_without_blobs(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     snapshot = cache.repo_cache_dir(REPO) / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)
     (snapshot / "model.safetensors").write_bytes(b"snapshot-only")
@@ -91,7 +91,7 @@ def test_disk_bytes_counts_real_snapshot_files_without_blobs(tmp_path, monkeypat
 
 
 def test_disk_bytes_counts_blob_storage_without_a_snapshot(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     blobs = cache.repo_cache_dir(REPO) / "blobs"
     blobs.mkdir(parents=True)
     (blobs / "blob-hash").write_bytes(b"blob-only")
@@ -221,7 +221,7 @@ def test_orphan_incomplete_is_pruned_only_after_complete_snapshot_verification(
 def test_metadata_only_snapshot_can_verify_required_companion_files(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     root = cache.repo_cache_dir(REPO)
     snapshot = root / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)

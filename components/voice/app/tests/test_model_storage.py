@@ -10,7 +10,7 @@ from backend import main as backend_main
 
 
 def _cached_repo(tmp_path: Path, monkeypatch, repo: str, *, weight: bool = True) -> Path:
-    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(tmp_path / "models"))
     root = cache.repo_cache_dir(repo)
     snapshot = root / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)

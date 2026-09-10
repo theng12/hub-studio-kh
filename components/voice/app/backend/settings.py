@@ -1,7 +1,7 @@
 """
 Persistent app settings.
 
-Stored as JSON at `app/backend/settings.json` (gitignored). Currently holds
+Stored as JSON in the external Studio Hub Voice state directory. Currently holds
 the Hugging Face token; structured as a dict so we can add more keys later
 without rev-bumping the file format.
 
@@ -18,8 +18,10 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
+from . import paths
 
-_PATH = Path(__file__).resolve().parent / "settings.json"
+
+_PATH = paths.data_path("settings.json")
 _LOCK = threading.Lock()
 
 DEFAULTS: dict[str, Any] = {
@@ -39,6 +41,7 @@ def _secure_permissions(path: Path) -> None:
 
 
 def _write_cache() -> None:
+    _PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = _PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(_cache, indent=2))
     _secure_permissions(tmp)
