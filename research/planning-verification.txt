@@ -1,0 +1,9 @@
+hub: source identity and clean status unchanged
+image: source identity and clean status unchanged
+voice: source identity and clean status unchanged
+README.md: local links and code fences valid
+AGENTS.md: local links and code fences valid
+docs/standalone-plan.md: local links and code fences valid
+research/hub-contract-inventory.md: local links and code fences valid
+Explicit PWF_PLAN_ROOT + PLAN_ID resolver returned the intended planning directory.
+No application test/build or OS compatibility claim.
