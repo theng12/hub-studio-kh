@@ -45,7 +45,7 @@ Owner approved starting implementation and using sub-agents. Prior planning-only
 3. Verify local relocation/imports/API and perform independent review — complete; 665 tests and final Qwen/Whisper smoke pass.
 4. Record qualification evidence and remaining hardware/model/integration work — complete; qualification/voice-runtime.md records exact artifact and limitations.
 5. Native app shell and six-function navigation — complete as local Audio/Transcription preview 0.2.0; 676 regression tests, native boundary/build checks and final relocation/model smoke passed. See qualification/native-preview.md.
-6. Native redesign — implemented; final artifact verification in progress: owner requires separate Audio/Transcription workspaces, central Models/Jobs/Connections/Settings and node-operation Overview. Replace legacy embedded navigation and duplicated management.
+6. Native redesign — complete as local 0.3.0 preview; final packaged UI, 676 regressions, native contracts, real Qwen/Whisper relocation and unchanged digest verified: owner requires separate Audio/Transcription workspaces, central Models/Jobs/Connections/Settings and node-operation Overview. Replace legacy embedded navigation and duplicated management.
 7. Local Image, then Chat/Music/Video, with necessary local capacity coordination — pending.
 8. Optional Studio Hub/GenStudio control — pending.
 9. Full local contract tests, physical qualification and distribution — pending.

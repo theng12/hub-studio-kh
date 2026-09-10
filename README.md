@@ -2,7 +2,7 @@
 
 Independent native macOS application project for local creation on Apple Silicon. Existing Pinokio installations and their maintenance flow remain untouched.
 
-**Version 0.3.0 status:** the native SwiftUI/AppKit redesign is implemented; final artifact verification is recorded in [redesign evidence](qualification/native-redesign.md). It presents six functions—Audio, Transcription, Image, Music, Video and Chat—with separate Audio and Transcription workspaces and shared Overview, Models, Jobs and Settings management. Connections to an API, Studio Hub or GenStudio are optional; local asset creation is the primary flow.
+**Version 0.3.0 status:** the native SwiftUI/AppKit redesign is implemented; the built standalone preview and final artifact verification are recorded in [redesign evidence](qualification/native-redesign.md). It presents six functions—Audio, Transcription, Image, Music, Video and Chat—with separate Audio and Transcription workspaces and shared Overview, Models, Jobs and Settings management. Connections to an API, Studio Hub or GenStudio are optional; local asset creation is the primary flow.
 
 Audio currently uses the adopted Voice runtime and Qwen speech model. Native job `c56f0f41d938` completed and was saved. The separate Transcription workspace imported that WAV, returned the expected text and exported SRT subtitles. Image, Chat, Music and Video engine integration, plus optional controller integration, remain pending. A navigation item is not treated as an implemented engine.
 
