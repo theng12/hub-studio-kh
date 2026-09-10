@@ -1,6 +1,6 @@
 # Standalone Studio app: design and feasibility plan
 
-Date: 2026-09-10. Status: accepted direction; milestone 1 implementation authorized and in progress. See `qualification/voice-runtime.md` for measured results and remaining acceptance checks.
+Date: 2026-09-10. Status: local Voice proof implemented; clean-machine qualification remains pending. See `qualification/voice-runtime.md` for measured results and remaining acceptance checks.
 
 ## Decision
 

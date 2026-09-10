@@ -1,0 +1,125 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "first": {
+    "startup_seconds": 37.294,
+    "health": {
+      "ok": true,
+      "version": "0.1.0",
+      "app_version": "0.1.0",
+      "app_commit": "b21b263c0dc03389d5658eafe632b795e1dccca1",
+      "release": {
+        "version": "0.1.0",
+        "implementation_commit": "b21b263c0dc03389d5658eafe632b795e1dccca1",
+        "development_build": false,
+        "payload_sha256": "4812bfd3148d1c140ced0de1621430516edfdddfba0c5a731a8fbb2a93b2976c",
+        "runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6",
+        "components": {
+          "voice": {
+            "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+            "upstream_version": "2.7.2",
+            "source_sha256": "09e73d736230c5e3ac8f4d89be168d905eec3d928d31805a0900468336dcd7fc"
+          }
+        }
+      },
+      "hf_home": "/build/Projects/studiohub-standalone/.build/pilot-models",
+      "hub_dir": "/build/Projects/studiohub-standalone/.build/pilot-models/hub",
+      "busy": false,
+      "loaded_models": [],
+      "memory": {
+        "total_gb": 17.18,
+        "available_gb": 3.06,
+        "used_gb": 5.26,
+        "percent": 82.2
+      },
+      "process": {
+        "pid": 30536,
+        "started_at": 1789057097.592644,
+        "started_at_iso": "2026-09-10T23:18:17",
+        "uptime_seconds": 37.211
+      },
+      "restart_health": {
+        "status": "healthy",
+        "alert": false,
+        "restarts_24h": 0,
+        "restarts_7d": 0,
+        "last_restart_at": null,
+        "observed_at": "2026-09-10T23:18:54",
+        "message": "No watchdog restarts observed in the last 7 days"
+      }
+    },
+    "catalog_status": 200,
+    "managed_exact_commit": false,
+    "local_update_status": 409,
+    "packaged_update_status": 409
+  },
+  "relocated": {
+    "startup_seconds": 1.977,
+    "health": {
+      "ok": true,
+      "version": "0.1.0",
+      "app_version": "0.1.0",
+      "app_commit": "b21b263c0dc03389d5658eafe632b795e1dccca1",
+      "release": {
+        "version": "0.1.0",
+        "implementation_commit": "b21b263c0dc03389d5658eafe632b795e1dccca1",
+        "development_build": false,
+        "payload_sha256": "4812bfd3148d1c140ced0de1621430516edfdddfba0c5a731a8fbb2a93b2976c",
+        "runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6",
+        "components": {
+          "voice": {
+            "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+            "upstream_version": "2.7.2",
+            "source_sha256": "09e73d736230c5e3ac8f4d89be168d905eec3d928d31805a0900468336dcd7fc"
+          }
+        }
+      },
+      "hf_home": "/build/Projects/studiohub-standalone/.build/pilot-models",
+      "hub_dir": "/build/Projects/studiohub-standalone/.build/pilot-models/hub",
+      "busy": false,
+      "loaded_models": [],
+      "memory": {
+        "total_gb": 17.18,
+        "available_gb": 3.16,
+        "used_gb": 5.36,
+        "percent": 81.6
+      },
+      "process": {
+        "pid": 30936,
+        "started_at": 1789057145.085612,
+        "started_at_iso": "2026-09-10T23:19:05",
+        "uptime_seconds": 2.015
+      },
+      "restart_health": {
+        "status": "healthy",
+        "alert": false,
+        "restarts_24h": 0,
+        "restarts_7d": 0,
+        "last_restart_at": null,
+        "observed_at": "2026-09-10T23:19:07",
+        "message": "No watchdog restarts observed in the last 7 days"
+      }
+    },
+    "catalog_status": 200,
+    "managed_exact_commit": false,
+    "local_update_status": 409,
+    "packaged_update_status": 409,
+    "model_execution": {
+      "generation_seconds": 22.462,
+      "audio_bytes": 241964,
+      "audio_sha256": "36b937640719dc84fd2385ae0c1224eecec77302b6f15068d460ac068e9e597b",
+      "transcription_text": "This is a standalone voice studio test. The bundled engine is speaking clearly.",
+      "total_seconds": 42.111
+    }
+  },
+  "bundle_sha256": "84bf78172326698531d8ae36b574e80a7a6f3e285f357f7e5a4a9b76457abe01",
+  "bundle_unchanged": true,
+  "minimal_process_environment": true,
+  "inherited_credential_stripping_tested": true,
+  "fresh_os_install": false,
+  "generation_tested": true,
+  "pilot_input_hashes_verified": true,
+  "huggingface_offline_mode": true,
+  "network_physically_disabled": false,
+  "sonoma_qualified": false
+}

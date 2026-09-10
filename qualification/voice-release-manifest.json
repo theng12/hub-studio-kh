@@ -1,0 +1,17 @@
+{
+  "schema": "studiohub.standalone-release",
+  "schema_version": 1,
+  "version": "0.1.0",
+  "implementation_commit": "b21b263c0dc03389d5658eafe632b795e1dccca1",
+  "development_build": false,
+  "qualification": "unqualified-local-proof",
+  "components": {
+    "voice": {
+      "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+      "upstream_version": "2.7.2",
+      "source_sha256": "09e73d736230c5e3ac8f4d89be168d905eec3d928d31805a0900468336dcd7fc"
+    }
+  },
+  "runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6",
+  "payload_sha256": "4812bfd3148d1c140ced0de1621430516edfdddfba0c5a731a8fbb2a93b2976c"
+}

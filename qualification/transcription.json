@@ -1,0 +1,67 @@
+{
+  "text": "This is a standalone voice studio test. The bundled engine is speaking clearly.",
+  "language": "en",
+  "duration": 5.04,
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 4.46,
+      "text": "This is a standalone voice studio test. The bundled engine is speaking clearly."
+    }
+  ],
+  "srt": "1\n00:00:00,000 --> 00:00:04,460\nThis is a standalone voice studio test. The bundled engine is speaking clearly.\n",
+  "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:04.460\nThis is a standalone voice studio test. The bundled engine is speaking clearly.\n",
+  "elapsed_seconds": 19.5,
+  "resource_telemetry": {
+    "schema": "voicestudio.resource-telemetry",
+    "schema_version": 1,
+    "sampling": {
+      "interval_seconds": 0.5,
+      "samples": 38,
+      "started_at": 1789057169.926752,
+      "finished_at": 1789057189.423605
+    },
+    "host": {
+      "total_gb": 17.18,
+      "available_gb_start": 4.473,
+      "minimum_available_gb": 2.685,
+      "available_gb_end": 3.438,
+      "maximum_used_gb": 6.864,
+      "maximum_used_percent": 84.4,
+      "pressure_level_start": "warning",
+      "peak_pressure_level": "warning",
+      "peak_pressure_raw": 2,
+      "pressure_level_end": "warning",
+      "swap_used_gb_start": 11.374,
+      "maximum_swap_used_gb": 12.565,
+      "swap_used_gb_end": 12.556,
+      "swap_used_delta_gb": 1.182,
+      "swap_in_delta_bytes": 3933208576,
+      "swap_out_delta_bytes": 15007744
+    },
+    "worker": {
+      "rss_gb_start": 0.367,
+      "peak_rss_gb": 1.009,
+      "rss_gb_end": 0.358,
+      "peak_process_count": 3
+    },
+    "mlx": {
+      "supported": true,
+      "active_gb_start": 0.0,
+      "peak_active_gb": 2.046,
+      "peak_cache_gb": 0.518,
+      "reported_peak_gb": 2.139,
+      "active_gb_end": 1.618,
+      "cache_gb_end": 0.0
+    },
+    "outcome": {
+      "state": "completed",
+      "memory_failure": false,
+      "restart_scheduled": false,
+      "model_retained": true
+    }
+  },
+  "task_id": "stt-258cf760f380"
+}
