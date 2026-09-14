@@ -37,3 +37,7 @@ Runtime inventory found existing source/lock drift: requirements-generation.txt 
 Read-only model inventory found reusable complete cached pilot snapshots: Qwen CustomVoice0.6B8bit at049ef77fe8816b536193c0c25f9a214d17921282 (~1.97GB,14files) and Whisper large-v3-turbo at a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb (~1.61GB,4files), no broken links. No model copy or execution yet; later proof can import only these complete weights/config packages into isolated test storage, without copying old credentials/state.
 
 Whisper MLX snapshot is weights-only. Source _attach_processor uses companion OpenAI tokenizer; imported its cached revision41f01f3fe87f28c78e2fbf8b568835947dd65ed9 (7tokenizer files, no duplicate OpenAI model weights) into isolated HF model library and recorded hashes. This is required offline input data, not a Python dependency or new paid/API route.
+
+## Khmer TTS stock — 2026-09-14
+
+Owner requested a personal-use local copy. The pinned VITS model package is recorded in research/khmer-tts-stock.json and kept under model-library/khmer-tts/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/. Preserve this folder when cleaning build artifacts. Weights and companion files are checksum-verified; inference quality, Mac compatibility and native Audio integration remain untested. Latest owner direction is personal use only.

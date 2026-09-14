@@ -53,5 +53,6 @@ The historical 0.2.0 evidence recorded 676 passing regression tests after reloca
 - [Redistribution inventory](research/licenses.md)
 - [Voice qualification evidence](qualification/voice-runtime.md)
 - [Upstream source identities](research/source-checkouts.json)
+- [Khmer TTS personal model stock](research/khmer-tts-stock.md)
 
 The adopted Voice source remains under `components/voice`; sibling Pinokio repositories are source evidence only. Use planning-with-files with `PWF_PLAN_ROOT=/build/Projects/studiohub-standalone` and `PLAN_ID=2026-09-10-standalone-app-feasibility` when continuing the project.

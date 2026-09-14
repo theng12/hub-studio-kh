@@ -1,0 +1,68 @@
+{
+  "repo": "khmerttsopensource/khmer-tts",
+  "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+  "source": "https://huggingface.co/khmerttsopensource/khmer-tts/tree/c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+  "stocked_at": "2026-09-14",
+  "intended_use": "Personal use, per owner direction",
+  "status": "Downloaded and checksum-verified; inference and app integration not tested or enabled",
+  "local_directory": "model-library/khmer-tts/c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+  "declared_license": "cc-by-nc-4.0",
+  "files": [
+    {
+      "path": "LICENSE.md",
+      "bytes": 316,
+      "sha256": "ffead4556d1a724ae92d912f39b84a9619e2aa12fab3c8b9be9c38477bd92810"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3108,
+      "sha256": "d9cff4c35eab821e335b61a3a0f01ed247c8ac2cd2149a457a8c17ca511e134e"
+    },
+    {
+      "path": "added_tokens.json",
+      "bytes": 18,
+      "sha256": "790075aa7c444d298744a71182497accf58329fff2beb8fee4cf2dcc3f99cf4c"
+    },
+    {
+      "path": "config.json",
+      "bytes": 1987,
+      "sha256": "ac84dc9f7306b8536771e9a556b230640fd9144942875e211c874822893c1119"
+    },
+    {
+      "path": "model.safetensors",
+      "bytes": 332188360,
+      "sha256": "e691800bfdf718af491cdf53762091b3ec95be1a90b84a0b7782284d60b98076"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "bytes": 254,
+      "sha256": "72877422bd3ff8f768c8a9e839ddf60c2832ad1fab580d546035c6ca96bb0c87"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 37,
+      "sha256": "526cc5fd6405c5209cbd159cd836e74e26e75420caa1b8dd236426d4061f7dca"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "bytes": 277,
+      "sha256": "a3120d4cd97bbfbbbd3126ab1991afa236b6ca9160c0f3ba1fda4bca9f8ac950"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 704,
+      "sha256": "cb3beccec589c3d2a131a837b3bfa68898aeb928e793f78e2ebd321387c98129"
+    },
+    {
+      "path": "vocab.json",
+      "bytes": 945,
+      "sha256": "b7549cb60a0851e2ad333bd259c62d9caa54e9e4d523e63334ddea8a4d22e91f"
+    },
+    {
+      "path": "examples/inference.py",
+      "bytes": 1037,
+      "sha256": "ea390203cb7cf491a8179a115341cae256fab405581d5bca4ed53d5de0ef7086"
+    }
+  ],
+  "total_bytes": 332197043
+}
