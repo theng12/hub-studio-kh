@@ -89,7 +89,7 @@ class QwenBaseCatalogTests(unittest.TestCase):
             # The model needs the exact reference transcript; that is a
             # backend-enforced requirement, not a UI hint.
             self.assertEqual(reference["transcript"], "required", repo)
-            self.assertEqual(reference["transcript_requirement"], "required", repo)
+            self.assertNotIn("transcript_requirement", reference, repo)
             self.assertTrue(reference["minimum_duration_seconds"] >= 3, repo)
             self.assertTrue(reference["maximum_duration_seconds"] <= 30, repo)
             self.assertEqual(reference["sample_rate_hz"], 24000, repo)

@@ -1863,9 +1863,8 @@ def serialize_model(m: ModelEntry) -> dict:
             "supported": bool("voice-cloning" in m.capabilities),
             "profile_audited": bool(reference_profile),
             "profile_source": "audit" if reference_profile else "unverified",
-            "transcript_requirement": (
-                str(reference_profile.get("transcript") or "") or None
-            ),
+            # ``transcript`` ("required" for every Base tier) comes from the
+            # audited profile below; it is the backend-enforced requirement.
             **reference_profile,
         },
         "apple_optimized": apple_optimized,

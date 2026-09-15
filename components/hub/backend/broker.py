@@ -956,6 +956,22 @@ def restore_batches():
     return len(batches)
 
 
+def _shared_params_with_local_reference(envelope: dict) -> dict:
+    """Lift a top-level ``voice_reference_asset_id`` into the item parameter map.
+
+    GenStudio transports the staged reference inside ``sharedParams``.  The
+    native app submits one already-staged local asset, so its request carries
+    the id beside ``model``/``items`` like the Image reference envelope does.
+    Both origins must reach the same worker route, so the top-level form is
+    folded in without overwriting an explicit ``sharedParams`` value.
+    """
+    shared = dict(envelope.get("sharedParams") or {})
+    reference = str(envelope.get("voice_reference_asset_id") or "").strip()
+    if reference and not str(shared.get("voice_reference_asset_id") or "").strip():
+        shared["voice_reference_asset_id"] = reference
+    return shared
+
+
 def submit_batch(envelope: dict) -> dict:
     with _submit_lock:
         return _submit_batch_locked(envelope)
@@ -1063,7 +1079,7 @@ def _submit_batch_locked(envelope: dict) -> dict:
         "genstudio_execution": prepared.evidence,
         "modality": modality,
         "model": envelope["model"],
-        "shared_params": envelope.get("sharedParams") or {},
+        "shared_params": _shared_params_with_local_reference(envelope),
         "routing": routing,
         "label": envelope.get("label"),        # who submitted (e.g. "storystudio")
         "webhook": envelope.get("webhook"),    # POSTed the summary on completion

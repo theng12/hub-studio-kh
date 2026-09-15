@@ -274,6 +274,51 @@ class VoiceReferenceRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"]["code"], "VOICE_REFERENCE_ASSET_MISSING")
 
+    def test_native_envelope_level_reference_reaches_the_item(self) -> None:
+        """The app's top-level voice_reference_asset_id must reach the item params.
+
+        GenStudio nests the staged id in sharedParams; the native envelope sends
+        it beside model/items. Both must route to the same worker endpoint, so
+        the Hub folds the top-level form in without overwriting sharedParams.
+        """
+        payload = self._stage(transcript="Exact words.").json()
+        from components.hub.backend import broker
+        seen: dict = {}
+        original = broker.submit_batch
+
+        def spy(envelope):
+            seen.update(envelope)
+            return {"batch_id": "fixture-batch", "items": 0}
+
+        broker.submit_batch = spy
+        try:
+            with patch.object(standalone, "_submission_readiness", lambda *_a, **_k: None):
+                response = self.client.post("/api/hub/jobs", headers=HEADERS, json={
+                    "modality": "voice", "model": "fixture/voice",
+                    "clientRequestId": "voice-ref-native-0001",
+                    "voice_reference_asset_id": payload["asset_id"],
+                    "items": [{"text": "Narration", "params": {}}],
+                })
+        finally:
+            broker.submit_batch = original
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen["voice_reference_asset_id"], payload["asset_id"])
+
+    def test_shared_params_reference_wins_over_the_top_level_form(self) -> None:
+        from components.hub.backend import broker
+        staged = broker._shared_params_with_local_reference({
+            "voice_reference_asset_id": "a" * 24,
+            "sharedParams": {"voice_reference_asset_id": "b" * 24},
+        })
+        self.assertEqual(staged["voice_reference_asset_id"], "b" * 24)
+        lifted = broker._shared_params_with_local_reference({
+            "voice_reference_asset_id": "a" * 24,
+        })
+        self.assertEqual(lifted["voice_reference_asset_id"], "a" * 24)
+        self.assertEqual(
+            broker._shared_params_with_local_reference({}), {},
+        )
+
     # -- reference bytes stay outside generated-output cleanup ---------
 
     def test_cleanup_index_refuses_a_reference_outside_the_output_root(self) -> None:
