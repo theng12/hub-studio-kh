@@ -24,6 +24,16 @@ struct StudioWindow: View {
     var body: some View { StudioContent(studio: studio, workspace: studio.workspace) }
 }
 
+/// Tabs for the unified history. Owner requirement (2026-09-15): each generation page keeps its
+/// own history, and the shared history is presented with tabs rather than one flat scroll.
+enum HistoryTab: String, CaseIterable, Identifiable {
+    case all = "All"
+    case image = "Image"
+    case audio = "Audio"
+    case transcription = "Transcription"
+    var id: String { rawValue }
+}
+
 struct StudioContent: View {
     @ObservedObject var studio: StudioController
     @ObservedObject var workspace: NativeWorkspaceStore
@@ -39,6 +49,7 @@ struct StudioContent: View {
     @State private var savingToken = false
     @State private var imagePreview: NSImage?
     @State private var selectedImageID: String?
+    @State private var historyTab = HistoryTab.all
     @State private var loadingImage = false
 
 
@@ -533,22 +544,39 @@ struct StudioContent: View {
     private var jobsWorkspace: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                heading("Jobs", "Follow local work and retrieve completed assets.")
+                heading("Jobs", "Every local generation in one place, or filtered to a single studio.")
+                Picker("History", selection: $historyTab) {
+                    ForEach(HistoryTab.allCases) { tab in Text(tab.rawValue).tag(tab) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420, alignment: .leading)
+                .accessibilityLabel("History filter")
                 if workspace.transcribing { transcriptionActivity }
-                sectionTitle("Image")
-                if workspace.imageJobs.isEmpty { Text("No image jobs yet.").foregroundStyle(.secondary) }
-                ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
-                sectionTitle("Audio")
-                if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
-                ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
-                sectionTitle("Transcription")
-                if let result = workspace.transcriptionResult {
-                    HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Transcript") { studio.select(.transcription) } }
-                } else if !workspace.transcribing { Text("No completed transcript yet.").foregroundStyle(.secondary) }
-                Divider()
-                sectionTitle("Model downloads")
-                if workspace.downloads.isEmpty { Text("No model downloads.").foregroundStyle(.secondary) }
-                ForEach(workspace.downloads) { downloadRow($0) }
+                if historyTab == .all || historyTab == .image {
+                    sectionTitle("Image")
+                    if workspace.imageJobs.isEmpty { Text("No image jobs yet.").foregroundStyle(.secondary) }
+                    ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
+                }
+                if historyTab == .all || historyTab == .audio {
+                    sectionTitle("Audio")
+                    if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
+                    ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
+                }
+                if historyTab == .all || historyTab == .transcription {
+                    sectionTitle("Transcription")
+                    if let result = workspace.transcriptionResult {
+                        HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Transcript") { studio.select(.transcription) } }
+                        Text("Subtitle keeps its own full history once the independent Subtitle studio is connected.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if !workspace.transcribing { Text("No completed transcript yet.").foregroundStyle(.secondary) }
+                }
+                if historyTab == .all {
+                    Divider()
+                    sectionTitle("Model downloads")
+                    if workspace.downloads.isEmpty { Text("No model downloads.").foregroundStyle(.secondary) }
+                    ForEach(workspace.downloads) { downloadRow($0) }
+                }
             }.padding(28)
         }
     }
