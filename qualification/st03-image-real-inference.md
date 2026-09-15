@@ -82,21 +82,35 @@ Still open:
 ## Export / receipt acknowledgement — proven 2026-09-15
 
 The Hub ↔ worker receipt contract was exercised end to end against the
-Image-inclusive artifact re-staged **from the merged tree**
-(`dist/Studio Hub 0.4.0 Image Proof.app`, `implementation_commit 5c8f85d`,
-bundling `runtimes/image` and `image_worker.py`):
+Image-inclusive artifact staged from the merged tree
+(`dist/Studio Hub 0.4.0 Image Proof.app`, `implementation_commit 86b11d3`,
+payload `0cabfe85…`, bundling `runtimes/image` and `image_worker.py`):
 
 | Step | Result |
 | --- | --- |
-| Submit through the Hub | `POST /api/hub/jobs` → HTTP 200, batch `d8c27a4e8e` |
-| Real generation | `done`; 1,696,066 bytes; SHA-256 `5e4cd5dbdfdd550cca2835e4d1cdd6c350a6f8981686919c07129666be43f5d9`; 107.36 s; studio job `c6ee61743e46479482bbc93a7f31f7be` |
-| Before acknowledgement | `receipt_acked_at: null` |
-| `POST /api/hub/jobs/d8c27a4e8e/items/0/ack` | HTTP 200, `{"ok": true}` |
-| After acknowledgement | `receipt_acked_at: 1789482968.542187` |
+| Submit through the Hub | `POST /api/hub/jobs` → HTTP 200, batch `2002393f6a` |
+| Real generation | `done`; 1,696,066 bytes; SHA-256 `dc995e8a…`; 107.73 s; studio job `f04f1b92f84e48cfac9f32be2b7b24d4` |
+| **Before** acknowledgement | `receipt_acked_at: null` |
+| `POST /api/hub/jobs/2002393f6a/items/0/ack` | HTTP 200, `{"ok": true}` |
+| **After** acknowledgement | `receipt_acked_at: 1789485143.736741` |
 
-Full batch detail: [`evidence/st03-ack-proof.json`](evidence/st03-ack-proof.json).
-The app was then stopped; both readiness files were removed and no project process
-remained.
+Both states were captured for the same job in a single run and are stored together in
+[`evidence/st03-ack-proof.json`](evidence/st03-ack-proof.json) alongside the artifact identity
+that produced them (`transition_confirmed: true`). The app was then stopped; both readiness
+files were removed and no project process remained.
+
+An earlier capture (batch `d8c27a4e8e`) recorded only the post-acknowledgement state. The
+independent review correctly flagged that the null→stamp transition was therefore asserted
+rather than evidenced; that capture is superseded by the run above.
+
+## Packaged restart history — verified 2026-09-15
+
+The same artifact was fully stopped and relaunched against the same external state directory.
+Before the restart the Hub listed batch `d8c27a4e8e`; after the restart it was still listed with
+the identical output SHA-256 `5e4cd5db…` and `receipt_acked_at` still set, on a **different** Hub
+port. So job history, output identity and delivery acknowledgement all survive a packaged
+restart. This is a ledger-level restart check through the Hub API; a human-driven click-through
+of the same history in the window remains part of the GUI pass.
 
 ### Native wiring
 
@@ -112,8 +126,32 @@ nothing, a verified save acknowledges exactly
 while the saved file remains. `bash native/build.sh` passes boundary and API contract
 checks.
 
-Still open: exercising the same path through the real GUI **Save** panel against a live
-Hub (the proof above drove the Hub API directly), restart-history checks, ST-03.6 retry
-counts and independent review. Separately, `StudioViews.swift` `saveAudio` still writes
-audio bytes with no verified-destination acknowledgement, so the same wiring is owed for
-Voice export under ST-08.
+Still open: exercising the path through the real GUI **Save** panel against a live Hub (the
+proof above drove the Hub API directly), ST-03.6 retry-count confirmation, and a
+human-driven click-through of history in the window. Restart history is verified above and
+independent review has run — see below. Separately, `StudioViews.swift` `saveAudio` still
+writes audio bytes with no verified-destination acknowledgement, so the same wiring is owed
+for Voice export under ST-08.
+
+## Independent review — 2026-09-15
+
+A separate read-only reviewer inspected the merged ST-03 code, the acknowledgement wiring and
+every recorded claim, and re-ran the suites. Verdict: **no code blocker** — the
+acknowledgement gating is correct and it found no path where the app acknowledges delivery
+without a byte-verified artifact. It did find defects in the *evidence and tests*, all of
+which are fixed in this pass:
+
+| Finding | Resolution |
+| --- | --- |
+| The null→stamp transition was asserted, not shown; the `null` in the jsonl belonged to a different job | Re-ran and captured **both** states for one job in `evidence/st03-ack-proof.json` |
+| The receipt cited a `5c8f85d` artifact that is no longer at the cited path | Proof re-run against the current `86b11d3` build; its identity is recorded inside the evidence |
+| The board said restart-history was proven while the card said it was open | Restart-history tested, then recorded once and consistently |
+| No test made the destination write fail, so "a failed save never acknowledges" was unenforced | Added a failing-destination case asserting **zero** acknowledgements |
+| The rejection fixture returned `200 {"ok": false}`, a shape the Hub never returns | Fixture now returns the real `502` rejection |
+| Message claimed "cleanup will retry later", but nothing retries an acknowledgement | Message now tells the user to save again, which is what actually retries it |
+| `saveImage` did not re-check the connection around the acknowledgement | Guard added: a changed connection reports instead of acknowledging the wrong Hub |
+
+Review findings accepted as minor and **not** fixed here: the broker's uncertain-image
+*recovery* poll path is exercised only indirectly (the malformed-poll cases drive the normal
+poll), and the extra `.build/` logs cited by [`st03-image.md`](st03-image.md) live in the
+`st-03` worktree — the important ones are copied into [`evidence/`](evidence/).

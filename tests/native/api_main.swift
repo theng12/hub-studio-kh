@@ -123,7 +123,11 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "image/png", corrupt ? Data([0]) : Self.png)
         case ("POST", "/api/hub/jobs/image-job/items/0/ack"):
             Self.lock.lock(); Self.imageAckPaths.append(path); let rejects = Self.imageAckRejects; Self.lock.unlock()
-            result = (200, "application/json", Data(rejects ? #"{"ok":false}"#.utf8 : #"{"ok":true}"#.utf8))
+            // delivery.py never returns 200 {"ok": false}; a rejected acknowledgement
+            // surfaces as a non-2xx status, so the fixture must reject the same way.
+            result = rejects
+                ? (502, "application/json", Data(#"{"detail":"render worker did not acknowledge receipt"}"#.utf8))
+                : (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("POST", "/api/hub/jobs/image-job/items/0/reconcile"):
             Self.lock.lock()
             Self.uncertainImage = false
@@ -294,6 +298,16 @@ struct NativeAPITests {
         catch { require(error.localizedDescription.contains("verification"), "Image hash mismatch needs actionable message") }
         FixtureProtocol.setCorruptImage(false)
         require(FixtureProtocol.imageAckRequests().isEmpty, "failed or unverified Image reads must not acknowledge delivery")
+        // A save that cannot even be written must never reach the Hub receipt, even though
+        // the artifact itself was fetched and hash-verified successfully first.
+        let unwritableDestination = temporary.appendingPathComponent("missing-directory/never.png")
+        do {
+            try await store.saveImage(image, to: unwritableDestination)
+            fatalError("a save into a missing directory must fail")
+        } catch {
+            require(FixtureProtocol.imageAckRequests().isEmpty,
+                    "a failed save must never acknowledge delivery")
+        }
         let imageDestination = temporary.appendingPathComponent("saved-image.png")
         try await store.saveImage(image, to: imageDestination)
         let savedImage = try Data(contentsOf: imageDestination)
@@ -306,7 +320,7 @@ struct NativeAPITests {
             try await store.saveImage(image, to: rejectedDestination)
             fatalError("a rejected delivery acknowledgement must be reported")
         } catch {
-            require(error.localizedDescription.contains("could not be acknowledged"),
+            require(error.localizedDescription.contains("was not acknowledged"),
                     "rejected acknowledgement needs an actionable message")
         }
         require(FileManager.default.fileExists(atPath: rejectedDestination.path),

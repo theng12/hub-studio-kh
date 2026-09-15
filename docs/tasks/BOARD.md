@@ -6,8 +6,8 @@
 earlier Codex session that ran out of credits. Read this block, then the table below,
 then the one task card you are claiming.
 
-- **Integration line:** `implementation/voice-runtime` @ `cea80a8`. Every task branch is
-  merged into it.
+- **Integration line:** branch `implementation/voice-runtime` (the only integration branch;
+  run `git log -1` for the current tip). Every task branch is merged into it.
 - **Backup:** remote `icloud` (a bare repo in iCloud Drive) plus a dated `git bundle`
   beside it. There is no hosted remote. `git push icloud --all` before you yield.
 - **Owner scope decision (2026-09-15):** finish the WHOLE app, including the fleet /
@@ -21,13 +21,14 @@ then the one task card you are claiming.
   §2 and checkpoints ST-04.CLONE / ST-10.CLONE. This is the primary Voice mechanism.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
-- **IN PROGRESS — ST-03 packaged Image.** Real generation, Hub output registration,
-  receipt acknowledgement and restart-history are all proven. Remaining: a live GUI Save
-  (the save path is unit-tested and the Hub contract is proven against a real Hub) and
-  independent review.
-- **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend,
-  `st-04` Qwen Base backend, and an independent ST-03 reviewer. The coordinator retains
-  native/UI and staging integration for all of them.
+- **IN PROGRESS — ST-03 packaged Image.** Proven: real generation, Hub output registration,
+  receipt acknowledgement (pre-ACK `null` → post-ACK stamp, captured on the same job), and
+  restart-history at the packaged level. An independent review found **no code blocker** but
+  flagged evidence/provenance and test-coverage defects, which are being fixed. Still owed:
+  a live GUI Save against a real Hub, and ST-03.6 retry-count confirmation.
+- **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend and
+  `st-04` Qwen Base backend — ST-04 has published its voice-reference wire contract. The
+  ST-03 review is complete. The coordinator retains native/UI and staging integration.
 - **NEXT:** ST-05 VoxCPM2/OmniVoice — must be the same owner as ST-04 because they share
   the Voice registry — then ST-08 native workflows/settings.
 - **LATER:** ST-10 fleet/GenStudio connection, then ST-11 qualification on real hardware.
@@ -51,7 +52,8 @@ integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FL
 merged into `implementation/voice-runtime` and a **real packaged 1K generation is
 evidenced** ([receipt](../../qualification/st03-image-real-inference.md)) with the
 **export/receipt acknowledgement now proven** and the native save path wired; restart-history
-checks, retry counts and independent review remain open. Historical 0.3.0
+is verified at the packaged level. Retry counts (ST-03.6) and the remaining review fixes are
+open. Historical 0.3.0
 evidence does not complete these cards.
 
 | ID | Phase / deliverable | Depends on | Status | Owner/session |

@@ -428,6 +428,7 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func saveImage(_ job: NativeJob, to destination: URL) async throws {
+        let requestConnection = connectionID
         let data = try await imageData(for: job)
         try data.write(to: destination, options: .atomic)
         guard try Data(contentsOf: destination) == data else {
@@ -436,12 +437,15 @@ final class NativeWorkspaceStore: ObservableObject {
         // The destination is verified, so delivery may now be acknowledged. Only a
         // verified save reaches the Hub receipt; if acknowledgement fails the managed
         // copy stays protected instead of being treated as delivered.
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The image was saved and verified, but the local service connection changed before delivery was acknowledged. Save again to confirm delivery.")
+        }
         do {
             let receipt: HubAckReceipt = try await sendEmpty(
                 ["api", "hub", "jobs", job.id, "items", "0", "ack"], method: "POST")
             if !receipt.ok { throw NativeAPIError.message("rejected") }
         } catch {
-            throw NativeAPIError.message("The image was saved and verified, but its delivery could not be acknowledged. The protected copy remains available and cleanup will retry later.")
+            throw NativeAPIError.message("The image was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
         }
     }
 
