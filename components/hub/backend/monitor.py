@@ -555,12 +555,13 @@ class StudioMonitor:
 
     async def _poll_one(self, studio: dict):
         sid = studio["id"]
-        url = f"{base_url(studio)}/api/health"
+        url, headers = studio_request(studio, "/api/health")
         started = time.monotonic()
         now = time.time()
         prev_status = self.status.get(sid, {}).get("status", "unknown")
         try:
-            r = await self._client.get(url, timeout=HEALTH_TIMEOUT_S)
+            r = await self._client.get(url, headers=headers, timeout=HEALTH_TIMEOUT_S)
+            r.raise_for_status()
             latency_ms = round((time.monotonic() - started) * 1000)
             health = r.json()
             self._note_restart_health(studio, health)

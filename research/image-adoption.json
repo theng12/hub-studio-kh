@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "/build/pinokio/api/imagestudio-mac",
+    "upstream_repository": "https://github.com/theng12/imagestudio-mac",
+    "commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
+    "version": "1.32.2",
+    "read_only": true,
+    "tracked_inputs": {
+      "app/backend/generation.py": "dc8ac1705913279b9efea02d45cef794799745b8a34887b7c0cb75afe236f144",
+      "app/backend/main.py": "844935fe911a06667427ab2d46beaf702143f7a3bb5673656e135978bdd9c144",
+      "app/backend/sizes.py": "90c7945e11a8422836e4083251e35da0130a9390df7f1d8b263c03295bfd4297"
+    }
+  },
+  "destination": "components/image/app/backend",
+  "method": "Selected tracked inference, size and finalized-PNG behavior adapted at the exact source commit; no live environment, credentials, jobs, launcher, model cache or unrelated source modules copied",
+  "adopted_behavior": [
+    "mflux.models.flux2.variants.txt2img.flux2_klein.Flux2Klein with immutable verified model folder",
+    "source 1K aspect-ratio preset pixels and editable 2–100 steps / finite 0–30 guidance bounds",
+    "source random 32-bit seed resolution, PNG validation, atomic final publish and SHA-256/byte evidence",
+    "durable terminal job identity, cooperative cancellation and separate runtime/model-file readiness"
+  ],
+  "published_scope": {
+    "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+    "model_revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+    "mode": "1K text-to-image",
+    "audited_workload": {"steps": 4, "guidance": 1.0},
+    "excluded": ["2K", "reference-image", "editing", "LoRA", "negative prompt", "other models"]
+  }
+}

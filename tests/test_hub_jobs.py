@@ -267,6 +267,22 @@ class HubJobProofTests(unittest.TestCase):
             time.sleep(.03)
         self.fail(f"job {batch_id} did not reach {state}: {payload}")
 
+    def test_image_reconciliation_route_requires_owner_and_never_submits(self) -> None:
+        from unittest.mock import AsyncMock, patch
+        app = standalone.create_app(start_background=False)
+        path = "/api/hub/jobs/original-image/items/0/reconcile"
+        reply = {"batch_id": "original-image", "client_request_id": "original-request",
+                 "reconciled": False, "item": {"state": "uncertain"}}
+        with TestClient(app) as client, patch.object(broker, "reconcile_image_item", new=AsyncMock(return_value=reply)) as reconcile:
+            self.assertEqual(client.post(path).status_code, 401)
+            reconcile.assert_not_awaited()
+            response = client.post(path, headers={"Authorization": f"Bearer {_TOKEN}"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), reply)
+            reconcile.assert_awaited_once_with("original-image", 0, client=app.state.monitor._client)
+            reconcile.side_effect = ValueError("unknown Image job")
+            self.assertEqual(client.post(path, headers={"Authorization": f"Bearer {_TOKEN}"}).status_code, 400)
+
     def test_authenticated_lifecycle_idempotency_cancel_admission_and_recovery(self) -> None:
         app = standalone.create_app(start_background=True)
         headers = {"Authorization": f"Bearer {_TOKEN}"}

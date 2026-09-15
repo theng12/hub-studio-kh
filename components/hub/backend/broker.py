@@ -778,10 +778,20 @@ def _expire_genstudio_batch(batch: dict) -> bool:
     batch["governor_note"] = "GenStudio execution lease expired"
     now = time.time()
     for item in unfinished:
-        item["state"] = "cancelled"
-        item["error"] = "GenStudio execution lease expired"
-        item["finished_at"] = now
-        item["retry_at"] = None
+        if batch.get("modality") == "image" and item.get("state") in {
+                "running", "cancel_requested"}:
+            studio = next((row for row in _monitor().registry
+                           if row.get("id") == item.get("studio")), {})
+            _mark_image_uncertain(
+                item, studio,
+                "GenStudio lease expired during an Image attempt; cancellation "
+                "was requested, but the original worker outcome must be reconciled.",
+            )
+        else:
+            item["state"] = "cancelled"
+            item["error"] = "GenStudio execution lease expired"
+            item["finished_at"] = now
+            item["retry_at"] = None
     if first_expiry:
         from . import alerts
         execution = batch.get("genstudio_execution") or {}
@@ -850,6 +860,19 @@ def _mark_voice_uncertain(item: dict, reason: str) -> None:
     }
 
 
+def _mark_image_uncertain(item: dict, studio: dict, reason: str,
+                          code: str = "IMAGE_OUTCOME_UNCERTAIN") -> None:
+    """Retain an Image attempt whose worker outcome cannot be safely replayed."""
+    item["state"] = "uncertain"
+    item["retry_at"] = None
+    item.setdefault("machine", str(studio.get("machine") or "local")[:500])
+    item.setdefault("worker_id", str(studio.get("id") or "unknown")[:500])
+    item["error_code"] = code
+    item["error"] = reason
+    item["recovery"] = {"phase": "uncertain", "reason": reason,
+                        "updated_at": time.time()}
+
+
 def set_voice_recovery(item: dict, phase: str, reason: str) -> dict:
     """Persist the small, safe operator trail for one Voice item."""
     if phase not in {
@@ -899,10 +922,8 @@ def voice_recovery_item(batch_id: str, item_index: int) -> tuple[dict, dict]:
 def restore_batches():
     """Reload unfinished batches after a Hub restart.
 
-    Historic non-Voice jobs retain their retry behavior.  A Voice item that
-    was running is never automatically replayed: its native request may have
-    been accepted before the Hub stopped, so it becomes a durable, actionable
-    uncertainty record instead.
+    Accepted Voice and Image jobs remain fenced after restart. Other modalities
+    retain their historic retry behavior.
     """
     for b in ledger.load_unfinished_batches():
         if _expire_genstudio_batch(b):
@@ -915,6 +936,14 @@ def restore_batches():
                     it,
                     "Hub restarted while Voice Studio work was active; "
                     "the original job must be reconciled before any retry.",
+                )
+            elif it["state"] in {"running", "cancel_requested"} and b.get("modality") == "image":
+                studio = next((row for row in _monitor().registry
+                               if row.get("id") == it.get("studio")), {})
+                _mark_image_uncertain(
+                    it, studio,
+                    "Hub restarted while an Image worker attempt was active; "
+                    "reconcile the original job before any retry.",
                 )
             elif it["state"] == "running":
                 it["state"] = "queued"
@@ -1080,6 +1109,14 @@ def busy_machines() -> set[str]:
         for sid in _busy
         if sid in by_id
     }
+    for batch in batches.values():
+        if batch.get("modality") == "image":
+            for item in batch.get("items") or []:
+                if item.get("state") == "uncertain":
+                    machine = item.get("machine") or (
+                        by_id.get(item.get("studio")) or {}).get("machine")
+                    if machine:
+                        occupied.add(str(machine))
     from . import transcription_jobs
     if transcription_jobs._packaged():
         for batch in transcription_jobs.batches.values():
@@ -1676,6 +1713,33 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     item["state"] = "done"
 
 
+def _validate_image_worker_job(item: dict, job: object) -> None:
+    """Reject a changed Image identity or a completion without a PNG receipt."""
+    if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
+        raise ValueError("Image worker status did not match the accepted job ID")
+    state = job.get("state")
+    if state not in {"queued", "running", "cancel_requested", "done", "error", "cancelled"}:
+        raise ValueError("Image worker status has an unknown state")
+    for field, accepted in (("model_revision", item.get("model_revision")),
+                            ("runtime_revision", item.get("runtime_revision")),
+                            ("worker_id", item.get("worker_id")),
+                            ("machine_id", item.get("machine"))):
+        if accepted is not None and job.get(field) != accepted:
+            raise ValueError(f"Image worker status changed its {field}")
+    if state == "done" and not job.get("error"):
+        digest = job.get("sha256")
+        generated_at = job.get("generated_at", job.get("finished_at"))
+        if (type(job.get("bytes")) is not int or job["bytes"] <= 0
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+                or job.get("output_url") != f"/api/generate/jobs/{job['id']}/image"
+                or not isinstance(job.get("output_path"), str) or not job["output_path"]
+                or job.get("media_type") != "image/png"
+                or type(generated_at) not in (int, float)
+                or not math.isfinite(float(generated_at)) or generated_at <= 0):
+            raise ValueError("Image worker completion lacks a final PNG receipt")
+
+
 async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                               body: dict, t_start: float) -> bool | dict:
     """Reconcile a worker job after a transport failure.
@@ -1703,6 +1767,8 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             job = jr.json().get("job") or {}
             if not isinstance(job, dict) or job.get("id") != job_id:
                 return False
+            if b.get("modality") == "image":
+                _validate_image_worker_job(item, job)
             if _voice_recovery_owns(item):
                 return False
             _persist_worker_execution_started_at(b, item, job)
@@ -1725,6 +1791,124 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             await asyncio.sleep(delay)
             delay = min(delay * 2, 8.0)
     return False
+
+
+async def reconcile_image_item(batch_id: str, item_index: int,
+                               client: httpx.AsyncClient | None = None) -> dict:
+    """Check only the original accepted Image job; never submit another one."""
+    batch = batches.get(batch_id) or ledger.load_batch(batch_id)
+    if batch is None or batch.get("modality") != "image":
+        raise ValueError("unknown Image batch")
+    item = next((row for row in batch.get("items", [])
+                 if row.get("index") == item_index), None)
+    if item is None:
+        raise ValueError("unknown Image item")
+    if item.get("state") != "uncertain":
+        raise ValueError("Image item is not uncertain")
+    batches[batch_id] = batch
+
+    def result(reconciled: bool) -> dict:
+        return {"batch_id": batch_id, "clientRequestId": batch.get("client_request_id"),
+                "reconciled": reconciled, "item": public_item(batch, item)}
+
+    def pending(reason: str) -> dict:
+        recovery = dict(item.get("recovery") or {})
+        recovery.update(phase="manual_action_required", reason=reason,
+                        updated_at=time.time())
+        item["recovery"] = recovery
+        item["error"] = reason
+        ledger.save_batch(batch)
+        return result(False)
+
+    job_id = item.get("studio_job_id")
+    worker_id = item.get("studio")
+    machine = item.get("machine")
+    if not all(isinstance(value, str) and value for value in (job_id, worker_id, machine)):
+        return pending("The original Image worker identity is incomplete; manual reconciliation is required.")
+    studio = next((row for row in _monitor().registry
+                   if row.get("id") == worker_id and row.get("machine") == machine), None)
+    if studio is None:
+        return pending("The original Image worker and machine are unavailable; manual reconciliation is required.")
+    if any(not isinstance(item.get(field), str) or not item[field]
+           for field in ("model_revision", "runtime_revision", "worker_id")):
+        return pending("The accepted Image model, runtime or worker revision is missing.")
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(follow_redirects=False)
+    try:
+        if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
+            await _signal_worker_cancel(client, item)
+            ledger.save_batch(batch)
+        try:
+            url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
+            response = await client.get(url, headers=headers, timeout=15.0)
+            if response.status_code >= 400:
+                return pending("The original Image job could not be read; its outcome remains uncertain.")
+            job = response.json().get("job")
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            return pending("The original Image worker response was unavailable or malformed.")
+        if not isinstance(job, dict):
+            return pending("The original Image worker response was malformed.")
+        try:
+            _validate_image_worker_job(item, job)
+        except ValueError:
+            return pending("The original Image worker status or final PNG receipt was malformed.")
+        params = job.get("params")
+        body = dict(batch.get("shared_params") or {})
+        body.update(item.get("params") or {})
+        body.update(repo=batch["model"], prompt=item["prompt"])
+        if item.get("seed") is not None and "seed" not in body:
+            body["seed"] = item["seed"]
+        accepted = {
+            "id": job_id, "model_revision": item.get("model_revision"),
+            "runtime_revision": item.get("runtime_revision"),
+            "worker_id": item.get("worker_id"), "machine_id": machine,
+        }
+        if (not isinstance(params, dict)
+                or any(job.get(key) != value for key, value in accepted.items()
+                       if value is not None)
+                or any(params.get(key) != value for key, value in body.items())):
+            return pending("Original Image job identity or request settings did not match the accepted attempt.")
+        state = job.get("state")
+        if state in {"queued", "running", "cancel_requested"}:
+            recovery = dict(item.get("recovery") or {})
+            recovery.update(phase="health_wait", reason="The original Image job is still active.",
+                            updated_at=time.time())
+            item["recovery"] = recovery
+            _record_worker_progress(item, job.get("progress"))
+            ledger.save_batch(batch)
+            return result(False)
+        code = str(job.get("error_code") or "")
+        if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
+            return pending("The original Image worker cannot prove a final receipt; manual reconciliation is required.")
+        if state == "done" and not job.get("error"):
+            try:
+                await _record_worker_success(
+                    client, batch, item, studio, job, body,
+                    float(item.get("run_started") or batch["created_at"]), recovery=True,
+                )
+            except Exception:
+                return pending("The original Image output could not be verified by the Hub.")
+            if item.get("state") != "done":
+                return pending("The original Image output could not be adopted by the Hub.")
+        elif state in {"error", "cancelled"}:
+            _record_worker_failure(item, studio, job,
+                                   float(item.get("run_started") or batch["created_at"]))
+            item.update(state=state, error=str(job.get("error") or state)[:500],
+                        error_code=code or "WORKER_TERMINAL_ERROR",
+                        finished_at=time.time(), retry_at=None)
+        else:
+            return pending("The original Image worker returned an unknown job state.")
+        item["recovery"] = {"phase": "reconciled",
+                            "reason": "The original Image worker returned a verified terminal result.",
+                            "updated_at": time.time()}
+        await _post_item_webhook(client, batch, item)
+        await _maybe_finish(client, batch)
+        _wakeup.set()
+        return result(True)
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
@@ -1929,6 +2113,14 @@ async def _dispatch_loop():
     while True:
         try:
             assigned = False
+            for batch in list(batches.values()):
+                if batch.get("modality") == "image" and batch.get("cancelled"):
+                    for item in batch.get("items") or []:
+                        if (item.get("state") == "uncertain"
+                                and item.get("studio_job_id")
+                                and not item.get("cancel_signal_sent_at")):
+                            await _signal_worker_cancel(client, item)
+                            ledger.save_batch(batch)
             for b in _queued_batches():
                 if _expire_genstudio_batch(b):
                     ledger.save_batch(b)
@@ -2047,6 +2239,19 @@ async def _dispatch_loop():
                     _reserved["gb"] += reserve
                     _busy.add(studio["id"])
                     b["last_dispatched_at"] = time.time()
+                    if b["modality"] == "image":
+                        # A crash after POST may lose its response. Persist the
+                        # attempt identity before the worker can accept it.
+                        try:
+                            ledger.save_batch(b)
+                        except Exception:
+                            item.update(state="queued", studio=None, studio_job_id=None,
+                                        tries=item["tries"] - 1)
+                            item.pop("_dispatch_generation", None)
+                            item.pop("_reserved", None)
+                            _reserved["gb"] = max(0.0, _reserved["gb"] - reserve)
+                            _busy.discard(studio["id"])
+                            raise
                     _log_audio_priority(b, item, studio, now)
                     asyncio.create_task(_run_item(client, b, item, studio))
                     assigned = True
@@ -2081,6 +2286,7 @@ def _worker_terminal_error(message: str, code: str | None = None) -> RuntimeErro
     error = RuntimeError(message)
     error.model_unavailable = _model_file_failure(message, code)
     error.worker_terminal = True
+    error.error_code = code
     error.retryable = True  # another healthy worker may handle this item
     return error
 
@@ -2306,6 +2512,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     ref_mode = body.pop("ref_mode", None)
     body.pop("reference_images", None)  # never forward references as JSON
     generation = item.get("_dispatch_generation")
+    image_post_attempted = False
+    image_post_rejected = False
 
     def requeue_if_peer_changed() -> bool:
         if generation is None or peers.dispatch_ready(studio, generation):
@@ -2317,6 +2525,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
 
     try:
         if _voice_recovery_owns(item):
+            if b.get("modality") == "image" and b.get("cancelled") and item.get("studio_job_id"):
+                await _signal_worker_cancel(client, item)
             return  # recovery owns the accepted Voice identity; never race adoption
         if _expire_genstudio_batch(b):
             item["state"] = "cancelled"
@@ -2401,6 +2611,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if requeue_if_peer_changed():
                     return
                 url, headers = studio_request(studio, f"/api/generate/{mode}")
+                image_post_attempted = True
                 r = await client.post(
                     url,
                     data=_multipart_fields(body),
@@ -2410,6 +2621,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if requeue_if_peer_changed():
                 return
             url, headers = studio_request(studio, endpoint)
+            image_post_attempted = b["modality"] == "image"
             r = await client.post(url, json=body, headers=headers)
         if r.status_code == 401 and not peers.is_local_studio(studio):
             peers.invalidate(studio["machine"], rejected=True,
@@ -2427,6 +2639,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 )
                 return
         if r.status_code >= 400:
+            image_post_rejected = b["modality"] == "image"
             rejection = _worker_http_error(r)
             if rejection.model_unavailable:
                 item["error_code"] = "MODEL_FILES_UNAVAILABLE"
@@ -2434,10 +2647,17 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                                     "MODEL_FILES_UNAVAILABLE", str(rejection))
             raise rejection
         job = r.json()["job"]
+        if b["modality"] == "image" and (
+                not isinstance(job, dict) or not isinstance(job.get("id"), str)
+                or not job["id"] or job.get("state") not in {
+                    "queued", "running", "cancel_requested", "done", "error", "cancelled"}):
+            raise ValueError("Image worker acceptance did not contain a valid job receipt")
         _persist_worker_execution_started_at(b, item, job)
         _record_worker_identity(item, studio, job)
         _record_worker_resource_usage(item, job)
         item["studio_job_id"] = job["id"]
+        if b["modality"] == "image":
+            ledger.save_batch(b)  # retain the accepted receipt before polling
         # Keep the Hub's ownership fact after this finished batch is pruned;
         # the optional Studio reporter must not have to win a poll race.
         try:
@@ -2454,6 +2674,14 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             )
         if _expire_genstudio_batch(b) or b["cancelled"]:
             await _signal_worker_cancel(client, item)
+            if b["modality"] == "image" and image_post_attempted:
+                if item.get("state") != "uncertain":
+                    _mark_image_uncertain(
+                        item, studio,
+                        "Image cancellation was requested after submission; "
+                        "the original worker outcome must be reconciled.",
+                    )
+                return
             item["state"] = "cancelled"
             item["error"] = (
                 "GenStudio execution lease expired"
@@ -2465,9 +2693,19 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         while True:
             await asyncio.sleep(POLL_S)
             if _voice_recovery_owns(item):
+                if b.get("modality") == "image" and b.get("cancelled") and item.get("studio_job_id"):
+                    await _signal_worker_cancel(client, item)
                 return  # explicit recovery has taken ownership of this job
             if _expire_genstudio_batch(b) or b["cancelled"]:
                 await _signal_worker_cancel(client, item)
+                if b["modality"] == "image":
+                    if item.get("state") != "uncertain":
+                        _mark_image_uncertain(
+                            item, studio,
+                            "Image cancellation was requested after acceptance; "
+                            "the original worker outcome must be reconciled.",
+                        )
+                    return
                 item["state"] = "cancelled"
                 item["error"] = (
                     "GenStudio execution lease expired"
@@ -2486,6 +2724,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             j = jr.json()["job"]
             if _voice_recovery_owns(item):
                 return
+            if b["modality"] == "image":
+                _validate_image_worker_job(item, j)
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)
@@ -2511,8 +2751,18 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         # retry; otherwise one image can be generated twice or reported as a
         # false failure.
         if b["cancelled"]:
-            item["state"] = "cancelled"
-            item["error"] = "Cancelled by user"
+            if b["modality"] == "image" and image_post_attempted and not image_post_rejected:
+                if item.get("state") != "uncertain":
+                    _mark_image_uncertain(
+                        item, studio,
+                        "Image cancellation followed a possible worker acceptance; "
+                        "reconcile the original outcome before releasing its machine.",
+                    )
+                if item.get("studio_job_id"):
+                    await _signal_worker_cancel(client, item)
+            else:
+                item["state"] = "cancelled"
+                item["error"] = "Cancelled by user"
             return
         recovered = (False if getattr(e, "worker_terminal", False)
                      else await _recover_worker_job(client, b, item, studio, body, t_start))
@@ -2521,6 +2771,31 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if isinstance(recovered, dict):
             e = _classify_worker_failure(b, item, studio, recovered, t_start)
         message = str(e) or type(e).__name__
+        if b.get("modality") == "image":
+            code = str(getattr(e, "error_code", None) or item.get("error_code") or "")
+            if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
+                _mark_image_uncertain(
+                    item, studio,
+                    "The accepted Image job has an uncertain final result; "
+                    "reconcile its original worker receipt before any retry.", code,
+                )
+                return
+            if (item.get("studio_job_id") and recovered is False
+                    and not getattr(e, "worker_terminal", False)):
+                _mark_image_uncertain(
+                    item, studio,
+                    "The accepted Image job could not be reconciled; "
+                    "it was not retried automatically.",
+                )
+                return
+            if (image_post_attempted and not image_post_rejected
+                    and not item.get("studio_job_id")):
+                _mark_image_uncertain(
+                    item, studio,
+                    "Image submission may have been accepted but its worker "
+                    "receipt was lost; reconcile before any retry.",
+                )
+                return
         if (b.get("modality") == "voice" and item.get("studio_job_id")
                 and _is_transport_failure(e, message)):
             _mark_voice_uncertain(

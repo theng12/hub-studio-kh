@@ -1,5 +1,39 @@
 import Combine
 import Foundation
+import CryptoKit
+
+struct NativeImageSettings: Codable, Equatable {
+    var width: Int
+    var height: Int
+    var steps: Int
+    var guidance: Double
+    var seed: Int64
+}
+struct NativeImageSize: Decodable, Identifiable, Equatable {
+    let id: String
+    let label: String
+    let width: Int
+    let height: Int
+}
+struct NativeImageLimits: Decodable, Equatable {
+    let minSteps: Int
+    let maxSteps: Int
+    let minGuidance: Double
+    let maxGuidance: Double
+    let minSeed: Int64
+    let maxSeed: Int64
+}
+struct NativeImageConfiguration: Equatable {
+    let defaults: NativeImageSettings
+    let sizes: [NativeImageSize]
+    let limits: NativeImageLimits
+    func accepts(_ value: NativeImageSettings) -> Bool {
+        sizes.contains { $0.width == value.width && $0.height == value.height }
+            && value.steps >= limits.minSteps && value.steps <= limits.maxSteps
+            && value.guidance.isFinite && value.guidance >= limits.minGuidance && value.guidance <= limits.maxGuidance
+            && value.seed >= limits.minSeed && value.seed <= limits.maxSeed
+    }
+}
 
 struct NativeModel: Identifiable, Equatable {
     let id: String
@@ -27,6 +61,9 @@ struct NativeJob: Identifiable, Equatable {
     let createdAt: Double?
     let outputURL: String?
     let error: String?
+    var bytes: Int64? = nil
+    var sha256: String? = nil
+    var imageSettings: NativeImageSettings? = nil
 }
 
 struct NativeDownload: Identifiable, Equatable {
@@ -91,6 +128,14 @@ final class NativeWorkspaceStore: ObservableObject {
 
     @Published private(set) var models: [NativeModel] = []
     @Published private(set) var audioJobs: [NativeJob] = []
+    @Published private(set) var imageJobs: [NativeJob] = []
+    @Published private(set) var imageConfigurations: [String: NativeImageConfiguration] = [:]
+    @Published var imagePrompt = "" { didSet { scheduleSave() } }
+    @Published var imageModel = "" { didSet { if imageModel != oldValue { imageSettings = nil }; scheduleSave() } }
+    @Published var imageSettings: NativeImageSettings? { didSet { scheduleSave() } }
+    @Published private(set) var submittingImage = false
+    var imageConfiguration: NativeImageConfiguration? { imageConfigurations[imageModel] }
+
     @Published private(set) var downloads: [NativeDownload] = []
     @Published private(set) var audioSpeakers: [String] = []
     @Published var audioText = "" { didSet { scheduleSave() } }
@@ -119,6 +164,7 @@ final class NativeWorkspaceStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var loadingState = false
     private var pendingAudio: HubAudioRequest?
+    private var pendingImage: HubImageRequest?
     private var pendingTranscription: PendingTranscription?
     private var modelPackages: [String: HubModelPackage] = [:]
     private var hubDownloadRuns: [String: String] = [:]
@@ -149,6 +195,7 @@ final class NativeWorkspaceStore: ObservableObject {
             )
             try loadState()
             try loadPendingAudio()
+            try loadPendingImage()
             try loadPendingTranscription()
             try loadHubDownloadRuns()
             await refresh()
@@ -181,6 +228,7 @@ final class NativeWorkspaceStore: ObservableObject {
         connectionID = nil
         isReachable = false
         submittingAudio = false
+        submittingImage = false
         transcribing = false
     }
 
@@ -213,13 +261,22 @@ final class NativeWorkspaceStore: ObservableObject {
                 speakers: audioSpeakers,
                 packages: modelPackages
             )
+            imageConfigurations = Dictionary(uniqueKeysWithValues: catalogValue.models.compactMap { model in
+                model.imageConfiguration.map { (model.repo, $0) }
+            })
+            if imageConfigurations[imageModel] == nil,
+               let first = models.first(where: { $0.function == .image && $0.supported }) { imageModel = first.repo }
+            if imageSettings == nil { imageSettings = imageConfiguration?.defaults }
             var history: [NativeJob] = []
-            for batch in jobsValue.batches where batch.modality == "voice" {
+            var images: [NativeJob] = []
+            for batch in jobsValue.batches where ["voice", "image"].contains(batch.modality) {
                 let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
                 guard connectionID == requestConnection else { return }
-                history.append(Self.mapHubJob(detail))
+                if batch.modality == "image" { images.append(Self.mapHubJob(detail)) }
+                else { history.append(Self.mapHubJob(detail)) }
             }
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
             for (runID, repo) in hubDownloadRuns {
                 let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
@@ -277,6 +334,106 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             self.error = Self.actionable(error, action: "Generate audio")
         }
+    }
+
+    func restoreImageDefaults() {
+        imageSettings = imageConfiguration?.defaults
+    }
+
+    func generateImage() async {
+        guard !submittingImage, let requestConnection = connectionID else { return }
+        do {
+            let body: HubImageRequest
+            if let pendingImage { body = pendingImage }
+            else {
+                let model = try usableModel(repo: imageModel, function: .image)
+                let prompt = imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !prompt.isEmpty else { throw NativeAPIError.message("Enter an image prompt.") }
+                guard let settings = imageSettings, imageConfiguration?.accepts(settings) == true else {
+                    throw NativeAPIError.message("Choose an available image size and settings within the model's supported ranges, or restore its defaults.")
+                }
+                if let original = imageJobs.first(where: {
+                    $0.state == "uncertain" && $0.model == model.repo && $0.text == prompt
+                        && ($0.imageSettings == nil || $0.imageSettings == settings)
+                }) {
+                    throw NativeAPIError.message("Image job \(original.id) has an uncertain result. Reconcile that original job before repeating this request.")
+                }
+                body = HubImageRequest(modality: "image", model: model.repo,
+                    clientRequestId: "native:\(UUID().uuidString)", items: [HubImageItem(prompt: prompt, params: settings)])
+            }
+            submittingImage = true
+            defer { if connectionID == requestConnection { submittingImage = false } }
+            if pendingImage == nil { pendingImage = body; try savePendingImage() }
+            let response: HubJobSubmit = try await sendHubJSON(["api", "hub", "jobs"], body: body)
+            guard connectionID == requestConnection else { return }
+            let detail: HubJobDetail = try await get(["api", "hub", "jobs", response.batchId])
+            guard connectionID == requestConnection else { return }
+            let job = Self.mapHubJob(detail)
+            imageJobs.removeAll { $0.id == job.id }; imageJobs.insert(job, at: 0)
+            if job.state != "uncertain" { pendingImage = nil }
+            try savePendingImage()
+            error = job.state == "uncertain" ? "The Image result is uncertain. Its original request is preserved for reconciliation." : nil
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Generate an image") }
+        }
+    }
+
+    func cancelImage(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard imageJobs.contains(where: { $0.id == job.id }) else { throw NativeAPIError.message("That image job is no longer in the current history.") }
+            let _: HubCancelResponse = try await sendEmpty(["api", "hub", "jobs", job.id], method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the image job") } }
+    }
+
+    func reconcileImage(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard imageJobs.contains(where: { $0.id == job.id && $0.state == "uncertain" }) else {
+                throw NativeAPIError.message("Refresh the original uncertain Image job before checking its result.")
+            }
+            let result: HubImageReconciliation = try await sendEmpty(["api", "hub", "jobs", job.id, "items", "0", "reconcile"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            if result.reconciled && result.clientRequestId == pendingImage?.clientRequestId {
+                pendingImage = nil
+                try savePendingImage()
+            }
+            await refresh()
+            guard connectionID == requestConnection else { return }
+            if !result.reconciled {
+                error = "The original Image result is still uncertain. Its request remains protected; no new generation was submitted."
+            }
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Check the original Image result") }
+        }
+    }
+
+    func imageData(for job: NativeJob) async throws -> Data {
+        guard let requestConnection = connectionID else { throw NativeAPIError.message("Start the local services before retrieving images.") }
+        guard job.state == "done", imageJobs.contains(where: { $0.id == job.id }),
+              let bytes = job.bytes, bytes > 0, let sha = job.sha256,
+              sha.count == 64, sha.allSatisfy({ $0.isHexDigit }) else {
+            throw NativeAPIError.message("This image has no verified completed result. Refresh its job before saving.")
+        }
+        let data = try await performData(makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"]))
+        guard connectionID == requestConnection else { throw NativeAPIError.message("The Hub connection changed before image retrieval completed.") }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard Int64(data.count) == bytes, digest == sha.lowercased(),
+              data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
+            throw NativeAPIError.message("Image verification failed. Refresh the job and retrieve its original result again.")
+        }
+        return data
+    }
+
+    func saveImage(_ job: NativeJob, to destination: URL) async throws {
+        let data = try await imageData(for: job)
+        try data.write(to: destination, options: .atomic)
+        guard try Data(contentsOf: destination) == data else {
+            throw NativeAPIError.message("Saved image verification failed. Choose another destination and save again.")
+        }
+        // The shared delivery phase connects verified destination saves to ACK.
     }
 
     func transcribe() async {
@@ -517,7 +674,7 @@ final class NativeWorkspaceStore: ObservableObject {
             return NativeModel(
                 id: "audio:\(item.repo)", repo: item.repo, label: item.label, family: item.family ?? "Audio",
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
-                capabilities: item.capabilities ?? [], languages: item.languages ?? [], runtimeReady: ready,
+                capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: supported ? speakers : []
             )
         }
@@ -539,7 +696,17 @@ final class NativeWorkspaceStore: ObservableObject {
                 runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: []
             )
         }
-        return audioModels + transcriptionModels
+        let imageModels = audio.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
+            let package = packages[item.repo]
+            let supported = item.imageConfiguration != nil && package != nil
+            let ready = item.runtimeReady == true && item.memoryEligible != false && package?.dispatchState == "eligible"
+            return NativeModel(id: "image:\(item.repo)", repo: item.repo, label: item.label,
+                family: item.family ?? "Image", function: .image, cached: item.cache?.state == "cached",
+                supported: supported, supportNote: ready && supported ? "Ready for local image generation." : "Verify the image model files and runtime in Models.",
+                sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
+                supportsWordTimestamps: false, speakers: [])
+        }
+        return audioModels + transcriptionModels + imageModels
     }
 
     private static func mapJob(_ wire: JobWire) -> NativeJob {
@@ -553,7 +720,8 @@ final class NativeWorkspaceStore: ObservableObject {
         let item = wire.items.first
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
-            outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error)
+            outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
+            imageSettings: item?.params?.imageSettings)
     }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
@@ -718,6 +886,9 @@ final class NativeWorkspaceStore: ObservableObject {
         let transcriptionLanguage: String
         let wordTimestamps: Bool
         let transcriptionResult: NativeTranscript?
+        let imagePrompt: String?
+        let imageModel: String?
+        let imageSettings: NativeImageSettings?
     }
     private var pendingAudioURL: URL? { dataDirectory?.appendingPathComponent("native-pending-audio.json") }
     private func savePendingAudio() throws {
@@ -730,6 +901,19 @@ final class NativeWorkspaceStore: ObservableObject {
     private func loadPendingAudio() throws {
         guard let pendingAudioURL, FileManager.default.fileExists(atPath: pendingAudioURL.path) else { return }
         pendingAudio = try JSONDecoder().decode(HubAudioRequest.self, from: Data(contentsOf: pendingAudioURL))
+    }
+    private var pendingImageURL: URL? { dataDirectory?.appendingPathComponent("native-pending-image.json") }
+    private func savePendingImage() throws {
+        guard let pendingImageURL else { return }
+        if let pendingImage {
+            try JSONEncoder().encode(pendingImage).write(to: pendingImageURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingImageURL.path)
+        } else { try? FileManager.default.removeItem(at: pendingImageURL) }
+    }
+    private func loadPendingImage() throws {
+        pendingImage = nil
+        guard let pendingImageURL, FileManager.default.fileExists(atPath: pendingImageURL.path) else { return }
+        pendingImage = try JSONDecoder().decode(HubImageRequest.self, from: Data(contentsOf: pendingImageURL))
     }
     private var pendingTranscriptionURL: URL? { dataDirectory?.appendingPathComponent("native-pending-transcription.json") }
     private func savePendingTranscription() throws {
@@ -772,7 +956,7 @@ final class NativeWorkspaceStore: ObservableObject {
             audioText: audioText, audioModel: audioModel, audioSpeaker: audioSpeaker, audioLanguage: audioLanguage,
             transcriptionModel: transcriptionModel, transcriptionFile: transcriptionFile?.path,
             transcriptionLanguage: transcriptionLanguage, wordTimestamps: wordTimestamps,
-            transcriptionResult: transcriptionResult
+            transcriptionResult: transcriptionResult, imagePrompt: imagePrompt, imageModel: imageModel, imageSettings: imageSettings
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -794,6 +978,9 @@ final class NativeWorkspaceStore: ObservableObject {
         transcriptionLanguage = state.transcriptionLanguage
         wordTimestamps = state.wordTimestamps
         transcriptionResult = state.transcriptionResult
+        imagePrompt = state.imagePrompt ?? ""
+        imageModel = state.imageModel ?? ""
+        imageSettings = state.imageSettings
     }
 }
 
@@ -814,10 +1001,23 @@ private struct CatalogModel: Decodable {
     let family: String?
     let sizeGb: Double?
     let capabilities: [String]?
-    let languages: [String]?
+    let languages: StringOrStrings?
     let runtimeReady: Bool?
     let memoryEligible: Bool?
     let cache: CacheWire?
+    let generationDefaults: NativeImageSettings?
+    let generationLimits: NativeImageLimits?
+    let imageSizes: [NativeImageSize]?
+    var imageConfiguration: NativeImageConfiguration? {
+        guard let defaults = generationDefaults, let limits = generationLimits,
+              let sizes = imageSizes, !sizes.isEmpty,
+              limits.minSteps > 0, limits.maxSteps >= limits.minSteps,
+              limits.minGuidance.isFinite, limits.maxGuidance.isFinite, limits.minGuidance <= limits.maxGuidance,
+              limits.minSeed <= limits.maxSeed,
+              sizes.allSatisfy({ $0.width > 0 && $0.height > 0 }), Set(sizes.map(\.id)).count == sizes.count else { return nil }
+        let value = NativeImageConfiguration(defaults: defaults, sizes: sizes, limits: limits)
+        return value.accepts(defaults) ? value : nil
+    }
 }
 private struct TranscriptionAvailability: Decodable {
     let available: Bool?
@@ -861,9 +1061,31 @@ private struct HubJobItem: Decodable {
     let prompt: String?
     let artifactUrl: String?
     let error: String?
+    let bytes: Int64?
+    let sha256: String?
+    let params: HubJobParams?
+}
+private struct HubJobParams: Decodable {
+    let width: Int?
+    let height: Int?
+    let steps: Int?
+    let guidance: Double?
+    let seed: Int64?
+    var imageSettings: NativeImageSettings? {
+        guard let width, let height, let steps, let guidance, let seed else { return nil }
+        return NativeImageSettings(width: width, height: height, steps: steps, guidance: guidance, seed: seed)
+    }
 }
 private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
 private struct HubCancelResponse: Decodable { let ok: Bool }
+private struct HubImageReconciliation: Decodable { let reconciled: Bool; let clientRequestId: String? }
+private struct HubImageRequest: Codable {
+    let modality: String
+    let model: String
+    let clientRequestId: String
+    let items: [HubImageItem]
+}
+private struct HubImageItem: Codable { let prompt: String; let params: NativeImageSettings }
 private struct HubAudioRequest: Codable {
     let modality: String
     let model: String

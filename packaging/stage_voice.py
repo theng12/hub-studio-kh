@@ -67,11 +67,15 @@ def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None
         shutil.copyfile(path, target)
 
 
-def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, include_hub: bool = False) -> Path:
+def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, include_hub: bool = False, image_runtime: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
     validate_runtime(runtime)
+    if image_runtime is not None:
+        image_runtime = image_runtime.expanduser().resolve()
+        validate_runtime(image_runtime)
+        include_hub = True
     if native_shell is not None:
         native_shell = native_shell.expanduser().resolve()
         validate_native_shell(native_shell)
@@ -86,6 +90,14 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
         if not subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '--',
                                         'components/hub/standalone.py']).strip():
             raise ValueError('Hub source must be added to Git before staging the bundle')
+    image_provenance = None
+    if image_runtime is not None:
+        image_provenance = json.loads((ROOT / 'research/image-adoption.json').read_text())['source']
+        if not (ROOT / 'components/image/app/backend/main.py').is_file():
+            raise ValueError('Bundled Image entry point is missing')
+        if not subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '--',
+                                        'components/image/app/backend/main.py']).strip():
+            raise ValueError('Image source must be added to Git before staging the bundle')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = bool(subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip())
     version = (ROOT / 'VERSION').read_text().strip()
@@ -121,6 +133,17 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
             'upstream_commit': hub_provenance['commit'],
             'upstream_version': hub_provenance['version'],
             'source_sha256': tree_digest(hub), 'runtime': 'voice',
+        }
+    if image_runtime is not None:
+        image_source = resources / 'components/image'
+        copy_tracked_tree(ROOT / 'components/image', image_source)
+        shutil.copytree(image_runtime, resources / 'runtimes/image', symlinks=True)
+        shutil.copyfile(ROOT / 'packaging/image_worker.py', resources / 'image_worker.py')
+        release['components']['image'] = {
+            'upstream_commit': image_provenance['commit'],
+            'upstream_version': image_provenance['version'],
+            'source_sha256': tree_digest(image_source), 'runtime': 'image',
+            'runtime_sha256': tree_digest(resources / 'runtimes/image'),
         }
     service_name = 'StudioHubService' if include_hub else 'StudioHubVoice'
     entry_point = 'hub_worker.py' if include_hub else 'voice_worker.py'
@@ -164,6 +187,7 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-shell', type=Path)
+    parser.add_argument('--image-runtime', type=Path, help='Include the independently qualified Image runtime and worker')
     parser.add_argument('--hub', action='store_true', help='Include the local Hub service (always enabled for native app builds)')
     args = parser.parse_args()
-    print(stage(args.runtime, args.output, native_shell=args.native_shell, include_hub=args.hub))
+    print(stage(args.runtime, args.output, native_shell=args.native_shell, include_hub=args.hub, image_runtime=args.image_runtime))

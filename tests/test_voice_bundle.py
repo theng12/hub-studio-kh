@@ -490,6 +490,12 @@ class StagingTests(unittest.TestCase):
                 module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json')}))
 
     def test_native_shell_stage_keeps_cli_and_creates_foreground_app(self):
+        self._native_stage()
+
+    def test_native_shell_stage_includes_separate_image_runtime_and_source(self):
+        self._native_stage(image=True)
+
+    def _native_stage(self, image=False):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -513,6 +519,9 @@ class StagingTests(unittest.TestCase):
                 'components/model_packages.py': '# package helper',
                 'model-manifests/fixture.json': '{}',
                 'research/hub-adoption.json': json.dumps({'source': {'commit': 'c' * 40, 'version': '2.22.0'}}),
+                'research/image-adoption.json': json.dumps({'source': {'commit': 'e' * 40, 'version': '1.32.2'}}),
+                'components/image/app/backend/main.py': '# image fixture',
+                'packaging/image_worker.py': '# image worker',
             }
             for name, content in files.items():
                 path = repo / name
@@ -531,7 +540,7 @@ class StagingTests(unittest.TestCase):
             artifact = base / 'Studio Hub.app'
             with mock.patch.object(module, 'ROOT', repo):
                 try:
-                    module.stage(runtime, artifact, native_shell=native)
+                    module.stage(runtime, artifact, native_shell=native, **({"image_runtime": runtime} if image else {}))
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
@@ -550,6 +559,14 @@ class StagingTests(unittest.TestCase):
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
             manifest = json.loads((contents / 'Resources/release-manifest.json').read_text())
             self.assertFalse(manifest['development_build'])
+            if image:
+                self.assertEqual(manifest['components']['image']['upstream_commit'], 'e' * 40)
+                self.assertEqual(manifest['components']['image']['runtime_sha256'], module.tree_digest(runtime))
+                self.assertTrue((contents / 'Resources/image_worker.py').is_file())
+                self.assertTrue((contents / 'Resources/components/image/app/backend/main.py').is_file())
+                self.assertTrue((contents / 'Resources/runtimes/image/bin/python3').is_file())
+            else:
+                self.assertNotIn('image', manifest['components'])
             self.assertEqual(manifest['payload_sha256'], module.tree_digest(
                 contents, exclude={Path('Resources/release-manifest.json')}))
             (contents / 'MacOS/StudioHub').write_bytes(b'changed-native-shell')

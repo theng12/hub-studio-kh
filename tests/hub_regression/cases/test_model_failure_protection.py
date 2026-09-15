@@ -114,14 +114,17 @@ def test_lost_poll_adopts_exact_model_failure_instead_of_transport_failure(prote
     class Client:
         polls = 0
 
+        receipt = {"id": "accepted-job", "worker_id": "image", "machine_id": "local",
+                   "model_revision": "r" * 40, "runtime_revision": "a" * 64}
+
         async def post(self, url, **kwargs):
-            return httpx.Response(200, json={"job": {"id": "accepted-job", "state": "queued"}})
+            return httpx.Response(200, json={"job": {**self.receipt, "state": "queued"}})
 
         async def get(self, url, **kwargs):
             self.polls += 1
             if self.polls == 1:
                 raise httpx.RemoteProtocolError("connection dropped")
-            return httpx.Response(200, json={"job": {"id": "accepted-job", "state": "error",
+            return httpx.Response(200, json={"job": {**self.receipt, "state": "error",
                 "error_code": "MODEL_FILES_UNAVAILABLE", "error": "missing shard"}})
 
     async def no_sleep(*args):

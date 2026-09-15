@@ -45,7 +45,7 @@ class HubProcessTests(unittest.TestCase):
         if probe.returncode:
             raise unittest.SkipTest(f"FastAPI/Uvicorn unavailable in test runtime: {probe.stderr.strip()}")
 
-    def _fixture(self, base: Path, *, failing_voice: bool = False) -> dict[str, Path]:
+    def _fixture(self, base: Path, *, failing_voice: bool = False, image: bool = False) -> dict[str, Path]:
         resources = base / "Proof.app" / "Contents" / "Resources"
         resources.mkdir(parents=True)
         shutil.copyfile(WORKTREE / "packaging/hub_worker.py", resources / "hub_worker.py")
@@ -98,6 +98,20 @@ class HubProcessTests(unittest.TestCase):
             },
             "runtime_sha256": RUNTIME_ID,
         }
+        if image:
+            shutil.copyfile(WORKTREE / "packaging/image_worker.py", resources / "image_worker.py")
+            backend = resources / "components/image/app/backend"
+            backend.mkdir(parents=True)
+            for package in [backend, backend.parent, backend.parent.parent]:
+                (package / "__init__.py").write_text("")
+            (backend / "main.py").write_text("from fastapi import FastAPI\ndef from_environment():\n    return FastAPI()\n")
+            image_python = resources / "runtimes/image/bin/python3"
+            image_python.parent.mkdir(parents=True)
+            image_python.symlink_to(RUNTIME_SOURCE)
+            catalog = resources / "model-manifests"
+            catalog.mkdir()
+            (catalog / "flux2-klein-4b-mlx-4bit.json").write_text("{}")
+            release["components"]["image"] = {"runtime_sha256": "e" * 64}
         release_path = resources / "release-manifest.json"
         release_path.write_text(json.dumps(release))
         return {
@@ -177,9 +191,9 @@ class HubProcessTests(unittest.TestCase):
             return error.code, json.loads(error.read())
 
     @contextmanager
-    def _running_hub(self, *, failing_voice: bool = False):
+    def _running_hub(self, *, failing_voice: bool = False, image: bool = False):
         with tempfile.TemporaryDirectory(prefix="studiohub-hub-process-") as temp:
-            fixture = self._fixture(Path(temp), failing_voice=failing_voice)
+            fixture = self._fixture(Path(temp), failing_voice=failing_voice, image=image)
             environment = {
                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                 "LANG": "en_US.UTF-8",
@@ -249,6 +263,7 @@ class HubProcessTests(unittest.TestCase):
             self.assertEqual(worker["hub_token"], TOKEN)
             self.assertEqual(worker["studio_token"], TOKEN)
             self.assertEqual(worker["runtime_identity"], {"id": RUNTIME_ID, "compatible": True})
+            self.assertEqual(worker["managed_output_roots"], [str((fixture["data"] / "voice/output").resolve())])
 
             status, health = self._get_json(hub_ready["url"] + "/api/health")
             self.assertEqual((status, health), (200, {"ok": True, "component": "hub"}))
@@ -295,6 +310,22 @@ class HubProcessTests(unittest.TestCase):
             self.assertFalse(fixture["ready"].exists())
             self.assertFalse(fixture["child_ready"].exists())
             self.assertFalse(fixture["workers"].exists())
+
+    def test_hub_owns_image_and_voice_and_stops_both_after_image_crash(self):
+        with self._running_hub(image=True) as (fixture, process, known_children):
+            _, _, workers, voice_pid = self._await_started(fixture, process, known_children)
+            self.assertEqual({worker["id"] for worker in workers}, {"voice", "image"})
+            image = next(worker for worker in workers if worker["id"] == "image")
+            known_children.append(image["pid"])
+            self.assertEqual(image["runtime_identity"], {"id": "e" * 64, "compatible": True})
+            self.assertEqual(image["studio_token"], TOKEN)
+            self.assertNotEqual(image["port"], workers[0]["port"])
+            self.assertEqual(image["managed_output_roots"], [str((fixture["data"] / "image/outputs").resolve())])
+            os.kill(image["pid"], signal.SIGKILL)
+            self._wait_for(lambda: process.poll() is not None, 10, "Hub survived owned Image crash")
+            self.assertFalse(self._alive(voice_pid), "Voice survived Hub cleanup after Image crash")
+            self.assertFalse(fixture["workers"].exists())
+            self.assertFalse((fixture["data"] / "hub/image-ready.json").exists())
 
     def test_voice_startup_failure_never_publishes_hub_readiness(self):
         with self._running_hub(failing_voice=True) as (fixture, process, known_children):
