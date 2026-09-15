@@ -15,7 +15,7 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD_PYTHON = ROOT.parents[1] / '.build/voice-runtime/bin/python3'
+BUILD_PYTHON = ROOT / '.build/voice-runtime/bin/python3'
 IMAGE_RUNTIME = ROOT / '.build/st03-image-runtime-worker'
 
 
