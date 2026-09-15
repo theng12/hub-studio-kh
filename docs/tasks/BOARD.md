@@ -26,12 +26,11 @@ then the one task card you are claiming.
   See design §2 and checkpoint ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
-- **IN PROGRESS — ST-03 packaged Image.** Proven: real generation, Hub output registration,
-  receipt acknowledgement (pre-ACK `null` → post-ACK stamp on the same job), restart-history at
-  the packaged level, and ST-03.6 retry/attempt counting. The independent review found **no code
-  blocker** and all seven evidence/test defects it raised are fixed. The **only** item left is a
-  single interactive GUI **Save…** by a human: automation successfully navigated the app to
-  Image Studio but could not drive the unlabelled SwiftUI save panel.
+- **WORKING END TO END (verified in the packaged app): Image, Subtitle and Voice cloning.** Each
+  produced real output through the real app: a FLUX image, a Whisper transcript, and a cloned WAV
+  from a local reference clip. What is *not* yet done is the formal side of these cards — ST-03's
+  single manual GUI Save click-through, ST-04's cancellation/restart receipts and review, ST-06's
+  SRT export through the native screen — plus every card after them.
 - **ST-04 merged** (`71611bb` + follow-up): the unified voice-reference staging contract (local
   upload + GenStudio push), Qwen Base clone requirements, the native clone UI, and **real
   offline receipts for both tiers** — QWEN06 and QWEN17, TER/CER 0.0 on reference and output,
@@ -91,9 +90,21 @@ then the one task card you are claiming.
   check's own Whisper resolution/caching inside the Voice worker is the next (and likely last)
   step for a real cloned voice. Note the earlier `Qwen3TTS-0.6B` attempt also showed a
   too-short-reference guard at <3 s of usable speech, so any future test clip must be ~5 s+.
-- **Next:** fix the internal Whisper quality-check resolution, produce a real cloned voice
-  through the packaged app, then ST-05 (VoxCPM2/OmniVoice) — which shares this same resolver — then
-  ST-08, ST-10 and ST-11.
+- **Voice cloning now works end to end in the packaged app.** A locally chosen reference clip
+  staged through `POST /api/hub/voice-references` (201, `origin: local`) produced a real cloned
+  WAV: `state: done`, `studio: voice`, **145,964 bytes**, sha256 `8c63dcc7…`, 34.1 s, artifact
+  fetched. Evidence: `qualification/evidence/st04-packaged-clone-e2e.json`.
+- **The chain that had to be fixed to get there** (each found only by running the real app, none
+  caught by the suites): the Hub's `is_cached` gate; the Voice cache resolver understanding only an
+  HF cache; `cache_state`/`status_snapshot`/`model_dir`; the mlx-audio snapshot path; the package's
+  split `model/` + `companions/processor/` layout (a merged read-only view now presents them
+  together); the Whisper tokenizer fallback asking the hub **by name offline** instead of using the
+  local companion files; and `snapshot_revision` lacking package evidence. Commits `bc0119b` …
+  `6f8fa8b`; Voice suite **664 passed**, root suite **192 OK**.
+- **Three of four studios are now proven working end to end: Image, Subtitle and Voice.**
+- **Next:** ST-05 (VoxCPM2/OmniVoice) — it shares the resolver just fixed, so it should now be a
+  matter of capability/UI wiring plus real receipts — then ST-08's remaining native work, ST-10
+  fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
