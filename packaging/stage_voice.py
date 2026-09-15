@@ -134,6 +134,16 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
             'upstream_version': hub_provenance['version'],
             'source_sha256': tree_digest(hub), 'runtime': 'voice',
         }
+        # Independent Subtitle worker: its own process and state root, but it reuses the shared
+        # (already staged) Voice runtime bytes and imports Voice's transcription module from
+        # Resources/voice/app instead of carrying a second copy.
+        subtitle_source = resources / 'components/subtitle'
+        copy_tracked_tree(ROOT / 'components/subtitle', subtitle_source)
+        shutil.copyfile(ROOT / 'packaging/subtitle_worker.py', resources / 'subtitle_worker.py')
+        release['components']['subtitle'] = {
+            'source_sha256': tree_digest(subtitle_source), 'runtime': 'voice',
+            'runtime_sha256': release['runtime_sha256'],
+        }
     if image_runtime is not None:
         image_source = resources / 'components/image'
         copy_tracked_tree(ROOT / 'components/image', image_source)

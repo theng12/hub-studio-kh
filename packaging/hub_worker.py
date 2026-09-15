@@ -139,7 +139,7 @@ def main():
     from components.hub.backend.auth import load_token
     load_token()
     token = read_private_token(token_file, data)
-    specs = [('voice', runtime, release['runtime_sha256'], data / 'voice/output')]
+    specs = [('voice', 'voice', runtime, release['runtime_sha256'], data / 'voice/output')]
     if 'image' in release.get('components', {}):
         image_runtime = RESOURCES / 'runtimes/image'
         image_id = release['components']['image'].get('runtime_sha256')
@@ -148,7 +148,18 @@ def main():
                 or not isinstance(image_id, str) or len(image_id) != 64
                 or any(ch not in '0123456789abcdef' for ch in image_id)):
             parser.error('Incomplete Image runtime or release identity')
-        specs.append(('image', image_runtime, image_id, data / 'image/outputs'))
+        specs.append(('image', 'image', image_runtime, image_id, data / 'image/outputs'))
+    if 'subtitle' in release.get('components', {}):
+        # Subtitle reuses the shared Voice runtime bytes but is its own process and state root.
+        # It advertises modality 'transcription' so the packaged public scheduler routes public
+        # Subtitle jobs here; the Voice worker keeps its Whisper quality check internal.
+        subtitle_id = release['components']['subtitle'].get('runtime_sha256')
+        if (not (RESOURCES / 'subtitle_worker.py').is_file()
+                or not (RESOURCES / 'components/subtitle/app/backend/main.py').is_file()
+                or not isinstance(subtitle_id, str) or len(subtitle_id) != 64
+                or any(ch not in '0123456789abcdef' for ch in subtitle_id)):
+            parser.error('Incomplete Subtitle worker or release identity')
+        specs.append(('subtitle', 'transcription', runtime, subtitle_id, data / 'subtitle'))
     children = []
     child_watch_stop = threading.Event()
 
@@ -167,7 +178,7 @@ def main():
         for child in children:
             _, port = await_child(child['process'], child['ready'], label=child['id'].title())
             workers.append({
-                'id': child['id'], 'modality': child['id'], 'title': f"{child['id'].title()} Studio",
+                'id': child['id'], 'modality': child['modality'], 'title': f"{child['id'].title()} Studio",
                 'host': '127.0.0.1', 'port': port, 'machine': 'local', 'local': True,
                 'hub_token': token, 'studio_token': token, 'pid': child['process'].pid,
                 'runtime_identity': {'id': child['runtime_id'], 'compatible': True},
@@ -188,7 +199,7 @@ def main():
         workers_file.unlink(missing_ok=True)
 
     try:
-        for worker_id, worker_runtime, runtime_id, outputs in specs:
+        for worker_id, modality, worker_runtime, runtime_id, outputs in specs:
             child_ready = hub_data / f'{worker_id}-ready.json'
             child_ready.unlink(missing_ok=True)
             command = [str(worker_runtime / 'bin/python3'), '-I', '-B', str(RESOURCES / f'{worker_id}_worker.py'),
@@ -198,7 +209,7 @@ def main():
                 command.append('--offline')
             child = subprocess.Popen(command, cwd=data,
                 env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
-            children.append({'id': worker_id, 'process': child, 'ready': child_ready,
+            children.append({'id': worker_id, 'modality': modality, 'process': child, 'ready': child_ready,
                              'runtime_id': runtime_id, 'outputs': outputs})
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
                    token=token, factory=True, shutdown_callback=cleanup)

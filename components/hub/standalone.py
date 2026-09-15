@@ -255,22 +255,31 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Existing Hub aggregate contract, gathered only through private workers."""
         return await monitor.aggregate_catalog()
 
-    async def voice_read(path: str) -> dict[str, Any]:
-        voice = next((worker for worker in monitor.registry if worker["id"] == "voice"), None)
-        if voice is None:
-            raise HTTPException(503, "Voice worker is unavailable")
+    async def worker_read(worker_id: str, path: str) -> dict[str, Any]:
+        """Authenticated pass-through read from one named worker.
+
+        Public Subtitle job state must come from the Subtitle worker, never from the Voice
+        worker, otherwise the studio separation is only nominal.
+        """
+        worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
+        label = worker_id.title()
+        if worker is None:
+            raise HTTPException(503, f"{label} worker is unavailable")
         try:
             response = await monitor._client.get(
-                voice["base_url"] + path,
-                headers={"X-Hub-Token": voice["hub_token"]}, timeout=15,
+                worker["base_url"] + path,
+                headers={"X-Hub-Token": worker["hub_token"]}, timeout=15,
             )
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(502, "Voice worker read failed") from exc
+            raise HTTPException(502, f"{label} worker read failed") from exc
         if not isinstance(payload, dict):
-            raise HTTPException(502, "Voice worker returned an invalid response")
+            raise HTTPException(502, f"{label} worker returned an invalid response")
         return payload
+
+    async def voice_read(path: str) -> dict[str, Any]:
+        return await worker_read("voice", path)
 
     @app.get("/studio/voice/api/generate/availability")
     async def voice_availability() -> dict[str, Any]:
@@ -291,6 +300,23 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.get("/studio/voice/api/settings")
     async def voice_settings() -> dict[str, Any]:
         return await voice_read("/api/settings")
+
+    # Independent Subtitle studio reads. These come from the subtitle worker, not Voice.
+    @app.get("/studio/subtitle/api/catalog")
+    async def subtitle_catalog() -> dict[str, Any]:
+        return await worker_read("subtitle", "/api/catalog")
+
+    @app.get("/studio/subtitle/api/transcribe/availability")
+    async def subtitle_availability() -> dict[str, Any]:
+        return await worker_read("subtitle", "/api/transcribe/availability")
+
+    @app.get("/studio/subtitle/api/generate/transcribe/jobs")
+    async def subtitle_jobs() -> dict[str, Any]:
+        return await worker_read("subtitle", "/api/generate/transcribe/jobs")
+
+    @app.get("/studio/subtitle/api/generate/transcribe/jobs/{job_id}")
+    async def subtitle_job(job_id: str) -> dict[str, Any]:
+        return await worker_read("subtitle", f"/api/generate/transcribe/jobs/{job_id}")
 
     @app.post("/api/hub/memory/release")
     async def release_memory(body: dict[str, Any] | None = None) -> dict[str, Any]:
