@@ -3130,6 +3130,12 @@ class GenerationManager:
         repo_dir = cache.repo_cache_dir(repo)
         snapshots = repo_dir / "snapshots"
         if not snapshots.exists():
+            # Verified Studio Hub package install: <library>/<package>/<revision>/ holds the
+            # model files directly, so that revision folder is the snapshot folder. Without
+            # this fallback a model the app installed and verified looked uncached here.
+            package = cache.package_snapshot(repo)
+            if package is not None and package[1].is_dir():
+                return package[1]
             raise RuntimeError(
                 f"No snapshots folder for {repo} at {snapshots}. "
                 "Re-download from the Models tab or re-import."

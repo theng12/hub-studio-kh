@@ -143,6 +143,9 @@ def main() -> None:
         'STUDIOHUB_MODELS_DIR': str(models),
         'STUDIOHUB_TOOLS_DIR': str(runtime / 'bin'),
         'STUDIOHUB_RELEASE_MANIFEST': str(manifest),
+        # The Voice cache resolver answers from the verified package library, which needs the
+        # packaged manifests to map a repository to its package id and revision.
+        'STUDIOHUB_MODEL_MANIFESTS': str(resources / 'model-manifests'),
         'HF_HOME': str(models),
         'HF_HUB_CACHE': str(models / 'hub'),
         'HF_HUB_DISABLE_TELEMETRY': '1',

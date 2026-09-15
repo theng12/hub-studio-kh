@@ -8,6 +8,7 @@ Pure-ish functions that look at the on-disk Hugging Face cache and answer:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from fnmatch import fnmatch
@@ -181,6 +182,20 @@ def _cache_state_for_revision(repo: str, revision: str | None) -> str:
     return "cached" if has_weight_files(repo, revision=revision) else "partial"
 
 
+def model_dir(repo: str) -> Path:
+    """Directory holding this repo's files: the HF cache, else the verified package.
+
+    ``repo_cache_dir`` alone points inside the Hugging Face cache, which does not exist for a
+    model the application installed as a Studio Hub package. Every caller that needs to read
+    model files should resolve through here so both install paths work.
+    """
+    if _cache_state_for_revision(repo, snapshot_revision(repo)) != "cached":
+        package = package_snapshot(repo)
+        if package is not None:
+            return package[1]
+    return repo_cache_dir(repo)
+
+
 def cache_state(repo: str) -> str:
     """Returns one of: 'absent', 'partial', 'cached'.
 
@@ -190,8 +205,16 @@ def cache_state(repo: str) -> str:
     A model is cached only when its selected snapshot has both an immutable
     revision and real weight files. Mutable names such as ``main`` remain
     resumable partial state rather than routable runtime evidence.
+
+    A model installed as a verified Studio Hub package also counts: the HF-cache check is
+    tried first, then the package library, so the app's own install path is usable.
     """
-    return _cache_state_for_revision(repo, snapshot_revision(repo))
+    state = _cache_state_for_revision(repo, snapshot_revision(repo))
+    if state == "cached":
+        return state
+    if package_snapshot(repo) is not None:
+        return "cached"
+    return state
 
 
 def snapshot_contains_patterns(repo: str, patterns) -> bool:
@@ -344,9 +367,82 @@ def prune_stale_incomplete(
     return {"removed_files": removed_files, "removed_bytes": removed_bytes}
 
 
+def _manifest_catalog() -> dict[str, tuple[str, str]]:
+    """Map a model repository to (package_id, revision) from the packaged manifests."""
+    location = (os.environ.get("STUDIOHUB_MODEL_MANIFESTS") or "").strip()
+    if not location:
+        return {}
+    root = Path(location).expanduser()
+    catalog: dict[str, tuple[str, str]] = {}
+    try:
+        manifests = sorted(root.glob("*.json"))
+    except OSError:
+        return {}
+    for path in manifests:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        model_id = manifest.get("model_id")
+        revision = manifest.get("revision")
+        package_id = manifest.get("package_id")
+        if (isinstance(model_id, str) and isinstance(revision, str)
+                and isinstance(package_id, str)):
+            catalog[model_id] = (package_id, revision.lower())
+    return catalog
+
+
+def package_snapshot(repo: str) -> tuple[str, Path] | None:
+    """Resolve a repository through the Studio Hub verified-package library.
+
+    This module historically understood only an HF cache
+    (``<hf_home>/hub/models--org--name``). The application installs models as
+    verified packages at ``<library>/<package_id>/<revision>/`` and records them in
+    ``<library>/.studiohub/installed.json`` only after verification succeeded. Without
+    this bridge every installed model reported ``absent``, so the Hub refused to
+    dispatch Voice work even though the app called the model installed and verified.
+
+    Only a package present in that index at the manifest's exact revision counts; a
+    bare folder or a stale revision must never be advertised as downloaded.
+    """
+    entry = _manifest_catalog().get(repo)
+    if entry is None:
+        return None
+    package_id, revision = entry
+    root = hf_home()
+    try:
+        index = json.loads((root / ".studiohub" / "installed.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(index, dict):
+        return None
+    row = index.get(package_id)
+    if not isinstance(row, dict):
+        return None
+    if str(row.get("revision") or "").lower() != revision:
+        return None
+    folder = row.get("folder")
+    if not isinstance(folder, str) or not folder:
+        return None
+    candidate = root / folder
+    try:
+        if not candidate.is_dir():
+            return None
+    except OSError:
+        return None
+    return revision, candidate
+
+
 def status_snapshot(repo: str) -> dict:
     revision = snapshot_revision(repo)
     state = _cache_state_for_revision(repo, revision)
+    path = str(repo_cache_dir(repo)) if state != "absent" else None
+    if state == "absent":
+        # Fall back to the verified package library before declaring the model missing.
+        package = package_snapshot(repo)
+        if package is not None:
+            revision, folder = package
+            state, path = "cached", str(folder)
     return {
         "repo": repo,
         "state": state,
@@ -354,7 +450,7 @@ def status_snapshot(repo: str) -> dict:
         # Studio Hub can match a GenStudio-pinned request to the right worker.
         # Mutable refs such as ``main`` are never returned here.
         "snapshot_revision": revision,
-        "path": str(repo_cache_dir(repo)) if state != "absent" else None,
+        "path": path,
         "bytes_complete": disk_bytes(repo),
         "bytes_incomplete": incomplete_bytes(repo),
     }
