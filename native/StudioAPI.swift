@@ -825,7 +825,11 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         let transcriptionModels = transcription.map { item in
             let package = packages[item.repo]
-            let supported = item.engine?.lowercased().contains("whisper") == true && package != nil
+            // The standalone Subtitle worker reports engine "subtitle-mlx"; the retained Voice
+            // worker reports "whisper". Accept either, or the Subtitle screen can never select a
+            // model even though the worker reports it ready.
+            let engine = (item.engine ?? "").lowercased()
+            let supported = (engine.contains("whisper") || engine.contains("subtitle")) && package != nil
             let ready = transcriptionAvailable && item.cached == true && package?.dispatchState == "eligible"
             let qualified = item.repo == whisperTurbo
             let note = supported
