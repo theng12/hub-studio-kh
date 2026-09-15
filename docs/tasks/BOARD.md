@@ -136,6 +136,33 @@ then the one task card you are claiming.
 - **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
   true, and put every result in a committed file — not in a chat message.
 
+## ▶ FIRST TASKS FOR THE NEXT SESSION (specific, verified starting points)
+
+1. **Expose the heavy voices in the Audio screen.** Cause confirmed:
+   `native/StudioAPI.swift:785` gates audio models on
+   `let isQwen = item.family == "qwen3-tts"`, and `formCompatible`/`isClone` follow from it, so
+   the catalogue's `voxcpm-mlx` (VoxCPM2 4-bit/8-bit/bf16) and `omnivoice` families never reach
+   the form even though both **work end to end through the Hub** (OmniVoice proven; VoxCPM2
+   memory-bound). Broaden the gate to those families, mark them clone models
+   (`requiresReference`), and keep Qwen CustomVoice as the preset-speaker path. The reference-clip
+   and transcript UI added in `1a010e5` is family-agnostic and needs no change.
+2. **Re-probe VoxCPM2 on a 24/32 GB Mac with the other engines idle** and record receipts —
+   including 8-bit, which was never run. This is an owner-hardware task, not a code change.
+3. **Subtitle export + acknowledgement.** `native/StudioViews.swift` `saveAudio`/transcript export
+   still writes bytes without the verified-destination acknowledgement that ST-03 added for Image
+   (`saveImage`); apply the same pattern before acknowledging delivery.
+4. **Independent review** of the ST-04/ST-05/ST-06 changes, reusing the pattern that found seven
+   real defects in ST-03.
+5. Then **ST-10 fleet** and **ST-11 hardware**, per the owner's "finish the whole app" scope.
+
+**Verify every one of these by running the packaged app, not only the suites.** Seven integration
+defects in the Voice/Subtitle chain passed a fully green 192-test suite and were only visible when
+a real job ran (`st04-packaged-clone-e2e.json`, `st06-packaged-e2e.json`). `bash native/build.sh`,
+`.build/voice-runtime/bin/python3 -m unittest discover -s tests -p 'test_*.py'` and
+`PYTHONPATH=$PWD/.build/test-deps .build/voice-runtime/bin/python3 -m pytest tests/hub_regression -q`
+are the quick gates; staging with `packaging/stage_voice.py --runtime .build/voice-runtime
+--native-shell .build/StudioHub --image-runtime .build/st03-image-runtime-worker` is the real one.
+
 *Plain-English position:* four engines are now proven working through the real packaged app —
 image generation (FLUX), subtitles (Whisper), Qwen voice cloning, and OmniVoice. The only engine
 not yet producing output on this 16 GiB machine is VoxCPM2, and it fails with its own explicit
