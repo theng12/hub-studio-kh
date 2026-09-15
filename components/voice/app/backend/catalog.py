@@ -1853,8 +1853,19 @@ def serialize_model(m: ModelEntry) -> dict:
         },
         "long_form_delivery": effective_long_form_policy,
         "reference_audio": {
+            # ``declared`` is the family capability claim; ``profile_source``
+            # says whether the exact limits below are audit-grounded or the
+            # adapter's documented fallback. Qwen3-TTS Base is the only family
+            # whose reference contract is qualification-bound, so a caller must
+            # be able to tell "cloning supported, limits audited" from
+            # "cloning supported, limits unverified" without guessing.
+            "declared": bool("voice-cloning" in m.capabilities),
             "supported": bool("voice-cloning" in m.capabilities),
+            "profile_audited": bool(reference_profile),
             "profile_source": "audit" if reference_profile else "unverified",
+            "transcript_requirement": (
+                str(reference_profile.get("transcript") or "") or None
+            ),
             **reference_profile,
         },
         "apple_optimized": apple_optimized,

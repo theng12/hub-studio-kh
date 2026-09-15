@@ -40,8 +40,16 @@ def _profile(model_id: str) -> dict[str, Any]:
 
 
 def _requires_audited_profile(model_id: str) -> bool:
+    """Voice-cloning models whose reference contract must come from an audit.
+
+    Qwen3-TTS Base cannot run without an exact reference transcript and a
+    bounded, speech-aligned window, so silently falling back to generic
+    defaults would produce a wrong execution copy instead of an honest error.
+    Every *-Base-* Qwen3-TTS tier is covered (0.6B and 1.7B), not only the
+    1.7B tier that happened to need the stricter production section policy.
+    """
     name = (model_id or "").lower()
-    return "qwen3-tts" in name and "1.7b-base" in name
+    return "qwen3-tts" in name and "base" in name
 
 
 def _number(value: object, default: float | None = None) -> float | None:
@@ -236,7 +244,7 @@ def prepare(
     if _requires_audited_profile(model_id) and not profile:
         raise ReferenceAudioError(
             "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE",
-            "Qwen3-TTS 1.7B Base reference preparation is unavailable until its audited contract is installed.",
+            f"{model_id} reference preparation is unavailable until its audited contract is installed.",
         )
     target_rate = int(_number(profile.get("sample_rate_hz"), 24000) or 24000)
     target_rate = max(8000, min(target_rate, 96000))

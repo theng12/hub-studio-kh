@@ -492,6 +492,96 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "queued": sum(item["state"] == "queued" for item in batch["items"]),
                 "duplicate": duplicate}
 
+    @app.post("/api/hub/voice-references", status_code=201)
+    async def stage_voice_reference(
+        audio: UploadFile = File(...),
+        transcript: str = Form(""),
+        transcript_segments: str = Form(""),
+        language: str = Form(""),
+        ttl_seconds: float | None = Form(None),
+        source_asset_id: str = Form(""),
+        sha256: str = Form(""),
+    ) -> dict[str, Any]:
+        """Stage one clone reference for later Voice jobs — one contract, two origins.
+
+        Local origin: the app uploads a chosen clip and omits ``source_asset_id``.
+        GenStudio origin: the controller pushes the clip with its durable
+        ``source_asset_id``, which keeps the existing required-source semantics.
+
+        Either way the returned ``asset_id`` is passed back verbatim as
+        ``voice_reference_asset_id`` on ``/api/hub/jobs``; the Hub then streams
+        the staged bytes to the Voice worker's clone route.  Nothing about the
+        local origin relaxes GenStudio's type/size/checksum/transcript/expiry
+        and privacy rules — only the upstream identity is optional.
+        """
+        from .backend import execution_assets
+        try:
+            audio_bytes = await audio.read()
+        except Exception as exc:
+            raise HTTPException(400, {"code": "REFERENCE_AUDIO_UNREADABLE",
+                                      "detail": f"The uploaded reference could not be read: {exc}"}) from exc
+        finally:
+            await audio.close()
+        segments: object = []
+        if transcript_segments.strip():
+            try:
+                segments = json.loads(transcript_segments)
+            except ValueError as exc:
+                raise HTTPException(400, {
+                    "code": "REFERENCE_TRANSCRIPT_SEGMENTS_INVALID",
+                    "detail": "transcript_segments must be a JSON array of ordered segments.",
+                }) from exc
+        stage = (execution_assets.stage_voice_reference if source_asset_id.strip()
+                 else execution_assets.stage_local_voice_reference)
+        try:
+            metadata = stage(
+                audio_bytes=audio_bytes,
+                filename=audio.filename or "reference.wav",
+                declared_sha256=sha256,
+                transcript=transcript,
+                transcript_segments=segments,
+                language=language,
+                ttl_seconds=(execution_assets.DEFAULT_TTL_SECONDS if ttl_seconds is None
+                             else int(ttl_seconds)),
+                **({"source_asset_id": source_asset_id} if source_asset_id.strip() else {}),
+            )
+        except execution_assets.ExecutionAssetError as exc:
+            raise HTTPException(400, {"code": exc.code, "detail": exc.detail}) from exc
+        public = execution_assets.public(metadata)
+        return {
+            "asset_id": public["id"],
+            "sha256": public["sha256"],
+            "bytes": public["bytes"],
+            "media_type": public["media_type"],
+            "created_at": public["created_at"],
+            "expires_at": public["expires_at"],
+            "transcript_supplied": bool(transcript.strip() or segments),
+            "origin": "genstudio" if source_asset_id.strip() else "local",
+        }
+
+    @app.get("/api/hub/voice-references/{asset_id}")
+    def voice_reference_status(asset_id: str) -> dict[str, Any]:
+        """Report whether a staged clone reference is still usable."""
+        from .backend import execution_assets
+        try:
+            metadata, path = execution_assets.resolve_voice_reference(asset_id)
+        except execution_assets.ExecutionAssetError as exc:
+            raise HTTPException(409, {"code": exc.code, "detail": exc.detail}) from exc
+        return {
+            "asset_id": asset_id,
+            "sha256": metadata.get("sha256"),
+            "bytes": path.stat().st_size,
+            "media_type": execution_assets.MIME_BY_EXTENSION.get(
+                str(metadata.get("audio_extension") or ""), "application/octet-stream"
+            ),
+            "created_at": metadata.get("created_at"),
+            "expires_at": metadata.get("expires_at"),
+            "transcript_supplied": bool(
+                str(metadata.get("transcript") or "").strip()
+                or metadata.get("transcript_segments")
+            ),
+        }
+
     @app.get("/api/hub/transcription/jobs")
     def list_transcription_jobs() -> dict[str, Any]:
         return {"batches": transcription_jobs.list_batches(), "stats": transcription_jobs.statistics()}
