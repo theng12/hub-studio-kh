@@ -4,9 +4,9 @@ Updated: 2026-09-15. Canonical planning directory remains this directory.
 
 ## Current goal
 
-Complete the owner's source-backed rescope and agent handoff plan for a native standalone
-Hub + Image + Voice + Subtitle app. This pass is planning/review; it does not implement
-the new app features. Historical local implementation authorization remains recorded.
+Execute the owner-authorized first phase, ST-01, of the standalone Hub + Image + Voice
++ Subtitle plan. The narrowed design is accepted. Complete reviewed runtime/model
+foundations and hand off ST-02; do not silently begin later phases.
 
 ## Confirmed scope
 
@@ -46,8 +46,8 @@ Turbo evidence. Native shell, immutable runtime and relocation proof are reusabl
 Requested Qwen Base is not proven by CustomVoice. Hub/Image are not bundled.
 Historical 676 regressions and 28 packaging tests are not new test runs.
 
-ST-00 is this planning pass. ST-01 through ST-11 remain pending; their board controls
-readiness. Start runtime/model contracts, then bundled local Hub, then packaged FLUX.
+ST-00 planning is complete. ST-01 foundation is in final review; ST-02 through ST-11
+remain pending and their board controls readiness. Start runtime/model contracts, then bundled local Hub, then packaged FLUX.
 Physical hardware and distribution conditions remain explicit, not reasons to stall
 independent local implementation.
 
@@ -71,8 +71,24 @@ Their original tests/limitations remain evidence for those artifacts only.
 
 ## Latest owner addition
 
-Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 remains READY. ST-10.TOPOLOGY awaits the owner endpoint clarification; the prior direct controller connection is not reconfirmed. Future standalone GenStudio implementation remains deferred.
+Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 is in final implementation review. ST-10.TOPOLOGY is resolved: preserve GenStudio-to-location-controller-to-nodes routing. Future standalone GenStudio implementation remains deferred.
 
 ## Older-device addition
 
-Preserve original M1/MLX support on the oldest qualified Sonoma release, without requiring the newest OS. ST-01/02/08/09/11 now contain OS compatibility and update-recovery checkpoints. Existing macOS14 target remains unqualified physically. Model and endpoint requirements from prior turns remain active; ST-10.TOPOLOGY is still pending.
+Preserve original M1/MLX support on the oldest qualified Sonoma release, without requiring the newest OS. ST-01/02/08/09/11 now contain OS compatibility and update-recovery checkpoints. Existing macOS14 target remains unqualified physically. Model and endpoint requirements from prior turns remain active; ST-10.TOPOLOGY is resolved; existing routing remains unchanged.
+
+## ST-01 implementation evidence
+
+- Baseline: 28 unittest cases ran successfully (one skipped) before changes.
+- Runtime/model imports, ten exact manifests, separate Image hash lock and notices,
+  file receipt validation and resumable download/copy implementation are complete.
+- Real Turbo copy/import verified 1,618,590,987 bytes; moved library and offline
+  tokenizer round trip passed. Real HTTPS smoke verified 89,500 companion bytes.
+- Existing Voice regression: 640 passed, five warnings. Final foundation checks and
+  integration are recorded in qualification/st01.md and docs/tasks/ST-01.md.
+- Independent review covers filesystem races/durability, explicit full Verify,
+  source-adoption identity and model/runtime qualification boundaries.
+- Original user progress/research/graph changes are preserved outside this worktree.
+- Pinokio launcher creation, URL capture, destination and example rules are not
+  applicable: no launcher is being edited. Existing fleet/source checkouts remain
+  read-only. No hosted compute, publication, deployment or model-weight download.

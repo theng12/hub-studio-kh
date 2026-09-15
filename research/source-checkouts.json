@@ -19,5 +19,49 @@
     "branch": "main",
     "version": "2.7.2",
     "status": ""
+  },
+  "current_provenance": {
+    "observed_at": "2026-09-15",
+    "purpose": "ST-01 read-only runtime/source input observation. references do not adopt a live checkout or prove a packaged release; adopted_components records the standalone source subject separately.",
+    "references": [
+      {
+        "component": "hub",
+        "path": "/build/pinokio/api/studiohub-mac",
+        "resolved_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+        "version": "2.22.0",
+        "branch": "main",
+        "official_remote": "https://github.com/theng12/studiohub-mac.git",
+        "working_tree_status": "clean"
+      },
+      {
+        "component": "image",
+        "path": "/build/pinokio/api/imagestudio-mac",
+        "resolved_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
+        "version": "1.32.2",
+        "branch": "main",
+        "official_remote": "https://github.com/theng12/imagestudio-mac.git",
+        "working_tree_status": "clean"
+      },
+      {
+        "component": "voice",
+        "path": "/build/pinokio/api/voicestudio-mac.git",
+        "resolved_commit": "72e26b795cd3d0a6f76961f8137e4dfd4af59e9b",
+        "version": "2.8.1",
+        "branch": "main",
+        "official_remote": "https://github.com/theng12/voicestudio-mac.git",
+        "working_tree_status": "clean"
+      }
+    ],
+    "adopted_components": [
+      {
+        "component": "voice",
+        "component_path": "components/voice",
+        "adoption_record": "research/voice-adoption.json",
+        "commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+        "version": "2.7.2",
+        "official_remote": "https://github.com/theng12/voicestudio-mac.git",
+        "adoption_method": "git archive of tracked source only; no live environments or state"
+      }
+    ]
   }
 }

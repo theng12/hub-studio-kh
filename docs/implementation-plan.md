@@ -6,7 +6,7 @@
 **Architecture:** Native client → bundled Hub → private studio workers. Qualified immutable runtimes, external model packages and one device output policy.
 **Tech stack:** Existing SwiftUI/AppKit, Python, MLX, SQLite and macOS ServiceManagement.
 **Spec:** [Focused design](standalone-plan.md).
-**Status:** Planned on 2026-09-15 against source 29d0baa. No new implementation or model qualification is claimed.
+**Status:** ST-01 foundation implemented from checkpoint 2fc8ee0; see the board for review/integration state and [phase evidence](../qualification/st01.md). Later app integration and model inference remain pending.
 
 ## Shared constraints
 
@@ -73,7 +73,7 @@ Before engine work, ST-01/02 publish a short docs/runtime-contract.md using exis
 - Submit/status/cancel/result and verified receipt semantics.
 - Common model, RAM and output-space admission for native and remote work.
 - Persisted per-device settings and effective defaults.
-- Stable location/site membership and physical node identity, generation attribution, statistics/freshness and deployment-independent address/IP + token APIs. The latest GenStudio-to-location endpoint decision remains pending in the design and ST-10.TOPOLOGY.
+- Stable location/site membership and physical node identity, generation attribution, statistics/freshness and deployment-independent address/IP + token APIs. Owner confirmed current GenStudio-to-controller-to-nodes routing; no topology change.
 - Output-group registration plus delivery/read protection.
 - Independent public Subtitle lifecycle; internal Voice Whisper quality checks stay under the parent job lease.
 - Owned processes and truthful packaged release identity.

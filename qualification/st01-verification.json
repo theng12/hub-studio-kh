@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-15",
+  "start_commit": "2fc8ee0",
+  "foundation": {
+    "passed": 83,
+    "initially_skipped": 1,
+    "seconds": 9.34
+  },
+  "resolved_skip": {
+    "passed": 1,
+    "seconds": 0.97
+  },
+  "adopted_voice": {
+    "passed": 640,
+    "warnings": 5,
+    "seconds": 32.78
+  },
+  "total_passed": 724,
+  "remaining_skips": 0,
+  "image_dependency_check": {
+    "packages": 69,
+    "result": "compatible"
+  },
+  "markdown_files_checked": 21,
+  "local_links_checked": 92,
+  "reviewers": [
+    "scope_packaging",
+    "st01_manifests"
+  ],
+  "review_result": "No remaining ST-01 blocker; ST-03 relocation and ST-11 physical/model qualifications retained.",
+  "logs": {
+    "st01-foundation-tests.log": {
+      "sha256": "b9e833a095ca31dfa08172a9fc4faeffb58ca93350023d0c023dd87b5372b144",
+      "path": ".build/st01-foundation-tests.log"
+    },
+    "st01-real-worker-test.log": {
+      "sha256": "8def88ee96978e0df999977834feec6a2ff41a4a32c4e731cb86eb701cf393c3",
+      "path": ".build/st01-real-worker-test.log"
+    },
+    "st01-voice-regression.log": {
+      "path": ".build/st01-voice-regression.log",
+      "sha256": "cebbf050c549bb164601bdbe4c5c3b817c84b39bd9d002fbb67abee020c3bbf1"
+    }
+  }
+}

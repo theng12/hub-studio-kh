@@ -1,0 +1,85 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "91bff6db1be27bc0f4f2a287cca7a8fbb8b1d7a0b026a5dc4a71bc5f2f1ddcfb",
+      "size": 5332,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-4bit/resolve/dc9e5c187858da5f4a13dc4c247e297339216381/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "25bddc99a7cc6d28214f12dd676ed0afa9b0a805d6477f85c275bb113cb8acee",
+      "size": 2297215329,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-4bit/resolve/dc9e5c187858da5f4a13dc4c247e297339216381/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76",
+      "size": 1632,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-4bit/resolve/dc9e5c187858da5f4a13dc4c247e297339216381/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20",
+      "size": 3676772,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-4bit/resolve/dc9e5c187858da5f4a13dc4c247e297339216381/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "466575c55f0cf49530666c2e46ed14f26237dbd227ba7f4bb3bbec93df90edfc",
+      "size": 4952,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-4bit/resolve/dc9e5c187858da5f4a13dc4c247e297339216381/tokenizer_config.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/VoxCPM2-4bit",
+  "package_id": "voxcpm2-4bit",
+  "qualification": {
+    "memory_evidence": "Historical fleet observation: 7.963 GB peak and 3.95x realtime on a 17.2 GB M2; 8.6 GB swapped heavily.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 24,
+    "status": "unqualified"
+  },
+  "revision": "dc9e5c187858da5f4a13dc4c247e297339216381",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/VoxCPM2-4bit",
+        "revision": "dc9e5c187858da5f4a13dc4c247e297339216381"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/VoxCPM2-4bit",
+        "revision": "dc9e5c187858da5f4a13dc4c247e297339216381",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-4bit/revision/dc9e5c187858da5f4a13dc4c247e297339216381",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-4bit/tree/dc9e5c187858da5f4a13dc4c247e297339216381?recursive=true&expand=true"
+      }
+    ]
+  }
+}

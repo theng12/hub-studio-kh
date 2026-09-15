@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — ST-01 foundation
+
+- Pin ten scoped model packages and companion assets to immutable revisions and file hashes.
+- Add verified HTTPS download, resumable staging, offline folder import and registration in place; preserve a working revision on failed replacement.
+- Record separate Image/Voice runtime inputs, native binary floors and redistribution notices, with Image relocation and physical-device qualification still pending.
+- Preserve GenStudio-to-location-controller-to-nodes routing and document the next Hub integration handoff.
+- Keep the existing 0.3.0 preview artifact unchanged; these foundations are not a new packaged app release.
+
 ## 0.3.0 — 2026-09-11
 
 - Redesigned the application as a native SwiftUI/AppKit shell with six visible functions: Audio, Transcription, Image, Music, Video and Chat. The embedded browser workspace is removed.

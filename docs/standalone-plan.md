@@ -34,7 +34,7 @@ or guarantee compatibility with every future macOS release.
 - Editable per-device generated-output defaults: 50 GB total and 30 days after generation, whichever condition is reached first.
 - Operating defaults are editable; settings must show the effective value and allow restoring the default.
 - Each generator can gain supported models later without rebuilding its entire interface.
-- Protected reveal/copy of the Hub connection token for the GenStudio endpoint selected at ST-10.TOPOLOGY.
+- Protected reveal/copy of the existing Hub token: GenStudio connects to each location controller; its nodes connect only to that controller.
 - Phased implementation with independently reviewable tasks and durable agent/session handoffs.
 
 ## 3. What already exists
@@ -63,7 +63,7 @@ records remain intact; no source or app rebuild occurred to produce this plan.
 ~~~mermaid
 flowchart TD
     UI[One native app: Hub, Image, Voice, Subtitle] --> H[Bundled Hub: jobs, readiness, shared device admission]
-    G[Optional GenStudio: location endpoint pending ST-10.TOPOLOGY]
+    G[Optional GenStudio] -->|IP/address and Hub token: controller mode| H
     C[Optional location controller] -->|authenticated worker connection| H
     H --> I[Image worker]
     H --> V[Voice worker]
@@ -103,18 +103,15 @@ Shared tokenizer/model assets are referenced once in the model library.
 
 ### Roles
 
-**Latest clarification pending:** the owner confirms that nodes join named locations,
-but also says they do not want controllers connected to GenStudio. The earlier direct
-GenStudio-to-controller connection was a prior design assumption, not a confirmed
-answer to this addition; the diagram leaves that connection unspecified. Final GenStudio-to-location routing remains
-open until the owner chooses the intended endpoint. Do not implement a new gateway,
-direct-node fanout or controller link by guessing. Model import, local roles, telemetry
-and the deployment-independent IP/token contract can proceed independently.
+**Owner-confirmed topology:** preserve the current arrangement. GenStudio connects
+once to each location's controller using its address/IP and Hub token. Each controller
+manages its joined nodes; nodes do not contact GenStudio directly. No extra location
+gateway or new routing layer is required. Standalone local operation remains available.
 
 | Mode | Default behavior | Editable connection setup |
 | --- | --- | --- |
 | Standalone (initial default) | Local Hub schedules local studios; external listener off | Can later become a controller or join one |
-| Controller | Manages this device and explicitly enrolled workers | Site identity, worker enrollment and private listener; GenStudio endpoint pending |
+| Controller | Manages this device and explicitly enrolled workers | Site identity, worker enrollment, private listener and existing Hub token for GenStudio |
 | Worker (existing Hub agent role) | Executes work accepted from its selected controller | Parent controller address and enrollment |
 
 Preserve the current agent rule: it does not accept customer-style queue submissions.
@@ -148,7 +145,7 @@ pipeline. Count a physical machine once even if it hosts multiple studios. Inclu
 freshness and explicit unsupported/unknown values; unavailable metrics are not zero.
 Lost reports must not erase history or turn a model-file failure into healthy readiness.
 Keep generation detail behind the existing authorized access, with no secrets in
-telemetry. Final transport routing follows the pending location decision above.
+telemetry. Transport routing remains GenStudio to location controller to joined nodes.
 
 ## 5. Bounded catalog: ten initial model choices
 
@@ -335,22 +332,22 @@ Process health does not clear a model-file failure.
 
 Connections provides:
 
-- Credential-free private connection URL and stable site/node identity; GenStudio endpoint selected at ST-10.TOPOLOGY.
+- Credential-free private controller URL and stable site/node identity; GenStudio uses each location controller endpoint.
 - Masked token status with explicit owner-only Reveal and Copy actions.
 - Scoped token rotation and clear instructions for reconnecting GenStudio.
 - Existing protected Hub-token storage (owner-only files or already-adopted secure
   store); no secret in the app bundle, model manifest, URL, log or ordinary status.
-- Preserve existing separate Hub and fleet tokens. Select the GenStudio-facing
-  credential/scope at ST-10.TOPOLOGY; a dedicated GenStudio scope would be new work,
-  not an existing third token type. Rotation must not revoke unrelated scope or
-  discard accepted work.
+- Preserve existing separate Hub and fleet tokens. GenStudio uses the controller's
+  Hub service token; joined-node enrollment and communication retain the existing
+  fleet credentials. No new third token type. Rotation must not revoke unrelated
+  scope or discard accepted work.
 - Authenticated connection test reporting identity, capabilities and release type.
 - Truthful packaged app identity: standalone implementation revision, component
   provenance and runtime artifact hashes. Never fake a Git checkout or managed Git
   update support to pass a legacy contract.
 
-The deployment-independent API and fixtures are required for this release. Concrete
-GenStudio endpoint integration awaits ST-10.TOPOLOGY before implementation. Any live
+The deployment-independent API and existing controller endpoint integration are
+required for this release. Preserve current routing and credentials. Any live
 enrollment, deployment, secret rotation or changes to a separate production repository
 require their established authorization. Planning never changes live credentials.
 

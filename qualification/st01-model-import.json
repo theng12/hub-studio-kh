@@ -1,0 +1,26 @@
+{
+  "date": "2026-09-15",
+  "host": {
+    "os": "26.6.2",
+    "architecture": "arm64"
+  },
+  "model_id": "mlx-community/whisper-large-v3-turbo",
+  "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+  "manifest_sha256": "2f6080e652cb3dd8f52ea61f092d8c7d85a326d81753285f93eb7dacf25d0531",
+  "required_files": 9,
+  "verified_bytes": 1618590987,
+  "source": "Selected existing isolated pilot cache assets; read-only hardlinks assembled into a complete package; no weight download.",
+  "proof": [
+    "All required files SHA-256 verified against captured catalog",
+    "External import materialized complete independent package",
+    "Relocated library including space in path remained usable",
+    "Refresh did not copy imported weights again",
+    "Installed package has no cache symlinks",
+    "Original source size/mtime unchanged",
+    "WhisperTokenizer loaded from imported companion folder with offline flags; text encode/decode round-trip passed"
+  ],
+  "state": "files_verified",
+  "generation_qualified": false,
+  "elapsed_seconds": 6.29,
+  "artifact": ".build/ST-01 Moved Model Library/whisper-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
+}

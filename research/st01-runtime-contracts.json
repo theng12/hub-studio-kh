@@ -1,0 +1,270 @@
+{
+  "schema": "studiohub.st01-runtime-contracts.v1",
+  "observed_at": "2026-09-15",
+  "scope": "Reproducible runtime inputs and import surfaces only. A valid runtime install is not a model-package READY state and does not authorize generation.",
+  "official_workflows": [
+    {
+      "component": "hub",
+      "test_command": "cd /build/pinokio/api/studiohub-mac && python -m pytest",
+      "test_declaration": "pytest.ini: pythonpath=app, testpaths=app/tests",
+      "build_workflow": "Pinokio install.js then start.js; no separate source build command is declared.",
+      "executed": false
+    },
+    {
+      "component": "image",
+      "test_command": "cd /build/pinokio/api/imagestudio-mac && python -m pytest",
+      "test_declaration": "pytest.ini: pythonpath=app, testpaths=app/tests",
+      "build_workflow": "Pinokio install.js, optional install_generation.js, then start.js; no separate source build command is declared.",
+      "executed": false
+    },
+    {
+      "component": "voice",
+      "test_command": "cd /build/pinokio/api/voicestudio-mac.git && python -m pytest",
+      "test_declaration": "pytest.ini: pythonpath=app, testpaths=app/tests",
+      "build_workflow": "Pinokio install.js, optional install_generation.js, then start.js; no separate source build command is declared.",
+      "executed": false
+    }
+  ],
+  "source_inputs": [
+    {
+      "component": "hub",
+      "read_only_reference": true,
+      "resolved_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+      "version": "2.22.0",
+      "official_remote": "https://github.com/theng12/studiohub-mac.git",
+      "working_tree_status": "clean",
+      "official_check": "git rev-parse HEAD and git status --porcelain=v1 observed on 2026-09-15"
+    },
+    {
+      "component": "image",
+      "read_only_reference": true,
+      "resolved_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
+      "version": "1.32.2",
+      "official_remote": "https://github.com/theng12/imagestudio-mac.git",
+      "working_tree_status": "clean",
+      "official_check": "git rev-parse HEAD and git status --porcelain=v1 observed on 2026-09-15; app/requirements-generation.lock.txt selects mflux 0.17.5 and MLX 0.31.2"
+    },
+    {
+      "component": "voice",
+      "read_only_reference": true,
+      "resolved_commit": "72e26b795cd3d0a6f76961f8137e4dfd4af59e9b",
+      "version": "2.8.1",
+      "official_remote": "https://github.com/theng12/voicestudio-mac.git",
+      "working_tree_status": "clean",
+      "official_check": "git rev-parse HEAD and git status --porcelain=v1 observed on 2026-09-15"
+    },
+    {
+      "component": "voice-adopted-component",
+      "component_path": "components/voice",
+      "adoption_record": "research/voice-adoption.json",
+      "resolved_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+      "version": "2.7.2",
+      "official_remote": "https://github.com/theng12/voicestudio-mac.git",
+      "adoption_method": "git archive of tracked source only; no live environments or state",
+      "runtime_contract_subject": true,
+      "official_check": "research/voice-adoption.json and components/voice/VERSION observed on 2026-09-15"
+    }
+  ],
+  "runtimes": [
+    {
+      "engine": "voice-mlx",
+      "family": "Qwen Base, VoxCPM2, OmniVoice",
+      "lock_path": "packaging/voice-runtime/requirements.lock.txt",
+      "runtime_lock_sha256": "93766f4e6572d9db7aca649a758b1a7b655755d0d5fd670df657b7c64f40ef66",
+      "required_imports": [
+        "fastapi",
+        "mlx.core",
+        "mlx_audio",
+        "mlx_audio.tts.models.qwen3_tts.qwen3_tts",
+        "torch",
+        "torchaudio",
+        "transformers"
+      ],
+      "platform": {
+        "architecture": "arm64",
+        "minimum_macos": "14.0",
+        "python": "3.12"
+      },
+      "readiness": "runtime-inputs-only",
+      "native_binary_floor_audit": "The existing immutable Voice artifact records an arm64 Mach-O and load-command audit against macOS 14.0. This source lock alone is not that artifact audit and does not establish original-M1 inference.",
+      "provenance": {
+        "mlx_audio": "git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384",
+        "mlx": "0.31.2 macosx_14_0_arm64 wheel",
+        "mlx_metal": "0.31.2 macosx_14_0_arm64 wheel"
+      },
+      "build_side_import_proof": {
+        "command": "HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 /build/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 -I -B -c \"from importlib import import_module; tuple(import_module(module) for module in ('mlx_audio.tts.models.qwen3_tts.qwen3_tts', 'mlx_audio.tts.models.voxcpm2.voxcpm2', 'mlx_audio.tts.models.omnivoice.omnivoice', 'mlx_audio.stt.models.whisper.whisper', 'mlx_audio.tts.utils', 'mlx_audio.stt.utils'))\"",
+        "runtime_read_only": true,
+        "packages": {
+          "mlx": "0.31.2",
+          "mlx-audio": "0.4.7",
+          "mlx-lm": "0.31.3",
+          "transformers": "5.14.1"
+        },
+        "imports": {
+          "qwen_base": {
+            "status": "imported",
+            "model_family": "Qwen3-TTS Base",
+            "model_type": "qwen3_tts",
+            "module": "mlx_audio.tts.models.qwen3_tts.qwen3_tts",
+            "loader_evidence": "The selected manifest pins mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit at e7dd0585652209fa0d7783659aad4e8a324de11c. Current Voice passes a local snapshot Path to mlx_audio.tts.utils.load_model; mlx-audio 0.4.7 maps model_type qwen3_tts to the qwen3_tts package, whose __init__ imports this module."
+          },
+          "voxcpm2": {
+            "status": "imported"
+          },
+          "omnivoice": {
+            "status": "imported"
+          },
+          "whisper": {
+            "status": "imported"
+          },
+          "tts_loader": {
+            "status": "imported"
+          },
+          "stt_loader": {
+            "status": "imported"
+          }
+        },
+        "result": "All listed import surfaces, including the selected Qwen3-TTS Base module, completed with offline flags and without model-weight downloads."
+      },
+      "read_only_artifact_evidence": {
+        "runtime_files_sha256": "ca0514095cc3f641a5e557407983b6f9051636af80eb66cff67da328cedd9ec6",
+        "macho_audit_sha256": "78f46201e31c1840bf749edc1ab30219bf6b2ca6765a6dbba991c4067c67318b",
+        "macho_audit_target_macos": "14.0"
+      },
+      "contract_subject": {
+        "component_path": "components/voice",
+        "adoption_record": "research/voice-adoption.json",
+        "adoption_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+        "version": "2.7.2",
+        "scope": "This lock and model-free import proof apply to the current standalone adopted Voice component. They do not qualify the newer read-only Voice 2.8.1 reference application."
+      }
+    },
+    {
+      "engine": "subtitle-mlx",
+      "family": "Whisper subtitle worker",
+      "lock_path": "packaging/voice-runtime/requirements.lock.txt",
+      "runtime_lock_sha256": "93766f4e6572d9db7aca649a758b1a7b655755d0d5fd670df657b7c64f40ef66",
+      "required_imports": [
+        "fastapi",
+        "mlx.core",
+        "mlx_audio",
+        "transformers"
+      ],
+      "platform": {
+        "architecture": "arm64",
+        "minimum_macos": "14.0",
+        "python": "3.12"
+      },
+      "readiness": "runtime-inputs-only",
+      "native_binary_floor_audit": "Subtitle may reuse the exact Voice immutable runtime bytes only after ST-02 proves process-specific lifecycle and the existing macOS 14 native audit applies to those exact bytes.",
+      "provenance": {
+        "mlx_audio": "git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384",
+        "mlx": "0.31.2 macosx_14_0_arm64 wheel"
+      },
+      "contract_subject": {
+        "component_path": "components/voice",
+        "adoption_record": "research/voice-adoption.json",
+        "adoption_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+        "version": "2.7.2",
+        "scope": "This lock and model-free import proof apply to the current standalone adopted Voice component. They do not qualify the newer read-only Voice 2.8.1 reference application."
+      }
+    },
+    {
+      "engine": "image-mflux",
+      "family": "FLUX.2 Klein 4B MLX 4-bit",
+      "lock_path": "packaging/image-runtime/requirements.lock.txt",
+      "runtime_lock_sha256": "6809919c3ec817d7de27d03cc7f2adfe2f52f283d842ea74098a45696cc07c51",
+      "required_imports": [
+        "mflux",
+        "mlx.core",
+        "PIL",
+        "numpy",
+        "safetensors",
+        "transformers",
+        "mflux.models.flux2.variants.txt2img.flux2_klein"
+      ],
+      "platform": {
+        "architecture": "arm64",
+        "minimum_macos": "14.0",
+        "python": "3.12"
+      },
+      "readiness": "runtime-inputs-only",
+      "native_binary_floor_audit": "The build-side Image environment completed an arm64/load-command audit: no Mach-O floor is above macOS 14.0, but relocation failures prevent packaging. A final relocated Image artifact needs a fresh audit; neither this lock nor an import test proves original-M1/macOS-14 inference.",
+      "provenance": {
+        "mflux": "PyPI mflux 0.17.5, SHA-256 hashes in requirements.lock.txt; installed METADATA declares MIT License",
+        "mlx": "0.31.2 macosx_14_0_arm64 wheel, SHA-256 e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f",
+        "mlx_metal": "0.31.2 macosx_14_0_arm64 wheel, SHA-256 b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc"
+      },
+      "build_side_import_proof": {
+        "command": "uv pip sync --python .build/st01-image-runtime-31214/bin/python packaging/image-runtime/requirements.lock.txt && .build/st01-image-runtime-31214/bin/python -I -B packaging/image-runtime/smoke_imports.py",
+        "build_host": "arm64 macOS 26.6.2",
+        "python": "3.12.14",
+        "interpreter_provenance": "New virtual environment created with the existing immutable Voice runtime interpreter; no Voice runtime files were copied or modified. The earlier CPython 3.12.13 Image environment is exploratory only.",
+        "packages": {
+          "mflux": "0.17.5",
+          "mlx": "0.31.2",
+          "mlx-metal": "0.31.2",
+          "Pillow": "12.3.0",
+          "numpy": "2.5.3",
+          "safetensors": "0.8.0",
+          "transformers": "5.17.0"
+        },
+        "result": "all selected imports completed without model weights"
+      },
+      "distribution_inventory": {
+        "path": "packaging/image-runtime/manifest/python-distributions.json",
+        "sha256": "6e77d5def83d8033af64b42f3bb387b603209b089a00b4761d87e74f13191868",
+        "count": 69,
+        "locked_package_count": 68,
+        "extra_distribution": "pip is present in the virtual environment but is not a locked shipped dependency",
+        "licenses_path": "packaging/image-runtime/licenses",
+        "license_file_count": 179
+      },
+      "build_side_native_audit": {
+        "command": "python3 packaging/voice-runtime/runtime_packaging.py audit .build/st01-image-runtime-31214 --target-macos 14.0 --forbid-prefix /build/Projects/studiohub-standalone/.worktrees/st-01",
+        "report_path": "packaging/image-runtime/manifest/macho-audit.json",
+        "report_sha256": "e156228dea8d86848ce7f2481f7b6273a19968a051fb65a7aaedec155e0587dd",
+        "binaries_checked": 182,
+        "missing_arm64": 0,
+        "minimum_macos_above_target": 0,
+        "architectures": {
+          "arm64": 172,
+          "universal2": 10,
+          "missing_arm64": 0
+        },
+        "minimum_macos": {
+          "11.0": 80,
+          "12.0": 1,
+          "13.0": 69,
+          "14.0": 32,
+          "above_target": 0
+        },
+        "failures": {
+          "external_install_id": 112,
+          "external_rpath": 2,
+          "unresolved_loader_dependency": 1
+        },
+        "status": "not-packageable-without-relocation",
+        "limitation": "The environment has no macOS-floor or arm64 violation, but has relocation violations including libmlx.dylib -> @rpath/libjaccl.dylib. It is a build-side environment, not an immutable runtime artifact."
+      },
+      "build_side_native_observation": {
+        "path": "mlx/core.cpython-312-darwin.so",
+        "architectures": [
+          "arm64"
+        ],
+        "minimum_macos": "14.0",
+        "dependencies": [
+          "@rpath/libmlx.dylib",
+          "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+          "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+          "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+          "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate",
+          "/usr/lib/libc++.1.dylib",
+          "/usr/lib/libSystem.B.dylib"
+        ],
+        "limitation": "This is an installed build-side virtual environment, not the final relocatable Image runtime audit."
+      }
+    }
+  ]
+}

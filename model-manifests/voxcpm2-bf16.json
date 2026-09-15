@@ -1,0 +1,103 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "cf9f7d2b880e63720b6d886319b0d6ab14182bcf2939915fdf3aad12d60bc071",
+      "size": 5210,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/config.json"
+      ]
+    },
+    {
+      "path": "model/model-00001.safetensors",
+      "sha256": "676b05649d915e63f2291a0b091bd72250785b2448fe14ec81f3566cf5f47950",
+      "size": 4286190791,
+      "source_path": "model-00001.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/model-00001.safetensors"
+      ]
+    },
+    {
+      "path": "model/model-00002.safetensors",
+      "sha256": "adddb9b85026763751beb20ba050aa46ef19b6b55cf6cb6a8c44ac8b06ec5cff",
+      "size": 669068875,
+      "source_path": "model-00002.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/model-00002.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "e5c9dbe10f771ec0bc6ee244531475615547c1129b3adf6b51fd00b1466ee75a",
+      "size": 67424,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76",
+      "size": 1632,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20",
+      "size": 3676772,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "466575c55f0cf49530666c2e46ed14f26237dbd227ba7f4bb3bbec93df90edfc",
+      "size": 4952,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/VoxCPM2-bf16/resolve/a7fb80d9056983135a54ca3f71fcc5a637ccddf5/tokenizer_config.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/VoxCPM2-bf16",
+  "package_id": "voxcpm2-bf16",
+  "qualification": {
+    "memory_evidence": "16 GB is a known-not-below floor, not a measured safe budget; 24 GB remains required for qualification.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 24,
+    "status": "unqualified"
+  },
+  "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/VoxCPM2-bf16",
+        "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/VoxCPM2-bf16",
+        "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-bf16/revision/a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-bf16/tree/a7fb80d9056983135a54ca3f71fcc5a637ccddf5?recursive=true&expand=true"
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+# Studio Hub model manifests
+
+This catalog contains the ten bounded first-release model packages. The files
+describe **24,494,855,896 expected bytes** across the packages; Qwen Base
+packages reference the shared `whisper-turbo` package for their internal
+quality check and do not copy its weights again.
+
+Each JSON manifest is schema version 1 and records the exact Hugging Face
+commit, package paths, byte counts, SHA-256 values and immutable resolve URLs.
+`qualification.status` is deliberately `unqualified`: an upstream LFS digest
+proves the expected bytes, not a locally imported package, runnable runtime or
+model result.
+
+## Installed layout
+
+Primary assets use `model/<upstream path>`. Their `source_path` is the original
+publisher path, allowing an importer to recognize a complete, validated model
+folder already in the selected model library.
+
+Whisper models include their required tokenizer/processor assets only at
+`companions/processor/<upstream path>`. Companion files intentionally have no
+root-folder fallback: a root `config.json` is ambiguous and must not satisfy a
+processor requirement. The `source.layout` mapping identifies every model and
+processor repository/revision.
+
+The catalog excludes model cards, Git attributes, licenses and example audio;
+it keeps only required generation weights, indexes, configuration and
+tokenizer/codec assets. Full source URLs and the metadata/tree endpoints used
+for the capture remain in each manifest's `source` object.
+
+## Refreshing metadata
+
+Run from the repository root:
+
+```sh
+python3 packaging/capture_model_manifests.py --write --output model-manifests
+python3 -m unittest tests/test_model_manifest_catalog.py -v
+```
+
+The capture tool reads only fixed snapshot metadata. When the Hugging Face tree
+lacks an LFS object SHA-256, it reads a required non-weight file no larger than
+10 MiB to hash it and refuses a larger unknown-digest file. It never downloads
+model-weight payloads.

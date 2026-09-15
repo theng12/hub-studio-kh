@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-15",
+  "purpose": "Real HTTPS transport smoke; selected small tokenizer companion files only, not a full model qualification.",
+  "files": [
+    {
+      "path": "companions/processor/added_tokens.json",
+      "size": 34648,
+      "sha256": "3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0",
+      "url": "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/added_tokens.json"
+    },
+    {
+      "path": "companions/processor/normalizer.json",
+      "size": 52666,
+      "sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+      "url": "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/normalizer.json"
+    },
+    {
+      "path": "companions/processor/special_tokens_map.json",
+      "size": 2186,
+      "sha256": "baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74",
+      "url": "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/special_tokens_map.json"
+    }
+  ],
+  "verified_bytes": 89500,
+  "elapsed_seconds": 1.8,
+  "result": "files_verified",
+  "model_weights_downloaded": false
+}

@@ -1,0 +1,130 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/audio_tokenizer/config.json",
+      "sha256": "eefb20806f7104e77c9a5277c9df0f9bb8826b08eb1d4e8ab2b9829b6ef9fac1",
+      "size": 2531,
+      "source_path": "audio_tokenizer/config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/audio_tokenizer/config.json"
+      ]
+    },
+    {
+      "path": "model/audio_tokenizer/model.safetensors",
+      "sha256": "fe7c5e8785e0a05833e1bfc3e002ec7f55af21e306b2e7154a448c1f54ccfb0d",
+      "size": 805665628,
+      "source_path": "audio_tokenizer/model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/audio_tokenizer/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/audio_tokenizer/preprocessor_config.json",
+      "sha256": "ae61eea88558608ee2fa86d2aec9fce8d99a5ff75d09cb7651ccce21ae1d9084",
+      "size": 206,
+      "source_path": "audio_tokenizer/preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/audio_tokenizer/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/chat_template.jinja",
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "size": 4168,
+      "source_path": "chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "5e359117e13b420c5e0c925d4aba650d624767131f1d1746928f8b850d5dc372",
+      "size": 2238,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/config.json"
+      ]
+    },
+    {
+      "path": "model/mlx_manifest.json",
+      "sha256": "bf83bf7f2b66591ab4afd2f4611be26ee18755d8bfd48cf0860616dfb991e8c1",
+      "size": 568,
+      "source_path": "mlx_manifest.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/mlx_manifest.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "56431e08b3cda725358b507e795955188e9a669833cc05ff1ecbe7cec06a78d3",
+      "size": 1225189510,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "b986e9b62c95b99a9c3aa1a3e9a91bf51b9d9f525e0379fc7fb4b0596c542f4c",
+      "size": 20462,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "408f669b7e2b045fdf54201d815bd364e6667dbd845115da81239c40bc6dcfd1",
+      "size": 11423986,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "49f78845596a82bf15c83673794bdf9f76f812b11f60ab6a2239d9be65b00676",
+      "size": 533,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/OmniVoice-bfloat16/resolve/6119f7072580cc30c3cbdf496269216b03ad9742/tokenizer_config.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/OmniVoice-bfloat16",
+  "package_id": "omnivoice-bfloat16",
+  "qualification": {
+    "memory_evidence": "Historical receipt reports 3.5 GB peak. 8 GB is dedicated-worker only; standalone runtime qualification remains required.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "6119f7072580cc30c3cbdf496269216b03ad9742",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/OmniVoice-bfloat16",
+        "revision": "6119f7072580cc30c3cbdf496269216b03ad9742"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/OmniVoice-bfloat16",
+        "revision": "6119f7072580cc30c3cbdf496269216b03ad9742",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/revision/6119f7072580cc30c3cbdf496269216b03ad9742",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/tree/6119f7072580cc30c3cbdf496269216b03ad9742?recursive=true&expand=true"
+      }
+    ]
+  }
+}

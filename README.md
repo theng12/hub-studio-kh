@@ -15,7 +15,7 @@ condition is reached first. Automatic login startup and optional protected Hub-t
 connection to GenStudio are part of the target. The app bundles runtimes; complete
 model packages can accompany it in an offline install kit.
 
-Planned model setup supports configured GitHub/original-host downloads and copy/paste
+The model-package foundation supports configured GitHub/original-host downloads and copy/paste
 of complete model folders, with the same companion-file validation. Address/IP, port
 and token connections retain an API boundary suitable for a future standalone GenStudio.
 
@@ -24,7 +24,22 @@ MLX baseline, rather than requiring the newest macOS. Exact point-release/model 
 still needs physical qualification. See the design's compatibility and OS-update rules.
 
 Read the [design and flows](docs/standalone-plan.md), [build order](docs/implementation-plan.md)
-and [agent task board](docs/tasks/BOARD.md). These are planned changes.
+and [agent task board](docs/tasks/BOARD.md). The board separates implemented foundations
+from remaining app integration.
+
+## ST-01 foundation
+
+The [runtime/model contract](docs/runtime-contract.md) now includes ten immutable model
+manifests, verified HTTPS downloads, offline folder import and refresh without duplicate
+copies. Complete files and companions must match their hashes before registration.
+Separate Image and Voice runtime inputs are pinned; Subtitle reuses the Voice runtime
+in a later independent process.
+
+[Phase evidence](qualification/st01.md) records the real Whisper Turbo import and
+relocated-library check, small-file HTTPS smoke, tests and runtime limitations.
+These helpers are not wired into the existing preview yet. ST-02 integrates the local
+Hub; ST-03 packages FLUX. Image runtime relocation and physical M1/Sonoma model tests
+remain explicit later checkpoints.
 
 ## Existing 0.3.0 preview
 

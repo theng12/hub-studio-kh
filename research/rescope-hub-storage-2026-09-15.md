@@ -1,6 +1,6 @@
 # Rescope inventory: bundled Hub control and per-device output storage
 
-Date: 2026-09-15  
+Date: 2026-09-15
 Scope: read-only plan input for `studiohub-standalone` at `29d0baa`, using Hub
 source `/build/pinokio/api/studiohub-mac` at `06e893e` (main), plus
 the already-adopted Voice source. No service, credential, source checkout, or

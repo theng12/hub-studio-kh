@@ -1,0 +1,142 @@
+{
+  "defaults": {
+    "guidance": 1.0,
+    "parameters_source": "research/rescope-model-inventory-2026-09-15.md",
+    "size_pixels": 1024,
+    "steps": 4
+  },
+  "engine": "image-mflux",
+  "files": [
+    {
+      "path": "model/text_encoder/0.safetensors",
+      "sha256": "6d01df75444457adf6bc9762e49f95942eedb02298831bb6a16df331b0c58cd0",
+      "size": 2135435091,
+      "source_path": "text_encoder/0.safetensors",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/text_encoder/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/1.safetensors",
+      "sha256": "42e6f20a22e225d201709bcf1d437f0b49238159383f6cd0d57918a3bdb9f2de",
+      "size": 127582109,
+      "source_path": "text_encoder/1.safetensors",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/text_encoder/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/model.safetensors.index.json",
+      "sha256": "c135f6bbe524bf230c07348f57989026452ed9ad62738349f33f2646f5cc88ed",
+      "size": 51332,
+      "source_path": "text_encoder/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/text_encoder/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/chat_template.jinja",
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "size": 4168,
+      "source_path": "tokenizer/chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/tokenizer/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/tokenizer/tokenizer.json",
+      "sha256": "be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506",
+      "size": 11422650,
+      "source_path": "tokenizer/tokenizer.json",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/tokenizer/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/tokenizer_config.json",
+      "sha256": "12d954e6dd43cefa344345292406442871ea7f3237065d2f068f6a0402f92bf6",
+      "size": 703,
+      "source_path": "tokenizer/tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/tokenizer/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/transformer/0.safetensors",
+      "sha256": "7792412b7fa174a65184dca22460487295876303e73c72c663ed6279a1b1f608",
+      "size": 2145323701,
+      "source_path": "transformer/0.safetensors",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/transformer/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/1.safetensors",
+      "sha256": "f328d96b64258d65b35a8325a2824d55320d7de2d47c694f72e5c50bce2cfaab",
+      "size": 34752393,
+      "source_path": "transformer/1.safetensors",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/transformer/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/model.safetensors.index.json",
+      "sha256": "24c0a6581bf20eee2173dc7f169321b9279278b7148e5690041fef0e7b371297",
+      "size": 26953,
+      "source_path": "transformer/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/transformer/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/vae/0.safetensors",
+      "sha256": "cf2e489f78bd25bb37309b583fd16ad5c6c7a2448597334890efe80ab6a4c7b3",
+      "size": 165107912,
+      "source_path": "vae/0.safetensors",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/vae/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae/model.safetensors.index.json",
+      "sha256": "dbe90a3d8e6faf35107899281a6492ed52c434126c18d4087aa582097380cd6e",
+      "size": 17547,
+      "source_path": "vae/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/AITRADER/FLUX2-klein-4B-mlx-4bit/resolve/7fd24828501390b67a92c8b66d2fc5a707d0ba1a/vae/model.safetensors.index.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+  "package_id": "flux2-klein-4b-mlx-4bit",
+  "qualification": {
+    "memory_evidence": "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+        "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+        "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/AITRADER/FLUX2-klein-4B-mlx-4bit/revision/7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+        "tree_api_url": "https://huggingface.co/api/models/AITRADER/FLUX2-klein-4B-mlx-4bit/tree/7fd24828501390b67a92c8b66d2fc5a707d0ba1a?recursive=true&expand=true"
+      }
+    ]
+  }
+}

@@ -1,12 +1,12 @@
 # Studio Hub task board
 
 Updated: 2026-09-15. [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
-Implementation below is pending. Historical 0.3.0 evidence does not complete these cards.
+ST-01 foundation has current implementation evidence; later app phases remain pending. Historical 0.3.0 evidence does not complete these cards.
 
 | ID | Phase / deliverable | Depends on | Status | Owner/session |
 | --- | --- | --- | --- | --- |
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
-| [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | READY | Unassigned |
+| [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | REVIEW | root / implementation/st-01 |
 | [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | WAITING | Unassigned |
 | [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | WAITING | Unassigned |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
@@ -51,9 +51,9 @@ physical login/reboot plus all-model assembled-app acceptance.
 Complete GitHub/original-host download and copied-folder model setup are now explicit
 ST-01/ST-08/ST-11 checkpoints. Location membership, generation data/statistics and an
 IP/address + token API suitable for future standalone GenStudio are explicit ST-02,
-ST-08 and ST-10 requirements. ST-10.TOPOLOGY is awaiting the owner's clarification
-about which location endpoint GenStudio contacts; the prior controller connection is not
-reconfirmed. Independent model/local work remains available.
+ST-08 and ST-10 requirements. ST-10.TOPOLOGY is resolved: preserve existing GenStudio-to-location-controller-to-nodes
+routing, using existing Hub/fleet tokens. No new gateway or direct node connections.
+Independent model/local work continues.
 
 Original-M1/older-OS support is now explicit in ST-01/02/08/09/11. The baseline
 candidate is Sonoma 14.0, subject to real per-model and point-release qualification.

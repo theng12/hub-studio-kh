@@ -1,0 +1,129 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "subtitle-mlx",
+  "files": [
+    {
+      "path": "companions/processor/added_tokens.json",
+      "sha256": "3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0",
+      "size": 34648,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/added_tokens.json"
+      ]
+    },
+    {
+      "path": "companions/processor/merges.txt",
+      "sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+      "size": 493869,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/merges.txt"
+      ]
+    },
+    {
+      "path": "companions/processor/normalizer.json",
+      "sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+      "size": 52666,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/normalizer.json"
+      ]
+    },
+    {
+      "path": "companions/processor/special_tokens_map.json",
+      "sha256": "baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74",
+      "size": 2186,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "companions/processor/tokenizer.json",
+      "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd",
+      "size": 2710337,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/tokenizer.json"
+      ]
+    },
+    {
+      "path": "companions/processor/tokenizer_config.json",
+      "sha256": "844b642c73a91359722f47b35705f7174686df33d252695d8572cf9ac03a6389",
+      "size": 282843,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "companions/processor/vocab.json",
+      "sha256": "e2aa043ef015641d363d8288e7c241c85e36a5c761fb303598e0710233344387",
+      "size": 1036558,
+      "urls": [
+        "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/41f01f3fe87f28c78e2fbf8b568835947dd65ed9/vocab.json"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379",
+      "size": 268,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json"
+      ]
+    },
+    {
+      "path": "model/weights.safetensors",
+      "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+      "size": 1613977612,
+      "source_path": "weights.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/weights.safetensors"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "qualification": {
+    "memory_evidence": "Adopted registry default is 8 GB; this is the only standalone subtitle model exercised end-to-end.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "companions": [
+        {
+          "destination": "companions/processor",
+          "purpose": "Whisper processor/tokenizer",
+          "repo": "openai/whisper-large-v3-turbo",
+          "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
+        }
+      ],
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/whisper-large-v3-turbo",
+        "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/whisper-large-v3-turbo",
+        "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/whisper-large-v3-turbo/revision/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/whisper-large-v3-turbo/tree/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb?recursive=true&expand=true"
+      },
+      {
+        "repo": "openai/whisper-large-v3-turbo",
+        "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+        "role": "processor",
+        "snapshot_api_url": "https://huggingface.co/api/models/openai/whisper-large-v3-turbo/revision/41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+        "tree_api_url": "https://huggingface.co/api/models/openai/whisper-large-v3-turbo/tree/41f01f3fe87f28c78e2fbf8b568835947dd65ed9?recursive=true&expand=true"
+      }
+    ]
+  }
+}
