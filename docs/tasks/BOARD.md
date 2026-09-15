@@ -33,8 +33,13 @@ then the one task card you are claiming.
   single interactive GUI **Save…** by a human: automation successfully navigated the app to
   Image Studio but could not drive the unlabelled SwiftUI save panel.
 - **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend and
-  `st-04` Qwen Base backend — ST-04 has published its voice-reference wire contract. The
-  ST-03 review is complete. The coordinator retains native/UI and staging integration.
+  `st-04` Qwen Base backend. **ST-04 is merged** (`71611bb`): the unified voice-reference
+  staging contract (local upload + GenStudio push), Qwen Base clone requirements, and its
+  focused tests, paired with the native clone UI (`1a010e5`). Integrated-tree evidence: root
+  suite **150 OK**, Voice regression **664 passed / 2 skipped**, native build passes. ST-04 is
+  still open for its real-model receipts (QWEN06/QWEN17), its `qualification/st04.md` receipt
+  and independent review. The ST-03 review is complete; ST-06 has written its receipts but has
+  not committed yet. The coordinator retains native/UI and staging integration.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
