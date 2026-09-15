@@ -186,3 +186,13 @@ Shared board/version/changelog are root-owned. API/View/native Image edits remai
 separate from startup-owned files. Agents supply contracts before integration; whole
 phase completion still requires independent review, exact tests and local integration.
 No new Git remote, deployment, signing, fleet enrollment or physical qualification.
+
+
+## ST-07 exit
+
+Reviewed storage implementation `8978aa0` is locally integrated by `0e97d98`.
+Root reran all 12 focused output/settings/delivery/jobs tests after integration: passed
+in 17.473 seconds. ST-07 is DONE; native receipt/export wiring stays in ST-08 and
+real Image registration will additionally be exercised by ST-03. No user outputs
+were deleted. All ten scoped model packages now have file-verification receipts;
+the remaining seven packages were imported from local stock with no network download.

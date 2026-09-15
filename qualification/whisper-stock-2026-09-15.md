@@ -23,3 +23,19 @@ Local detailed receipts and transfer log are retained in the original checkout:
 `.build/whisper-download-2026-09-15.json` and `.build/whisper-download-2026-09-15.log`.
 The coordinator inspected both package verification records and the transfer summary.
 Later Subtitle work must prove actual model loading and transcription separately.
+
+## Complete scoped stock
+
+The coordinator subsequently imported the remaining seven Voice/Whisper packages
+from selected local stock into the same model library, reusing already verified
+packages where present. This used zero network downloads and completed in 67.297
+seconds. Together with the separately imported FLUX package and these two Whispers,
+all ten scoped packages now have `files_verified` receipts in the original library.
+
+The seven-package receipt is `.build/import-existing-scoped-models.json` (final
+status `passed`); exact revisions and companion assets are fixed by the committed
+`model-manifests/`. The importer validated dependencies against the complete catalog,
+including the existing Whisper Turbo package. Its log retains two earlier dependency
+ordering failures; the final rerun completed successfully without replacing valid stock.
+No existing Pinokio cache was changed. This completes stock preparation only; each
+engine still needs its named inference and hardware qualification checkpoints.
