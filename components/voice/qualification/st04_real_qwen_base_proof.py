@@ -200,6 +200,11 @@ def build_bundle(proof: Path, runtime: Path, release_manifest: Path | None) -> t
     # The staged backend is this worktree's adopted source at the receipt commit.
     shutil.copytree(VOICE_SOURCE, resources / "voice" / "app",
                     ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    # Audited reference/section contracts ship as sibling evidence exactly as
+    # packaging/stage_voice.py stages them; without this the worker correctly
+    # refuses to prepare a Qwen Base reference.
+    shutil.copytree(REPO_ROOT / "components" / "voice" / "model-audits",
+                    resources / "voice" / "model-audits")
     manifest_target = resources / "release-manifest.json"
     if release_manifest is not None and release_manifest.is_file():
         shutil.copy2(release_manifest, manifest_target)
@@ -227,7 +232,7 @@ def free_port() -> int:
 
 
 def request(url: str, token: str | None = None, *, data=None, method="GET",
-            headers=None, raw=False):
+            headers=None, raw=False, timeout: float = 600):
     merged = dict(headers or {})
     if token:
         merged["Authorization"] = f"Bearer {token}"
@@ -237,7 +242,7 @@ def request(url: str, token: str | None = None, *, data=None, method="GET",
         merged["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=payload, method=method, headers=merged)
     try:
-        with urllib.request.urlopen(req, timeout=600) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read()
             if raw:
                 return response.status, body, dict(response.headers)
@@ -330,6 +335,16 @@ def poll_job(base: str, token: str, job_id: str, *, timeout: float) -> tuple[dic
     return job, samples
 
 
+def job_payload(payload: object) -> dict:
+    """Unwrap the worker's ``{"job": {...}}`` envelope; never guess at it."""
+    if not isinstance(payload, dict):
+        raise SystemExit(f"unexpected job payload type: {type(payload).__name__}")
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        raise SystemExit(f"unexpected job payload shape: {sorted(payload)[:6]}")
+    return job
+
+
 def run_model(base: str, token: str, worker_pid: int, spec: dict, reference: dict,
               proof: Path, *, timeout: float) -> dict:
     started = time.time()
@@ -338,18 +353,36 @@ def run_model(base: str, token: str, worker_pid: int, spec: dict, reference: dic
         base, token, repo=spec["repo"], reference=Path(reference["path"]),
         transcript=reference["transcript"], text=JOB_TEXT,
     )
-    job_id = accepted["job"]["id"]
+    job_id = job_payload(accepted)["id"]
     stop = time.time() + timeout
     samples = []
     job = {}
+    poll_failures = 0
+    attempt = 0
     while time.time() < stop:
-        _status, job = request(f"{base}/api/generate/jobs/{job_id}", token)
+        attempt += 1
+        try:
+            status, payload = request(f"{base}/api/generate/jobs/{job_id}", token,
+                                      timeout=15)
+            job = job_payload(payload)
+        except Exception as exc:  # bounded retry; the job keeps running regardless
+            poll_failures += 1
+            print(f"    poll {attempt} error ({type(exc).__name__}: {exc})", flush=True)
+            if poll_failures > 20:
+                raise SystemExit(f"job {job_id} polling failed 20 times; see worker log")
+            time.sleep(2)
+            continue
         peak_rss = max(peak_rss, rss_kb(worker_pid))
-        samples.append({"at": round(time.time(), 3), "state": job.get("state"),
+        state = job.get("state")
+        samples.append({"at": round(time.time(), 3), "state": state,
                         "progress": job.get("progress")})
-        if job.get("state") in {"done", "error", "cancelled", "uncertain"}:
+        print(f"    poll {attempt} http={status} state={state} "
+              f"progress={job.get('progress')}", flush=True)
+        if state in {"done", "error", "cancelled", "uncertain"}:
             break
         time.sleep(2)
+    else:
+        raise SystemExit(f"job {job_id} did not finish inside {timeout}s")
     record = {
         "repo": spec["repo"],
         "model_revision": spec["revision"],
@@ -486,11 +519,14 @@ def main() -> int:
                 f"rss={record['peak_worker_rss_bytes']} bytes")
             records.append(record)
     finally:
+        # The worker may sit in a long non-daemon shutdown after the job is
+        # already durable; never let that hold the receipt hostage.
         process.terminate()
         try:
-            process.wait(timeout=30)
+            process.wait(timeout=20)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=10)
 
     receipt = {
         "schema": "studiohub.st04-qwen-base-real-proof",
