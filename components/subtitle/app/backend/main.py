@@ -92,7 +92,8 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
                  'word_timestamps': bool(word_timestamps),
                  'formats': ['srt', 'vtt', 'text']},
                 packages=sorted(manager.engine.manifests),
-                default_package=manager.default_package())
+                default_package=manager.default_package(),
+                aliases=manager.model_aliases())
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         readiness = manager.readiness(request['model'])
@@ -145,7 +146,8 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
                  'word_timestamps': bool(word_timestamps),
                  'formats': [item.strip() for item in formats.split(',') if item.strip()]},
                 packages=sorted(manager.engine.manifests),
-                default_package=manager.default_package())
+                default_package=manager.default_package(),
+                aliases=manager.model_aliases())
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         source = manager.store_input('studio', name, data)

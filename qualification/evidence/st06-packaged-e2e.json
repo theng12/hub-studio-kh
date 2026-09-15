@@ -1,0 +1,45 @@
+{
+  "captured_at": 1789492179.724638,
+  "artifact": {
+    "path": "dist/Studio Hub 0.4.0 Subtitle Proof.app",
+    "implementation_commit": "af3f1641bf25e16d10bc2e3e2b8b9c3261e23a87",
+    "payload_sha256": "d362d9ffd4bf23a918533cc441fe4d71ca92e2b70717b9d9241d86ba7a6f688e",
+    "subtitle_runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6"
+  },
+  "input": {
+    "file": "sample.wav",
+    "bytes": 160832,
+    "sha256": "6264796eb134f491130739e1357e898151932de738d847220569b00c5d71773f"
+  },
+  "verify_status": 200,
+  "submit_status": 200,
+  "batch_id": "95f5e119f095",
+  "workers": [
+    {
+      "id": "voice",
+      "modality": "voice"
+    },
+    {
+      "id": "image",
+      "modality": "image"
+    },
+    {
+      "id": "subtitle",
+      "modality": "transcription"
+    }
+  ],
+  "final_status": "done",
+  "governor_note": null,
+  "item": {
+    "state": "done",
+    "studio": "subtitle",
+    "error": null
+  },
+  "transcript": {
+    "text": "Studio Hub Subtitle Routing Check! The quick brown fox jumps over the lazy dog.",
+    "language": "en",
+    "duration": 4.898,
+    "model": "mlx-community/whisper-large-v3-turbo",
+    "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:02.400\nStudio Hub Subtitle Routing Check!\n\n00:00:02.400 --> 00:00:04.880\nThe quick brown fox jumps over the lazy dog.\n"
+  }
+}

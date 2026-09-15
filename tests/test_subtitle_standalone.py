@@ -663,5 +663,54 @@ class SubtitleRealModelTests(unittest.TestCase):
         self.fail('real Whisper job did not finish within 600s')
 
 
+class SubtitleModelIdentifierTests(unittest.TestCase):
+    """The Hub's transcription contract identifies a model by repository.
+
+    The worker keys its catalogue by package id. A packaged Subtitle job was answered with
+    ``422 choose one of the packaged Whisper models`` because only the package id was accepted,
+    so both spellings are pinned here.
+    """
+
+    aliases = {'mlx-community/whisper-large-v3-turbo': 'whisper-turbo'}
+
+    def test_model_repository_resolves_to_its_package(self) -> None:
+        from components.subtitle.app.backend import manager as subtitle_manager
+
+        request = subtitle_manager.validate_request(
+            {'model': 'mlx-community/whisper-large-v3-turbo', 'language': 'en',
+             'word_timestamps': False, 'formats': ['srt']},
+            packages=['whisper-turbo'], default_package='whisper-turbo',
+            aliases=self.aliases)
+        self.assertEqual(request['model'], 'whisper-turbo')
+
+    def test_package_id_still_resolves_to_itself(self) -> None:
+        from components.subtitle.app.backend import manager as subtitle_manager
+
+        request = subtitle_manager.validate_request(
+            {'model': 'whisper-turbo', 'formats': ['srt']},
+            packages=['whisper-turbo'], default_package='whisper-turbo',
+            aliases=self.aliases)
+        self.assertEqual(request['model'], 'whisper-turbo')
+
+    def test_an_unpackaged_model_is_still_refused(self) -> None:
+        from components.subtitle.app.backend import manager as subtitle_manager
+
+        with self.assertRaisesRegex(ValueError, 'packaged Whisper models'):
+            subtitle_manager.validate_request(
+                {'model': 'someone/unknown-whisper', 'formats': ['srt']},
+                packages=['whisper-turbo'], default_package='whisper-turbo',
+                aliases=self.aliases)
+
+    def test_engine_publishes_repository_aliases(self) -> None:
+        """The alias map must be derived from the real manifests, not hard-coded."""
+        import inspect
+
+        from components.subtitle.app.backend import manager as subtitle_manager
+
+        source = inspect.getsource(subtitle_manager.SubtitleManager.model_aliases)
+        self.assertIn('model_id', source)
+        self.assertIn('manifests', source)
+
+
 if __name__ == '__main__':
     unittest.main()

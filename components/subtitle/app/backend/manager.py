@@ -70,10 +70,16 @@ def safe_input_name(value: str) -> str:
     return name
 
 
-def validate_request(raw: dict, *, packages: list[str], default_package: str) -> dict:
+def validate_request(raw: dict, *, packages: list[str], default_package: str,
+                     aliases: dict[str, str] | None = None) -> dict:
     if not isinstance(raw, dict):
         raise ValueError('Subtitle request must be an object')
     model = str(raw.get('model') or default_package).strip()
+    # The Hub's transcription contract sends the model repository
+    # (mlx-community/whisper-large-v3-turbo); this worker's own catalogue keys on the package
+    # id (whisper-turbo). Accept either spelling rather than refusing a valid packaged model.
+    if aliases and model in aliases:
+        model = aliases[model]
     if model not in packages:
         raise ValueError('choose one of the packaged Whisper models')
     language = raw.get('language')
@@ -188,6 +194,19 @@ class SubtitleManager:
     def default_package(self) -> str:
         return self.engine.default_package()
 
+    def model_aliases(self) -> dict[str, str]:
+        """Map each model repository to its package id.
+
+        The Hub's transcription contract identifies a model by repository, while this worker
+        keys its catalogue by package id; accepting both keeps the existing Hub contract and
+        the retained Voice-shaped endpoint working without a translation layer.
+        """
+        return {
+            manifest['model_id']: package_id
+            for package_id, manifest in self.engine.manifests.items()
+            if manifest.get('model_id')
+        }
+
     def readiness(self, package_id: str) -> dict:
         return self.engine.readiness(package_id)
 
@@ -254,7 +273,8 @@ class SubtitleManager:
         """Create one durable job. ``source`` comes from ``store_input``."""
         params = validate_request(
             request, packages=sorted(self.engine.manifests),
-            default_package=self.default_package())
+            default_package=self.default_package(),
+            aliases=self.model_aliases())
         readiness = self.readiness(params['model'])
         if not readiness['ready']:
             raise ModelPackageError(
