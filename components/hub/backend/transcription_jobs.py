@@ -300,6 +300,10 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
     now = time.time()
     batch = {
         "id": batch_id, "idempotency_key": key, "created_at": now,
+        # The modality must be persisted: the packaged admission guard re-checks it on every
+        # dispatch attempt, and a batch without it is refused with MODEL_MODALITY_MISMATCH
+        # forever (submit-time admission uses the request envelope, which does carry it).
+        "modality": "transcription",
         "updated_at": now, "finished_at": None, "cancelled": False,
         "label": clean_label, "project": clean_project, "episode": clean_episode,
         "model": model, "language": language or None,
