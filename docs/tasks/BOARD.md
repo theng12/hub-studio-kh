@@ -90,6 +90,14 @@ then the one task card you are claiming.
   check's own Whisper resolution/caching inside the Voice worker is the next (and likely last)
   step for a real cloned voice. Note the earlier `Qwen3TTS-0.6B` attempt also showed a
   too-short-reference guard at <3 s of usable speech, so any future test clip must be ~5 s+.
+- **All three Whisper choices now work** (`da1a8f4`). Base and Small were catalog-only because
+  those pinned packages ship `model/weights.npz` while mlx-audio's Whisper loader globs
+  `*.safetensors`. Now: the shared view converts npz → safetensors once into an app-side view
+  (verified library bytes untouched), the tokenizer is taken from local files — reusing the
+  shared multilingual tokenizer when a package ships no companions — and the Subtitle worker
+  passes `STUDIOHUB_MODEL_MANIFESTS`, which the adopted Voice cache module needs. **Verified
+  through the packaged app: `whisper-base` and `whisper-small` both reach `status=done` on
+  `studio=subtitle` with correct transcripts** (previously they never left `queued`).
 - **Voice cloning now works end to end in the packaged app.** A locally chosen reference clip
   staged through `POST /api/hub/voice-references` (201, `origin: local`) produced a real cloned
   WAV: `state: done`, `studio: voice`, **145,964 bytes**, sha256 `8c63dcc7…`, 34.1 s, artifact

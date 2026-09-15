@@ -111,7 +111,7 @@ What each studio needs, in the current build:
 | Studio | Working models |
 | --- | --- |
 | Image | FLUX.2 Klein 4B MLX 4-bit |
-| Subtitle | Whisper large-v3-turbo. Base/Small are catalogued but refuse, because `mlx-audio` reads `*.safetensors` while those pinned revisions ship `weights.npz`. |
+| Subtitle | All three: Whisper large-v3-turbo, small and base. Base/Small ship `weights.npz`, which the app converts once into an app-side view, so all three run offline. |
 | Voice | Qwen3-TTS **Base** (clone: reference clip **and** its exact transcript required), Qwen3-TTS **CustomVoice** (preset speakers), **OmniVoice** (clone: reference clip only). |
 | Voice (heavy) | **VoxCPM2** is exposed but needs more free unified memory than a 16 GB Mac has with the other engines resident; it fails with its own explicit memory message rather than misbehaving. Run it on a 24/32 GB machine with memory free. |
 
