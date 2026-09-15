@@ -1,0 +1,1 @@
+"""Independent standalone Subtitle application."""
