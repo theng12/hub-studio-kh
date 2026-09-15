@@ -35,6 +35,11 @@ then the one task card you are claiming.
 - **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend and
   `st-04` Qwen Base backend — ST-04 has published its voice-reference wire contract. The
   ST-03 review is complete. The coordinator retains native/UI and staging integration.
+- **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
+  clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
+  action that posts to the same Hub reference route GenStudio pushes use, and submits
+  `voice_reference_asset_id`. It is built and compiles; the end-to-end proof waits on the ST-04
+  Hub route landing, and the native API fixture still needs a voice-references case.
 - **NEXT:** ST-05 VoxCPM2/OmniVoice — must be the same owner as ST-04 because they share
   the Voice registry — then ST-08 native workflows/settings.
 - **LATER:** ST-10 fleet/GenStudio connection, then ST-11 qualification on real hardware.
