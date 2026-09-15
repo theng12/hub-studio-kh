@@ -11,8 +11,9 @@
 
 ## Focused release handoffs — 2026-09-15
 
+- **START HERE:** the `▶ TAKE OVER HERE` block at the top of `docs/tasks/BOARD.md` names the current holder, the integration commit, what is DONE, the single task in progress, and what unlocks next. Read it before anything else.
 - The current design supersedes the six-function release scope: Hub, Image, Voice and independent Subtitle only; Chat/Music/Video are deferred.
-- Before implementation, read docs/implementation-plan.md and docs/tasks/BOARD.md. Claim a READY ST task and record start commit/worktree, owned files and completion proof.
+- Before implementation, read docs/implementation-plan.md and docs/tasks/BOARD.md. Claim a READY ST task and record start commit/worktree, owned files and completion proof. If no card is READY, the `▶ TAKE OVER HERE` block names the single task in progress to resume instead of starting new work.
 - One coordinator owns the board and canonical progress; workers own assigned task cards/reports. Serialize shared native, staging and Voice registry edits.
 - Mark DONE only after required evidence, independent review and integration. Preserve partial model/hardware checkpoints and explicit blockers.
 - Per-device generated-output defaults are editable 50 GB total and 30 days; operating defaults are configurable, while integrity/authentication/active-job safeguards remain enforced.

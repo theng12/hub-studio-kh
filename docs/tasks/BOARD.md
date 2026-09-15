@@ -1,5 +1,36 @@
 # Studio Hub task board
 
+## ▶ TAKE OVER HERE
+
+**Current holder:** DeepSeek Harness session, 2026-09-15 — took the wheel from the
+earlier Codex session that ran out of credits. Read this block, then the table below,
+then the one task card you are claiming.
+
+- **Integration line:** `implementation/voice-runtime` @ `cea80a8`. Every task branch is
+  merged into it.
+- **Backup:** remote `icloud` (a bare repo in iCloud Drive) plus a dated `git bundle`
+  beside it. There is no hosted remote. `git push icloud --all` before you yield.
+- **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
+  ST-07 output storage · ST-09 startup/recovery.
+- **IN PROGRESS — ST-03 packaged Image (the only thing blocking everything else).**
+  Working today: real image generation, Hub output registration, and receipt
+  acknowledgement. Still missing: restart-history check, a live GUI Save against a real
+  Hub, retry counts (ST-03.6), and independent review.
+- **NEXT, once ST-03 reaches DONE:** ST-04 Qwen Base, ST-05 VoxCPM2/OmniVoice, ST-06
+  Subtitle, ST-08 native workflows — all four unlock together. Their model files are
+  already downloaded and checksum-verified.
+- **LATER:** ST-10 fleet/GenStudio connection, then ST-11 full qualification on real
+  hardware (original M1, real macOS Sonoma, login/reboot).
+- **The rule that will bite you:** run tests with `.build/voice-runtime/bin/python3`.
+  The system `python3` is 3.9.6 and fails.
+- **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
+  true, and put every result in a committed file — not in a chat message.
+
+*Plain-English position:* the hard engine work is done and the app can already make a
+real image end to end. What is left is proving the remaining behaviours carefully,
+then three more engines, then real-hardware sign-off. Roughly halfway by task count,
+but past the riskiest part.
+
 Updated: 2026-09-15 (record reconciliation). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
 integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was

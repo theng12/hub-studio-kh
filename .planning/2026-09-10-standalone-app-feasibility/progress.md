@@ -247,3 +247,23 @@ against a real Hub (the proof above drove the Hub API directly), ST-03.6 retry c
 and independent review is still owed before ST-03 can be DONE. Separately,
 `StudioViews.swift` `saveAudio` writes audio with no verified-destination acknowledgement, so
 the same wiring is owed for Voice export under ST-08.
+
+### 2026-09-15 — session handover (the wheel changes hands)
+
+The Codex session that had been driving the project ran out of credits mid-flight. It left
+the repository with: the Image vertical slice committed but unmerged, the canonical progress
+ledger uncommitted, two finished research handoffs untracked, a merged tree whose test suite
+was red, a board that contradicted Git, and a Hub + Image worker pair still running.
+
+A DeepSeek Harness session took over the wheel on 2026-09-15 and, in order: committed the
+stranded documents; recorded and then merged `implementation/st-03` (`cd6ed5d`); fixed the
+Image bundle test path so the suite went green; corrected ST-09 to DONE with its integration
+commit; preserved the previously unrecorded real Image generation as tracked evidence;
+preserved the pinned Image runtime outside the disposable worktree; added the `icloud` remote
+and an off-disk `git bundle`; proved the receipt-acknowledgement contract end to end and wired
+it into the native save path (`86b11d3`); and added the `▶ TAKE OVER HERE` block at the top of
+`docs/tasks/BOARD.md` so the next session starts from a stated position instead of a stale row.
+
+That block is now the single place to look first: it names the current holder, the integration
+commit, what is DONE, the one task in progress, what unlocks next, and the rules that will bite
+a newcomer. Undo point for the whole pass: `backup/pre-handoff-7aa7775`.
