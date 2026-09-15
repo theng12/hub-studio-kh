@@ -65,8 +65,14 @@ def snapshot_revision(repo: str) -> str | None:
             if path.is_dir() and _IMMUTABLE_REVISION.fullmatch(path.name)
         )
     except (FileNotFoundError, OSError):
-        return None
-    return candidates[0] if len(candidates) == 1 else None
+        package_fallback = package_snapshot(repo)
+        return package_fallback[0] if package_fallback is not None else None
+    if len(candidates) == 1:
+        return candidates[0]
+    # No HF snapshot: fall back to the verified package's recorded revision so the
+    # generation path has the immutable model evidence it requires.
+    package_fallback = package_snapshot(repo)
+    return package_fallback[0] if package_fallback is not None else None
 
 
 def _unresolved_incomplete_entries(repo: str) -> list[Path]:

@@ -747,13 +747,20 @@ class TranscriptionManager:
         clear, actionable error that distinguishes a dependency mismatch from a
         network failure."""
         base = _PROCESSOR_BASE.get(repo, "openai/whisper-large-v3-turbo")
-        print(f"[stt] {repo} ships no processor — attaching tokenizer from {base}", flush=True)
+        # Prefer the tokenizer files this app already ships and verified (the package's
+        # companions/processor, presented beside the weights by the merged snapshot view).
+        # The hub name only resolves online with a populated cache, which a standalone
+        # offline install does not have — that made every clone's internal quality check
+        # fail with an empty tokenizer.
+        local = cache.package_snapshot(repo)
+        source = str(local[1]) if local is not None else base
+        print(f"[stt] {repo} ships no processor — attaching tokenizer from {source}", flush=True)
         attempts: list[str] = []
 
         # 1) Narrow: WhisperTokenizer only (what get_tokenizer() reads).
         try:
             from transformers import WhisperTokenizer
-            tok = WhisperTokenizer.from_pretrained(base)
+            tok = WhisperTokenizer.from_pretrained(source)
             model._processor = _TokenizerOnlyProcessor(tok)
             return
         except Exception as e:
@@ -762,7 +769,7 @@ class TranscriptionManager:
         # 2) Fallback: full WhisperProcessor.
         try:
             from transformers import WhisperProcessor
-            model._processor = WhisperProcessor.from_pretrained(base)
+            model._processor = WhisperProcessor.from_pretrained(source)
             return
         except Exception as e:
             attempts.append(f"WhisperProcessor → {type(e).__name__}: {e}")
