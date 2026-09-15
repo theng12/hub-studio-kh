@@ -65,18 +65,19 @@ then the one task card you are claiming.
   through the packaged app returned *"Studio Hub Subtitle Routing Check! The quick brown fox
   jumps over the lazy dog."* with `studio: subtitle`, `state: done` — see
   `qualification/evidence/st06-packaged-e2e.json`. Root suite now **192 OK**.
-- **Voice cloning: reference contract verified in the packaged app, dispatch blocked on a
-  second vocabulary mismatch.** A real clip staged through `POST /api/hub/voice-references`
-  returned 201 (`origin: local`, transcript supplied) and its `asset_id` was accepted as a
-  top-level `voice_reference_asset_id` on submit — so the native client's contract is right. The
-  clone job then stayed queued with the explicit note *"'…Qwen3-TTS-12Hz-0.6B-Base-8bit' not
-  downloaded on voice"* (`broker.py:2205`): the **Voice worker does not consider the verified
-  ST-01 package cached**, while the Hub's own package view says `files_verified` after `/verify`.
-  Both Base packages also read `invalid` until `/verify` is run (the `ctime` stamp issue).
-  Next diagnostic is cheap and on the ST-04 card: read the Base row's `cache.state` from
-  `/studio/voice/api/generate/availability` and compare with CustomVoice, which does dispatch.
-- **Next:** resolve that so a real voice clone comes out of the app (matching Subtitle), then
-  ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11 hardware.
+- **Voice is blocked by a library-format gap, not by the Base models.** Reading the actual values
+  in the packaged app shows **every** Qwen entry — Base *and* CustomVoice — reports
+  `cache.state: "absent"`, `path: null`, `bytes_complete: 0`. The Voice worker's cache resolver
+  therefore understands nothing in the ST-01 verified-package library, and the broker's
+  `is_cached` gate (`monitor.py:149`, `broker.py:2205`) refuses every Voice dispatch. CustomVoice
+  worked earlier only because that proof used an HF-cache-shaped library. Image is unaffected —
+  ST-03 generated a real image from this same library. **This is a user-facing gap**: the app
+  would say a model is installed and verified, then refuse to use it. Next step is on the ST-04
+  card: find the Voice worker's snapshot resolver and make it read the package layout, as Image
+  does.
+- **Next:** fix that Voice library-format gap so a real clone comes out of the app (matching
+  Subtitle), then ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11
+  hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
