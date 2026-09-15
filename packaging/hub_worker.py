@@ -50,11 +50,11 @@ def stop_child(process):
         process.wait(timeout=5)
 
 
-def await_child(process, ready_file, timeout=120):
+def await_child(process, ready_file, timeout=120, *, label="Studio"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError('Private Voice worker exited during startup; inspect the service log')
+            raise RuntimeError(f'Private {label} worker exited during startup; inspect the service log')
         try:
             value = json.loads(ready_file.read_text())
             url = urlsplit(value['url'])
@@ -65,7 +65,7 @@ def await_child(process, ready_file, timeout=120):
             return value, url.port
         except FileNotFoundError:
             time.sleep(0.05)
-    raise RuntimeError('Private Voice worker startup timed out; inspect the service log')
+    raise RuntimeError(f'Private {label} worker startup timed out; inspect the service log')
 
 
 def main():
@@ -139,47 +139,72 @@ def main():
     from components.hub.backend.auth import load_token
     load_token()
     token = read_private_token(token_file, data)
-    child_ready = hub_data / 'voice-ready.json'
-    child_ready.unlink(missing_ok=True)
-    command = [str(runtime / 'bin/python3'), '-I', '-B', str(RESOURCES / 'voice_worker.py'),
-        '--data-dir', str(data), '--models-dir', str(models), '--ready-file', str(child_ready),
-        '--parent-pid', str(os.getpid()), '--hub-token-file', str(token_file)]
-    if args.offline:
-        command.append('--offline')
-    child = subprocess.Popen(command, cwd=data,
-        env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
+    specs = [('voice', runtime, release['runtime_sha256'], data / 'voice/output')]
+    if 'image' in release.get('components', {}):
+        image_runtime = RESOURCES / 'runtimes/image'
+        image_id = release['components']['image'].get('runtime_sha256')
+        if (not (image_runtime / 'bin/python3').is_file()
+                or not (RESOURCES / 'image_worker.py').is_file()
+                or not isinstance(image_id, str) or len(image_id) != 64
+                or any(ch not in '0123456789abcdef' for ch in image_id)):
+            parser.error('Incomplete Image runtime or release identity')
+        specs.append(('image', image_runtime, image_id, data / 'image/outputs'))
+    children = []
     child_watch_stop = threading.Event()
-    def watch_child():
+
+    def watch_children():
         while not child_watch_stop.wait(0.2):
-            if child.poll() is not None:
-                print('Private Voice worker exited unexpectedly; stopping its Hub owner.',
-                      file=sys.stderr, flush=True)
-                os.kill(os.getpid(), signal.SIGTERM)
-                return
+            for child in children:
+                if child['process'].poll() is not None:
+                    print(f"Private {child['id'].title()} worker exited unexpectedly; stopping its Hub owner.",
+                          file=sys.stderr, flush=True)
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    return
+
     def load_app():
-        # run_server starts its parent watchdog before this potentially slow wait.
-        _, voice_port = await_child(child, child_ready)
-        write_workers(workers_file, [{
-            'id': 'voice', 'modality': 'voice', 'title': 'Voice Studio',
-            'host': '127.0.0.1', 'port': voice_port, 'machine': 'local', 'local': True,
-            'hub_token': token, 'studio_token': token, 'pid': child.pid,
-            'runtime_identity': {'id': release['runtime_sha256'], 'compatible': True},
-        }])
-        threading.Thread(target=watch_child, daemon=True,
+        # The shared server starts its parent watchdog before these startup waits.
+        workers = []
+        for child in children:
+            _, port = await_child(child['process'], child['ready'], label=child['id'].title())
+            workers.append({
+                'id': child['id'], 'modality': child['id'], 'title': f"{child['id'].title()} Studio",
+                'host': '127.0.0.1', 'port': port, 'machine': 'local', 'local': True,
+                'hub_token': token, 'studio_token': token, 'pid': child['process'].pid,
+                'runtime_identity': {'id': child['runtime_id'], 'compatible': True},
+                'managed_output_roots': [str(child['outputs'])],
+            })
+        write_workers(workers_file, workers)
+        threading.Thread(target=watch_children, daemon=True,
                          name='studiohub-child-monitor').start()
         from components.hub.standalone import app
         return app
+
     def cleanup():
         child_watch_stop.set()
         ready.unlink(missing_ok=True)
-        stop_child(child)
-        child_ready.unlink(missing_ok=True)
+        for child in reversed(children):
+            stop_child(child['process'])
+            child['ready'].unlink(missing_ok=True)
         workers_file.unlink(missing_ok=True)
+
     try:
+        for worker_id, worker_runtime, runtime_id, outputs in specs:
+            child_ready = hub_data / f'{worker_id}-ready.json'
+            child_ready.unlink(missing_ok=True)
+            command = [str(worker_runtime / 'bin/python3'), '-I', '-B', str(RESOURCES / f'{worker_id}_worker.py'),
+                '--data-dir', str(data), '--models-dir', str(models), '--ready-file', str(child_ready),
+                '--parent-pid', str(os.getpid()), '--hub-token-file', str(token_file)]
+            if args.offline:
+                command.append('--offline')
+            child = subprocess.Popen(command, cwd=data,
+                env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
+            children.append({'id': worker_id, 'process': child, 'ready': child_ready,
+                             'runtime_id': runtime_id, 'outputs': outputs})
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
                    token=token, factory=True, shutdown_callback=cleanup)
     finally:
         cleanup()
+
 
 
 if __name__ == '__main__':

@@ -37,10 +37,17 @@ struct StudioContent: View {
     @State private var hfToken = ""
     @State private var tokenMessage: String?
     @State private var savingToken = false
+    @State private var imagePreview: NSImage?
+    @State private var selectedImageID: String?
+    @State private var loadingImage = false
+
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
     private var selectedAudioModel: NativeModel? { workspace.models.first { $0.repo == workspace.audioModel && $0.function == .audio } }
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
+    private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
+    private var previewImageJob: NativeJob? { workspace.imageJobs.first { $0.state == "done" && (selectedImageID == nil || $0.id == selectedImageID) } }
+    private var activeImages: [NativeJob] { workspace.imageJobs.filter { active($0.state) } }
     private var activeAudio: [NativeJob] { workspace.audioJobs.filter { active($0.state) } }
     private var activeDownloads: [NativeDownload] { workspace.downloads.filter { active($0.state) } }
     private var filteredModels: [NativeModel] {
@@ -90,6 +97,7 @@ struct StudioContent: View {
                 switch studio.selection {
                 case .overview: overview
                 case .audio: audioWorkspace
+                case .image: imageWorkspace
                 case .transcription: transcriptionWorkspace
                 case .models: modelsWorkspace
                 case .jobs: jobsWorkspace
@@ -142,7 +150,7 @@ struct StudioContent: View {
                     sectionTitle("In progress")
                     Button("View All Jobs") { studio.select(.jobs) }
                 }
-                if activeAudio.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
+                if activeAudio.isEmpty && activeImages.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
@@ -154,6 +162,7 @@ struct StudioContent: View {
                     }
                 } else {
                     ForEach(activeAudio) { job in jobRow(job, compact: true) }
+                    ForEach(activeImages) { imageJobRow($0) }
                     if workspace.transcribing { transcriptionActivity }
                     ForEach(activeDownloads) { download in downloadRow(download) }
                 }
@@ -188,7 +197,7 @@ struct StudioContent: View {
         }
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
-        guard page == .audio || page == .transcription else { return "Engine not installed" }
+        guard page == .audio || page == .transcription || page == .image else { return "Engine not installed" }
         guard connected else { return "Services stopped" }
         if workspace.refreshing && workspace.models.isEmpty { return "Checking models…" }
         return workspace.models.contains { $0.function == page.function && $0.supported && $0.cached && $0.runtimeReady } ? "Ready to create" : "Needs a model"
@@ -202,6 +211,121 @@ struct StudioContent: View {
         case .video: return "Generate video clips."
         case .chat: return "Work with local language models."
         default: return ""
+        }
+    }
+
+    private var imageWorkspace: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            heading("Image Studio", "Describe an image, choose your settings and generate it locally.")
+            if !connected { setup }
+            HSplitView {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text("Prompt").font(.headline)
+                        TextEditor(text: $workspace.imagePrompt)
+                            .font(.body).padding(8).frame(height: 155)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            .accessibilityLabel("Image prompt")
+                        HStack {
+                            if workspace.submittingImage { ProgressView().controlSize(.small) }
+                            Spacer()
+                            Button("Generate Image") { selectedImageID = nil; Task { await workspace.generateImage() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!connected || workspace.submittingImage || workspace.imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageModel?.supported != true || selectedImageModel?.runtimeReady != true || selectedImageModel?.cached != true)
+                        }
+                        Divider()
+                        modelPicker(.image)
+                        if let configuration = workspace.imageConfiguration, let values = workspace.imageSettings {
+                            imageControls(configuration, values)
+                            Button("Restore Generation Defaults") { workspace.restoreImageDefaults() }
+                        }
+                        Button("Manage Image Models") { modelFilter = "Image"; studio.select(.models) }
+                    }.padding(.trailing, 20).padding(.bottom, 20)
+                }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Preview").font(.headline)
+                        Spacer()
+                        if let job = previewImageJob { Button("Save Image…") { saveImage(job) }.disabled(!connected || loadingImage) }
+                    }
+                    Group {
+                        if loadingImage { ProgressView("Loading image…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                        else if let imagePreview {
+                            Image(nsImage: imagePreview).resizable().scaledToFit()
+                                .accessibilityLabel(previewImageJob?.text ?? "Generated image")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else { empty("Your image will appear here", "Enter a prompt and generate an image. Completed images stay in Jobs.", symbol: "photo") }
+                    }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    if let job = previewImageJob { Text(job.text).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                    Divider()
+                    HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.imageJobs.prefix(5)) { imageJobRow($0) } } }
+                        .frame(minHeight: 80, maxHeight: 150)
+                }.padding(.leading, 20).frame(minWidth: 320)
+            }
+        }.padding(28)
+        .task(id: previewImageJob?.id) {
+            imagePreview = nil
+            guard let job = previewImageJob else { return }
+            loadingImage = true
+            defer { loadingImage = false }
+            do {
+                let data = try await workspace.imageData(for: job)
+                guard !Task.isCancelled else { return }
+                guard let image = NSImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }
+                imagePreview = image
+            } catch { if !Task.isCancelled { fileActionError = error.localizedDescription } }
+        }
+    }
+
+    private func imageControls(_ configuration: NativeImageConfiguration, _ values: NativeImageSettings) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Image size", selection: Binding(
+                get: { configuration.sizes.first { $0.width == workspace.imageSettings?.width && $0.height == workspace.imageSettings?.height }?.id ?? "" },
+                set: { id in
+                    guard let size = configuration.sizes.first(where: { $0.id == id }) else { return }
+                    workspace.imageSettings?.width = size.width; workspace.imageSettings?.height = size.height
+                })) {
+                    ForEach(configuration.sizes) { size in Text("\(size.label) · \(size.width) × \(size.height)").tag(size.id) }
+                }
+            Stepper(value: Binding(get: { workspace.imageSettings?.steps ?? values.steps }, set: { workspace.imageSettings?.steps = $0 }),
+                    in: configuration.limits.minSteps...configuration.limits.maxSteps) { Text("Steps: \(workspace.imageSettings?.steps ?? values.steps)") }
+            HStack {
+                Text("Guidance")
+                Spacer()
+                TextField("Guidance", value: Binding(get: { workspace.imageSettings?.guidance ?? values.guidance }, set: { workspace.imageSettings?.guidance = $0 }), format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 95)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Seed")
+                    Spacer()
+                    TextField("Seed", value: Binding(get: { workspace.imageSettings?.seed ?? values.seed }, set: { workspace.imageSettings?.seed = $0 }), format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder).frame(width: 145)
+                }
+                Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func imageJobRow(_ job: NativeJob) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if job.state == "done" {
+                    Button("Preview") { selectedImageID = job.id; studio.select(.image) }
+                    Button("Save…") { saveImage(job) }.disabled(!connected)
+                } else if job.state == "uncertain" {
+                    Button("Check Original Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected)
+                } else if active(job.state) {
+                    Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected)
+                }
+            }
+            if let message = job.error, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
         }
     }
 
@@ -253,7 +377,7 @@ struct StudioContent: View {
     }
 
     private func modelPicker(_ function: StudioFunction) -> some View {
-        let selection = function == .audio ? $workspace.audioModel : $workspace.transcriptionModel
+        let selection = function == .audio ? $workspace.audioModel : function == .image ? $workspace.imageModel : $workspace.transcriptionModel
         let models = workspace.models.filter { $0.function == function && $0.supported }
         return VStack(alignment: .leading, spacing: 7) {
             Text("Model").font(.callout)
@@ -383,6 +507,9 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: 24) {
                 heading("Jobs", "Follow local work and retrieve completed assets.")
                 if workspace.transcribing { transcriptionActivity }
+                sectionTitle("Image")
+                if workspace.imageJobs.isEmpty { Text("No image jobs yet.").foregroundStyle(.secondary) }
+                ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
                 sectionTitle("Audio")
                 if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
                 ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
@@ -507,6 +634,11 @@ struct StudioContent: View {
     private func chooseTranscriptionFile() {
         let panel = NSOpenPanel(); panel.title = "Choose a recording"; panel.allowedContentTypes = [.audio, .movie]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK { workspace.transcriptionFile = panel.url }
+    }
+    private func saveImage(_ job: NativeJob) {
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "image-\(job.id).png"; panel.allowedContentTypes = [.png]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { do { try await workspace.saveImage(job, to: url) } catch { fileActionError = error.localizedDescription } }
     }
     private func saveAudio(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "audio-\(job.id).wav"; panel.allowedContentTypes = [.wav]

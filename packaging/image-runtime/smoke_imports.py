@@ -11,6 +11,8 @@ import sys
 
 for module in (
     "mflux",
+    "fastapi",
+    "uvicorn",
     "mlx.core",
     "PIL",
     "numpy",
@@ -28,7 +30,7 @@ print(
             "python": platform.python_version(),
             "packages": {
                 name: metadata.version(name)
-                for name in ("mflux", "mlx", "mlx-metal", "Pillow", "numpy", "safetensors", "transformers")
+                for name in ("mflux", "mlx", "mlx-metal", "Pillow", "numpy", "safetensors", "transformers", "fastapi", "uvicorn")
             },
             "executable": sys.executable,
         },

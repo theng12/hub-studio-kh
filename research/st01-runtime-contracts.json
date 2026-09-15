@@ -174,7 +174,7 @@
       "engine": "image-mflux",
       "family": "FLUX.2 Klein 4B MLX 4-bit",
       "lock_path": "packaging/image-runtime/requirements.lock.txt",
-      "runtime_lock_sha256": "6809919c3ec817d7de27d03cc7f2adfe2f52f283d842ea74098a45696cc07c51",
+      "runtime_lock_sha256": "5fd5e79db7f8bec7dfa5c3ebc0fd1495ba7460138b44caf06bb6c0346c186b4f",
       "required_imports": [
         "mflux",
         "mlx.core",
@@ -182,7 +182,9 @@
         "numpy",
         "safetensors",
         "transformers",
-        "mflux.models.flux2.variants.txt2img.flux2_klein"
+        "mflux.models.flux2.variants.txt2img.flux2_klein",
+        "fastapi",
+        "uvicorn"
       ],
       "platform": {
         "architecture": "arm64",
@@ -190,7 +192,7 @@
         "python": "3.12"
       },
       "readiness": "runtime-inputs-only",
-      "native_binary_floor_audit": "The build-side Image environment completed an arm64/load-command audit: no Mach-O floor is above macOS 14.0, but relocation failures prevent packaging. A final relocated Image artifact needs a fresh audit; neither this lock nor an import test proves original-M1/macOS-14 inference.",
+      "native_binary_floor_audit": "Historical ST-01 observations below retain their original evidence. ST-03 resolved Image relocation and added the private HTTP worker dependencies; its current immutable runtime passes 194 Mach-O binaries with zero failures at macOS 14.0. Original-M1/Sonoma inference still requires physical qualification.",
       "provenance": {
         "mflux": "PyPI mflux 0.17.5, SHA-256 hashes in requirements.lock.txt; installed METADATA declares MIT License",
         "mlx": "0.31.2 macosx_14_0_arm64 wheel, SHA-256 e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f",
@@ -264,6 +266,14 @@
           "/usr/lib/libSystem.B.dylib"
         ],
         "limitation": "This is an installed build-side virtual environment, not the final relocatable Image runtime audit."
+      },
+      "st03_runtime_proof": {
+        "receipt": "qualification/st03-image.md",
+        "runtime_tree_sha256": "c9cd56a6d1cde6b72dee8ba22cf45fcbd640538207038087261cae91ec67f67e",
+        "macho_audit_sha256": "f603d0665c385bdecf88d2be8db5808d641cecdd8cf23eb3d4b945ce804617d5",
+        "binaries_checked": 194,
+        "failures": 0,
+        "offline_relocated_imports": "passed"
       }
     }
   ]

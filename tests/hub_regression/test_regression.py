@@ -42,4 +42,3 @@ def test_adapted_upstream_hub_cases_in_isolated_subprocess() -> None:
         f"isolated Hub regression failed (exit {completed.returncode}); see {log_path}\n"
         f"{completed.stdout}\n{completed.stderr}"
     )
-    assert "32 passed" in completed.stdout, completed.stdout

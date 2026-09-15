@@ -355,6 +355,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown batch")
         return _summary(batch)
 
+    @app.post("/api/hub/jobs/{batch_id}/items/{item_index}/reconcile")
+    async def reconcile_image(batch_id: str, item_index: int) -> dict[str, Any]:
+        try:
+            return await broker.reconcile_image_item(batch_id, item_index, client=monitor._client)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     async def open_worker_artifact(worker: dict[str, Any], artifact_path: str):
         from .backend.peers import studio_request
         url, headers = studio_request(worker, artifact_path)

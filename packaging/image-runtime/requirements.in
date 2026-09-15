@@ -1,4 +1,6 @@
-# ST-01 Image runtime: only the chosen FLUX.2 Klein MLX/mflux worker surface.
+# ST-03 Image runtime: pinned FLUX.2 Klein MLX/mflux plus its private HTTP server.
 # Source: imagestudio-mac app/requirements-generation.lock.txt at the exact
 # read-only source commit recorded in research/st01-runtime-contracts.json.
 mflux==0.17.5
+fastapi==0.141.1
+uvicorn==0.52.4

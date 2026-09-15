@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CryptoKit
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
@@ -18,6 +19,9 @@ final class FixtureProtocol: URLProtocol {
     static var lastTranscriptionBody = ""
     static var transcriptionPorts: [Int] = []
     static var uncertainTranscription = false
+    static var corruptImage = false
+    static var uncertainImage = false
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
     static let releaseGeneration = DispatchSemaphore(value: 0)
@@ -35,6 +39,8 @@ final class FixtureProtocol: URLProtocol {
     static func setUncertainTranscription(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainTranscription = value }
     static func transcriptionBody() -> String { lock.lock(); defer { lock.unlock() }; return lastTranscriptionBody }
     static func recordedTranscriptionPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return transcriptionPorts }
+    static func setCorruptImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptImage = value }
+    static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
@@ -77,7 +83,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"whisper","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
         case ("GET", "/studio/voice/api/generate/availability"):
@@ -96,11 +102,27 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
         case ("GET", "/api/hub/jobs"):
-            result = (200, "application/json", Data(#"{"batches":[{"id":"old-job","modality":"voice"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"}]}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job"):
             result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact"}]}"#.utf8))
         case ("GET", "/api/hub/jobs/new-job"):
             result = (200, "application/json", Data(#"{"id":"new-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":20,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Hello locally","artifact_url":"/api/hub/jobs/new-job/items/0/artifact"}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/image-job"):
+            let sha = SHA256.hash(data: Self.png).map { String(format: "%02x", $0) }.joined()
+            Self.lock.lock(); let uncertain = Self.uncertainImage; Self.lock.unlock()
+            let body: [String: Any] = ["id": "image-job", "modality": "image", "model": "fixture/flux", "created_at": 30,
+                "items": [["index": 0, "state": uncertain ? "uncertain" : "done", "prompt": "A quiet garden", "artifact_url": "/api/hub/jobs/image-job/items/0/artifact", "bytes": Self.png.count, "sha256": sha,
+                           "params": ["width": 1280, "height": 720, "steps": 4, "guidance": 1.0, "seed": -1]]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case ("GET", "/api/hub/jobs/image-job/items/0/artifact"):
+            Self.lock.lock(); let corrupt = Self.corruptImage; Self.lock.unlock()
+            result = (200, "image/png", corrupt ? Data([0]) : Self.png)
+        case ("POST", "/api/hub/jobs/image-job/items/0/reconcile"):
+            Self.lock.lock()
+            Self.uncertainImage = false
+            let originalRequestID = Self.generateBodies.last?["clientRequestId"] as? String ?? ""
+            Self.lock.unlock()
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
         case ("GET", "/studio/voice/api/downloads"):
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
         case ("POST", "/api/hub/jobs"):
@@ -120,6 +142,10 @@ final class FixtureProtocol: URLProtocol {
                 if drop {
                     client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
                     return
+                }
+                if object["modality"] as? String == "image" {
+                    result = (200, "application/json", Data(#"{"batch_id":"image-job","items":1,"replayed":false}"#.utf8))
+                    break
                 }
             }
             result = (200, "application/json", Data(#"{"batch_id":"new-job","items":1,"replayed":false}"#.utf8))
@@ -149,7 +175,7 @@ final class FixtureProtocol: URLProtocol {
         finish(result)
     }
 
-    private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
+    private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}}]}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -179,7 +205,7 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
-        require(store.models.count == 4, "combined model catalog")
+        require(store.models.count == 5, "combined model catalog")
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
         require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"], "native Audio support guard")
@@ -235,6 +261,78 @@ struct NativeAPITests {
         require(!FileManager.default.fileExists(atPath: pending.path), "reconciled submit identity remained pending")
         recovered.disconnect()
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
+
+        require(store.imageJobs.first?.id == "image-job", "Image history must restore through Hub")
+        require(store.imageSettings?.width == 1280 && store.imageSettings?.steps == 4, "Image defaults must come from runtime")
+        store.imagePrompt = "A quiet garden"
+        store.imageSettings?.steps = 6
+        store.imageSettings?.seed = 42
+        FixtureProtocol.dropNextSubmit()
+        await store.generateImage()
+        let imagePending = state.appendingPathComponent("native-pending-image.json")
+        require(FileManager.default.fileExists(atPath: imagePending.path), "lost Image submit must retain identity")
+        let imageFirst = FixtureProtocol.generatedBodies().last!
+        store.imagePrompt = "Changed after a lost response"
+        store.imageSettings?.steps = 8
+        await store.generateImage()
+        let imageReplay = FixtureProtocol.generatedBodies().last!
+        require(imageFirst["clientRequestId"] as? String == imageReplay["clientRequestId"] as? String, "Image replay changed identity")
+        require((imageReplay["items"] as? [[String: Any]])?.first?["prompt"] as? String == "A quiet garden", "Image replay changed prompt")
+        require(!FileManager.default.fileExists(atPath: imagePending.path), "accepted Image submit remained pending")
+        let image = store.imageJobs.first!
+        let verifiedImage = try await store.imageData(for: image)
+        require(verifiedImage == FixtureProtocol.png, "verified Image artifact")
+        FixtureProtocol.setCorruptImage(true)
+        do { _ = try await store.imageData(for: image); fatalError("corrupt Image artifact was accepted") }
+        catch { require(error.localizedDescription.contains("verification"), "Image hash mismatch needs actionable message") }
+        FixtureProtocol.setCorruptImage(false)
+        let imageDestination = temporary.appendingPathComponent("saved-image.png")
+        try await store.saveImage(image, to: imageDestination)
+        let savedImage = try Data(contentsOf: imageDestination)
+        require(savedImage == FixtureProtocol.png, "Image export bytes")
+        store.restoreImageDefaults()
+        require(store.imageSettings?.steps == 4 && store.imageSettings?.seed == -1, "Restore Image Defaults must use runtime values")
+
+        FixtureProtocol.setUncertainImage(true)
+        await store.refresh()
+        store.imagePrompt = "A quiet garden"
+        let beforeUncertainRepeat = FixtureProtocol.generatedBodies().count
+        await store.generateImage()
+        require(FixtureProtocol.generatedBodies().count == beforeUncertainRepeat, "same unresolved Image request was submitted as new work")
+        require(store.error?.contains("uncertain") == true, "unresolved Image repeat needs a reconciliation explanation")
+        store.imagePrompt = "A different new image"
+        await store.generateImage()
+        require(FixtureProtocol.generatedBodies().count == beforeUncertainRepeat + 1, "uncertainty blocked a different new request")
+        require(FileManager.default.fileExists(atPath: imagePending.path), "accepted uncertain Image response lost its original request")
+        let uncertainImageRequest = FixtureProtocol.generatedBodies().last!
+        FixtureProtocol.setUncertainImage(false)
+        await store.generateImage()
+        require(FixtureProtocol.generatedBodies().last!["clientRequestId"] as? String == uncertainImageRequest["clientRequestId"] as? String, "uncertain Image response generated a new request identity")
+        require(!FileManager.default.fileExists(atPath: imagePending.path), "reconciled Image response remained pending")
+        FixtureProtocol.setUncertainImage(true)
+        store.imagePrompt = "A second different request"
+        await store.generateImage()
+        let beforeImageCheck = FixtureProtocol.generatedBodies().count
+        await store.reconcileImage(store.imageJobs.first!)
+        require(FixtureProtocol.generatedBodies().count == beforeImageCheck, "Check Original Result submitted another generation")
+        require(store.imageJobs.first?.state == "done", "Image result reconciliation did not refresh history")
+        require(!FileManager.default.fileExists(atPath: imagePending.path), "verified original Image result did not clear its matching pending identity")
+
+        let imageConnectionStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let oldImageState = temporary.appendingPathComponent("old-image-state")
+        let newImageState = temporary.appendingPathComponent("new-image-state")
+        await imageConnectionStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: oldImageState, token: "native-test-token")
+        imageConnectionStore.imagePrompt = "Old device prompt"
+        FixtureProtocol.dropNextSubmit()
+        await imageConnectionStore.generateImage()
+        let oldImageRequest = FixtureProtocol.generatedBodies().last!
+        await imageConnectionStore.connect(baseURL: URL(string: "http://127.0.0.1:45679")!, dataDirectory: newImageState, token: "native-test-token")
+        imageConnectionStore.imagePrompt = "New device prompt"
+        await imageConnectionStore.generateImage()
+        let newImageRequest = FixtureProtocol.generatedBodies().last!
+        require(oldImageRequest["clientRequestId"] as? String != newImageRequest["clientRequestId"] as? String, "pending Image identity crossed device state directories")
+        require((newImageRequest["items"] as? [[String: Any]])?.first?["prompt"] as? String == "New device prompt", "old Image prompt crossed device state directories")
+        imageConnectionStore.disconnect()
 
         let input = temporary.appendingPathComponent("clip.wav")
         try Data([0x52, 0x49, 0x46, 0x46]).write(to: input)
