@@ -10,17 +10,26 @@ then the one task card you are claiming.
   merged into it.
 - **Backup:** remote `icloud` (a bare repo in iCloud Drive) plus a dated `git bundle`
   beside it. There is no hosted remote. `git push icloud --all` before you yield.
+- **Owner scope decision (2026-09-15):** finish the WHOLE app, including the fleet /
+  GenStudio connection. Model-fit checking is the owner's call — do not spend time proving
+  a model fits a given RAM tier. Distribution is "copy the built app to the Mac and open it
+  with right-click → Open"; signing/notarization stays out of scope.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
-- **IN PROGRESS — ST-03 packaged Image (the only thing blocking everything else).**
-  Working today: real image generation, Hub output registration, and receipt
-  acknowledgement. Still missing: restart-history check, a live GUI Save against a real
-  Hub, retry counts (ST-03.6), and independent review.
-- **NEXT, once ST-03 reaches DONE:** ST-04 Qwen Base, ST-05 VoxCPM2/OmniVoice, ST-06
-  Subtitle, ST-08 native workflows — all four unlock together. Their model files are
-  already downloaded and checksum-verified.
-- **LATER:** ST-10 fleet/GenStudio connection, then ST-11 full qualification on real
-  hardware (original M1, real macOS Sonoma, login/reboot).
+- **IN PROGRESS — ST-03 packaged Image.** Real generation, Hub output registration,
+  receipt acknowledgement and restart-history are all proven. Remaining: a live GUI Save
+  (the save path is unit-tested and the Hub contract is proven against a real Hub) and
+  independent review.
+- **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend,
+  `st-04` Qwen Base backend, and an independent ST-03 reviewer. The coordinator retains
+  native/UI and staging integration for all of them.
+- **NEXT:** ST-05 VoxCPM2/OmniVoice — must be the same owner as ST-04 because they share
+  the Voice registry — then ST-08 native workflows/settings.
+- **LATER:** ST-10 fleet/GenStudio connection, then ST-11 qualification on real hardware.
+- **Coordinator decision:** ST-04/05/06 were unlocked before ST-03 formally reached DONE
+  because the packaged-worker pattern they depend on is already proven by the working Image
+  slice. This is a deliberate, recorded exception to "whole-task dependencies require DONE";
+  ST-03's independent review is what closes that card out.
 - **The rule that will bite you:** run tests with `.build/voice-runtime/bin/python3`.
   The system `python3` is 3.9.6 and fails.
 - **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
