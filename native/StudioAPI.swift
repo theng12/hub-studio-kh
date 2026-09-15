@@ -52,6 +52,9 @@ struct NativeModel: Identifiable, Equatable {
     let speakers: [String]
     /// Qwen3-TTS *Base* models clone from a reference clip instead of using preset speakers.
     var requiresReference: Bool = false
+    /// The runtime reports this as "required" for every Base tier: a clone fails closed on a
+    /// transcript mismatch, so the app must not submit without one.
+    var requiresTranscript: Bool = true
 }
 
 struct NativeJob: Identifiable, Equatable {
@@ -326,7 +329,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 throw NativeAPIError.message("The reference clip is no longer at that location. Choose it again.")
             }
             let transcript = audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else {
+            let transcriptRequired = models.first { $0.repo == audioModel && $0.function == .audio }?.requiresTranscript ?? true
+            guard !transcriptRequired || !transcript.isEmpty else {
                 throw NativeAPIError.message("Enter the exact words spoken in the reference clip.")
             }
             guard let uploadDirectory = dataDirectory else {
@@ -383,7 +387,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     guard audioReferencePath != nil else {
                         throw NativeAPIError.message("Choose a reference clip before generating with this voice model.")
                     }
-                    guard !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    guard !model.requiresTranscript || !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw NativeAPIError.message("This Qwen Base voice needs the exact words spoken in the reference clip.")
                     }
                     guard let assetID = audioReferenceAssetId else {
@@ -761,7 +765,11 @@ final class NativeWorkspaceStore: ObservableObject {
     ) -> [NativeModel] {
         let audioModels = audio.filter { $0.capabilities?.contains("tts") == true }.map { item in
             let isQwen = item.family == "qwen3-tts"
-            let isClone = isQwen && item.repo.localizedCaseInsensitiveContains("Base")
+            // Prefer the runtime's own capability claim; fall back to the model name only if the
+            // catalog omits it, so a catalog change cannot silently drift from the UI.
+            let declaredClone = item.referenceAudio?.supported ?? item.referenceAudio?.declared ?? false
+            let isClone = isQwen && (declaredClone || item.repo.localizedCaseInsensitiveContains("Base"))
+            let transcriptRequired = isClone && (item.referenceAudio?.transcript ?? "required") == "required"
             let formCompatible = isQwen && (isClone || item.repo.localizedCaseInsensitiveContains("CustomVoice"))
             let package = packages[item.repo]
             let supported = formCompatible && package != nil
@@ -785,7 +793,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
                 capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: (supported && !isClone) ? speakers : [],
-                requiresReference: isClone
+                requiresReference: isClone, requiresTranscript: transcriptRequired
             )
         }
         let transcriptionModels = transcription.map { item in
@@ -1106,6 +1114,12 @@ private struct HubModelPackage: Decodable {
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct EmptyBody: Encodable {}
+private struct CatalogReferenceAudio: Decodable {
+    let declared: Bool?
+    let supported: Bool?
+    let transcript: String?
+}
+
 private struct CatalogModel: Decodable {
     let repo: String
     let label: String
@@ -1119,6 +1133,9 @@ private struct CatalogModel: Decodable {
     let generationDefaults: NativeImageSettings?
     let generationLimits: NativeImageLimits?
     let imageSizes: [NativeImageSize]?
+    /// Family capability claim from the runtime, so clone vs preset is decided by the catalog
+    /// rather than by guessing from the model name.
+    let referenceAudio: CatalogReferenceAudio?
     var imageConfiguration: NativeImageConfiguration? {
         guard let defaults = generationDefaults, let limits = generationLimits,
               let sizes = imageSizes, !sizes.isEmpty,

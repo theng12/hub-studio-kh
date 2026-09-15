@@ -383,13 +383,15 @@ struct StudioContent: View {
                                 Text("Reference transcript").font(.callout)
                                 TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
                                     .textFieldStyle(.roundedBorder)
-                                Text("Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
+                                Text(selectedAudioModel?.requiresTranscript == false
+                                     ? "Optional for this model." : "Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
                             }
                             HStack(spacing: 8) {
                                 Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
                                     .disabled(!connected || workspace.stagingReference
                                               || workspace.audioReferencePath == nil
-                                              || workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                              || (selectedAudioModel?.requiresTranscript != false
+                                                  && workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                                 if workspace.stagingReference { ProgressView().controlSize(.small) }
                                 if let status = workspace.audioReferenceStatus {
                                     Text(status).font(.caption).foregroundStyle(.secondary)
