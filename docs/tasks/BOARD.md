@@ -48,8 +48,15 @@ then the one task card you are claiming.
 - **Whisper Base/Small are catalog-only.** `mlx-audio` loads only `*.safetensors` while those
   pinned revisions ship `weights.npz`; the app refuses them with an explicit reason instead of
   loading the wrong thing. Scoped as its own checkpoint.
-- **Next:** the native Subtitle screen + its history tab, then ST-05 (VoxCPM2/OmniVoice), then
-  ST-08's remaining work, ST-10 fleet and ST-11 hardware.
+- **Native Subtitle screen landed** (`f2df056`): the studio reads its availability from the
+  Subtitle worker, shows its own durable history ("Recent subtitles") from the Hub's
+  transcription jobs, and appears as the **Subtitle tab** in the unified history. The
+  owner-facing name is now "Subtitle" in the sidebar and Overview, while the page's stable raw
+  value stays `Transcription` because it is also the function lookup key and persisted state.
+  Verified live: a staged app shows the Subtitle entry; the tab/filter logic is covered by the
+  native API fixture. Sidebar navigation cannot be driven reliably by Accessibility automation,
+  so the click-through remains a manual check.
+- **Next:** ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
