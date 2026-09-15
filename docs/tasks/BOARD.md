@@ -56,19 +56,18 @@ then the one task card you are claiming.
   Verified live: a staged app shows the Subtitle entry; the tab/filter logic is covered by the
   native API fixture. Sidebar navigation cannot be driven reliably by Accessibility automation,
   so the click-through remains a manual check.
-- **Subtitle end-to-end is one small fix away.** Running a real WAV through the packaged app
-  found three release blockers that the fixture suites had missed: the persisted batch had no
-  `modality` (`bc0119b`); `monitor.py` refreshed Whisper availability only for `voice`-modality
-  studios, so the standalone `subtitle` worker's cache was never populated (`ce7caa0`); and the
-  dispatch failure was entirely silent (now recorded in `governor_note`). **The job now
-  dispatches to the `subtitle` worker.** The last blocker is a vocabulary mismatch: the Hub sends
-  the model as a repo (`mlx-community/whisper-large-v3-turbo`) while the worker's
-  `validate_request` only accepts its package id (`whisper-turbo`), so the worker answers
-  `422 choose one of the packaged Whisper models`. Two fix options are recorded on the ST-06
-  card; accepting both spellings in the worker is the smallest change that keeps the Hub's
-  existing contract intact.
-- **Next:** apply that identifier fix and get a real subtitle out of the packaged app, then
-  ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11 hardware.
+- **Subtitle now works end to end in the packaged app.** Running real audio through the app
+  found and fixed **four** release blockers that the fixture suites had all missed: the persisted
+  batch had no `modality` (`bc0119b`); `monitor.py` refreshed Whisper availability only for
+  `voice`-modality studios, so the `subtitle` worker's cache was never populated (`ce7caa0`); the
+  dispatch failure was completely silent (now recorded in `governor_note`); and the Hub and the
+  worker used different identifiers for the same model (`418da53`). **Proof:** audio submitted
+  through the packaged app returned *"Studio Hub Subtitle Routing Check! The quick brown fox
+  jumps over the lazy dog."* with `studio: subtitle`, `state: done` — see
+  `qualification/evidence/st06-packaged-e2e.json`. Root suite now **192 OK**.
+- **Next:** ST-05 (VoxCPM2/OmniVoice) so every requested engine family exists, plus a
+  packaged end-to-end run for Voice cloning to match what Subtitle now has. Then ST-08's
+  remaining native work, ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
