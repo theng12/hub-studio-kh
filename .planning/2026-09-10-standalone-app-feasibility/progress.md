@@ -62,3 +62,74 @@ Final redesign review/verification: read-only review found stale token-save succ
 Final 0.3.0 preview: clean implementation 9efb6f0 staged as dist/Studio Hub.app (1.7 GB). The final native window restores Audio/Transcription state; the minimum-size Script label and controls are visible; worker health reports the exact release. Quit stops the worker and removes readiness. The relocated copy passed real Qwen/Whisper execution in 29.54 seconds, with startup times of 8.312/1.986 seconds. Digest 7634717f…b4d914 matches the staged artifact and remains unchanged. Qualification JSON records launch, release, smoke and transcript evidence. The upstream resource_tracker warning about cleaning 13 semaphores remains; direct PID and process-path checks found no remaining supervisor/model processes. Removed the disposable development harness and relocated copy safely; retained final and historical artifacts. No Git remote is configured, so integration consists of local implementation and evidence commits. Exit check: standalone instructions and canonical plan followed; review findings closed; native and regression checks completed; no Pinokio launcher changes apply. Existing installations retain their flow. Remaining local engines, optional controller integration, physical Sonoma and distribution qualification are explicit.
 
 2026-09-14: owner requested stocking khmerttsopensource/khmer-tts, then clarified personal use only. Baseline clean; standalone scope and canonical plan reviewed. Downloaded the pinned revision c9380a9d1c817f2b21980d54f29f7a61b0d626f5 into model-library/khmer-tts/, outside the app, Git and disposable .build outputs. Saved 11 inference/source/attribution files, 332,197,043 bytes total. Published LFS SHA-256 matched for weights; reread and verified every saved checksum, JSON configuration and safetensors header. research/khmer-tts-stock.json records exact files/revision; README links the stock record. No dependencies installed, upstream code executed, model inference run, app catalog enabled or Pinokio installation changed. No publication or user access was enabled.
+
+2026-09-14 research-only handoff: owner deferred SSD follow-up until they announce VoxCPM2 8-bit download completion; explicitly no download polling. Recorded current SSD state and per-drive refresh order in research/ssd-refresh-handoff.md. Investigated Yume 1.5 MLX 4-bit for 24 GB I2V in research/yume-i2v-24gb.md; current loader expands BF16 T5 weights to float32 (~22.72 GB parameters), so 24 GB remains unqualified. No runtime changes, weight downloads, tests or generation. Preserved pre-existing graph query-stamp modification.
+
+2026-09-15 rescope planning started: owner requests a simpler bundled app: current fleet FLUX.2 klein, Qwen3 TTS 0.6B/1.7B Base, VoxCPM2 4-bit/8-bit/full, OmniVoice full, separate Subtitle Studio with three Whisper choices, Hub controller, automatic startup and bounded generated-output storage. Owner requests source-backed assessment, build order, labeled agent checkpoints and session handoffs before further implementation. The ambiguous age phrase "30 deletion after generation" is pending clarification. Existing progress additions, graph stamp and research files are pre-existing and preserved. Baseline 29d0baa; no source/runtimes/dependencies/old nodes changed. Plan resolver lacked executable permission; invoked its existing script through bash without changing permissions. Root owns shared planning documents; independent read-only inventories will feed the revised canonical plan.
+
+2026-09-15 rescope clarification: owner confirmed 50 GB combined generated files per device and 30 days after generation, either condition first; all operating defaults editable, standalone local use plus protected Hub token for GenStudio. Three source inventories completed and reviewed. Wrote narrowed canonical design, PRODUCT/DESIGN/README updates, eleven task cards, board and execution plan. No new app implementation. A document-write attempt hit a stdin encoding error before creating files; reran with ASCII-escaped JSON successfully. Independent final planning review pending.
+
+2026-09-15 rescope complete (ST-00): independent scope_hub_storage review found four planning issues, all resolved and closure verified: software startup no longer waits for physical reboot hardware before connection work; native pilot can consume independently reviewed QWEN06/Turbo receipts before all Vox/Omni variants; changing managed output root remains within quota while explicit exported copies are excluded; proposed five-minute cadence is distinguished from inherited behavior, with admission authoritative. ST-11 owns final all-model/hardware proof. Validated 20 Markdown files, 142 local links, eleven task cards with matching acyclic dependencies, and clean git diff --check. Initial checker treated a URL-encoded space as a broken link; decoded it and verified the real manifest exists. ST-00 DONE; ST-01 READY. Reviewed documents are integrated in the local working tree; no new release/commit, app code/build/tests, model download, credential change, fleet enrollment or old-node modification. Prior progress, graph stamp and SSD/Yume research preserved. Exit checklist: standalone/canonical-plan/read-only-source/local-check rules satisfied; Pinokio launcher destination/example/regex requirements not applicable because no launcher work occurred.
+
+2026-09-15 owner addition: extended the existing plan/cards for GitHub/original-host
+model downloads and offline copy/paste folders, complete companion assets, portable
+cache links and identical verification. Executable runtime dependencies remain bundled.
+Added location/node membership, generation attribution, status/stats freshness and
+address/IP + token API contracts suitable for future standalone GenStudio. Inspected
+current Hub contracts read-only at06e893e; recorded source references in the Hub inventory.
+Owner phrase about not connecting controllers conflicts with the prior topology;
+asked one endpoint-layout question and marked only ST-10.TOPOLOGY pending. No new
+gateway, direct-node routing or controller linkage assumed. No application changes,
+downloads, live calls, credential changes or existing-node changes.
+
+Owner-addition verification: 20 Markdown files and 151 local links checked; task-card prerequisites still match board; git diff --check clean. Independent review prompted endpoint-neutral wording while topology is pending, correct distinction of current Hub/fleet tokens from a possible new GenStudio scope, and explicit staging of imports outside the selected model library. Applied all refinements. No application tests/build run for these documentation changes. Source references and pre-existing work preserved.
+
+2026-09-15 older-M1 planning addition: read applicable standalone instructions and preserved existing working-tree changes. Checked locked MLX/Metal wheels, native/build target and historical qualification; verified official MLX macOS14.0 minimum. Extended design/PRODUCT/README/execution plan and ST-01/02/08/09/11 for original M1, oldest-qualified Sonoma point release, per-model OS/RAM readiness, last-compatible release preservation and pause/drain/recovery around owner-controlled OS restart. No OS updates, app/runtime changes, inference or model downloads. Documentation validation:20 Markdown files,151 local links, clean git diff --check. Independent packaging evidence review requested; physical compatibility remains unproven.
+
+Independent platform audit recorded in research/rescope-platform-floor-2026-09-15.md: native/FFmpeg/MLX artifact selection targets14.0, but no local proof establishes an exact Sonoma point release for the requested complete model set. Existing M1 OmniVoice evidence does not specify Sonoma. Keep all physical OS/model checkpoints open. Reviewed report and linked it from the canonical design; no runtime or OS changes.
+
+
+## 2026-09-15 — ST-01 implemented and integrated
+
+Owner clarified annotation 1: preserve GenStudio -> location controller -> joined
+nodes, using existing Hub/fleet tokens. No direct node-to-GenStudio connection or new
+gateway. This clarification was incorporated into the design and ST-02/ST-10 handoffs.
+
+Implemented ten immutable model/companion manifests, separate runtime input contracts,
+HTTPS and offline package import/registration, atomic receipts and explicit full Verify.
+Independent reviewers scope_packaging and st01_manifests resolved filesystem durability,
+anchored verification, receipt refresh and adopted-vs-reference Voice identity findings.
+
+Local verification: 83 foundation tests passed; the initial runtime-path skip was then
+run successfully against the existing read-only runtime (1 passed). Adopted Voice:
+640 passed / five warnings. Total 724 passing tests. Real Turbo import verified nine
+files / 1,618,590,987 bytes, moved-library reuse and offline tokenizer round trip.
+Three real HTTPS companion files verified 89,500 bytes; no model weights downloaded.
+Image inputs: 69 compatible distributions, 179 byte-exact notices; 182 Mach-O floors
+at or below macOS14/arm64, but 115 relocation issues remain ST-03 work.
+
+Implementation072abf6 and closurec16833c fast-forwarded locally into
+implementation/voice-runtime. No remote exists; no PR, hosted compute, publishing,
+deployment, credential or existing fleet change. ST-01 DONE; ST-02 READY.
+See qualification/st01.md and docs/tasks/BOARD.md. Clean implementation worktree
+.worktrees/st-01 retains the current build-side runtime and model proof; disposable
+source-hardlink scaffold and superseded exploratory venv were removed. Prior personal
+research/progress edits and graph stamp remain preserved outside committed scope.
+
+
+2026-09-15 owner efficiency direction: inspect existing model files first; report
+missing download requirements early and overlap authorized downloads with independent
+implementation. Continue Ponytail full (reuse/std-library/minimal scope), use existing
+Graphify for code navigation and verify actual source. Do not rebuild graphs or
+re-download existing model bytes merely as a routine step.
+
+One-time requested local inventory: all eight FLUX/Voice/Turbo packages have every
+required file SHA-256 verified; 23,861,459,508 bytes present before cross-package
+companion reuse. Whisper Base and Small weights are absent from the inspected local
+Image/Voice/global/pilot caches. After shared-file reuse, unique missing downloads total
+628,667,821 bytes in 9 files. No external SSD is mounted,
+so this is not an inventory of disconnected SSDs or other fleet machines. No downloads,
+imports, source changes or inference were started. Exact sources/files/checksums and
+missing URLs: .build/model-availability-2026-09-15.json. The inventory used one hash
+per unchanged physical source file and completed its full read in 22.8 seconds.
+ST-02 remains READY; this inventory does not mark model inference qualified.
