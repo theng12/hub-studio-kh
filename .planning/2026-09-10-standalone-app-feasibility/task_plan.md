@@ -1,57 +1,78 @@
 # Standalone Studio App Planning
 
-## Goal
-Implement the accepted feasibility-first plan for a new standalone Apple Silicon Studio application, beginning with the relocatable Voice worker proof.
+Updated: 2026-09-15. Canonical planning directory remains this directory.
 
-## Owner direction
-- Separate project outside existing Pinokio repositories.
-- Existing installed Macs retain their Pinokio installation and update flow.
-- Standalone app is for new nodes; adopt only if qualification succeeds.
-- Apple Silicon only; target macOS 14 Sonoma or later, subject to actual engine qualification.
-- Bundle tested runtimes; models imported/downloaded separately.
-- Primary product: generate all six asset types locally. API exposure and accepting Studio Hub/GenStudio control are optional secondary capabilities; preserve their safeguards when integrated.
-- Owner now confirms six functions: Audio, Transcription, Image, Music, Video, Chat. Hub is their management layer; Audio/Transcription share the Voice engine.
-- Use planning-with-files, Graphify and Ponytail.
-- Owner selected SwiftUI/AppKit; the subsequent redesign replaces WKWebView with native workspaces; no paid Apple Developer membership currently available. Local development proceeds; Developer ID/notarization remain later distribution work.
+## Current goal
 
-## Planning phases
-1. Establish isolated project and source evidence — complete.
-2. Trace reusable engines, APIs, installation and runtime assumptions — complete.
-3. Write design, staged feasibility plan and decisions — complete.
-4. Review consistency and deliver plan — complete.
+Complete the owner's source-backed rescope and agent handoff plan for a native standalone
+Hub + Image + Voice + Subtitle app. This pass is planning/review; it does not implement
+the new app features. Historical local implementation authorization remains recorded.
 
-## Implementation status
-Local implementation authorized by the owner on 2026-09-10. Voice source adoption, external state paths, launcher, staging and API relocation checks are implemented; local runtime/model verification has passed; clean physical Sonoma and fleet qualification remain pending. Existing-node migration and deployment are outside scope.
+## Confirmed scope
 
-## Decisions
-Confirmed target scope: Audio, Transcription, Image, Music, Video, Chat. First usable subset: local Audio/Transcription, followed by Image and the remaining engines with independent packaging and model tests. Add shared local scheduling as needed; remote controller setup remains optional. Working folder/name studiohub-standalone is provisional. Architecture, packaging and qualification choices will be recorded in the design.
+- Image: current fleet FLUX.2 Klein 4B MLX 4-bit.
+- Voice: Qwen3 TTS 0.6B/1.7B Base, VoxCPM2 4-bit/8-bit/full, OmniVoice full.
+- Separate Subtitle backend, workspace and jobs; three Whisper choices.
+- Bundled Hub controls local and optional connected work; protected controller token for GenStudio.
+- All operating defaults editable through backend-owned settings.
+- Per-device output defaults: 50 GB total across studios, 30 days after generation, either condition triggers cleanup.
+- Editable automatic login startup; preserve fixed authentication/integrity/active-job safeguards.
+- Tested runtimes bundled in the app; complete exact model packages external, optionally one offline SSD kit.
+- Apple Silicon/macOS 14 target pending physical qualification. Existing Pinokio nodes untouched.
+- Chat, Music and Video deferred. Prior six-function release order is superseded.
 
-## Errors
-- Two read-only searches referenced nonexistent files (native_execution.py and child CAPABILITY_CONTRACT.md). Resolved using discovered native_executor.py, Hub contract and actual child README paths.
+## Sources of truth
 
-## Final evidence
-- Design: docs/standalone-plan.md.
-- Independent read-only Hub inventory: research/hub-contract-inventory.md.
-- Graphify traversals and corrected result saved only in the copied research graph.
-- Documentation links, explicit plan-root resolution and unchanged source checkout identities/status verified.
-- No application tests/builds were run: only planning documents were created. Compatibility and integration remain acceptance work, not claimed results.
+- Product design: docs/standalone-plan.md.
+- Execution/files/dependencies: docs/implementation-plan.md.
+- Task status/ownership: docs/tasks/BOARD.md; checklists and handoffs: ST-01 through ST-11.
+- Source evidence: research/rescope-model-inventory-2026-09-15.md,
+  research/rescope-hub-storage-2026-09-15.md and research/rescope-packaging-2026-09-15.md.
+- Historical implementation/qualification: progress.md and qualification/native-redesign.md.
 
-## Implementation authorization — 2026-09-10
-Owner approved starting implementation and using sub-agents. Prior planning-only restrictions are superseded for local implementation.
+## This planning pass
 
-## Implementation phases
-1. Initialize isolated repository, adopt tracked Voice source, inventory runtime — complete.
-2. Build isolated relocatable Voice runtime and external data paths — complete (local proof).
-3. Verify local relocation/imports/API and perform independent review — complete; 665 tests and final Qwen/Whisper smoke pass.
-4. Record qualification evidence and remaining hardware/model/integration work — complete; qualification/voice-runtime.md records exact artifact and limitations.
-5. Native app shell and six-function navigation — complete as local Audio/Transcription preview 0.2.0; 676 regression tests, native boundary/build checks and final relocation/model smoke passed. See qualification/native-preview.md.
-6. Native redesign — complete as local 0.3.0 preview; final packaged UI, 676 regressions, native contracts, real Qwen/Whisper relocation and unchanged digest verified: owner requires separate Audio/Transcription workspaces, central Models/Jobs/Connections/Settings and node-operation Overview. Replace legacy embedded navigation and duplicated management.
-7. Local Image, then Chat/Music/Video, with necessary local capacity coordination — pending.
-8. Optional Studio Hub/GenStudio control — pending.
-9. Full local contract tests, physical qualification and distribution — pending.
+- [x] Read applicable instructions, inspect status and preserve pre-existing work.
+- [x] Inspect existing app, model, Hub/storage and packaging sources.
+- [x] Confirm owner retention clarification: 50 GB and 30 days, editable per device.
+- [x] Write narrowed design, build order, task cards and handoff protocol.
+- [x] Complete independent review and documentation consistency checks.
+- [x] Deliver the concrete plan and next task: ST-01 is READY.
 
-## Preflight snapshot
-Standalone AGENTS: preserve old nodes; read-only source baselines; external state; local checks; no hosted compute or deployment. Source Voice instructions apply as reference release discipline; no legacy launcher is being edited. New standalone project already isolates all work. Existing plan is the accepted scope; no competing plan is needed.
+## Implementation state
 
-## Next acceptance condition
-Milestone 1 is locally proven, not fully qualified. Obtain a clean physical Sonoma Apple Silicon test machine and repeat the recorded artifact offline before claiming Sonoma/fleet readiness. Next implementation: local Image, then Chat/Music/Video and optional Studio Hub/GenStudio integration. Physical Sonoma, login/reboot and distribution qualification remain pending.
+Current built preview: 0.3.0, Voice-only packaging with real Qwen CustomVoice and Whisper
+Turbo evidence. Native shell, immutable runtime and relocation proof are reusable.
+Requested Qwen Base is not proven by CustomVoice. Hub/Image are not bundled.
+Historical 676 regressions and 28 packaging tests are not new test runs.
+
+ST-00 is this planning pass. ST-01 through ST-11 remain pending; their board controls
+readiness. Start runtime/model contracts, then bundled local Hub, then packaged FLUX.
+Physical hardware and distribution conditions remain explicit, not reasons to stall
+independent local implementation.
+
+## Preflight and exit snapshot
+
+Applicable instructions: independent standalone scope; canonical plan; exact source
+adoption; preserve old nodes and unrelated changes; smallest reusable implementation;
+local verification; no hosted compute, deployment or live credentials.
+No Pinokio launcher creation/editing occurs; launcher destination/example/capture checks
+are not applicable. Shared plan documents are root-owned; agents own their reports.
+
+Baseline: 29d0baa, no Git remote configured. Pre-existing progress additions, graph query
+stamp, SSD research and Yume research are preserved. No model downloads, polling,
+runtime installation, generation, app rebuild or production changes in this pass.
+
+## Historical record
+
+The September 10 feasibility plan, Voice proof, September 11 native 0.2/0.3 work and
+September 14 personal stock/research remain in progress.md and qualification records.
+Their original tests/limitations remain evidence for those artifacts only.
+
+## Latest owner addition
+
+Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 remains READY. ST-10.TOPOLOGY awaits the owner endpoint clarification; the prior direct controller connection is not reconfirmed. Future standalone GenStudio implementation remains deferred.
+
+## Older-device addition
+
+Preserve original M1/MLX support on the oldest qualified Sonoma release, without requiring the newest OS. ST-01/02/08/09/11 now contain OS compatibility and update-recovery checkpoints. Existing macOS14 target remains unqualified physically. Model and endpoint requirements from prior turns remain active; ST-10.TOPOLOGY is still pending.

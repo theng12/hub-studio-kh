@@ -1,13 +1,60 @@
 # Native shell design
 
-Version 0.3.0 is a native SwiftUI/AppKit application. The redesign replaces the embedded browser workspace entirely. AppKit owns the window, menu bar and process lifecycle; SwiftUI owns navigation, creation views, management views and first-run/recovery state. There is no WKWebView dependency in the native shell.
+## Target after the 2026-09-15 rescope
 
-The sidebar is ordered as Overview, Audio, Transcription, Image, Music, Video, Chat, Models, Jobs, Connections and Settings. The six function pages are creation workspaces. Overview reports local job, engine and model readiness; Models, Jobs and Settings are shared management pages; Connections contains optional API, Studio Hub and GenStudio configuration. Local creation remains usable without a remote connection.
+One SwiftUI/AppKit window, with:
 
-Audio and Transcription have independent selections, drafts, uploads and result state. Audio exposes the installed and runtime-ready Qwen voice model, speaker selection and generation. Transcription accepts an audio or video file and exports Text, SRT or VTT. Word timestamps are not exposed because the native result viewer does not implement word-level output. Image, Music, Video and Chat remain honest unavailable states until their engines are integrated and qualified.
+- Hub Overview
+- Image Studio
+- Voice Studio
+- Subtitle Studio
+- Models
+- Jobs
+- Devices (controller mode)
+- Connections
+- Settings
 
-First launch resolves the model library and reports missing-volume or startup failures directly in the app. Model download, removal and progress live in Models; completed local work lives in Jobs. The app keeps writable state and models outside the bundle. Closing the window keeps the owned worker available from the menu bar. Explicit Quit asks how to handle active work, then stops only the verified owned process group. Login-item status is read from macOS service management; login/reboot behavior is unqualified.
+Each creation workspace owns its inputs, selected model and result state. Shared
+Models, Jobs, storage settings and device controls are not duplicated inside every
+workspace. Chat, Music and Video leave the first-release navigation; their existing
+work is not deleted as part of this planning pass.
 
-The minimum native window is 1040×680, with scrollable creation and management content. Verify keyboard focus and overflow at the default and minimum sizes. The native build targets macOS 14 but currently selects the macOS 26.5 SDK because installed SDK 27 lacks the SwiftUI macros plugin required by the source. Sonoma compatibility has only been tested on macOS 26; physical Sonoma compatibility remains unqualified.
+Voice Studio must provide the reference-library and transcript workflow needed by
+Qwen Base, plus only the controls supported by each selected VoxCPM2/OmniVoice model.
+The current preset-speaker CustomVoice form is not the requested Base workflow.
+Subtitle Studio owns distinct uploads, jobs, cancellation, text/SRT/VTT output and
+history. Image Studio starts with the fleet's qualified FLUX text-to-image contract.
 
-The current implementation is in [native/StudioViews.swift](native/StudioViews.swift), [native/StudioHub.swift](native/StudioHub.swift) and [native/StudioAPI.swift](native/StudioAPI.swift). The SDK selection and native compilation steps are in [native/build.sh](native/build.sh).
+The native client submits through the bundled Hub, using the same admission and
+model-readiness rules as externally submitted work. Hub reports effective settings,
+eligible models, job state and protected output usage. The UI never treats an online
+process or downloaded badge as proof that a model can run.
+
+Settings expose editable defaults and Restore Defaults per section. Storage shows
+device-wide usage, configured GB/days, eligible/protected bytes and cleanup preview.
+Connections shows a private endpoint and masked token with explicit owner-scoped
+Reveal/Copy, plus connection tests. Tokens are never normal diagnostic text.
+
+Models provides Download, Import Folder and Refresh/Verify. Show copied packages as
+incomplete until all required weights/companions validate; keep source and library path
+editable. Connections uses address/IP, port and token independently of whether its
+client is hosted or standalone. No terminal or Git workflow appears in model setup.
+
+## Retained implementation and acceptance
+
+Version 0.3.0 already uses AppKit lifecycle and SwiftUI pages; there is no WKWebView.
+Reuse native/StudioHub.swift, native/ShellCore.swift, native/StudioAPI.swift and
+native/StudioViews.swift, splitting focused studio views/stores only when needed.
+
+Closing the window retains the app-owned Hub in the menu bar. Explicit Quit safely
+handles current jobs before stopping owned children. Login startup defaults on after
+setup; the UI reports actual SMAppService registration and approval state and allows
+turning it off. One data directory owns one app/service instance.
+
+The existing minimum window is 1040×680. Verify keyboard focus, Voice reference
+controls, model/error text, token visibility, scrolling and primary actions at minimum
+and default sizes. New engine presence is proven by real output, not navigation.
+
+Current built preview and historical limits: [0.3.0 proof](qualification/native-redesign.md).
+Current requirements and architecture: [canonical design](docs/standalone-plan.md).
+Execution/ownership: [task board](docs/tasks/BOARD.md).

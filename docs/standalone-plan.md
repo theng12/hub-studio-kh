@@ -1,153 +1,468 @@
-# Standalone Studio app: design and feasibility plan
+# Studio Hub Standalone — focused first-release design
 
-Date: 2026-09-10. Status: version 0.3.0 native redesign in progress. The local Voice proof exists; native Audio job `c56f0f41d938` completed and was saved, while Whisper transcription verification is underway. Clean-machine and physical Sonoma qualification remain pending. See `qualification/voice-runtime.md` for measured historical results and remaining acceptance checks.
+Updated: 2026-09-15. This is the canonical design. It supersedes the earlier six-function release plan.
+Current built artifact: 0.3.0; the changes below are planned, not implemented.
+Execution: [implementation plan](implementation-plan.md) · [task board](tasks/BOARD.md).
+Evidence: [current model inventory](../research/rescope-model-inventory-2026-09-15.md), [Hub/storage inventory](../research/rescope-hub-storage-2026-09-15.md), [packaging inventory](../research/rescope-packaging-2026-09-15.md).
 
-## Decision
+## 1. Decision and sufficiency
 
-Develop one independent `Studio Hub.app` for new Apple Silicon nodes. Present Audio, Transcription, Image, Music, Video, and Chat in one native application window. Local creation is the primary product. Central app management coordinates models, jobs and settings; retain isolated engine processes and dependencies. Optional API exposure and Studio Hub/GenStudio control are secondary, with no remote controller required for local jobs. Leave all installed Pinokio nodes and their maintenance flow intact. Adopt the standalone app only after a real clean-machine pilot passes.
+Build one independent native Apple Silicon app containing a Hub management layer,
+Image Studio, Voice Studio and Subtitle Studio. Each device can create locally without
+GenStudio. The same app can be configured as a location controller or joined worker.
+GenStudio connectivity is a supported first-release option, not a requirement for local work.
 
-The owner confirmed six functional sections: Audio, Transcription, Image, Music, Video, Chat. Audio initially means speech generation/voice workflows; Transcription means speech-to-text and subtitles. Audio and Transcription have separate workspaces, selections and result state; they may share Voice runtime dependencies internally. Image, Music, Video generation, and Chat reuse their existing sibling engines where qualified. This supersedes the earlier three-component-only scope; it does not require six independent runtimes or concurrent model loading. The working folder and app name remain provisional.
+This is sufficient for the requested production image, speech and subtitle workflows.
+It deliberately removes Chat, Music and Video from the first-release build sequence.
+Their existing source, artifacts and personal model stock are preserved; adding those
+functions is a later product decision. No legacy Pinokio node is migrated by this project.
 
-The minimum compatibility target is **macOS 14 Sonoma**, with testing on newer supported macOS releases as well. MLX documents macOS 14+ Apple Silicon support, and MLX 0.31.2 has macOS 14 arm64 wheels. This does not certify every engine, native dependency, or model on Sonoma. The exact oldest supported release must be determined by the assembled app and physical-machine tests. Do not lower a binary's deployment metadata to disguise a newer OS requirement. [MLX installation](https://ml-explore.github.io/mlx/build/html/install.html), [MLX wheel metadata](https://pypi.org/pypi/mlx/0.31.2/json), [Metal wheel metadata](https://pypi.org/pypi/mlx-metal/0.31.2/json).
+The main operational benefit is a tested runtime copied to every new Mac. Do not claim
+that old packages are universally unavailable: the observed problem is uncontrolled
+dependency resolution and inconsistent installed environments. Packaging addresses that
+drift. It does not by itself repair missing weights, qualify a model on every RAM tier,
+or guarantee compatibility with every future macOS release.
 
-## Boundaries
+## 2. Owner-confirmed requirements
 
-| Area | Proposed first release |
-|---|---|
-| Users | People creating assets locally on new Macs; optional fleet use; no automatic migration of installed nodes |
-| Hardware | Apple Silicon; each model still has its own memory requirements |
-| Functions | Audio, Transcription, Image, Music, Video, Chat; one Hub and isolated workers as needed |
-| Installation | Copy an app containing tested runtimes and native tools; no Pinokio, Homebrew, system Python, or developer toolchain required on the node |
-| Models | Import or download complete, validated model packages separately |
-| GenStudio | Secondary, optional authenticated control, qualified separately from local creation |
-| Updates | App replacement for the pilot; no Git pull or package installation on nodes |
-| Excluded | Intel, Windows/Linux, old-node migration, model conversion promises, public App Store submission |
+- Native standalone app; no Pinokio, Git, pip, uv, Homebrew, Xcode or system Python needed on a target device.
+- Image: the fleet's FLUX.2 Klein 4B MLX 4-bit model.
+- Voice: Qwen3 TTS 0.6B Base and 1.7B Base; VoxCPM2 4-bit, 8-bit and full; OmniVoice full.
+- Subtitle Studio: its own workspace and backend/job lifecycle, with three Whisper options.
+- Hub controls jobs, installed models, availability, memory, storage, devices and connections.
+- Automatic startup, with editable startup settings.
+- Editable per-device generated-output defaults: 50 GB total and 30 days after generation, whichever condition is reached first.
+- Operating defaults are editable; settings must show the effective value and allow restoring the default.
+- Each generator can gain supported models later without rebuilding its entire interface.
+- Protected reveal/copy of the Hub connection token for the GenStudio endpoint selected at ST-10.TOPOLOGY.
+- Phased implementation with independently reviewable tasks and durable agent/session handoffs.
 
-An external SSD is useful for large model libraries and offline transfers. It does not solve incompatible native binaries or insufficient unified memory. Package size and RAM recommendations will come from measurements, not estimates presented as requirements.
+## 3. What already exists
 
-## Architecture
+| Area | Evidence | Decision |
+| --- | --- | --- |
+| Native SwiftUI/AppKit shell, menu bar, owned-process shutdown, private logs | native/StudioHub.swift, native/ShellCore.swift | Reuse and adapt from one worker to Hub-owned workers |
+| Packaged relocatable Python, media tools, hashes, immutable runtime | packaging/voice-runtime/, packaging/stage_voice.py | Keep; narrow runtime dependencies using requested-model evidence |
+| Audio generation | 0.3.0 Qwen 0.6B CustomVoice plus saved WAV | Useful plumbing proof; NOT proof of the requested Base models |
+| Subtitle output | Whisper Turbo transcription and SRT export | Reuse decoding and format behavior; extract the public Subtitle service |
+| Image | Native placeholder; no bundled Image engine | Implement first complete new engine slice |
+| Hub | Source inventory only; no Hub service inside the artifact | Implement early, not after all generator pages |
+| Startup at login | SMAppService code exists | Verify and finish setup/reboot behavior |
+| Shared output quota | Existing sibling/Hub mechanisms have different scopes | One local output index and policy, not three independent 50 GB quotas |
+| GenStudio connection | Native placeholder/configuration work | Implement scoped token, packaged identity and fixture qualification |
+| Current verification | 676 regression + 28 packaging tests; relocated Qwen/Whisper proof | Historical evidence only; new source/runtime/model combinations need new receipts |
 
-```mermaid
+The 0.3.0 artifact is approximately 1.7 GB allocated and packages Voice only.
+The native client currently talks directly to that worker. NativeWorkspaceStore
+defaults to CustomVoice and must be changed for the requested Base/reference workflow.
+The exact source baseline for this planning pass is 29d0baa. Historical qualification
+records remain intact; no source or app rebuild occurred to produce this plan.
+
+## 4. Chosen structure
+
+~~~mermaid
+flowchart TD
+    UI[One native app: Hub, Image, Voice, Subtitle] --> H[Bundled Hub: jobs, readiness, shared device admission]
+    G[Optional GenStudio: location endpoint pending ST-10.TOPOLOGY]
+    C[Optional location controller] -->|authenticated worker connection| H
+    H --> I[Image worker]
+    H --> V[Voice worker]
+    H --> S[Subtitle worker]
+    I --> O[Device-owned outputs and job evidence]
+    V --> O
+    S --> O
+    H --> R[One output index and cleanup policy]
+    R --> O
+    I --> M[External validated model library]
+    V --> M
+    S --> M
+~~~
+
+One app does not mean one Python environment. Bundle only the isolated runtime sets
+the selected engines actually need. Voice and Subtitle may share identical immutable
+runtime files when compatibility is proven, while retaining independent processes,
+queues, cancellation and result history. Image has its own qualified runtime if its
+dependency constraints differ. Hub owns lifecycle; the native window does not launch
+three unrelated unmanaged servers.
+
+Reuse current tested workers and Hub scheduling code at recorded commits. Adopt source
+deliberately, replace packaging/path assumptions, and test the resulting contracts.
+Do not paste entire installed directories, virtual environments, credentials or live
+job databases into the app. Do not redesign working model inference algorithms.
+
+All native generation and external work must pass the same node-owned admission checks.
+There must be no direct native-to-worker path that bypasses the Hub's model pause,
+physical-memory slot or storage gate. Workers bind to private loopback endpoints.
+Only the configured Hub interface is exposed for external control.
+
+Subtitle Studio owns user transcription requests and independent subtitle history.
+Voice may retain the existing internal Whisper quality check required by Qwen Base;
+that check remains part of the parent voice job under its existing memory lease. It
+does not become a separately queued public Subtitle job or wait for a second node slot.
+Shared tokenizer/model assets are referenced once in the model library.
+
+### Roles
+
+**Latest clarification pending:** the owner confirms that nodes join named locations,
+but also says they do not want controllers connected to GenStudio. The earlier direct
+GenStudio-to-controller connection was a prior design assumption, not a confirmed
+answer to this addition; the diagram leaves that connection unspecified. Final GenStudio-to-location routing remains
+open until the owner chooses the intended endpoint. Do not implement a new gateway,
+direct-node fanout or controller link by guessing. Model import, local roles, telemetry
+and the deployment-independent IP/token contract can proceed independently.
+
+| Mode | Default behavior | Editable connection setup |
+| --- | --- | --- |
+| Standalone (initial default) | Local Hub schedules local studios; external listener off | Can later become a controller or join one |
+| Controller | Manages this device and explicitly enrolled workers | Site identity, worker enrollment and private listener; GenStudio endpoint pending |
+| Worker (existing Hub agent role) | Executes work accepted from its selected controller | Parent controller address and enrollment |
+
+Preserve the current agent rule: it does not accept customer-style queue submissions.
+In joined-worker mode, native creation submits through its parent controller. Already
+accepted work survives brief disconnection; new submissions show the connection problem.
+An owner may return an idle device to Standalone through the normal safe mode change.
+Do not create a second global scheduler or billing/account system: GenStudio retains
+global customer jobs, pricing, credits, assets and cross-location routing.
+
+### Locations, nodes and operational data
+
+A location groups explicitly joined node machines. Preserve stable location/site and
+physical node identities independently of editable display names and IP addresses.
+One node has one active location membership at a time; Standalone remains usable
+without a remote location. The location grouping and Controller/Agent/Standalone
+roles must survive app restart and be visible in native management and authenticated
+API responses. Moving a node between locations uses the existing safe role/enrollment
+flow and reconciles accepted jobs before membership changes take effect.
+
+Preserve the current Hub's operational information, mapped to the packaged studios:
+
+| View | Required information |
+| --- | --- |
+| Location | Member nodes, online/offline/stale status, roles, capabilities and aggregate work |
+| Node | Stable identity, location, app/runtime versions, hardware, memory, storage policy/usage, model readiness and last report time |
+| Generation | Studio, exact model/variant, location/node attribution, job/item/attempt IDs, current phase/progress when available, timings, result/delivery state and actionable failure reason |
+| History/stats | Completed and failed requested items separately from execution attempts/retries, comparable duration/throughput and observation window |
+
+Reuse existing Hub APIs and statistics definitions; do not create a second analytics
+pipeline. Count a physical machine once even if it hosts multiple studios. Include
+freshness and explicit unsupported/unknown values; unavailable metrics are not zero.
+Lost reports must not erase history or turn a model-file failure into healthy readiness.
+Keep generation detail behind the existing authorized access, with no secrets in
+telemetry. Final transport routing follows the pending location decision above.
+
+## 5. Bounded catalog: ten initial model choices
+
+The first seven are owner-selected models. The three Whisper choices are recommended
+editable defaults drawn from the existing registry; they are not an additional engine family.
+
+| Studio | Initial model IDs | Qualification rule |
+| --- | --- | --- |
+| Image | AITRADER/FLUX2-klein-4B-mlx-4bit | Start with the current 1K text-to-image contract; four steps and guidance 1.0 are editable within qualified ranges |
+| Voice / Qwen | mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit; mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit | Reference-audio/transcript cloning; independent receipt for each model |
+| Voice / VoxCPM2 | mlx-community/VoxCPM2-4bit; mlx-community/VoxCPM2-8bit; mlx-community/VoxCPM2-bf16 | Each precision variant gets its own memory, quality and runtime receipt |
+| Voice / OmniVoice | mlx-community/OmniVoice-bfloat16 | Full-weight variant only; qualify every exposed generation mode |
+| Subtitle / recommended | mlx-community/whisper-base-mlx; mlx-community/whisper-small-mlx; mlx-community/whisper-large-v3-turbo | Base=compact drafts, Small=balanced drafts, Turbo=default; models and companion tokenizers pinned |
+
+Exact known revisions and evidence limits are in the model inventory. ST-01 captures
+the remaining five revisions and processor companions from official metadata before
+import. A moving main reference is never an installed-model identity.
+
+Do not inherit the complete upstream catalog. Do not expose CustomVoice, VoiceDesign,
+additional Omni/Vox precisions or image families merely because their code is present.
+Do not delete existing personal model stock (including Khmer TTS) or its records.
+No additional model downloads or download-status monitoring is authorized by this
+planning task.
+
+Historical RAM evidence is not a universal guarantee. Existing Qwen Base audits exclude
+8 GB. Vox tiers need their own packaged measurements; full precision is not automatically
+safe or practical on a 16 GB device. FLUX has fleet 8 GB operation evidence but its
+referenced formal 1K audit was on 16 GB; repeat the intended 8 GB case on the packaged app.
+Publish eligibility from exact model, runtime, workload and hardware receipts.
+A smaller machine may install the app without being eligible for every catalog model.
+
+## 6. App release and model package flow
+
+~~~mermaid
 flowchart LR
-  U[Native creative app] --> L[Local model and job management]
-  L --> I[Image engine]
-  L --> A[Audio workspace / voice runtime]
-  L --> T[Transcription workspace / STT runtime]
-  L --> C[Chat engine]
-  L --> M[Music engine]
-  L --> V[Video engine]
-  E[Optional Studio Hub / GenStudio] -. authenticated control .-> L
-  L --> D[External settings, models and outputs]
-```
+    A[Pinned source and dependency inputs] --> B[Build once on build Mac]
+    B --> C[Immutable app with runtime hashes]
+    M[Exact model revisions and all companions] --> P[Validated model packages]
+    C --> K[Offline install kit: app plus selected packages]
+    P --> K
+    K --> N[New device imports, verifies and opens app]
+    N --> Q[Only ready and eligible models can receive jobs]
+~~~
 
-The owner now requires a redesigned native SwiftUI/AppKit application instead of the legacy embedded workspaces. Reuse the tested Python APIs and workers behind new independent creation views and centralized management. Reuse Hub scheduling components when needed for local capacity coordination, without requiring a remote Hub or GenStudio connection. Separate environments prevent incompatible dependency sets from being forced into one Python environment. Reuse existing resource limits; separate processes do not create additional physical GPU capacity.
+The app contains executable code, runtime libraries and native tools. Model packages
+contain complete weight shards, indexes, configurations, tokenizers and required
+companions. Keep them separate from the app so replacing a release does not recopy or
+delete a large model library. An SSD kit can carry both, giving a new node a complete
+offline setup without Git or node-side dependency installation.
 
-The owner currently has no paid Apple Developer Program membership. Continue local development and internal testing without making membership a build prerequisite. Xcode and local Mac development are available without paid enrollment; Developer ID and notarization require membership. A transferred, unnotarized internal build may need the normal per-app Open Anyway approval in macOS Privacy & Security, subject to machine policy. Verify this on a test Mac; do not disable Gatekeeper globally or claim frictionless fleet distribution. Paid membership and notarization remain a later distribution decision. [Apple membership comparison](https://developer.apple.com/support/compare-memberships/) · [Apple app-opening guidance](https://support.apple.com/en-ca/102445).
+### Two equivalent model installation paths
 
-Proposed bundle layout:
+1. **Download in the app:** select a supported model and its configured source. Support
+   GitHub-hosted release assets/direct model files as well as the original model host
+   (currently Hugging Face for this catalog). Download the complete pinned package,
+   including companion assets, then verify it before exposing Ready. A source is
+   editable; the downloaded bytes must still match the selected model manifest.
+2. **Copy a folder:** copy/paste a complete model folder into the selected model library,
+   or choose Import Folder for a folder on an SSD. Rescan on opening Models and through
+   an explicit Refresh/Verify action. Recognize supported folder layouts, validate the
+   package and register it without redownloading files already present. Register a
+   complete folder already in the library in place; do not keep a second full copy.
+   Importing from outside the selected library stages/copies into it. To use an SSD
+   folder in place, select that SSD library root first; do not silently adopt an
+   arbitrary source folder as a second managed library.
 
-```text
-Studio Hub.app/Contents/
-  MacOS/StudioHub
-  Resources/
-    hub/                 # adopted tracked source and built UI
-    image/
-    voice/               # Audio + Transcription
-    chat/
-    music/
-    video/
-    runtimes/            # isolated relocatable runtimes
-    tools/               # required native executables, e.g. FFmpeg
-    release-manifest.json
-    licenses/
-```
+Both paths end at the same validation and readiness record. A copy still in progress
+stays Incomplete; show exact missing/invalid files and an explicit repair action. Never
+dispatch merely because a folder exists. After import, verify the final files again
+and publish readiness atomically. A hand-copied folder without a manifest can be matched
+to the app's supported catalog manifest; an unknown model requires explicit supported
+model registration, not guessing an architecture or executing downloaded code.
 
-The exact runtime packaging method is a feasibility result. First test a relocatable Python environment prepared from locked dependencies, including wheels built on the build machine for source-only packages such as pyopenjtalk. Do not copy an active conda environment as though it were portable. If relocation requires modifying signed executable files at first launch, reject that method for the final app and evaluate a frozen worker executable. Record only the successful method as the production path. [Conda relocation constraints](https://conda.github.io/conda-pack/), [PyInstaller platform constraints](https://pyinstaller.org/en/stable/usage.html).
+A model folder contains all required weight shards, indexes, configuration, tokenizer,
+processor, vocabulary and companion model data. Runtime dependencies such as Python,
+MLX and media tools stay in the tested app runtime. The manifest identifies the required
+engine/runtime; a mismatched app shows the required app release instead of installing
+arbitrary dependencies on a node. Portable folder export materializes required cache
+links so copying it to another Mac cannot leave references to the original Mac's cache.
 
-All executable code and libraries in the shipped bundle are immutable. Store settings, node identity, credentials, queues, outputs and logs in per-user application support locations. Let the owner choose the model library, including an external SSD. A missing volume must produce a clear unavailable state; never silently create a replacement cache or redownload the library elsewhere. Model import validates configuration, tokenizers, companion files, revisions and checksums as required by that model, not just one weights file.
+GitHub support does not assert that every current upstream weight is hosted there.
+Use actual complete published model assets or an owner-provided package source. Generic
+source ZIPs may omit actual Git LFS weights; reject pointer-only/incomplete downloads.
+GitHub currently limits each release asset to under 2 GiB, so a larger package needs
+multiple assets or another configured host. No weights are uploaded or redistributed
+by this planning task. Sources: [GitHub release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases),
+[Hugging Face revision and local-folder downloads](https://huggingface.co/docs/huggingface_hub/guides/download).
 
-Keep local engines on loopback and make local creation the primary path. Optional API, Studio Hub and GenStudio exposure may use the existing authenticated enrollment/network model, but it is not required for local jobs. Preserve authentication, idempotency, cancellation semantics, output verification, capacity accounting and owner-controlled model exposure. A packaged runtime must be freshly qualified; prior runtime/model audits are reference evidence, not automatic approval of a changed artifact.
+- Preserve exact source commits, dependency hash locks, wheel/source archives and final runtime manifests on the build side.
+- Retain a last-known-good app artifact and its matching model manifests. Do not depend on future availability of a package index to reinstall a node.
+- Import into a staging location, validate complete files/checksums, then atomically publish the installed model record.
+- Run a cheap required-file readability check before dispatch. A broken symlink, missing shard or absent processor means Not ready and no job submission.
+- A failed download/import cannot replace a working model. Resume partial downloads through the existing supported importer; do not duplicate caches.
+- Inference never resolves a new dependency, silently updates a model revision or downloads a missing companion.
+- App replacement occurs while idle and preserves external settings, tokens, models, outputs and job evidence. Rollback uses a preserved app artifact; no custom automatic updater is needed for the first pilot.
+- New-model support for a known engine is a validated catalog/model-package addition with qualification. A new architecture or dependency stack requires a new tested app release. No arbitrary code or pip install on nodes.
 
-Window close may leave the owned local worker running with a visible status/menu item. Explicit Quit must drain or clearly handle active jobs without silently replaying them. Login startup is optional and uses native macOS service management after the foreground workflow works; login/reboot behavior remains unqualified. The pilot requires a logged-in user; boot-before-login operation is separate scope. [Apple service management](https://developer.apple.com/documentation/servicemanagement/smappservice).
+## 7. Editable defaults
 
-## Reuse and required adaptations
+| Setting | First-release default | Scope and behavior |
+| --- | --- | --- |
+| Generated-output budget | 50 GB = 50,000,000,000 bytes | Per device, across Image/Voice/Subtitle together |
+| Generated-output age | 30 days from successful output finalization | Per device; size or age independently triggers cleanup |
+| Automatic cleanup | On | Per device; editable enable/limits with usage preview |
+| Start at login | On after first-run setup and normal macOS approval | Editable per device; show actual registered/approval state |
+| Start local services | With app startup | Editable enabled studios; load models on demand |
+| Model library | App's external Application Support library | User can select another folder or SSD; missing volume stays unavailable |
+| Output location | App-managed external output directory | Editable; moving it must retain index and ownership evidence |
+| Device mode | Standalone | Editable Standalone/Controller/Worker while safe |
+| External Hub listener | Off in Standalone | Explicit private-interface configuration when connecting |
+| Default models | FLUX for Image; Qwen0.6 Base if eligible; Turbo for Subtitle | Editable among installed, qualified and eligible choices; no silent fallback |
+| Generation parameters | Model-provided defaults | Editable supported fields; unsupported parameters are not invented |
+| Device/site labels, parent URL | Current local identity / no parent | Editable display labels; stable IDs are not silently rewritten |
 
-Source baselines are pinned in `research/source-checkouts.json`: Hub 2.21.3, Image 1.32.1, Voice 2.7.2. Adopt source into the new project's lifecycle at explicit commits. Record local changes so later upstream fixes can be selectively incorporated without linking production to the old working directories.
+All configurable fields live in the owning backend settings flow and are read by the
+native UI, not duplicated as Swift-only constants. Validation explains unsupported
+values and preserves the last valid setting. An authenticated owner controller may
+edit one device's settings; persist and acknowledge on that device before reporting
+success. Do not fan out a per-device change across the whole fleet without an explicit
+selection. Restore Defaults resets the selected settings section, not data or credentials.
 
-| Existing assumption | Standalone adaptation |
-|---|---|
-| `conda_env/bin/python`, Pinokio home and `pterm` process control | Bundle-relative interpreter and app-owned process lifecycle |
-| Settings, voice files and generated outputs beside source | Explicit writable state and model paths outside the signed bundle |
-| Sibling repository discovery | Explicit locations of bundled components; stable node identity outside bundle |
-| Git-based updater and commit inspection | Truthful packaged release identity with component commits and runtime artifact hashes |
-| Existing model qualification | Rerun relevant checks against the new runtime and record exact evidence |
-| Engine dependency trees | Keep necessary isolation; deduplicate only after proving compatibility |
+Editable defaults do not mean editable trust: file-integrity checks, authentication,
+active-job protection, verified completion, immutable revisions and safe path boundaries
+cannot be disabled by an ordinary preference.
 
-Graphify located Voice's updater/storage dependencies; current source confirmed the assumptions in `auto_update.py`, `settings.py`, `voices.py`, `generation.py`, `cache.py` and `main.py`. The graph covers Voice only, and some recorded locations are stale. A separate source-based Hub contract inventory accompanies this plan.
+## 8. Storage rules
 
-GenStudio generation endpoints may remain compatible while maintenance endpoints differ. Do not fake a `.git` checkout, report a packaged app as Git-managed, bypass exact-runtime checks, or route legacy nodes to an app updater. The first integration proof must establish whether the current controller accepts the packaged identity. If it needs a contract change outside this project, record the smallest additive change and its separate scope before implementation there. The current release validator fixes three upstream repository identities; a locally adapted standalone component cannot truthfully use its upstream commit as its complete runtime identity. Record the standalone implementation revision and artifact hash as well as upstream provenance. See the [source-linked Hub inventory](../research/hub-contract-inventory.md).
+Use one local Hub-owned output index and reclaimer. Reuse current worker deletion and
+receipt mechanisms; do not independently allocate 50 GB to each worker.
 
-The application's standalone packaging is separate from Hub's internal `standalone` role. A site connected to GenStudio needs the appropriate controller setup; other nodes join it as agents. Preserve these existing roles and enrollment flows rather than making every new machine a controller. The pilot's node/site assignment is selected before enrollment.
+1. Index finalized generated images/audio/text/subtitles and app-generated previews with
+   job ID, device ID, byte count, immutable generated_at, terminal state, safe relative
+   path, checksum and delivery/receipt state. Count physical output files once even when
+   UI and Hub both reference them.
+2. Delete eligible terminal outputs aged at least the configured days. If managed output
+   usage still reaches the configured byte budget, delete the oldest eligible groups
+   until usage is below the budget. A job's output group includes derivative files and
+   index updates; deleting it leaves an honest expired/deleted history row.
+3. Protect queued/running/cancelling/uncertain jobs, active readers, unfinished transfers
+   and results awaiting required verified receipt. Generated data needed for a pending
+   quality check is not terminal output. Reuse existing acknowledgement behavior.
+4. Models, runtime files, user voice-reference libraries, user originals, credentials,
+   job evidence and files exported to user-selected locations are not automatic-cleanup
+   candidates. Choosing a different app-managed output root keeps generated files indexed,
+   counted and reclaimable. Only an explicit exported copy outside the managed root
+   becomes user-owned; selecting a folder must not bypass cleanup. Temporary files
+   owned by an active job remain protected; abandoned
+   terminal job files are reconciled and reclaimed safely.
+5. Use generated_at, not filesystem mtime: copying a file or rebooting cannot reset its
+   age. Missing SSDs or permission errors never trigger replacement directories.
+6. Check space before admission; run cleanup at startup, after finalization/receipt or
+   settings changes, and periodically while the app runs. Suggested maintenance cadence
+   is five minutes, editable within validated bounds. This is a proposed default, not
+   inherited source behavior; admission checks remain authoritative between sweeps.
+7. The byte limit is a cleanup/admission threshold, not permission to erase protected
+   data. Active/protected outputs can temporarily prevent compliance. Show used,
+   eligible and protected bytes, pause new generation with OUTPUT_STORAGE_BLOCKED,
+   and explain the needed action. Do not claim an absolute disk ceiling during an
+   active unbounded job. Check real disk free space independently of this output quota.
+8. Preview reclaimable files/count/bytes when the owner lowers limits. Apply through the
+   existing authenticated settings action and display the result, not optimistic success.
 
-## Milestones and acceptance evidence
+This is generated-output housekeeping, not an archive service or a policy change to
+GenStudio's final customer asset retention.
 
-### 1. Prove a relocatable Voice runtime
+## 9. Startup, recovery and connections
 
-Deliver a disposable local bundle and `qualification/voice-runtime.md`, without changing any running node. Use Voice first because it includes the native dependency failure that motivated this project.
+On first setup: choose storage, choose mode, import models, set preferences and show
+startup approval state. Subsequent login starts the native app and owned Hub quietly
+in the menu bar, restoring settings. It must not require Terminal commands.
+Closing the window leaves the owned service running; explicit Quit drains or handles
+current work through the existing verified shutdown path. Repeated launch owns only
+one service set for one node-data directory.
 
-1. Inventory pinned Python and native requirements, dynamic libraries, external commands, model files, writable locations and redistribution licenses. Save `research/runtime-inventory.md` and `research/licenses.md`.
-2. Adopt tracked Voice source from the recorded commit into `components/voice`; exclude credentials, environments, caches and outputs. Record the source identity and adoption delta.
-3. Build an arm64 runtime from pinned inputs targeting Sonoma. Select macOS 14-compatible MLX/Metal wheels explicitly; audit every bundled Mach-O binary and its linked libraries. Produce `packaging/voice-runtime/` scripts and a dependency/hash manifest. Do not resolve packages opportunistically on a node.
-4. Adapt only the paths and process launch assumptions needed to run this worker from the bundle. Add focused tests for external writable paths and bundle-relative executable resolution; retain existing generation checks.
-5. Run the worker from two different paths, including one containing spaces, using a fresh account with no inherited development PATH, Pinokio, Homebrew or user Python packages. Verify the bundle remains unchanged after launch and a generated job.
-6. Import a complete Qwen 0.6B model package from the existing catalog at an exact recorded revision. Generate and validate audio with network unavailable after import. Run transcription with the existing Whisper implementation and record its exact model and revision. These are pilot models, not authorization to expose them commercially.
-7. Repeat on a clean physical Apple Silicon Sonoma machine without Xcode/Command Line Tools. Capture OS, hardware, memory, startup duration, job duration, peak memory, output checksums, imports and native dependency evidence. Repeat the same artifact on a newer OS.
+Automatic login startup is distinct from running before macOS login/FileVault unlock.
+First release targets a logged-in user, as the existing plan did. Boot-before-login
+service operation is separate scope and is not silently promised.
 
-Pass: successful audio and transcription, no node-side dependency installation/source builds, no development-path dependencies, no writes inside the bundle, no unexpected network dependency after complete model import, and evidence on Sonoma and a newer OS. Metal's normal runtime kernel compilation is not the prohibited dependency build.
+Reuse current SMAppService registration. Physical login, logout, reboot, missing-model
+SSD, crashed child, occupied port and upgrade/rollback tests are release checkpoints.
+Start-up recovery must reconcile the original job; never duplicate generation because
+a status response was lost. A model failure pauses that model and shows Repair/Recheck.
+Process health does not clear a model-file failure.
 
-Fail: identify the exact blocking package or behavior. Try one narrowly justified packaging correction. If Sonoma cannot support the selected engine stack without a major rewrite, bring back the measured choice: raise the OS floor or reduce the supported engine/model set. Do not build a universal compatibility framework.
+Connections provides:
 
-### 2. Add local Image and shared app management
+- Credential-free private connection URL and stable site/node identity; GenStudio endpoint selected at ST-10.TOPOLOGY.
+- Masked token status with explicit owner-only Reveal and Copy actions.
+- Scoped token rotation and clear instructions for reconnecting GenStudio.
+- Existing protected Hub-token storage (owner-only files or already-adopted secure
+  store); no secret in the app bundle, model manifest, URL, log or ordinary status.
+- Preserve existing separate Hub and fleet tokens. Select the GenStudio-facing
+  credential/scope at ST-10.TOPOLOGY; a dedicated GenStudio scope would be new work,
+  not an existing third token type. Rotation must not revoke unrelated scope or
+  discard accepted work.
+- Authenticated connection test reporting identity, capabilities and release type.
+- Truthful packaged app identity: standalone implementation revision, component
+  provenance and runtime artifact hashes. Never fake a Git checkout or managed Git
+  update support to pass a legacy contract.
 
-Adopt Image tracked source and needed local Hub scheduling components; build isolated runtimes and integrate the native Image workspace. Replace standalone-only discovery, lifecycle and data paths. Create a truthful release manifest and adapt runtime reporting. Preserve model exposure controls and physical capacity limits.
+The deployment-independent API and fixtures are required for this release. Concrete
+GenStudio endpoint integration awaits ST-10.TOPOLOGY before implementation. Any live
+enrollment, deployment, secret rotation or changes to a separate production repository
+require their established authorization. Planning never changes live credentials.
 
-Use the existing Image candidate `AITRADER/FLUX2-klein-4B-mlx-4bit`, revision `7fd24828501390b67a92c8b66d2fc5a707d0ba1a`, for the initial 1K text-to-image check. Requalify it on the packaged runtime; the existing README's qualification is not proof for this app. Test larger workloads only after this baseline passes.
+### Deployment-independent connection contract
 
-Pass evidence: authenticated health/catalog discovery; fresh test-node enrollment; exact runtime/model identities; one image, one speech and one transcription request through the GenStudio integration boundary; status and output retrieval; invalid authentication rejection; cancellation and duplicate-request handling; unavailable model/runtime behavior; appropriate shared capacity reporting. Run against a local test harness first. A live GenStudio/node pilot needs explicit enrollment/deployment authority and test credentials provided through an appropriate secure mechanism.
+The connection setup consists of a reachable address/IP, port and token. Preserve
+authenticated HTTP API behavior and the configured secure/private transport; a simple
+setup must not require copying databases, shared folders, a GenStudio browser session,
+or a hard-coded cloud domain. Tokens travel in the existing authentication header,
+never in the address. Do not require an additional account-linking service to connect.
 
-Exercise a mixed-fleet fixture containing a legacy Pinokio node and a packaged node. Generation routing may see both; maintenance targets only the correct installation type. If current GenStudio or Hub cannot represent this safely, report that blocker before changing another repository.
+Treat GenStudio as an API client regardless of whether its future deployment is a
+hosted app or a standalone app. Preserve current job IDs, idempotent submission/status,
+cancellation, result download/verified acknowledgement, capability and status contracts.
+Report protocol capabilities and unsupported operations explicitly, reusing the current
+contract versioning instead of inventing a generic compatibility framework. A changed
+IP updates the connection address without silently changing the location/node identity.
 
-### 3. Redesign the native workspaces and central model setup (current)
+The future standalone GenStudio application itself is deferred. This release provides
+the documented API boundary and fixture tests that allow that later client to connect.
 
-Replace the legacy embedded UI with independent native Audio and Transcription workspaces. Build one app sidebar with Overview, the six function pages, central Models and Jobs, app Settings and optional Connections. Preserve per-workspace drafts/selections and completed outputs. Keep installation and global settings out of creation workspaces. Support model download, location selection and readable failure logs. Preserve existing task semantics. The current native proof records Audio job `c56f0f41d938` completed and saved; Whisper transcription verification is still underway. Test Quit, startup failure, occupied ports, duplicate launch, process crashes, disk full, missing SSD, interrupted model import and restart recovery. Never stop an unrelated Pinokio service to claim a port.
+## 10. Build order and completion
 
-Pass: a fresh user can copy the app, open it, select/import models and complete a local job without a terminal. Moving/replacing the app retains node state and model location. A failed startup remains diagnosable.
+Build foundation first (ST-01 runtime/model contract; ST-02 Hub). Prove packaged
+FLUX end-to-end (ST-03). Then progress Qwen Base, the remaining bounded Voice models
+and the independent Subtitle engine against the same interfaces (ST-04/05/06).
+Finish shared storage, native controls and automatic startup (ST-07/08/09), then
+controller/GenStudio integration and whole-app qualification (ST-10/11). Native pilot
+work can start after FLUX/storage; token/connection fixtures can start after Hub and
+software lifecycle. Physical login/reboot proof belongs to ST-11 and does not block
+independent connection implementation.
 
-### 4. Add Chat, Music and Video and extend packaged Hub routing
+Do not wait until the end to test packaging: every engine task must run from a relocated
+app on a clean state directory and produce real verified output. The first integrated
+pilot is Hub + FLUX + Qwen0.6 Base + Whisper Turbo, with protected storage and startup.
+That checkpoint is useful but is NOT completion of the full requested ten-model scope.
 
-Use the source-linked inventory in `research/function-scope-inventory.md` to adopt tracked sources at exact revisions. Current Hub production routing tracks Image and Voice only; six visible functions are not proof of six working fleet operations. Extend the adopted Hub additively with each packaged engine, preserving registration, admission, shared memory limits, authentication, leases and release identity. Any required changes to a separate GenStudio repository need their own scoped integration work.
+Completion requires all selected variants to have explicit support or measured exclusion
+per hardware tier, successful clean-machine install with no dependency downloads, real
+output/cancellation/recovery checks, 50 GB/30-day policy tests at reduced fixture limits,
+startup/rollback proof and authenticated connection fixtures. A physical hardware or
+distribution blocker is recorded plainly; no task may mark unrun checks as passed.
 
-Implement text Chat first using its existing MLX path, then Music using its current Torch/MPS path, then a measured Video candidate. Prefer MLX where implemented and qualified; do not promise an MLX-only app or rewrite Music engines to enforce that preference. Video here means generation from Video Studio; separate Render Studio adoption is not implied. Models and runtime environments stay isolated as required, and are loaded only when needed.
+## 11. References and current limits
 
-For each function require a real local input/output job from the relocated bundle, complete imported model assets, cancellation, missing-model handling, memory release, safe shutdown and authenticated Hub contract tests. A navigation item alone is not an implemented function. Publish only measured supported model/hardware combinations. Video may require more memory or narrower output settings than Audio/Chat.
+### Old M1 devices and the oldest practical macOS
 
-### 5. Qualify optional controller integration, distribution and a controlled pilot
+Owner direction: support the original M1 family with Apple's MLX and keep useful
+generation working on the oldest feasible OS, without requiring the newest macOS.
 
-Measure bundle size and hardware requirements. Build a signed, notarized distribution artifact when signing access and submission authority are available. Sign all executable components appropriately and test the downloaded/quarantined artifact on clean machines; do not require globally disabling Gatekeeper. [Apple direct distribution](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
+The current engineering baseline is **Apple Silicon M1 or newer, macOS 14 Sonoma**.
+Apple's [MLX installation requirements](https://ml-explore.github.io/mlx/build/html/install.html)
+currently specify macOS 14.0 or later. The existing app targets arm64/macOS 14.0,
+and its runtime pins the macOS-14 variants of MLX and mlx-metal. This supports 14.0
+as the first qualification candidate; it does not prove every selected model runs on
+14.0. Record the exact minimum working point release and any model-specific exception
+from physical tests. M1 chip support, OS support and sufficient RAM are separate checks.
 
-Start with manual app replacement while idle; retain the prior app artifact and avoid irreversible state migrations so rollback remains testable. No custom automatic updater is needed for the first pilot. Do not advertise `managed_exact_commit` support before the full behavior is implemented and verified. If GenStudio's existing admission flow requires that capability, manual update support alone is insufficient for fleet adoption: complete the packaged release integration first or report the blocked pilot. Later fleet-managed updates must use the maintenance contract with an explicit packaged release implementation.
+| Device condition | Planned behavior |
+| --- | --- |
+| M1 on a qualified Sonoma 14.x version | Run supported, RAM-eligible models without requesting the latest macOS |
+| M1 on a newer qualified macOS | Use the same compatible app/runtime where verified; newer OS alone does not select a different model |
+| M1 on macOS 11/12/13 | Below the documented MLX floor and current app target; do not promise this app or MLX generation before an OS upgrade |
+| A particular model needs a newer OS/Metal feature or more RAM | Explain the exact requirement and leave other qualified models available on the current supported OS |
 
-Pilot on new nodes only. Require completed generation/transcription/image tests, restart recovery, signed artifact launch, external model storage behavior, authenticated GenStudio operation, and a successful app replacement/rollback preserving identity and data. Observe a full agreed workload cycle before recommending adoption. No old-node conversion is part of acceptance.
+Implementation rules:
 
-## Owner input needed later
+- Preserve the macOS 14 baseline across the shell, Hub, workers, libraries and Metal
+  shader paths. Audit actual binaries and execute inference on physical M1 hardware;
+  a deployment flag, wheel filename or successful launch on the build Mac is insufficient.
+- Reuse locked compatible dependencies. Do not raise the minimum because the build Mac
+  uses a newer SDK or because a newer package defaults to a newer-OS artifact. Gate
+  optional newer UI/engine features appropriately instead of breaking existing workflows.
+- Model readiness records the exact app/runtime/model, OS version, chip and memory
+  eligibility. An unsupported combination stays unavailable before job submission.
+  Do not silently substitute precision, model or a CPU backend to claim compatibility.
+- Keep the last qualified app and complete model packages available for older supported
+  nodes. Check OS requirements before offering/installing an app replacement; leave a
+  working release installed if its replacement is incompatible. Do not add a custom
+  updater or a fleet-wide forced upgrade. Previously qualified workflows remain usable
+  while a device's OS upgrade is deferred.
+- Bundled runtime libraries cannot supply missing operating-system Metal/driver features.
+  Supporting pre-Sonoma through a separate legacy engine would need new evidence and
+  scope; it is not promised by this plan or by the word modular.
 
-The owner approved proceeding with the native app and six functional sections. Continue local implementation with one app, Apple Silicon, Sonoma qualification target, separate model storage, menu-bar operation and optional login startup. Deliver native Audio and Transcription with central management first; Image, Chat, Music and Video remain pending engine integration and qualification. API exposure and authenticated external control follow as secondary capabilities. Hardware qualification and external enrollment remain separate acceptance conditions.
+### Working around an OS update
 
-- **Before clean-machine qualification:** identify one available Sonoma Apple Silicon test Mac and a newer-OS test Mac; confirm their memory. Do not downgrade or erase a machine to manufacture a test environment without authorization.
-- **Before real fleet integration:** choose a disposable new pilot node/site and authorize enrollment/testing. A mixed-fleet compatibility fixture is read-only/local preparation.
-- **Before distribution:** select the final app name/bundle identifier and signing identity; authorize any notarization submission. No secrets belong in this plan.
-- **Before adopting the app:** review the qualification evidence and decide whether the supported models/hardware meet the fleet's needs.
+Generation may continue while an OS update is merely downloading and the existing OS
+remains operational, subject to normal resource/space checks. It cannot continue through
+the installation restart. The app does not install, schedule or suppress macOS updates.
+Before an owner-controlled restart, reuse the existing pause/drain behavior: stop new
+admission on that node and let active work finish when possible. Keep other eligible
+location nodes available; do not claim a mid-generation transfer or checkpoint resume
+unless that engine already implements it.
 
-## Completion definition for this planning task
+After login, use the existing startup/recovery flow, preserve IDs/settings/models and
+reconcile interrupted attempts before accepting new work. Recheck OS/runtime/model
+compatibility and readiness without redownloading intact model packages. Unexpected
+restart must not invent successful results or duplicate jobs after lost responses.
+Physical OS-upgrade/reboot and last-compatible-app tests belong to ST-11.
 
-The separate folder, source evidence, architectural boundaries, staged implementation work and concrete pass/fail checks exist and agree with the owner's direction. The local Voice runtime and native shell are in progress; Audio job `c56f0f41d938` completed and was saved, while Whisper transcription verification remains underway. This does not establish support for every model, the remaining Image/Chat/Music/Video engines, physical Sonoma compatibility, signing, login-registration behavior or optional controller integration. The owner authorized milestone 1 implementation on 2026-09-10 and subsequently approved the native shell and six-function scope. Sonoma and external readiness claims remain gated by physical qualification and separately scoped integration evidence.
+- [0.3.0 measured proof](../qualification/native-redesign.md).
+- [Model and capability evidence](../research/rescope-model-inventory-2026-09-15.md).
+- [Current Hub and storage contracts](../research/rescope-hub-storage-2026-09-15.md).
+- [Runtime inventory](../research/rescope-packaging-2026-09-15.md).
+- [M1/macOS evidence and remaining physical checks](../research/rescope-platform-floor-2026-09-15.md).
+- [Apple login service API](https://developer.apple.com/documentation/servicemanagement/smappservice).
+- [Apple Developer ID distribution](https://developer.apple.com/developer-id/).
+- [MLX installation/platform documentation](https://ml-explore.github.io/mlx/build/html/install.html).
+
+macOS 14 remains a qualification target, not a proven fleet floor. The existing native
+build uses the available macOS 26.5 SDK; every bundled native binary must meet the chosen
+deployment target. Developer ID/notarization and physical test Macs are later concrete
+distribution/qualification conditions. Existing paid-membership availability is not a
+reason to stop local work. No hosted GitHub compute is part of this workflow.

@@ -9,3 +9,5 @@ __pycache__/
 
 # Stocked model assets; keep external to source and app bundles.
 /model-library/
+
+.worktrees/

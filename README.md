@@ -2,9 +2,39 @@
 
 Independent native macOS application project for local creation on Apple Silicon. Existing Pinokio installations and their maintenance flow remain untouched.
 
-**Version 0.3.0 status:** the native SwiftUI/AppKit redesign is implemented; the built standalone preview and final artifact verification are recorded in [redesign evidence](qualification/native-redesign.md). It presents six functions—Audio, Transcription, Image, Music, Video and Chat—with separate Audio and Transcription workspaces and shared Overview, Models, Jobs and Settings management. Connections to an API, Studio Hub or GenStudio are optional; local asset creation is the primary flow.
+## Current direction — 2026-09-15
 
-Audio currently uses the adopted Voice runtime and Qwen speech model. Native job `c56f0f41d938` completed and was saved. The separate Transcription workspace imported that WAV, returned the expected text and exported SRT subtitles. Image, Chat, Music and Video engine integration, plus optional controller integration, remain pending. A navigation item is not treated as an implemented engine.
+The focused release is **Hub + Image Studio + Voice Studio + Subtitle Studio**.
+Its models are FLUX.2 Klein 4B MLX 4-bit; Qwen3 TTS Base 0.6B/1.7B;
+VoxCPM2 4-bit/8-bit/full; OmniVoice full; and three Whisper choices.
+Chat, Music and Video are deferred.
+
+All operating defaults are editable. Generated-output cleanup defaults to **50 GB
+total per device across the studios and 30 days after generation**, whichever
+condition is reached first. Automatic login startup and optional protected Hub-token
+connection to GenStudio are part of the target. The app bundles runtimes; complete
+model packages can accompany it in an offline install kit.
+
+Planned model setup supports configured GitHub/original-host downloads and copy/paste
+of complete model folders, with the same companion-file validation. Address/IP, port
+and token connections retain an API boundary suitable for a future standalone GenStudio.
+
+Compatibility targets original M1 and newer with macOS 14 Sonoma as the oldest current
+MLX baseline, rather than requiring the newest macOS. Exact point-release/model support
+still needs physical qualification. See the design's compatibility and OS-update rules.
+
+Read the [design and flows](docs/standalone-plan.md), [build order](docs/implementation-plan.md)
+and [agent task board](docs/tasks/BOARD.md). These are planned changes.
+
+## Existing 0.3.0 preview
+
+The native SwiftUI/AppKit preview packages Voice only. Historical
+[redesign evidence](qualification/native-redesign.md) proves Qwen 0.6B **CustomVoice**
+generation and Whisper Turbo transcription/SRT export. It does not prove the requested
+Qwen Base models. Hub and Image engines are not bundled. The preview's six navigation
+destinations reflect the older plan, not six implemented engines.
+
+The following instructions describe that existing preview, not the future narrowed release.
 
 ## Native build
 
