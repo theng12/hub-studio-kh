@@ -507,6 +507,12 @@ class StagingTests(unittest.TestCase):
                 'components/voice/CHANGELOG.md': '# Upstream',
                 'research/voice-adoption.json': json.dumps({'commit': 'b' * 40, 'version': '2.7.2'}),
                 'packaging/voice_worker.py': '# worker',
+                'packaging/hub_worker.py': '# hub worker',
+                'components/hub/standalone.py': '# packaged hub',
+                'components/hub/backend/migrations/001.sql': 'SELECT 1;',
+                'components/model_packages.py': '# package helper',
+                'model-manifests/fixture.json': '{}',
+                'research/hub-adoption.json': json.dumps({'source': {'commit': 'c' * 40, 'version': '2.22.0'}}),
             }
             for name, content in files.items():
                 path = repo / name
@@ -531,7 +537,10 @@ class StagingTests(unittest.TestCase):
             contents = artifact / 'Contents'
             self.assertEqual((contents / 'MacOS/StudioHub').read_bytes(), b'native-shell')
             self.assertTrue(os.access(contents / 'MacOS/StudioHub', os.X_OK))
-            self.assertTrue((contents / 'MacOS/StudioHubVoice').is_file())
+            self.assertTrue((contents / 'MacOS/StudioHubService').is_file())
+            self.assertFalse((contents / 'MacOS/StudioHubVoice').exists())
+            self.assertTrue((contents / 'Resources/components/hub/standalone.py').is_file())
+            self.assertTrue((contents / 'Resources/components/hub/backend/migrations/001.sql').is_file())
             with (contents / 'Info.plist').open('rb') as stream:
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHub')

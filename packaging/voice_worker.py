@@ -5,7 +5,9 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import signal
+import stat
 import sys
 import tempfile
 import threading
@@ -15,7 +17,22 @@ PARENT_POLL_SECONDS = 0.1
 PARENT_KILL_GRACE_SECONDS = 2.0
 
 
-def write_ready_file(path: Path, url: str, version: str) -> None:
+def read_private_token(path: Path, data: Path) -> str:
+    if path.is_symlink() or not path.resolve().is_relative_to(data.resolve()):
+        raise ValueError('Hub token must be a private file inside this app data directory')
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'r') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or info.st_size > 257):
+            raise ValueError('Hub token file must be owner-only')
+        token = stream.read(257).strip()
+        if not re.fullmatch(r'[A-Za-z0-9_-]{24,256}', token):
+            raise ValueError('Invalid Hub token')
+        return token
+
+
+def write_ready_file(path: Path, url: str, version: str, *, token: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f'.{path.name}.', suffix='.tmp')
@@ -23,7 +40,10 @@ def write_ready_file(path: Path, url: str, version: str) -> None:
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, 'w') as stream:
-            json.dump({'url': url, 'pid': os.getpid(), 'version': version}, stream)
+            value = {'url': url, 'pid': os.getpid(), 'version': version}
+            if token is not None:
+                value['token'] = token
+            json.dump(value, stream)
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())
@@ -66,6 +86,7 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--parent-pid', type=int)
+    parser.add_argument('--hub-token-file', type=Path, help='Require the owning Hub token, including loopback requests')
     parser.add_argument('--offline', action='store_true', help='Use imported Hugging Face models without downloads')
     parser.add_argument('--check', action='store_true', help='Validate paths without starting services')
     args = parser.parse_args()
@@ -135,6 +156,13 @@ def main() -> None:
     })
     if args.offline:
         os.environ.update({'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1'})
+    if args.hub_token_file is not None:
+        try:
+            token = read_private_token(args.hub_token_file, data)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        os.environ.update({'STUDIOHUB_FLEET_TOKEN': token, 'STUDIOHUB_REQUIRE_AUTH': '1',
+                           'STUDIOHUB_OUTPUT_POLICY_OWNER': 'hub'})
     sys.dont_write_bytecode = True
     if args.check:
         print(json.dumps({'source_dir': str(source), 'data_dir': str(data),
@@ -143,13 +171,19 @@ def main() -> None:
         return
     sys.path.insert(0, str(source))
     os.chdir(data)
+    run_server('backend.main:app', args.port, ready_file, str(release.get('version', '')),
+               args.parent_pid, worker_pgid)
+
+
+def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False, shutdown_callback=None):
+    """Shared owned-process lifecycle for the private Voice worker and local Hub."""
     monitor_stop = threading.Event()
     parent_lost = threading.Event()
     readiness_lock = threading.Lock()
     parent_monitor = None
     if worker_pgid is not None:
         parent_monitor = threading.Thread(target=monitor_parent,
-            args=(args.parent_pid, worker_pgid, ready_file, monitor_stop,
+            args=(parent_pid, worker_pgid, ready_file, monitor_stop,
                   parent_lost, readiness_lock), daemon=True,
             name='studiohub-parent-monitor')
         parent_monitor.start()
@@ -157,8 +191,8 @@ def main() -> None:
         if ready_file is not None:
             ready_file.unlink(missing_ok=True)
         import uvicorn
-        config = uvicorn.Config(
-            'backend.main:app', host='127.0.0.1', port=args.port, log_level='info')
+        options = {'factory': True} if factory else {}
+        config = uvicorn.Config(app, host='127.0.0.1', port=port, log_level='info', **options)
         # Bind once and keep the socket, so reported ephemeral ports are exact and
         # another process cannot take the port between selection and server startup.
         with config.bind_socket() as sock:
@@ -173,12 +207,16 @@ def main() -> None:
                         if (ready_file is not None and not self.should_exit
                                 and not parent_lost.is_set()):
                             write_ready_file(ready_file,
-                                f'http://127.0.0.1:{port}', str(release.get('version', '')))
+                                f'http://127.0.0.1:{port}', version, token=token)
 
                 async def shutdown(self, sockets=None):
                     try:
                         await super().shutdown(sockets=sockets)
                     finally:
+                        # Uvicorn re-raises SIGTERM after shutdown, before outer
+                        # Python finally blocks. Dispose owned children here.
+                        if shutdown_callback is not None:
+                            shutdown_callback()
                         with readiness_lock:
                             if ready_file is not None:
                                 ready_file.unlink(missing_ok=True)

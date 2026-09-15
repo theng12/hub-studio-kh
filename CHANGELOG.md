@@ -1,12 +1,20 @@
 # Changelog
 
-## Unreleased — ST-01 foundation
+## 0.4.0 — 2026-09-15 · bundled Hub development proof
+
+- Route the native workspace through the bundled authenticated Hub and its private Voice child, reusing the existing Hub scheduler and durable job identities.
+- Add external model-package management, editable device output-policy defaults, packaged release identity and independent Subtitle registry support.
+- Stop owned workers on app/Hub exit and surface private-worker failure through the Hub owner. Keep model files and device state outside the app.
+- Preserve the historical 0.3.0 preview artifact. This development build is not a complete narrowed release: FLUX, Qwen Base controls, independent Subtitle process, cleanup enforcement and fleet integration remain later phases.
+- Model-file verification and local process tests do not qualify model inference, original M1/Sonoma, login startup, signing or distribution.
+
+### Included ST-01 foundation
 
 - Pin ten scoped model packages and companion assets to immutable revisions and file hashes.
 - Add verified HTTPS download, resumable staging, offline folder import and registration in place; preserve a working revision on failed replacement.
 - Record separate Image/Voice runtime inputs, native binary floors and redistribution notices, with Image relocation and physical-device qualification still pending.
 - Preserve GenStudio-to-location-controller-to-nodes routing and document the next Hub integration handoff.
-- Keep the existing 0.3.0 preview artifact unchanged; these foundations are not a new packaged app release.
+- Keep the existing 0.3.0 preview artifact unchanged; the foundation checkpoint itself did not replace that app.
 
 ## 0.3.0 — 2026-09-11
 

@@ -22,13 +22,17 @@ do {
     fatalError("missing selected SSD was accepted")
 } catch {}
 let base = URL(string: "http://127.0.0.1:45678")!
-let ready = Data("{\"url\":\"http://127.0.0.1:45678\",\"pid\":1234,\"version\":\"0.2.0\"}".utf8)
+let ready = Data("{\"url\":\"http://127.0.0.1:45678\",\"pid\":1234,\"version\":\"0.2.0\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}".utf8)
 let decoded = try WorkerReady.decode(ready, expectedPID: 1234)
 require(decoded.url == base, "ready URL")
 for bad in ["https://example.com", "http://localhost:45678", "http://127.0.0.1:45678@evil.test", "http://127.0.0.1:45678/path"] {
-    do { _ = try WorkerReady.decode(Data("{\"url\":\"\(bad)\",\"pid\":1234,\"version\":\"0.2.0\"}".utf8), expectedPID: 1234); fatalError("untrusted ready URL") } catch {}
+    do { _ = try WorkerReady.decode(Data("{\"url\":\"\(bad)\",\"pid\":1234,\"version\":\"0.2.0\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}".utf8), expectedPID: 1234); fatalError("untrusted ready URL") } catch {}
 }
 do { _ = try WorkerReady.decode(ready, expectedPID: 999); fatalError("wrong process readiness accepted") } catch {}
+for token in ["", "short", String(repeating: "a", count: 257), String(repeating: "é", count: 32), String(repeating: "a", count: 31) + "/"] {
+    let payload = try JSONSerialization.data(withJSONObject: ["url": base.absoluteString, "pid": 1234, "version": "0.4.0", "token": token])
+    do { _ = try WorkerReady.decode(payload, expectedPID: 1234); fatalError("invalid Hub credential accepted") } catch {}
+}
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 require(StudioPage.management == [.models, .jobs, .connections, .settings], "central management navigation")

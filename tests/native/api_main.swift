@@ -8,8 +8,16 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
 final class FixtureProtocol: URLProtocol {
     static let lock = NSLock()
     static var lastGenerateBody: [String: Any]?
+    static var lastGeneratePath = ""
+    static var lastGenerateToken = ""
+    static var generateBodies: [[String: Any]] = []
+    static var dropNextGeneration = false
+    static var lastDownloadPath = ""
+    static var lastDownloadToken = ""
+    static var hubDownloadCancelled = false
     static var lastTranscriptionBody = ""
     static var transcriptionPorts: [Int] = []
+    static var uncertainTranscription = false
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
     static let releaseGeneration = DispatchSemaphore(value: 0)
@@ -17,14 +25,14 @@ final class FixtureProtocol: URLProtocol {
     static var catalogPorts: [Int] = []
     static let catalogStarted = DispatchSemaphore(value: 0)
     static let releaseCatalog = DispatchSemaphore(value: 0)
-    static var heldTokenSavePort: Int?
-    static let tokenSaveStarted = DispatchSemaphore(value: 0)
-    static let releaseTokenSave = DispatchSemaphore(value: 0)
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     static func generatedBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastGenerateBody }
+    static func generatedBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return generateBodies }
+    static func dropNextSubmit() { lock.lock(); defer { lock.unlock() }; dropNextGeneration = true }
+    static func setUncertainTranscription(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainTranscription = value }
     static func transcriptionBody() -> String { lock.lock(); defer { lock.unlock() }; return lastTranscriptionBody }
     static func recordedTranscriptionPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return transcriptionPorts }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
@@ -32,8 +40,6 @@ final class FixtureProtocol: URLProtocol {
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
     static func catalogCount(on port: Int) -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.filter { $0 == port }.count }
-    static func holdTokenSave(on port: Int) { lock.lock(); defer { lock.unlock() }; heldTokenSavePort = port }
-    static func waitForTokenSaveStart() -> Bool { tokenSaveStarted.wait(timeout: .now() + 2) == .success }
 
     private func requestBody() -> Data {
         if let body = request.httpBody { return body }
@@ -51,7 +57,7 @@ final class FixtureProtocol: URLProtocol {
     override func startLoading() {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
-        if method == "GET", path == "/api/catalog" {
+        if method == "GET", path == "/api/hub/catalog" {
             let port = request.url?.port ?? -1
             Self.lock.lock()
             Self.catalogPorts.append(port)
@@ -66,36 +72,38 @@ final class FixtureProtocol: URLProtocol {
                 return
             }
         }
-        if method == "POST", path == "/api/settings" {
-            Self.lock.lock()
-            let shouldHold = Self.heldTokenSavePort == request.url?.port
-            Self.lock.unlock()
-            if shouldHold {
-                Self.tokenSaveStarted.signal()
-                DispatchQueue.global().async { [self] in
-                    _ = Self.releaseTokenSave.wait(timeout: .now() + 5)
-                    finish((200, "application/json", Self.savedTokenFixture))
-                }
-                return
-            }
-        }
         let result: (Int, String, Data)
         switch (method, path) {
-        case ("GET", "/api/catalog"):
+        case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
-        case ("GET", "/api/transcribe/availability"):
+        case ("GET", "/api/hub/model-packages"):
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+        case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"whisper","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
-        case ("GET", "/api/generate/availability"):
+        case ("GET", "/studio/voice/api/generate/availability"):
             result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}]}"#.utf8))
-        case ("GET", "/api/settings"):
+        case ("GET", "/studio/voice/api/settings"):
             result = (200, "application/json", Data(#"{"hf_token_set":false,"hf_token_masked":""}"#.utf8))
-        case ("POST", "/api/settings"):
-            result = (200, "application/json", Self.savedTokenFixture)
-        case ("GET", "/api/generate/jobs"):
-            result = (200, "application/json", Data(#"{"jobs":[{"id":"old-job","state":"done","progress":1.0,"params":{"text":"Earlier","repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"},"output_url":"/api/generate/jobs/old-job/audio","created_at":10}]}"#.utf8))
-        case ("GET", "/api/downloads"):
+        case ("POST", "/api/hub/model-packages/whisper-turbo/download"):
+            Self.lock.lock(); Self.lastDownloadPath = path
+            Self.lastDownloadToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"running"}"#.utf8))
+        case ("GET", "/api/hub/model-downloads/hub-download-1"):
+            Self.lock.lock(); let cancelled = Self.hubDownloadCancelled; Self.lock.unlock()
+            result = (200, "application/json", Data("{\"id\":\"hub-download-1\",\"package_id\":\"whisper-turbo\",\"state\":\"\(cancelled ? "cancelled" : "running")\"}".utf8))
+        case ("DELETE", "/api/hub/model-downloads/hub-download-1"):
+            Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
+        case ("GET", "/api/hub/jobs"):
+            result = (200, "application/json", Data(#"{"batches":[{"id":"old-job","modality":"voice"}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/old-job"):
+            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact"}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/new-job"):
+            result = (200, "application/json", Data(#"{"id":"new-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":20,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Hello locally","artifact_url":"/api/hub/jobs/new-job/items/0/artifact"}]}"#.utf8))
+        case ("GET", "/studio/voice/api/downloads"):
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
-        case ("POST", "/api/generate/txt2speech"):
+        case ("POST", "/api/hub/jobs"):
             Self.lock.lock(); let shouldHold = Self.holdGeneration; Self.lock.unlock()
             if shouldHold {
                 Self.generationStarted.signal()
@@ -103,19 +111,37 @@ final class FixtureProtocol: URLProtocol {
             }
             let body = requestBody()
             if let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-                Self.lock.lock(); Self.lastGenerateBody = object; Self.lock.unlock()
+                Self.lock.lock(); Self.lastGenerateBody = object; Self.lastGeneratePath = path
+                Self.lastGenerateToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+                Self.generateBodies.append(object)
+                let drop = Self.dropNextGeneration
+                Self.dropNextGeneration = false
+                Self.lock.unlock()
+                if drop {
+                    client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                    return
+                }
             }
-            result = (200, "application/json", Data(#"{"job":{"id":"new-job","state":"done","progress":1.0,"params":{"text":"Hello locally","repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","preset_speaker":"Ryan","language":"en"},"output_url":"/api/generate/jobs/new-job/audio","created_at":20}}"#.utf8))
-        case ("POST", "/api/transcribe"):
+            result = (200, "application/json", Data(#"{"batch_id":"new-job","items":1,"replayed":false}"#.utf8))
+        case ("POST", "/api/hub/transcription/jobs"):
             let body = requestBody()
             Self.lock.lock()
             Self.lastTranscriptionBody = String(decoding: body, as: UTF8.self)
             Self.transcriptionPorts.append(request.url?.port ?? -1)
             Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"text":"hello world","language":"en","duration":1.25,"model":"mlx-community/whisper-large-v3-turbo","srt":"1\n00:00:00,000 --> 00:00:01,250\nhello world\n","vtt":"WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nhello world\n"}"#.utf8))
-        case ("GET", "/api/generate/jobs/old-job/audio"):
+            result = (200, "application/json", Data(#"{"batch_id":"stt-batch","items":1,"queued":1}"#.utf8))
+        case ("GET", "/api/hub/transcription/jobs/stt-batch"):
+            Self.lock.lock(); let uncertain = Self.uncertainTranscription; Self.lock.unlock()
+            if uncertain {
+                result = (200, "application/json", Data(#"{"id":"stt-batch","status":"uncertain","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"uncertain"}]}"#.utf8))
+                break
+            }
+            result = (200, "application/json", Data(#"{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"done","artifact_url":"/api/hub/transcription/jobs/stt-batch/items/0/artifact","metadata":{"text":"hello world","language":"en","duration":1.25,"model":"mlx-community/whisper-large-v3-turbo","vtt":"WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nhello world\n"}}]}"#.utf8))
+        case ("GET", "/api/hub/transcription/jobs/stt-batch/items/0/artifact"):
+            result = (200, "application/x-subrip", Data("1\n00:00:00,000 --> 00:00:01,250\nhello world\n".utf8))
+        case ("GET", "/api/hub/jobs/old-job/items/0/artifact"):
             result = (200, "audio/wav", Data([0x52, 0x49, 0x46, 0x46]))
-        case ("GET", "/api/generate/jobs/new-job/audio"):
+        case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
             result = (200, "audio/wav", Data([0x52, 0x49, 0x46, 0x46]))
         default:
             result = (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
@@ -124,7 +150,6 @@ final class FixtureProtocol: URLProtocol {
     }
 
     private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
-    private static let savedTokenFixture = Data(#"{"hf_token_set":true,"hf_token_masked":"hf_…last"}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -148,20 +173,33 @@ struct NativeAPITests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FixtureProtocol.self]
         let rejected = NativeWorkspaceStore(sessionConfiguration: configuration)
-        await rejected.connect(baseURL: URL(string: "https://example.com")!, dataDirectory: temporary)
+        await rejected.connect(baseURL: URL(string: "https://example.com")!, dataDirectory: temporary, token: "native-test-token")
         require(rejected.error?.contains("127.0.0.1") == true, "external API base was accepted")
 
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
-        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state)
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 4, "combined model catalog")
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
         require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"], "native Audio support guard")
         require(supportedSTT.map(\.repo) == ["mlx-community/whisper-large-v3-turbo"], "native Transcription support guard")
-        require(store.models.first { $0.repo == "other/tts" }?.supportNote.contains("native") == true, "unsupported runtime model needs a native-workflow note")
+        require(store.models.first { $0.repo == "other/tts" }?.supportNote.contains("packaged model catalog") == true, "unsupported runtime model needs a catalog note")
         require(store.audioJobs.first?.id == "old-job", "existing audio jobs must load")
         require(store.downloads.first?.percent == 50, "download progress must load")
+        await store.startDownload(supportedSTT[0])
+        require(FixtureProtocol.lastDownloadPath == "/api/hub/model-packages/whisper-turbo/download", "model download bypassed Hub package management")
+        require(FixtureProtocol.lastDownloadToken == "native-test-token", "Hub download request was unauthenticated")
+        require(store.downloads.contains { $0.id == "hub-download-1" }, "Hub model download status missing")
+        await store.cancelDownload(store.downloads.first { $0.id == "hub-download-1" }!)
+        require(store.downloads.contains { $0.id == "hub-download-1" && $0.state == "cancelled" }, "Hub model download cancellation missing")
+        store.audioModel = "other/tts"
+        store.audioText = "Unsupported voice model"
+        let submitsBeforeUnsupported = FixtureProtocol.generatedBodies().count
+        await store.generateAudio()
+        require(FixtureProtocol.generatedBodies().count == submitsBeforeUnsupported, "unsupported voice model reached Hub dispatch")
+        require(store.error?.contains("packaged model catalog") == true, "unsupported voice model needs an explanation")
+        store.audioModel = NativeWorkspaceStore.qwenCustomVoice
 
         store.audioText = "Hello locally"
         store.audioSpeaker = "Ryan"
@@ -169,8 +207,34 @@ struct NativeAPITests {
         await store.generateAudio()
         require(store.audioJobs.first?.id == "new-job", "submitted audio job")
         let generated = FixtureProtocol.generatedBody()
-        require(generated?["preset_speaker"] as? String == "Ryan", "Qwen speaker field \(String(describing: generated))")
-        require(generated?["repo"] as? String == supportedAudio[0].repo, "Qwen repo field")
+        require(FixtureProtocol.lastGeneratePath == "/api/hub/jobs", "native generation must use Hub admission")
+        require(FixtureProtocol.lastGenerateToken == "native-test-token", "native Hub credential missing")
+        require(generated?["modality"] as? String == "voice", "Hub modality")
+        require(generated?["model"] as? String == supportedAudio[0].repo, "Hub model")
+        require((generated?["clientRequestId"] as? String)?.count ?? 0 >= 8, "durable clientRequestId missing")
+        let items = generated?["items"] as? [[String: Any]]
+        require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
+        require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
+
+        FixtureProtocol.dropNextSubmit()
+        store.audioText = "Accepted before connection loss"
+        await store.generateAudio()
+        let pending = state.appendingPathComponent("native-pending-audio.json")
+        require(FileManager.default.fileExists(atPath: pending.path), "lost submit response discarded original request identity")
+        let beforeReplay = FixtureProtocol.generatedBodies().last!
+        store.disconnect()
+        let recovered = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await recovered.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
+        recovered.audioText = ""
+        await recovered.generateAudio()
+        let replayed = FixtureProtocol.generatedBodies().last!
+        require(beforeReplay["clientRequestId"] as? String == replayed["clientRequestId"] as? String,
+                "retry changed durable Hub replay identity")
+        require((replayed["items"] as? [[String: Any]])?.first?["text"] as? String == "Accepted before connection loss",
+                "retry mutated the original accepted payload")
+        require(!FileManager.default.fileExists(atPath: pending.path), "reconciled submit identity remained pending")
+        recovered.disconnect()
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
 
         let input = temporary.appendingPathComponent("clip.wav")
         try Data([0x52, 0x49, 0x46, 0x46]).write(to: input)
@@ -178,13 +242,29 @@ struct NativeAPITests {
         store.transcriptionLanguage = "en"
         store.wordTimestamps = true
         await store.transcribe()
-        require(store.transcriptionResult?.text == "hello world", "transcription result")
+        require(store.transcriptionResult?.text == "hello world", "transcription result: \(store.error ?? "no error"), pending \(FileManager.default.fileExists(atPath: state.appendingPathComponent("native-pending-transcription.json").path))")
         let multipart = FixtureProtocol.transcriptionBody()
-        require(multipart.contains("name=\"model\"") && multipart.contains("name=\"file\""), "multipart transcription contract")
+        require(multipart.contains("name=\"model\"") && multipart.contains("name=\"files\""), "Hub multipart transcription contract")
+        require(multipart.contains("name=\"item_ids\"") && multipart.contains("name=\"episode\""), "stable Hub transcription identity")
         let subtitleData = try store.transcriptData(format: .srt)
         require(String(decoding: subtitleData, as: UTF8.self).contains("hello world"), "SRT export data")
         let audioData = try await store.audioData(for: store.audioJobs.first!)
         require(audioData == Data([0x52, 0x49, 0x46, 0x46]), "audio export data")
+
+        FixtureProtocol.setUncertainTranscription(true)
+        let uncertainUpload = Task { await store.transcribe() }
+        try await Task.sleep(for: .seconds(1))
+        require(!store.transcribing, "uncertain transcription must stop polling and surface an actionable state")
+        await uncertainUpload.value
+        require(store.error?.contains("uncertain") == true, "uncertain transcription needs an actionable message")
+        let pendingTranscript = state.appendingPathComponent("native-pending-transcription.json")
+        require(FileManager.default.fileExists(atPath: pendingTranscript.path), "uncertain transcription identity must survive")
+        let postsAfterUncertainty = FixtureProtocol.recordedTranscriptionPorts()
+        await store.transcribe()
+        require(FixtureProtocol.recordedTranscriptionPorts() == postsAfterUncertainty, "uncertain transcription must not resubmit")
+        FixtureProtocol.setUncertainTranscription(false)
+        await store.transcribe()
+        require(!FileManager.default.fileExists(atPath: pendingTranscript.path), "completed reconciliation must clear pending identity")
 
         FixtureProtocol.setHoldGeneration(true)
         let oldGeneration = Task { await store.generateAudio() }
@@ -199,7 +279,7 @@ struct NativeAPITests {
         require(!store.submittingAudio, "an old generation completion restored stale busy state")
         FixtureProtocol.setHoldGeneration(false)
 
-        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state)
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         let fifo = temporary.appendingPathComponent("blocked-input.wav")
         require(mkfifo(fifo.path, 0o600) == 0, "could not create lifecycle FIFO fixture")
         store.transcriptionFile = fifo
@@ -208,7 +288,7 @@ struct NativeAPITests {
         while !store.transcribing { await Task.yield() }
         store.disconnect()
         require(!store.transcribing, "disconnect must clear an in-flight transcription flag")
-        await store.connect(baseURL: URL(string: "http://127.0.0.1:45679")!, dataDirectory: state)
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45679")!, dataDirectory: state, token: "native-test-token")
         let fifoWriter = Task.detached {
             let output = try FileHandle(forWritingTo: fifo)
             try output.write(contentsOf: Data([0x52, 0x49, 0x46, 0x46]))
@@ -225,11 +305,11 @@ struct NativeAPITests {
         let overlappingStore = NativeWorkspaceStore(sessionConfiguration: configuration)
         FixtureProtocol.holdCatalog(on: 45681)
         let oldConnect = Task {
-            await overlappingStore.connect(baseURL: URL(string: "http://127.0.0.1:45681")!, dataDirectory: state)
+            await overlappingStore.connect(baseURL: URL(string: "http://127.0.0.1:45681")!, dataDirectory: state, token: "native-test-token")
         }
         let catalogDidStart = await Task.detached { FixtureProtocol.waitForCatalogStart() }.value
         require(catalogDidStart, "catalog fixture did not reach its delayed response")
-        await overlappingStore.connect(baseURL: URL(string: "http://127.0.0.1:45682")!, dataDirectory: state)
+        await overlappingStore.connect(baseURL: URL(string: "http://127.0.0.1:45682")!, dataDirectory: state, token: "native-test-token")
         try await Task.sleep(for: .milliseconds(600))
         FixtureProtocol.releaseCatalog.signal()
         await oldConnect.value
@@ -238,18 +318,14 @@ struct NativeAPITests {
         overlappingStore.disconnect()
 
         let tokenStore = NativeWorkspaceStore(sessionConfiguration: configuration)
-        await tokenStore.connect(baseURL: URL(string: "http://127.0.0.1:45683")!, dataDirectory: state)
-        FixtureProtocol.holdTokenSave(on: 45683)
-        let oldTokenSave = Task { await tokenStore.saveHFToken("hf_old") }
-        let tokenSaveDidStart = await Task.detached { FixtureProtocol.waitForTokenSaveStart() }.value
-        require(tokenSaveDidStart, "token fixture did not reach its delayed response")
-        tokenStore.disconnect()
-        await tokenStore.connect(baseURL: URL(string: "http://127.0.0.1:45684")!, dataDirectory: state)
-        FixtureProtocol.releaseTokenSave.signal()
-        let staleTokenSaved = await oldTokenSave.value
-        require(!staleTokenSaved, "stale token save reported success after reconnect")
-        let currentTokenSaved = await tokenStore.saveHFToken("hf_current")
-        require(currentTokenSaved && tokenStore.tokenStatus.isSet, "current token save did not report published success")
+        await tokenStore.connect(baseURL: URL(string: "http://127.0.0.1:45683")!, dataDirectory: state, token: "native-test-token")
+        let tokenSaved = await tokenStore.saveHFToken("hf_current")
+        require(!tokenSaved, "native sent an unsupported Voice settings mutation")
+        require(tokenStore.error?.contains("owner-authenticated Hub route") == true, "unsupported token edit needs a clear reason")
+        let tokenTest = await tokenStore.testHFToken("hf_current")
+        require(tokenTest == nil, "native sent an unsupported Voice token test")
+        await tokenStore.removeModel(supportedSTT[0])
+        require(tokenStore.error?.contains("active readers") == true, "unsafe model removal should be blocked")
         tokenStore.disconnect()
 
         store.audioText = "Persist this draft"

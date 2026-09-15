@@ -1,0 +1,732 @@
+"""Peer Hubs — the fleet layer.
+
+Each Mac runs its own Studio Hub. A Hub is the local authority for its machine:
+it alone can read that machine's host RAM, per-studio process memory, and run
+`pterm` to start/stop its studios. So to see a remote Mac's specs or control its
+servers, the primary Hub asks THAT machine's Hub.
+
+A "peer" is derived automatically from any remote studio entry: the peer Hub
+lives at http://<studio.host>:<hub_port default 47873>. No separate peer list —
+if you registered a machine's studios, its Hub is reachable at the same host.
+
+Auth across Hubs uses a shared **fleet token**: set the same token on every
+Mac's Hub (dashboard → Remote, or STUDIOHUB_FLEET_TOKEN env). Each Hub accepts
+it; the primary presents it when calling peers. Recursion is prevented with
+?local_only=true so a peer returns only its own machine and never fans back out.
+
+Peer resource data is cached (short TTL) and refreshed from the monitor poll
+loop, so the 5s dashboard poll never blocks on slow/offline peers.
+"""
+
+import asyncio
+import os
+import secrets
+import time
+from collections.abc import Callable
+from urllib.parse import urlsplit
+
+import httpx
+
+from .registry import DATA_DIR, LAUNCHER_ROOT
+
+FLEET_TOKEN_FILE = DATA_DIR / ".fleet_token"
+SHARED_STUDIO_TOKEN_FILE = (
+    LAUNCHER_ROOT.parent / ".kh_studio_token"
+    if DATA_DIR == LAUNCHER_ROOT else DATA_DIR / ".kh_studio_token"
+)
+DEFAULT_HUB_PORT = 47873
+PEER_TTL_S = 12.0
+PEER_TIMEOUT_S = 5.0
+
+# Changes to the local fleet credential invalidate any peer response that began
+# under the previous credential.  Per-machine proxy rejections live in the
+# cache as a tombstone so normal cache clearing also clears test/process state.
+_auth_generation = 0
+_DISPATCH_REJECTED = "_dispatch_rejected"
+_DISPATCH_MODALITY = "_dispatch_modality"
+
+# machine -> (ts, {"host": {...}|None, "studios": {modality: stats}, "reachable": bool})
+_cache: dict[str, tuple[float, dict]] = {}
+_peer_alert_state: dict[str, dict] = {}
+PEER_FAILURES_TO_ALERT = 3
+release_reconciler = None
+
+
+def fleet_token() -> str | None:
+    env = os.environ.get("STUDIOHUB_FLEET_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    if FLEET_TOKEN_FILE.exists():
+        os.chmod(FLEET_TOKEN_FILE, 0o600)
+        t = FLEET_TOKEN_FILE.read_text().strip()
+        if t:
+            return t
+    # Packaged Hub workers receive the owner Hub token in their private
+    # descriptors.  Local monitoring must not create an unused fleet token.
+    if os.environ.get("STUDIOHUB_PACKAGED") == "1":
+        return None
+    token = secrets.token_urlsafe(24)
+    set_fleet_token(token)
+    return token
+
+
+def current_fleet_token() -> str | None:
+    """Return the currently configured fleet token without changing state."""
+    env = os.environ.get("STUDIOHUB_FLEET_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    try:
+        value = FLEET_TOKEN_FILE.read_text().strip()
+    except (OSError, UnicodeError):
+        return None
+    return value or None
+
+
+def set_fleet_token(token: str):
+    global _auth_generation
+    value = (token or "").strip() or secrets.token_urlsafe(24)
+    previous = current_fleet_token()
+    for path in (FLEET_TOKEN_FILE, SHARED_STUDIO_TOKEN_FILE):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value + "\n")
+        os.chmod(path, 0o600)
+    if previous and previous != value:
+        _auth_generation += 1
+        _cache.clear()
+
+
+def studio_headers(studio: dict | None = None) -> dict[str, str]:
+    token = (studio or {}).get("studio_token") or fleet_token()
+    return {"X-Studio-Token": token} if token else {}
+
+
+def _peer_url(studio: dict) -> str:
+    return f"http://{studio['host']}:{studio.get('hub_port', DEFAULT_HUB_PORT)}"
+
+
+def _peer_token(studio: dict) -> str | None:
+    return studio.get("hub_token") or fleet_token()
+
+
+def is_local_studio(studio: dict) -> bool:
+    return (studio.get("machine", "local") == "local"
+            or (os.environ.get("STUDIOHUB_PACKAGED") == "1" and studio.get("local") is True))
+
+
+def studio_request(studio: dict, path_or_url: str) -> tuple[str, dict[str, str]]:
+    """Return the safest URL + credentials for a Studio API request.
+
+    A peer Hub is the local authority for every remote machine. Always route
+    remote Studio traffic through it, even before the short-lived peer-status
+    cache has populated. Falling back to the Studio during that window creates
+    an authentication race: a worker with an older in-memory credential can
+    consume and fail a batch before its local Hub is marked connected.
+    """
+    parsed = urlsplit(path_or_url)
+    path = parsed.path.lstrip("/")
+    if parsed.query:
+        path += "?" + parsed.query
+    if not is_local_studio(studio):
+        token = _peer_token(studio)
+        headers = {"X-Hub-Token": token} if token else {}
+        return f"{_peer_url(studio)}/studio/{studio['modality']}/{path}", headers
+    if os.environ.get("STUDIOHUB_PACKAGED") == "1" and (parsed.scheme or parsed.netloc):
+        try:
+            same_origin = (
+                parsed.scheme == "http" and parsed.hostname == studio["host"]
+                and parsed.port == studio["port"] and not parsed.username
+                and not parsed.password and not parsed.fragment
+            )
+        except ValueError:
+            same_origin = False
+        if not same_origin:
+            raise ValueError("packaged worker URL must use its private endpoint")
+    direct = path_or_url if parsed.scheme in {"http", "https"} else (
+        f"http://{studio['host']}:{studio['port']}/{path}")
+    return direct, studio_headers(studio)
+
+
+def _remote_machines(registry: list[dict]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for s in registry:
+        if not is_local_studio(s):
+            out.setdefault(s["machine"], []).append(s)
+    return out
+
+
+# Guard so overlapping refreshes never pile up (the poll loop fires this every
+# few seconds; a slow/offline fleet must not stack N in-flight refreshes).
+_inflight = {"v": False}
+
+
+async def refresh(registry: list[dict], client: httpx.AsyncClient):
+    """Refresh each remote machine's host+studio stats from its peer Hub.
+    TTL-guarded so it only actually hits the network every PEER_TTL_S. Safe to
+    fire-and-forget: an in-flight guard prevents overlap, and per-peer errors
+    are swallowed so one slow machine can't break the sweep."""
+    if _inflight["v"]:
+        return
+    machines = _remote_machines(registry)
+    now = time.time()
+    stale = [m for m, studios in machines.items()
+             if now - _cache.get(m, (0, None))[0] >= PEER_TTL_S]
+    if not stale:
+        return
+    _inflight["v"] = True
+    try:
+        await _refresh_stale(machines, stale, client, now)
+    finally:
+        _inflight["v"] = False
+
+
+async def _refresh_stale(machines, stale, client, now):
+
+    def store(machine: str, snapshot: dict, entry, auth_generation: int,
+              *, clears_rejection: bool = False) -> bool:
+        # A 401 proxy quarantine or fleet-token change must win over a resource
+        # request that was already in flight.
+        if auth_generation != _auth_generation or _cache.get(machine) is not entry:
+            return False
+        if (entry and entry[1].get(_DISPATCH_REJECTED)
+                and not clears_rejection):
+            snapshot[_DISPATCH_REJECTED] = True
+            snapshot[_DISPATCH_MODALITY] = entry[1].get(_DISPATCH_MODALITY)
+        _cache[machine] = (now, snapshot)
+        return True
+
+    def note_reachability(machine: str, snapshot: dict) -> None:
+        state = _peer_alert_state.setdefault(
+            machine, {"failures": 0, "alerted": False},
+        )
+        if snapshot.get("reachable") and snapshot.get("auth", True):
+            recovered = state["failures"] > 0
+            if state["alerted"]:
+                from . import alerts
+                alerts.emit(
+                    "agent_recovered",
+                    f"Agent Hub on {machine} is reachable again",
+                    {"machine": machine, "status": snapshot.get("status")},
+                )
+            if recovered and release_reconciler is not None:
+                try:
+                    release_reconciler.wake_peer(machine)
+                except Exception:
+                    pass
+            state.update(failures=0, alerted=False)
+            return
+        state["failures"] += 1
+        if state["failures"] < PEER_FAILURES_TO_ALERT or state["alerted"]:
+            return
+        state["alerted"] = True
+        from . import alerts
+        alerts.emit(
+            "agent_unreachable",
+            f"Agent Hub on {machine} is unreachable",
+            {
+                "machine": machine,
+                "status": snapshot.get("status"),
+                "consecutive_failures": state["failures"],
+            },
+        )
+
+    async def one(machine: str, studios: list[dict]):
+        entry = _cache.get(machine)
+        s0 = studios[0]
+        url = _peer_url(s0)
+        token = _peer_token(s0)
+        auth_generation = _auth_generation
+        headers = {"X-Hub-Token": token} if token else {}
+        try:
+            r = await client.get(f"{url}/api/hub/resources?local_only=true",
+                                  headers=headers, timeout=PEER_TIMEOUT_S)
+            if r.status_code in (401, 403):
+                # Hub is reachable but rejected the token → clearest possible signal
+                # that the fleet tokens don't match on that machine.
+                snapshot = {"host": None, "studios": {},
+                            "reachable": True, "auth": False,
+                            "status": ("no_token" if not token
+                                       else "token_rejected")}
+                if r.status_code == 401 and token:
+                    foreign = await _foreign_site(client, url)
+                    if foreign:
+                        snapshot.update(status="foreign_site", **foreign)
+                if store(machine, snapshot, entry, auth_generation):
+                    note_reachability(machine, snapshot)
+                return
+            data = r.json()
+            if (r.status_code != 200 or not isinstance(data, dict)
+                    or not isinstance(data.get("host"), dict)
+                    or not isinstance(data.get("studios"), dict)):
+                snapshot = {"host": None, "studios": {},
+                            "reachable": True, "auth": False,
+                            "status": "resource_error"}
+                if store(machine, snapshot, entry, auth_generation):
+                    note_reachability(machine, snapshot)
+                return
+            snapshot = {
+                "host": data.get("host"),
+                "studios": data.get("studios", {}),
+                "proxy": data.get("proxy"),
+                "reachable": True, "auth": True, "status": "connected",
+            }
+            clears_rejection = False
+            if entry and entry[1].get(_DISPATCH_REJECTED):
+                modality = entry[1].get(_DISPATCH_MODALITY) or s0["modality"]
+                probe = await client.get(
+                    f"{url}/studio/{modality}/api/catalog",
+                    headers=headers, timeout=PEER_TIMEOUT_S,
+                )
+                try:
+                    clears_rejection = (
+                        probe.status_code == 200 and isinstance(probe.json(), dict)
+                    )
+                except (AttributeError, ValueError):
+                    clears_rejection = False
+            if store(machine, snapshot, entry, auth_generation,
+                     clears_rejection=clears_rejection):
+                note_reachability(machine, snapshot)
+        except httpx.ConnectError:
+            # TCP refused: nothing is listening on :47873 there — the Studio Hub
+            # isn't actually running on that machine (even if its studios are).
+            snapshot = {"host": None, "studios": {},
+                        "reachable": False, "auth": True,
+                        "status": "no_hub"}
+            if store(machine, snapshot, entry, auth_generation):
+                note_reachability(machine, snapshot)
+        except (httpx.TimeoutException, httpx.ConnectTimeout):
+            # Packets dropped: a firewall is blocking :47873, or the Mac is asleep/off.
+            snapshot = {"host": None, "studios": {},
+                        "reachable": False, "auth": True,
+                        "status": "unreachable"}
+            if store(machine, snapshot, entry, auth_generation):
+                note_reachability(machine, snapshot)
+        except Exception:
+            snapshot = {"host": None, "studios": {},
+                        "reachable": False, "auth": True,
+                        "status": "unreachable"}
+            if store(machine, snapshot, entry, auth_generation):
+                note_reachability(machine, snapshot)
+
+    await asyncio.gather(*(one(m, machines[m]) for m in stale))
+
+
+async def _foreign_site(client, url: str) -> dict | None:
+    """A Hub that rejects our fleet token but reports a different site_id was
+    enrolled at another site — the Mac was moved and never removed here.
+    Enrollment never tells the previous controller, so this is the only place
+    it can be noticed. /api/health is unauthenticated; the extra GET happens
+    only after a token rejection."""
+    from . import control_plane
+    try:
+        r = await client.get(f"{url}/api/health", timeout=PEER_TIMEOUT_S)
+        plane = (r.json() or {}).get("control_plane") or {}
+    except Exception:
+        return None
+    theirs = str(plane.get("site_id") or "").strip()
+    ours = str(control_plane.load_settings().get("site_id") or "").strip()
+    if not theirs or theirs == ours:
+        return None
+    return {"site_id": theirs, "controller_id": str(plane.get("controller_id") or "")}
+
+
+def cached(machine: str) -> dict | None:
+    entry = _cache.get(machine)
+    return entry[1] if entry and not entry[1].get(_DISPATCH_REJECTED) else None
+
+
+def dispatch_ready(studio: dict, generation=None) -> bool:
+    """Whether a Studio has authority to receive newly dispatched work."""
+    if is_local_studio(studio):
+        return True
+    entry = _cache.get(studio.get("machine"))
+    if not entry:
+        return False
+    if generation is not None and generation != (_auth_generation, id(entry)):
+        return False
+    try:
+        observed_at, snapshot = entry
+        age = time.time() - observed_at
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(snapshot, dict)
+        and not snapshot.get(_DISPATCH_REJECTED)
+        and 0 <= age < PEER_TTL_S
+        and snapshot.get("reachable") is True
+        and snapshot.get("auth") is True
+        and snapshot.get("status") == "connected"
+    )
+
+
+def dispatch_generation(studio: dict):
+    """Capture the authority checked immediately before a scheduler commits work."""
+    if is_local_studio(studio):
+        return None
+    entry = _cache.get(studio.get("machine"))
+    if not dispatch_ready(studio) or not entry:
+        return None
+    return _auth_generation, id(entry)
+
+
+def invalidate(machine: str, *, rejected: bool = False,
+               modality: str | None = None) -> None:
+    """Forget a peer snapshot, retaining a proxy-auth quarantine when rejected."""
+    if rejected:
+        _cache[machine] = (0, {_DISPATCH_REJECTED: True,
+                               _DISPATCH_MODALITY: modality})
+        return
+    entry = _cache.get(machine)
+    if entry and entry[1].get(_DISPATCH_REJECTED):
+        # Force a resource refresh without erasing a worker-auth quarantine.
+        _cache[machine] = (0, entry[1])
+        return
+    _cache.pop(machine, None)
+
+
+def forget_machine(machine: str) -> None:
+    """Drop a removed machine's peer-resource snapshot immediately."""
+    _cache.pop(machine, None)
+    _peer_alert_state.pop(machine, None)
+
+
+async def control_remote(client: httpx.AsyncClient, studio: dict, action: str) -> dict:
+    """Proxy a start/stop to the studio's own machine's Hub, which runs pterm
+    locally there. The peer addresses the studio by its local id = modality."""
+    url = _peer_url(studio)
+    token = _peer_token(studio)
+    if not token:
+        return {"ok": False, "error": "no fleet token set — set one on this Hub "
+                "and the same on the remote Hub to control remote studios"}
+    headers = {"X-Hub-Token": token}
+    local_id = studio.get("modality")
+    try:
+        r = await client.post(f"{url}/api/hub/studios/{local_id}/{action}",
+                              headers=headers, timeout=10.0)
+        if r.status_code == 401:
+            return {"ok": False, "error": "remote Hub rejected the fleet token "
+                    "(set the SAME fleet token on that machine's Hub)"}
+        if r.status_code == 404:
+            return {"ok": False, "error": f"remote Hub has no '{local_id}' studio "
+                    "(is a Studio Hub running on that machine?)"}
+        return {"ok": r.status_code < 400, "status": r.status_code,
+                "remote": r.json() if r.headers.get("content-type", "").startswith("application/json") else None}
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": f"can't reach the Hub on {studio['host']} "
+                f"— run Studio Hub on that Mac ({e})"}
+
+
+async def startup_services_status(
+    registry: list[dict], client: httpx.AsyncClient,
+) -> dict[str, dict]:
+    """Read each machine's local startup-service audit through its peer Hub."""
+    machines = _remote_machines(registry)
+
+    async def one(machine: str, studios: list[dict]) -> tuple[str, dict]:
+        studio = studios[0]
+        token = _peer_token(studio)
+        headers = {"X-Hub-Token": token} if token else {}
+        try:
+            response = await client.get(
+                f"{_peer_url(studio)}/api/hub/startup-services?local_only=true",
+                headers=headers, timeout=PEER_TIMEOUT_S,
+            )
+            if response.status_code in {401, 403}:
+                return machine, {
+                    "machine": machine, "reachable": True, "supported": False,
+                    "services": [], "detail": "Peer rejected the fleet credential",
+                }
+            if response.status_code == 404:
+                return machine, {
+                    "machine": machine, "reachable": True, "supported": False,
+                    "services": [], "detail": "Update this machine's Studio Hub to add startup control",
+                }
+            if response.status_code >= 400:
+                return machine, {
+                    "machine": machine, "reachable": True, "supported": False,
+                    "services": [], "detail": f"Peer returned HTTP {response.status_code}",
+                }
+            payload = response.json()
+            return machine, {
+                **payload, "machine": machine, "reachable": True,
+                "supported": payload.get("supported", True),
+            }
+        except (httpx.HTTPError, ValueError) as exc:
+            return machine, {
+                "machine": machine, "reachable": False, "supported": False,
+                "services": [],
+                "detail": (str(exc).strip() or type(exc).__name__)[:180],
+            }
+
+    rows = await asyncio.gather(*(one(machine, studios)
+                                  for machine, studios in machines.items()))
+    return dict(rows)
+
+
+async def install_remote_startup_service(
+    client: httpx.AsyncClient, studio: dict, modality: str,
+) -> dict:
+    """Ask one peer Hub to install one sibling's service on its own Mac."""
+    token = _peer_token(studio)
+    if not token:
+        return {"ok": False, "error": "no fleet token set"}
+    try:
+        response = await client.post(
+            f"{_peer_url(studio)}/api/hub/startup-services/local/{modality}/install",
+            headers={"X-Hub-Token": token}, timeout=260.0,
+        )
+        payload = (response.json()
+                   if response.headers.get("content-type", "").startswith("application/json")
+                   else {})
+        if response.status_code in {401, 403}:
+            return {"ok": False, "error": "remote Hub rejected the fleet credential"}
+        if response.status_code == 404:
+            return {"ok": False, "error": "update the remote Studio Hub before installing startup services"}
+        if response.status_code >= 400:
+            return {"ok": False, "error": str(payload.get("detail") or
+                                                f"remote Hub returned HTTP {response.status_code}")}
+        return payload
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"can't reach the remote Hub ({exc})"}
+
+
+async def retire_remote_startup_service(
+    client: httpx.AsyncClient, studio: dict, modality: str,
+) -> dict:
+    """Ask one peer Hub to retire one legacy sibling on its own Mac."""
+    # Strict fleet-service routes accept only the controller's current fleet
+    # credential. A legacy per-row Hub token may still authenticate ordinary
+    # proxy traffic, but must never override this exact service contract.
+    token = current_fleet_token()
+    if not token:
+        return {"ok": False, "error": "no fleet token set"}
+    try:
+        response = await client.post(
+            f"{_peer_url(studio)}/api/hub/service/startup-services/local/{modality}/retire",
+            headers={"X-Hub-Token": token}, timeout=260.0,
+        )
+        payload = (response.json()
+                   if response.headers.get("content-type", "").startswith("application/json")
+                   else {})
+        if response.status_code in {401, 403}:
+            return {"ok": False, "error": "remote Hub rejected the fleet credential"}
+        if response.status_code == 404:
+            return {"ok": False, "error": "update the remote Studio Hub before retiring startup services"}
+        if response.status_code >= 400:
+            return {"ok": False, "error": str(payload.get("detail") or
+                                                f"remote Hub returned HTTP {response.status_code}")}
+        return payload
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"can't reach the remote Hub ({exc})"}
+
+
+async def remove_remote_studio(
+    client: httpx.AsyncClient, studio: dict, modality: str,
+) -> dict:
+    """Ask one peer Hub to fully remove an unused sibling on its own Mac."""
+    token = current_fleet_token()
+    if not token:
+        return {"ok": False, "error": "no fleet token set"}
+    try:
+        response = await client.post(
+            f"{_peer_url(studio)}/api/hub/service/startup-services/local/{modality}/remove",
+            headers={"X-Hub-Token": token}, timeout=260.0,
+        )
+        payload = (response.json()
+                   if response.headers.get("content-type", "").startswith("application/json")
+                   else {})
+        if response.status_code in {401, 403}:
+            return {"ok": False, "error": "remote Hub rejected the fleet credential"}
+        if response.status_code == 404:
+            return {"ok": False, "error": "update the remote Studio Hub before removing Studios"}
+        if response.status_code >= 400:
+            return {"ok": False, "error": str(payload.get("detail") or
+                                                f"remote Hub returned HTTP {response.status_code}")}
+        return payload
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"can't reach the remote Hub ({exc})"}
+
+
+async def install_remote_generation(
+    client: httpx.AsyncClient, studio: dict,
+) -> dict:
+    """Ask a peer Hub to reinstall one Studio's generation environment.
+
+    The peer Hub remains the only process that executes its local Pinokio
+    installer.  The response is a durable peer job reference; callers poll it
+    rather than assuming that a request accepted by the peer means success.
+    """
+    token = _peer_token(studio)
+    if not token:
+        return {"ok": False, "error": "no fleet token set"}
+    try:
+        response = await client.post(
+            f"{_peer_url(studio)}/api/hub/maintenance/generation-installs",
+            headers={"X-Hub-Token": token},
+            json={"studio_ids": [studio.get("modality")], "local_only": True},
+            timeout=30.0,
+        )
+        payload = (response.json()
+                   if response.headers.get("content-type", "").startswith("application/json")
+                   else {})
+        if response.status_code in {401, 403}:
+            return {"ok": False, "error": "remote Hub rejected the fleet credential"}
+        if response.status_code == 404:
+            return {"ok": False, "error": "update the remote Studio Hub before installing generation"}
+        if response.status_code >= 400:
+            return {"ok": False, "error": str(payload.get("detail") or
+                                                f"remote Hub returned HTTP {response.status_code}")}
+        return {"ok": True, "job": payload}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"can't reach the remote Hub ({exc})"}
+
+
+async def start_remote_studio_update_repair(
+    client: httpx.AsyncClient, studio: dict,
+) -> dict:
+    """Start one fixed local Studio repair on the Studio's Agent Hub."""
+    token = _peer_token(studio)
+    if not token:
+        return {"ok": False, "retryable": False, "error": "no fleet token set"}
+    headers = {"X-Hub-Token": token}
+    try:
+        capability = await client.get(
+            f"{_peer_url(studio)}/api/version", headers=headers, timeout=15.0,
+        )
+        payload = (capability.json()
+                   if capability.headers.get("content-type", "").startswith("application/json")
+                   else {})
+        schema = payload.get("studio_update_repair_schema") if isinstance(payload, dict) else None
+        if capability.status_code in {401, 403}:
+            return {"ok": False, "retryable": False,
+                    "error": "remote Hub rejected the fleet credential"}
+        if capability.status_code >= 400 or type(schema) is not int or schema != 1:
+            return {"ok": False, "retryable": True,
+                    "error": "update the Agent Hub before repairing Studio updates remotely"}
+        response = await client.post(
+            f"{_peer_url(studio)}/api/hub/maintenance/studio-update-repairs",
+            headers=headers,
+            json={"studio_ids": [studio.get("modality")], "local_only": True},
+            timeout=30.0,
+        )
+        result = (response.json()
+                  if response.headers.get("content-type", "").startswith("application/json")
+                  else {})
+        if response.status_code in {401, 403}:
+            return {"ok": False, "retryable": False,
+                    "error": "remote Hub rejected the fleet credential"}
+        if response.status_code == 404:
+            return {"ok": False, "retryable": True,
+                    "error": "update the Agent Hub before repairing Studio updates remotely"}
+        if response.status_code >= 400:
+            return {"ok": False, "retryable": response.status_code >= 500,
+                    "error": str(result.get("detail") or
+                                 f"remote Hub returned HTTP {response.status_code}")}
+        return {"ok": True, "job": result}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "retryable": True,
+                "error": f"can't reach the remote Hub ({exc})"}
+
+
+async def sync_owner_password(
+    registry: list[dict], client: httpx.AsyncClient, verifier: dict,
+) -> dict:
+    """Offer this controller's owner-password verifier to every connected Agent.
+
+    Reuses the fleet transport that already rotates the fleet credential: each
+    write is authenticated with the current fleet token and the Agent decides
+    whether to take it. An Agent with its own chosen password refuses, and an
+    unreachable Agent simply keeps what it has.
+    """
+    token = fleet_token()
+    machines = _remote_machines(registry)
+    headers = {"X-Hub-Token": token} if token else {}
+    body = {"schema_version": 1, "verifier": verifier}
+
+    async def one(machine: str, studios: list[dict]) -> tuple[str, dict]:
+        url = _peer_url(studios[0])
+        try:
+            response = await client.post(
+                f"{url}/api/hub/fleet/owner-password", headers=headers,
+                json=body, timeout=PEER_TIMEOUT_S)
+        except httpx.HTTPError as exc:
+            return machine, {"ok": False, "status": "unreachable",
+                             "detail": (str(exc).strip() or type(exc).__name__)[:180]}
+        if response.status_code in {401, 403}:
+            return machine, {"ok": False, "status": "refused",
+                             "detail": "peer rejected this controller's credential"}
+        if response.status_code >= 400:
+            return machine, {"ok": False, "status": "failed",
+                             "detail": f"peer returned HTTP {response.status_code}"}
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        installed = bool(isinstance(payload, dict) and payload.get("installed"))
+        return machine, {
+            "ok": installed,
+            "status": "installed" if installed else "kept_own_password",
+            "detail": ("owner password inherited from this controller" if installed
+                       else "peer keeps the password its owner chose"),
+        }
+
+    rows = await asyncio.gather(*(one(machine, studios)
+                                  for machine, studios in machines.items()))
+    results = dict(rows)
+    installed = sum(row["ok"] for row in results.values())
+    return {
+        "total": len(results), "installed": installed,
+        "unchanged": len(results) - installed, "machines": results,
+    }
+
+
+async def sync_fleet_token(
+    registry: list[dict], client: httpx.AsyncClient, new_token: str,
+    *, local_commit: Callable[[str], None] = set_fleet_token,
+) -> dict:
+    """Rotate connected peer Hubs from the current credential to ``new_token``.
+
+    Each write is authenticated with the old token, then verified with the new
+    one. The local token changes last so a partial failure remains recoverable
+    and can be reported as a one-time manual save on that machine.
+    """
+    old_token = fleet_token()
+    machines = _remote_machines(registry)
+
+    async def one(machine: str, studios: list[dict]) -> tuple[str, dict]:
+        studio = studios[0]
+        url = _peer_url(studio)
+        headers = {"X-Hub-Token": old_token} if old_token else {}
+        try:
+            response = await client.post(
+                f"{url}/api/hub/fleet", headers=headers,
+                json={"token": new_token, "sync": False}, timeout=PEER_TIMEOUT_S)
+            if response.status_code in {401, 403}:
+                return machine, {"ok": False, "status": "manual",
+                                 "detail": "peer rejected the current credential"}
+            if response.status_code >= 400:
+                return machine, {"ok": False, "status": "failed",
+                                 "detail": f"peer returned HTTP {response.status_code}"}
+            verified = await client.get(
+                f"{url}/api/hub/resources?local_only=true",
+                headers={"X-Hub-Token": new_token}, timeout=PEER_TIMEOUT_S)
+            if verified.status_code == 200:
+                return machine, {"ok": True, "status": "verified",
+                                 "detail": "saved and verified"}
+            return machine, {"ok": False, "status": "failed",
+                             "detail": f"saved but verification returned HTTP {verified.status_code}"}
+        except httpx.HTTPError as exc:
+            return machine, {"ok": False, "status": "unreachable",
+                             "detail": (str(exc).strip() or type(exc).__name__)[:180]}
+
+    rows = await asyncio.gather(*(one(machine, studios)
+                                  for machine, studios in machines.items()))
+    results = dict(rows)
+    local_commit(new_token)
+    _cache.clear()
+    verified = sum(row["ok"] for row in results.values())
+    manual = sum(row["status"] == "manual" for row in results.values())
+    return {
+        "total": len(results), "verified": verified,
+        "manual": manual, "pending": len(results) - verified - manual,
+        "machines": results,
+    }

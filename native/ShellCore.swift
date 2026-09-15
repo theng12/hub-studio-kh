@@ -48,8 +48,8 @@ struct ShellConfiguration {
     var dataDirectory: URL
     var modelsDirectory: URL?
     var offline: Bool
-    var readyFile: URL { dataDirectory.appendingPathComponent("voice-ready.json") }
-    var logFile: URL { dataDirectory.appendingPathComponent("voice-worker.log") }
+    var readyFile: URL { dataDirectory.appendingPathComponent("hub-ready.json") }
+    var logFile: URL { dataDirectory.appendingPathComponent("hub-worker.log") }
     var preferencesFile: URL { dataDirectory.appendingPathComponent("app-preferences.json") }
 
     init(arguments: [String], bundle: URL) throws {
@@ -109,13 +109,16 @@ struct WorkerReady: Decodable {
     let url: URL
     let pid: Int32
     let version: String
+    let token: String
     static func decode(_ data: Data, expectedPID: Int32) throws -> WorkerReady {
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.pid == expectedPID, value.url.scheme == "http", value.url.host == "127.0.0.1",
+        guard value.pid == expectedPID, (24...256).contains(value.token.utf8.count),
+              value.token.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }),
+              value.url.scheme == "http", value.url.host == "127.0.0.1",
               let port = value.url.port, (1...65535).contains(port), value.url.user == nil,
               value.url.password == nil, value.url.query == nil, value.url.fragment == nil,
               value.url.path.isEmpty || value.url.path == "/" else {
-            throw ShellFailure(message: "The audio engine reported an invalid startup address. Open its log for details.")
+            throw ShellFailure(message: "The local Hub reported invalid startup details. Open its log for details.")
         }
         return value
     }

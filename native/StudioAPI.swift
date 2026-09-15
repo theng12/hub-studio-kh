@@ -112,11 +112,16 @@ final class NativeWorkspaceStore: ObservableObject {
     private let session: URLSession
     private let redirectDelegate: RejectRedirects
     private var baseURL: URL?
+    private var hubToken: String?
     private var connectionID: UUID?
     private var dataDirectory: URL?
     private var pollTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
     private var loadingState = false
+    private var pendingAudio: HubAudioRequest?
+    private var pendingTranscription: PendingTranscription?
+    private var modelPackages: [String: HubModelPackage] = [:]
+    private var hubDownloadRuns: [String: String] = [:]
 
     init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
         let configuration = sessionConfiguration.copy() as! URLSessionConfiguration
@@ -126,10 +131,14 @@ final class NativeWorkspaceStore: ObservableObject {
         session = URLSession(configuration: configuration, delegate: redirectDelegate, delegateQueue: nil)
     }
 
-    func connect(baseURL: URL, dataDirectory: URL) async {
+    func connect(baseURL: URL, dataDirectory: URL, token: String) async {
         disconnect()
         do {
             self.baseURL = try Self.validatedBase(baseURL)
+            guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw NativeAPIError.message("The local Hub credential is unavailable.")
+            }
+            hubToken = token
             let requestConnection = UUID()
             self.connectionID = requestConnection
             self.dataDirectory = dataDirectory.standardizedFileURL
@@ -139,6 +148,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 attributes: [.posixPermissions: 0o700]
             )
             try loadState()
+            try loadPendingAudio()
+            try loadPendingTranscription()
+            try loadHubDownloadRuns()
             await refresh()
             guard self.connectionID == requestConnection else { return }
             pollTask = Task { [weak self] in
@@ -150,6 +162,7 @@ final class NativeWorkspaceStore: ObservableObject {
             }
         } catch {
             self.baseURL = nil
+            self.hubToken = nil
             self.connectionID = nil
             self.dataDirectory = nil
             self.error = Self.actionable(error, action: "Connect to the local engine")
@@ -164,6 +177,7 @@ final class NativeWorkspaceStore: ObservableObject {
         saveTask = nil
         if dataDirectory != nil { try? saveState() }
         baseURL = nil
+        hubToken = nil
         connectionID = nil
         isReachable = false
         submittingAudio = false
@@ -177,15 +191,17 @@ final class NativeWorkspaceStore: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         do {
-            async let catalog: CatalogResponse = get(["api", "catalog"])
-            async let transcription: TranscriptionAvailability = get(["api", "transcribe", "availability"])
-            async let generation: GenerationAvailability = get(["api", "generate", "availability"])
-            async let jobs: JobsResponse = get(["api", "generate", "jobs"])
-            async let transfers: DownloadsResponse = get(["api", "downloads"])
-            async let settings: TokenStatusWire = get(["api", "settings"])
-            let (catalogValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue) =
-                try await (catalog, transcription, generation, jobs, transfers, settings)
+            async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
+            async let packages: HubModelPackagesResponse = get(["api", "hub", "model-packages"])
+            async let transcription: TranscriptionAvailability = get(["studio", "voice", "api", "transcribe", "availability"])
+            async let generation: GenerationAvailability = get(["studio", "voice", "api", "generate", "availability"])
+            async let jobs: HubJobsResponse = get(["api", "hub", "jobs"])
+            async let transfers: DownloadsResponse = get(["studio", "voice", "api", "downloads"])
+            async let settings: TokenStatusWire = get(["studio", "voice", "api", "settings"])
+            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue) =
+                try await (catalog, packages, transcription, generation, jobs, transfers, settings)
             guard connectionID == requestConnection else { return }
+            modelPackages = Dictionary(uniqueKeysWithValues: packagesValue.models.map { ($0.modelId, $0) })
             audioSpeakers = (generationValue.qwen3PresetSpeakers ?? []).map(\.id)
             if audioSpeaker.isEmpty || (!audioSpeakers.isEmpty && !audioSpeakers.contains(audioSpeaker)) {
                 audioSpeaker = audioSpeakers.first ?? "Ryan"
@@ -194,12 +210,27 @@ final class NativeWorkspaceStore: ObservableObject {
                 catalogValue.models,
                 transcriptionValue.models,
                 transcriptionAvailable: transcriptionValue.available ?? false,
-                speakers: audioSpeakers
+                speakers: audioSpeakers,
+                packages: modelPackages
             )
-            audioJobs = jobsValue.jobs.map(Self.mapJob).sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
-            downloads = transfersValue.jobs.map(Self.mapDownload)
+            var history: [NativeJob] = []
+            for batch in jobsValue.batches where batch.modality == "voice" {
+                let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
+                guard connectionID == requestConnection else { return }
+                history.append(Self.mapHubJob(detail))
+            }
+            audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            var hubTransfers: [NativeDownload] = []
+            for (runID, repo) in hubDownloadRuns {
+                let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
+                hubTransfers.append(NativeDownload(id: run.id, repo: repo, state: run.state,
+                    percent: 0, downloadedBytes: 0, totalBytes: 0,
+                    error: run.state == "error" || run.state == "interrupted" ? "Hub model download \(run.state)." : nil))
+            }
+            downloads = hubTransfers + transfersValue.jobs.map(Self.mapDownload)
             tokenStatus = settingsValue.value
             reconcileSelections(defaultTranscription: transcriptionValue.defaultModel)
+            await reconcileTranscription()
             isReachable = true
             if reportErrors { error = nil }
         } catch {
@@ -212,26 +243,35 @@ final class NativeWorkspaceStore: ObservableObject {
     func generateAudio() async {
         guard !submittingAudio, let requestConnection = connectionID else { return }
         do {
-            let model = try usableModel(repo: audioModel, function: .audio)
-            let text = audioText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
-            guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
-            guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
-                throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
+            let body: HubAudioRequest
+            if let pendingAudio { body = pendingAudio }
+            else {
+                let model = try usableModel(repo: audioModel, function: .audio)
+                let text = audioText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
+                guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
+                guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
+                    throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
+                }
+                body = HubAudioRequest(
+                    modality: "voice", model: model.repo,
+                    clientRequestId: "native:\(UUID().uuidString)",
+                    items: [HubAudioItem(text: text, params: HubAudioParams(
+                        presetSpeaker: audioSpeaker,
+                        language: audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)))])
             }
             submittingAudio = true
             defer { if connectionID == requestConnection { submittingAudio = false } }
-            let body = AudioRequest(
-                repo: model.repo,
-                text: text,
-                presetSpeaker: audioSpeaker,
-                language: audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            let response: JobResponse = try await sendJSON(["api", "generate", "txt2speech"], method: "POST", body: body)
+            if pendingAudio == nil { pendingAudio = body; try savePendingAudio() }
+            let response: HubJobSubmit = try await sendHubJSON(["api", "hub", "jobs"], body: body)
             guard connectionID == requestConnection else { return }
-            let job = Self.mapJob(response.job)
+            let detail: HubJobDetail = try await get(["api", "hub", "jobs", response.batchId])
+            guard connectionID == requestConnection else { return }
+            let job = Self.mapHubJob(detail)
             audioJobs.removeAll { $0.id == job.id }
             audioJobs.insert(job, at: 0)
+            pendingAudio = nil
+            try savePendingAudio()
             error = nil
         } catch {
             guard connectionID == requestConnection else { return }
@@ -242,6 +282,13 @@ final class NativeWorkspaceStore: ObservableObject {
     func transcribe() async {
         guard !transcribing, let requestConnection = connectionID else { return }
         do {
+            if pendingTranscription != nil {
+                await reconcileTranscription()
+                if pendingTranscription != nil {
+                    throw NativeAPIError.message("The previous transcription upload has an uncertain response. Check its Hub history before starting another upload.")
+                }
+                return
+            }
             let model = try usableModel(repo: transcriptionModel, function: .transcription)
             guard let file = transcriptionFile, FileManager.default.fileExists(atPath: file.path) else {
                 throw NativeAPIError.message("Choose an audio or video file that still exists.")
@@ -251,10 +298,19 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             transcribing = true
             defer { if connectionID == requestConnection { transcribing = false } }
+            let identity = PendingTranscription(episode: "native-\(UUID().uuidString)",
+                itemID: "clip-\(UUID().uuidString)", filePath: file.path,
+                model: model.repo, language: transcriptionLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
+                wordTimestamps: wordTimestamps, batchID: nil)
+            pendingTranscription = identity
+            try savePendingTranscription()
             let boundary = "StudioHub-\(UUID().uuidString)"
             guard let uploadDirectory = dataDirectory else { throw NativeAPIError.message("The app data directory is unavailable.") }
             let fields = [
                     "model": model.repo,
+                    "item_ids": identity.itemID,
+                    "project": "native",
+                    "episode": identity.episode,
                     "language": transcriptionLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
                     "word_timestamps": wordTimestamps ? "true" : "false"
                 ]
@@ -265,17 +321,71 @@ final class NativeWorkspaceStore: ObservableObject {
             }.value
             defer { try? FileManager.default.removeItem(at: uploadFile) }
             guard connectionID == requestConnection else { return }
-            var request = try makeRequest(["api", "transcribe"], method: "POST")
+            var request = try makeRequest(["api", "hub", "transcription", "jobs"], method: "POST")
             request.timeoutInterval = 60 * 60
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-            let wire: TranscriptWire = try await performUpload(request, fromFile: uploadFile)
+            let wire: HubTranscriptionSubmit = try await performUpload(request, fromFile: uploadFile)
             guard connectionID == requestConnection else { return }
-            transcriptionResult = wire.value(sourceFilename: file.lastPathComponent)
-            error = nil
+            pendingTranscription = identity.withBatchID(wire.batchId)
+            try savePendingTranscription()
+            try await pollTranscription(batchID: wire.batchId, requestConnection: requestConnection)
+            if pendingTranscription == nil { error = nil }
         } catch {
             guard connectionID == requestConnection else { return }
             self.error = Self.actionable(error, action: "Transcribe the selected file")
         }
+    }
+
+    private func reconcileTranscription() async {
+        guard let pending = pendingTranscription, connectionID != nil else { return }
+        do {
+            var batchID = pending.batchID
+            if batchID == nil {
+                let listing: HubTranscriptionList = try await get(["api", "hub", "transcription", "jobs"])
+                batchID = listing.batches.first { $0.project == "native" && $0.episode == pending.episode }?.id
+                if let batchID {
+                    pendingTranscription = pending.withBatchID(batchID)
+                    try savePendingTranscription()
+                }
+            }
+            if let batchID, let requestConnection = connectionID {
+                try await pollTranscription(batchID: batchID, requestConnection: requestConnection, wait: false)
+            }
+        } catch { /* Keep the uncertain identity; a later refresh can reconcile it. */ }
+    }
+
+    private func pollTranscription(batchID: String, requestConnection: UUID, wait: Bool = true) async throws {
+        for _ in 0..<(wait ? 1_800 : 1) {
+            guard connectionID == requestConnection else { return }
+            do {
+                let detail: HubTranscriptionDetail = try await get(["api", "hub", "transcription", "jobs", batchID])
+                guard connectionID == requestConnection else { return }
+                let item = detail.items.first
+                if let item, item.state == "done", item.artifactUrl != nil,
+                   let pending = pendingTranscription, pending.batchID == batchID {
+                    let srt = String(decoding: try await performData(makeRequest(
+                        ["api", "hub", "transcription", "jobs", batchID, "items", "0", "artifact"])), as: UTF8.self)
+                    guard connectionID == requestConnection else { return }
+                    let metadata = item.metadata
+                    transcriptionResult = NativeTranscript(text: metadata?.text ?? "", srt: srt,
+                        vtt: metadata?.vtt ?? "", language: metadata?.language ?? "",
+                        duration: metadata?.duration ?? 0, model: metadata?.model ?? detail.model,
+                        sourceFilename: URL(fileURLWithPath: pending.filePath).lastPathComponent)
+                    pendingTranscription = nil
+                    try savePendingTranscription()
+                    try saveState()
+                    return
+                }
+                if ["uncertain", "manual_action_required"].contains(item?.state ?? "") {
+                    throw NativeAPIError.message("The Hub transcription result is uncertain. Its identity is saved; check the original job before retrying so the same file is not generated twice.")
+                }
+                if ["error", "cancelled"].contains(item?.state ?? "") {
+                    throw NativeAPIError.message("The Hub transcription item ended in state \(item?.state ?? "unknown").")
+                }
+            } catch { if wait { throw error }; return }
+            if wait { try? await Task.sleep(for: .seconds(2)) }
+        }
+        if wait { throw NativeAPIError.message("The Hub transcription job is still pending. Its identity was saved for recovery.") }
     }
 
     func startDownload(_ model: NativeModel) async {
@@ -284,10 +394,14 @@ final class NativeWorkspaceStore: ObservableObject {
             guard models.contains(where: { $0.id == model.id && $0.repo == model.repo }), model.supported else {
                 throw NativeAPIError.message("This model is not supported by the current native workspace.")
             }
-            let _: DownloadStartResponse = try await sendJSON(
-                ["api", "downloads"], method: "POST", body: DownloadRequest(repo: model.repo)
-            )
+            guard let package = modelPackages[model.repo] else {
+                throw NativeAPIError.message("This model has no approved Hub package.")
+            }
+            let run: HubModelDownload = try await sendHubJSON(
+                ["api", "hub", "model-packages", package.packageId, "download"], body: EmptyBody())
             guard connectionID == requestConnection else { return }
+            hubDownloadRuns[run.id] = model.repo
+            try saveHubDownloadRuns()
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Start the model download") } }
     }
@@ -295,8 +409,10 @@ final class NativeWorkspaceStore: ObservableObject {
     func cancelDownload(_ job: NativeDownload) async {
         guard let requestConnection = connectionID else { return }
         do {
-            guard downloads.contains(where: { $0.id == job.id }) else { throw NativeAPIError.message("That download is no longer in the local queue.") }
-            let _: DownloadCancelResponse = try await sendEmpty(["api", "downloads", job.id], method: "DELETE")
+            guard hubDownloadRuns[job.id] != nil else {
+                throw NativeAPIError.message("Only Hub package downloads can be cancelled from this workspace.")
+            }
+            let _: HubModelDownload = try await sendEmpty(["api", "hub", "model-downloads", job.id], method: "DELETE")
             guard connectionID == requestConnection else { return }
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the model download") } }
@@ -306,7 +422,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard let requestConnection = connectionID else { return }
         do {
             guard audioJobs.contains(where: { $0.id == job.id }) else { throw NativeAPIError.message("That audio job is no longer in the local queue.") }
-            let _: JobResponse = try await sendEmpty(["api", "generate", "jobs", job.id], method: "DELETE")
+            let _: HubCancelResponse = try await sendEmpty(["api", "hub", "jobs", job.id], method: "DELETE")
             guard connectionID == requestConnection else { return }
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the audio job") } }
@@ -315,22 +431,14 @@ final class NativeWorkspaceStore: ObservableObject {
     func releaseMemory() async {
         guard let requestConnection = connectionID else { return }
         do {
-            let _: EmptyResponse = try await sendEmpty(["api", "memory", "release"], method: "POST")
+            let _: EmptyResponse = try await sendEmpty(["api", "hub", "memory", "release"], method: "POST")
             guard connectionID == requestConnection else { return }
             error = nil
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Release model memory") } }
     }
 
     func removeModel(_ model: NativeModel) async {
-        guard let requestConnection = connectionID else { return }
-        do {
-            guard models.contains(where: { $0.id == model.id && $0.repo == model.repo }) else {
-                throw NativeAPIError.message("Refresh Models before removing this download.")
-            }
-            let _: EmptyResponse = try await sendEmpty(["api", "model-storage", model.repo], method: "DELETE")
-            guard connectionID == requestConnection else { return }
-            await refresh()
-        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Remove the downloaded model") } }
+        error = "Hub model removal is unavailable until it can protect models with active readers."
     }
 
     func audioData(for job: NativeJob) async throws -> Data {
@@ -338,7 +446,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard job.state == "done", audioJobs.contains(where: { $0.id == job.id }) else {
             throw NativeAPIError.message("Audio is available only for a completed job in the current history.")
         }
-        let request = try makeRequest(["api", "generate", "jobs", job.id, "audio"])
+        let request = try makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"])
         let data = try await performData(request)
         guard connectionID == requestConnection else { throw NativeAPIError.message("The local engine connection changed before audio retrieval completed.") }
         return data
@@ -352,31 +460,13 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func saveHFToken(_ token: String) async -> Bool {
-        guard let requestConnection = connectionID else { return false }
-        do {
-            let status: TokenStatusWire = try await sendJSON(["api", "settings"], method: "POST", body: TokenRequest(hfToken: token))
-            guard connectionID == requestConnection else { return false }
-            tokenStatus = status.value
-            error = nil
-            return true
-        } catch {
-            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Save the Hugging Face token") }
-            return false
-        }
+        error = "Hugging Face token editing needs an owner-authenticated Hub route."
+        return false
     }
 
     func testHFToken(_ token: String) async -> NativeTokenTest? {
-        guard let requestConnection = connectionID else { return nil }
-        do {
-            let response: TokenTestWire = try await sendJSON(["api", "settings", "test-hf-token"], method: "POST", body: TokenRequest(hfToken: token))
-            guard connectionID == requestConnection else { return nil }
-            error = nil
-            return NativeTokenTest(name: response.name, type: response.type, organizations: response.orgs ?? [])
-        } catch {
-            guard connectionID == requestConnection else { return nil }
-            self.error = Self.actionable(error, action: "Test the Hugging Face token")
-            return nil
-        }
+        error = "Hugging Face token testing needs an owner-authenticated Hub route."
+        return nil
     }
 
     private func usableModel(repo: String, function: StudioFunction) throws -> NativeModel {
@@ -406,18 +496,24 @@ final class NativeWorkspaceStore: ObservableObject {
         _ audio: [CatalogModel],
         _ transcription: [TranscriptionModel],
         transcriptionAvailable: Bool,
-        speakers: [String]
+        speakers: [String],
+        packages: [String: HubModelPackage]
     ) -> [NativeModel] {
         let audioModels = audio.filter { $0.capabilities?.contains("tts") == true }.map { item in
-            let supported = item.family == "qwen3-tts" && item.repo.localizedCaseInsensitiveContains("CustomVoice")
+            let formCompatible = item.family == "qwen3-tts" && item.repo.localizedCaseInsensitiveContains("CustomVoice")
+            let package = packages[item.repo]
+            let supported = formCompatible && package != nil
             let cached = item.cache?.state == "cached"
             let ready = (item.runtimeReady ?? false) && item.memoryEligible != false
+                && package?.dispatchState == "eligible"
             let qualified = item.repo == qwenCustomVoice
             let note = supported
                 ? (cached && ready
                     ? (qualified ? "Tested local Qwen CustomVoice workflow." : "Compatible Qwen CustomVoice contract; this exact model has not completed the native pilot test.")
                     : "Native Audio compatible; install the model and ensure its runtime is ready.")
-                : "This native Audio form does not yet expose the model-specific controls required by this runtime entry."
+                : (package == nil
+                    ? "This model is outside the packaged model catalog. Native Audio controls for the approved Base models are planned for the next phase."
+                    : "This native Audio form does not yet expose the model-specific controls required by this runtime entry.")
             return NativeModel(
                 id: "audio:\(item.repo)", repo: item.repo, label: item.label, family: item.family ?? "Audio",
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
@@ -426,14 +522,16 @@ final class NativeWorkspaceStore: ObservableObject {
             )
         }
         let transcriptionModels = transcription.map { item in
-            let supported = item.engine?.lowercased().contains("whisper") == true
-            let ready = transcriptionAvailable && item.cached == true
+            let package = packages[item.repo]
+            let supported = item.engine?.lowercased().contains("whisper") == true && package != nil
+            let ready = transcriptionAvailable && item.cached == true && package?.dispatchState == "eligible"
             let qualified = item.repo == whisperTurbo
             let note = supported
                 ? (ready
                     ? (qualified ? "Tested local Whisper transcription workflow." : "Compatible Whisper contract; this exact model has not completed the native pilot test.")
                     : "Native Transcription compatible; download this model and ensure the transcription runtime is ready.")
-                : "This native Transcription form has not been qualified for this runtime entry yet."
+                : (package == nil ? "This model is outside the packaged model catalog." :
+                    "This native Transcription form has not been qualified for this runtime entry yet.")
             return NativeModel(
                 id: "transcription:\(item.repo)", repo: item.repo, label: item.label, family: item.engine ?? "Transcription",
                 function: .transcription, cached: item.cached ?? false, supported: supported, supportNote: note,
@@ -450,6 +548,12 @@ final class NativeWorkspaceStore: ObservableObject {
             model: wire.params?.repo ?? "", createdAt: wire.createdAt,
             outputURL: wire.state == "done" ? wire.outputUrl : nil, error: wire.error
         )
+    }
+    private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
+        let item = wire.items.first
+        return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
+            text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
+            outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error)
     }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
@@ -478,6 +582,7 @@ final class NativeWorkspaceStore: ObservableObject {
         request.httpMethod = method
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let hubToken { request.setValue(hubToken, forHTTPHeaderField: "X-Hub-Token") }
         return request
     }
 
@@ -491,6 +596,12 @@ final class NativeWorkspaceStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         request.httpBody = try encoder.encode(body)
+        return try await perform(request)
+    }
+    private func sendHubJSON<T: Decodable, Body: Encodable>(_ components: [String], body: Body) async throws -> T {
+        var request = try makeRequest(components, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
         return try await perform(request)
     }
 
@@ -586,7 +697,7 @@ final class NativeWorkspaceStore: ObservableObject {
             try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n")
         }
         let filename = file.lastPathComponent.replacingOccurrences(of: "\"", with: "")
-        try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+        try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
         let input = try FileHandle(forReadingFrom: file)
         defer { try? input.close() }
         while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
@@ -607,6 +718,40 @@ final class NativeWorkspaceStore: ObservableObject {
         let transcriptionLanguage: String
         let wordTimestamps: Bool
         let transcriptionResult: NativeTranscript?
+    }
+    private var pendingAudioURL: URL? { dataDirectory?.appendingPathComponent("native-pending-audio.json") }
+    private func savePendingAudio() throws {
+        guard let pendingAudioURL else { return }
+        if let pendingAudio {
+            try JSONEncoder().encode(pendingAudio).write(to: pendingAudioURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingAudioURL.path)
+        } else { try? FileManager.default.removeItem(at: pendingAudioURL) }
+    }
+    private func loadPendingAudio() throws {
+        guard let pendingAudioURL, FileManager.default.fileExists(atPath: pendingAudioURL.path) else { return }
+        pendingAudio = try JSONDecoder().decode(HubAudioRequest.self, from: Data(contentsOf: pendingAudioURL))
+    }
+    private var pendingTranscriptionURL: URL? { dataDirectory?.appendingPathComponent("native-pending-transcription.json") }
+    private func savePendingTranscription() throws {
+        guard let pendingTranscriptionURL else { return }
+        if let pendingTranscription {
+            try JSONEncoder().encode(pendingTranscription).write(to: pendingTranscriptionURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingTranscriptionURL.path)
+        } else { try? FileManager.default.removeItem(at: pendingTranscriptionURL) }
+    }
+    private func loadPendingTranscription() throws {
+        guard let pendingTranscriptionURL, FileManager.default.fileExists(atPath: pendingTranscriptionURL.path) else { return }
+        pendingTranscription = try JSONDecoder().decode(PendingTranscription.self, from: Data(contentsOf: pendingTranscriptionURL))
+    }
+    private var hubDownloadRunsURL: URL? { dataDirectory?.appendingPathComponent("native-model-downloads.json") }
+    private func saveHubDownloadRuns() throws {
+        guard let hubDownloadRunsURL else { return }
+        try JSONEncoder().encode(hubDownloadRuns).write(to: hubDownloadRunsURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: hubDownloadRunsURL.path)
+    }
+    private func loadHubDownloadRuns() throws {
+        guard let hubDownloadRunsURL, FileManager.default.fileExists(atPath: hubDownloadRunsURL.path) else { return }
+        hubDownloadRuns = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: hubDownloadRunsURL))
     }
 
     private var stateURL: URL? { dataDirectory?.appendingPathComponent("native-workspaces.json") }
@@ -654,6 +799,15 @@ final class NativeWorkspaceStore: ObservableObject {
 
 private struct CacheWire: Decodable { let state: String? }
 private struct CatalogResponse: Decodable { let models: [CatalogModel] }
+private struct HubModelPackagesResponse: Decodable { let models: [HubModelPackage] }
+private struct HubModelPackage: Decodable {
+    let packageId: String
+    let modelId: String
+    let state: String
+    let dispatchState: String
+}
+private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
+private struct EmptyBody: Encodable {}
 private struct CatalogModel: Decodable {
     let repo: String
     let label: String
@@ -693,6 +847,71 @@ private enum StringOrStrings: Decodable {
 private struct GenerationAvailability: Decodable { let qwen3PresetSpeakers: [GenerationSpeaker]? }
 private struct GenerationSpeaker: Decodable { let id: String }
 private struct JobsResponse: Decodable { let jobs: [JobWire] }
+private struct HubJobsResponse: Decodable { let batches: [HubJobSummary] }
+private struct HubJobSummary: Decodable { let id: String; let modality: String }
+private struct HubJobDetail: Decodable {
+    let id: String
+    let model: String
+    let createdAt: Double?
+    let items: [HubJobItem]
+}
+private struct HubJobItem: Decodable {
+    let state: String
+    let progress: Double?
+    let prompt: String?
+    let artifactUrl: String?
+    let error: String?
+}
+private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
+private struct HubCancelResponse: Decodable { let ok: Bool }
+private struct HubAudioRequest: Codable {
+    let modality: String
+    let model: String
+    let clientRequestId: String
+    let items: [HubAudioItem]
+}
+private struct HubAudioItem: Codable { let text: String; let params: HubAudioParams }
+private struct HubAudioParams: Codable {
+    let presetSpeaker: String
+    let language: String
+    enum CodingKeys: String, CodingKey { case presetSpeaker = "preset_speaker", language }
+}
+private struct PendingTranscription: Codable {
+    let episode: String
+    let itemID: String
+    let filePath: String
+    let model: String
+    let language: String
+    let wordTimestamps: Bool
+    let batchID: String?
+    func withBatchID(_ id: String) -> Self {
+        Self(episode: episode, itemID: itemID, filePath: filePath, model: model,
+             language: language, wordTimestamps: wordTimestamps, batchID: id)
+    }
+}
+private struct HubTranscriptionSubmit: Decodable { let batchId: String }
+private struct HubTranscriptionList: Decodable { let batches: [HubTranscriptionSummary] }
+private struct HubTranscriptionSummary: Decodable {
+    let id: String
+    let project: String?
+    let episode: String?
+}
+private struct HubTranscriptionDetail: Decodable {
+    let model: String
+    let items: [HubTranscriptionItem]
+}
+private struct HubTranscriptionItem: Decodable {
+    let state: String
+    let artifactUrl: String?
+    let metadata: HubTranscriptMetadata?
+}
+private struct HubTranscriptMetadata: Decodable {
+    let text: String?
+    let vtt: String?
+    let language: String?
+    let duration: Double?
+    let model: String?
+}
 private struct JobResponse: Decodable { let job: JobWire }
 private struct JobWire: Decodable {
     let id: String

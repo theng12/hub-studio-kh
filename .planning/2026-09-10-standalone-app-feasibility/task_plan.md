@@ -4,9 +4,10 @@ Updated: 2026-09-15. Canonical planning directory remains this directory.
 
 ## Current goal
 
-Execute the owner-authorized first phase, ST-01, of the standalone Hub + Image + Voice
-+ Subtitle plan. The narrowed design is accepted. Complete reviewed runtime/model
-foundations and hand off ST-02; do not silently begin later phases.
+Execute the owner-authorized standalone Hub + Image + Voice + Subtitle plan.
+ST-01 is integrated. The September 15 owner instruction authorizes the remaining
+work and both missing Whisper downloads. Continue eligible phases in board order,
+using bounded parallel assignments and reviewed integration.
 
 ## Confirmed scope
 
@@ -102,3 +103,56 @@ The clean implementation worktree is retained with build-side runtime/model proo
 artifacts; disposable input scaffolding and superseded exploratory runtime were removed.
 All owned test processes exited. Applicable preflight/exit checks are satisfied; no
 launcher, native app artifact, installed fleet machine or credential was changed.
+
+
+## ST-02 active execution — 2026-09-15
+
+Owner authorized remaining work and missing Whisper Base/Small downloads, with cheap
+independent agents. Start c16833c; isolated .worktrees/st-02. Existing unrelated changes
+remain in original checkout. Apply standalone/canonical-plan/read-only-source rules;
+no Pinokio launcher edits, live fleet changes, hosted compute or publication.
+
+Dispatch record: Luna/high whisper_stock starts pinned two-model download+hash proof
+in original ignored model-library; prove with .build/whisper-download report. Terra/high
+hub_backend owns adopted Hub backend/tests/provenance; prove focusedtests and source
+receipt. Sol/high hub_contract_review owns read-only integrationmap and independent
+review; root owns packaging/native and shared contracts/board. No overlapping writers.
+
+Work sequence: baseline -> exact Hub adoption -> private process/auth lifecycle ->
+native Hub API routing -> packaged fixture submit/status/cancel/result/recovery ->
+local suites/build/smoke -> independent review/integration. Continue later READY tasks
+under owner's remaining-work authorization; retain physical qualification limitations.
+
+Download result: both Whisper packages passed full rehash; 628,667,821 bytes fetched
+and nine existing file placements reused. Receipt: qualification/whisper-stock-2026-09-15.md.
+Luna whisper_stock now owns tests/test_hub_process.py for process/crash boundaries.
+Sol completed native/StudioAPI.swift and its API fixtures, then independently reviewed
+process/auth/artifact boundaries. Root's full native build passed. Terra is resolving
+artifact, download lifetime and admission/replay findings with focused job tests.
+Luna/high hub_regression starts at c16833c in the same isolated ST-02 worktree, owning
+only tests/hub_regression/** and qualification/st02-regression.md; completion proof
+is preserved-core upstream tests run locally with .build/st02-hub-regression.log.
+
+Terra's continuation hit model capacity; Sol/high hub_backend_finish took over its
+exact owned backend/test paths and completed the remaining fixes. Luna completed
+32 isolated retained-Hub regressions and is independently reviewing final admission,
+identity and routing changes. Root added the existing delivery ACK route; Luna
+reviewed it, then supplied statistics and two pause/resume routes. No overlapping
+writers remain. Full project suite: 107 passed; existing Voice suite: 640 passed;
+native build passed. ST-02 is REVIEW until the final artifact, review disposition
+and local integration are recorded. Hub-owned Voice's old independent cleanup
+timer is disabled; ST-07 will enforce the shared protected-output policy.
+
+
+ST-02 final review repairs: potentially accepted synchronous Subtitle work remains
+uncertain on lost response, cancellation and restart. Its saved physical machine
+continues to participate in existing admission, preventing overlap while other nodes
+remain usable. Exact GenStudio replays precede new model readiness and retain conflict
+validation. Native surfaces uncertainty without resubmitting. Packaged Subtitle's
+legacy cleanup timer is off pending the shared ST-07 policy.
+Proof: root 107 passed (52.71 s); final admission/config + retained Hub wrapper
+11 passed (13.40 s, including 7 real-worker cases and 32 retained upstream cases);
+Voice 640 passed (34.59 s); native boundary/API/full build passed. Final assembled
+artifact and review disposition remain required. Whisper Base/Small are fully
+file-verified and stock receipts are retained; no further model download is needed
+for the current scoped catalog inventory.

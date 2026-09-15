@@ -185,6 +185,8 @@ def enforce(manager, output_dir: Path, target_bytes: int | None = None) -> dict:
 
 def start_background(manager, output_dir: Path) -> None:
     """Enforce independently of the UI after a safe startup delay, then hourly."""
+    if os.environ.get("STUDIOHUB_OUTPUT_POLICY_OWNER") == "hub":
+        return
     global _STARTED
     with _START_LOCK:
         if _STARTED:

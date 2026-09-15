@@ -1,8 +1,8 @@
-# ST-01 runtime and model contract
+# Runtime, model and local Hub contract
 
-Implemented boundary: model package validation/import/download and pinned runtime inputs.
-Hub ownership, native model controls and generation admission are implemented by later
-tasks. This document extends the existing Hub contracts rather than defining new job APIs.
+Implemented boundaries: ST-01 model package validation/import/download and pinned runtime inputs;
+ST-02 packaged Hub ownership and common admission. Engine qualification and complete native
+workflows remain their named later tasks. This document extends the existing Hub contracts rather than defining new job APIs.
 
 ## Files and callers
 
@@ -13,8 +13,7 @@ tasks. This document extends the existing Hub contracts rather than defining new
 - [Model package tests](../tests/test_model_packages.py): filesystem, download and receipt behavior.
 
 ST-02 stages the helper and catalog alongside Hub and supplies the owner-authenticated
-model-management API using the existing asynchronous download/run lifecycle. This phase
-does not add native UI, start a Hub, change an existing model cache or deploy a node.
+model-management API using the existing asynchronous download/run lifecycle. The ST-01 helper does not itself launch services or change existing model caches.
 
 ## Model manifest v1
 
@@ -139,8 +138,10 @@ Return truthful unsupported/unknown states instead of mapping absence to a healt
 - Preserve submit/status/cancel, Hub-relative artifact proxy, SHA-256/byte evidence and
   verified delivery acknowledgements. Do not expose worker-local paths as customer URLs.
 - Native and remote work use the same Hub admission. Workers bind privately. Runtime
-  identity records the package lock hash and staged artifact hash, never a fabricated
-  Git identity or a files-verified badge presented as successful model execution.
+  identity uses the manifest runtime_sha256; the release separately records
+  payload_sha256 and exact adoption commits. Build-side lock hashes remain in the
+  runtime input records, not in the worker descriptor. Never present a fabricated
+  Git identity or a files-verified badge as successful model execution.
 - Add independent Subtitle worker/registry/ledger entries deliberately. Its public jobs
   and history are separate; Voice's internal Whisper quality check remains part of the
   parent Voice job under the same admission lease.
@@ -183,3 +184,72 @@ ST-01 provides pinned inputs, import/download behavior and recorded runtime impo
 evidence. It does not certify all requested model inference on the new runtimes, make a
 complete multi-worker app, or establish physical M1/Sonoma support. Those remain the
 named later engine and ST-11 checkpoints, with exact runtime hashes carried forward.
+
+
+## ST-02 packaged handoff
+
+`packaging/hub_worker.py` is the `StudioHubService` entry point. The native shell
+reads its owner-only `hub-ready.json` and sends `X-Hub-Token` for API calls to that
+exact loopback URL; its health check uses the accepted Bearer form. The Hub starts Voice privately using the same existing Hub token.
+The readiness file contains URL, PID, release version and token; never log its token.
+`components/hub/standalone.py` owns the FastAPI lifecycle and the retained schedulers.
+
+The wrapper supplies these paths rather than discovering existing Pinokio installs:
+
+| Input | Value / owner |
+| --- | --- |
+| STUDIOHUB_DATA_DIR | External app data `/hub` directory for Hub ledger, settings and downloads |
+| STUDIOHUB_MODELS_DIR | Existing selected model library; missing volume fails startup |
+| STUDIOHUB_WORKERS_FILE | Private `hub/owned-workers.json`, removed on owned service shutdown |
+| STUDIOHUB_MODEL_MANIFESTS | Shipped Resources/model-manifests |
+| STUDIOHUB_RELEASE_MANIFEST | Shipped release-manifest.json with exact source/runtime identity |
+
+Descriptors list only workers actually running. Required fields are `id` (image,
+voice or subtitle), matching `modality` (image, voice or transcription), loopback
+host and distinct port, `local: true`, stable `machine`, existing `hub_token` and
+`runtime_identity`. A compatible runtime needs a nonempty ID and `compatible: true`.
+The same credential supplies `studio_token`. ST-03/ST-06 add owned Image/Subtitle
+processes; the current wrapper starts only Voice. ST-10 adds real fleet integration.
+
+### Authenticated API boundaries
+
+- `/api/hub/jobs`: existing native/external submit, list, item status, cancel and
+  Hub-relative artifact flow. Replay preserves the original execution identity and
+  validates conflicts before treating the request as new work.
+- `/api/hub/transcription/jobs`: separate multipart Subtitle lifecycle. A request
+  that may already have reached a synchronous worker must remain uncertain after
+  cancellation, connection loss or restart. It cannot be automatically resubmitted.
+  The persisted physical machine remains occupied in the existing admission check
+  until reconciliation; other machines remain eligible.
+- `/api/hub/model-packages`: catalog/file/runtime readiness; `/{package_id}/import`,
+  `/download` and `/verify` use the ST-01 helper. Download returns a durable run ID;
+  `/api/hub/model-downloads/{run_id}` gets or cancels that run. Explicit retries reuse
+  validated partial bytes without changing model protection.
+- `/api/hub/settings`: GET defaults/effective values, PUT `max_bytes` and
+  `retention_days`, POST `/restore-defaults`. ST-07 extends this same owner instead
+  of creating another settings service. Current defaults are 50,000,000,000 and 30.
+- `/api/hub/controller`, `/api/hub/capabilities`, `/api/hub/workers` and preserved
+  statistics/pause routes expose existing identity and admission semantics.
+
+### Storage and receipt handoff to ST-07/ST-08
+
+`components/hub/delivery.py` registers the existing item ACK route. It requires a
+done item, successful worker acknowledgement and durable Hub receipt save. Failure
+leaves it unacknowledged; sequential repeats return the recorded receipt. Concurrent
+or lost-response retries may repeat the downstream call, so the worker ACK contract
+must be idempotent. Remote worker routing is qualified by ST-10.
+
+Retained Voice 2.7.2 lacks that worker ACK endpoint. The Hub boundary is fixture-tested;
+ST-07 supplies the worker output registration/receipt mechanism. Native export does
+not send an ACK until ST-07/ST-08 can verify saved destination bytes/hash. Hub-owned
+Voice disables its previous 80 GiB background cleaner using
+`STUDIOHUB_OUTPUT_POLICY_OWNER=hub`; packaged Subtitle also leaves its legacy cleanup
+timer off. ST-07 supplies shared enforcement. This interim
+development build therefore preserves outputs. Existing standalone Voice cleanup
+behavior outside Hub ownership is unchanged.
+
+ST-07 must register finalized groups using original generation time, exact paths,
+bytes/hash, job/item/attempt and physical device/model/runtime identity. Existing
+ledger metadata and artifact evidence are inputs; no output index is claimed here.
+Models, originals, active/uncertain and unacknowledged files stay protected. Tests may
+exercise deletion only inside temporary fixtures.

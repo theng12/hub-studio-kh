@@ -37,9 +37,23 @@ in a later independent process.
 
 [Phase evidence](qualification/st01.md) records the real Whisper Turbo import and
 relocated-library check, small-file HTTPS smoke, tests and runtime limitations.
-These helpers are not wired into the existing preview yet. ST-02 integrates the local
-Hub; ST-03 packages FLUX. Image runtime relocation and physical M1/Sonoma model tests
-remain explicit later checkpoints.
+ST-02 connects these helpers to the packaged Hub. ST-03 packages FLUX. Image runtime
+relocation and physical M1/Sonoma model tests remain explicit later checkpoints.
+Both missing [Whisper Base and Small packages](qualification/whisper-stock-2026-09-15.md)
+are now downloaded and fully file-verified; transcription qualification is separate.
+
+## 0.4.0 development build
+
+The native shell connects to a bundled Hub, which owns the private Voice process.
+The Hub exposes authenticated jobs, model import/download/verification and editable
+device policy settings. Worker death stops the owner so the shell can show a failed
+service instead of leaving a stale healthy connection. Restart automation remains ST-09.
+
+This is an intermediate build. The narrowed model-specific controls, independent
+Subtitle process and generated-output cleanup enforcement are still on the task board.
+The existing native CustomVoice form is unavailable for the approved Qwen Base packages
+until their dedicated workflow is implemented. File verification alone never qualifies
+a model/runtime for generation.
 
 ## Existing 0.3.0 preview
 
@@ -49,7 +63,8 @@ generation and Whisper Turbo transcription/SRT export. It does not prove the req
 Qwen Base models. Hub and Image engines are not bundled. The preview's six navigation
 destinations reflect the older plan, not six implemented engines.
 
-The following instructions describe that existing preview, not the future narrowed release.
+That existing artifact is preserved. The following commands build the current source
+into a separate development artifact.
 
 ## Native build
 
@@ -57,12 +72,15 @@ Build the local artifact on an Apple Silicon Mac:
 
 ```sh
 bash native/build.sh
-python3 -B packaging/stage_voice.py --runtime .build/voice-runtime --native-shell .build/StudioHub --output 'dist/Studio Hub.app'
+python3 -B packaging/stage_voice.py --runtime .build/voice-runtime --native-shell .build/StudioHub --output 'dist/Studio Hub 0.4.0 Local Proof.app'
 ```
 
 `native/build.sh` selects the installed macOS 26.5 SDK because the installed SDK 27 toolchain is missing the SwiftUI macros plugin needed by this source. The deployment target remains macOS 14. Local execution was tested on macOS 26; physical Sonoma compatibility remains unqualified. The target app needs no Swift build tools, Python, Pinokio or Homebrew on the user machine.
 
-Open `dist/Studio Hub.app`, choose a model library, and use Audio or Transcription. Models, jobs, settings and outputs are managed from the central sidebar. A missing model volume stays unavailable with an actionable error; the app does not silently create a replacement cache or redownload elsewhere. Closing the window leaves the owned worker available from the menu bar. Explicit Quit handles active work before stopping that worker.
+Open the separately built app and choose a model library. A missing model volume stays
+unavailable with an actionable error; the app does not silently create a replacement
+cache or redownload elsewhere. Closing the window leaves the owned Hub available from
+the menu bar. Explicit Quit handles active work before stopping its processes.
 
 Transcription accepts an audio or video file and exports Text, SRT or VTT. The word-timestamp control is not exposed because a word-level result viewer is not implemented.
 

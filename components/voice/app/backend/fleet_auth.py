@@ -84,7 +84,8 @@ def make_middleware(token: str):
             if urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
                 return JSONResponse({"detail": "Cross-origin browser writes are not allowed."}, 403)
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/assets/") or request.method == "OPTIONS" or is_loopback(request):
+        if (path in PUBLIC_PATHS or path.startswith("/assets/") or request.method == "OPTIONS"
+                or (is_loopback(request) and os.environ.get("STUDIOHUB_REQUIRE_AUTH") != "1")):
             return await call_next(request)
         offered = _presented(request)
         current_token = load_token()
@@ -107,7 +108,7 @@ def manifest(*, modality: str, title: str, version: str, operations: list[str], 
             "bearer_supported": True,
             "cookie_supported": True,
             "query_token_supported": False,
-            "loopback_exempt": True,
+            "loopback_exempt": os.environ.get("STUDIOHUB_REQUIRE_AUTH") != "1",
         },
         "operations": operations,
         "catalog_endpoint": "/api/catalog",

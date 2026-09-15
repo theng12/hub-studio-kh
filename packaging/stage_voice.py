@@ -67,7 +67,7 @@ def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None
         shutil.copyfile(path, target)
 
 
-def stage(runtime: Path, output: Path, native_shell: Path | None = None) -> Path:
+def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, include_hub: bool = False) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
@@ -75,8 +75,17 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None) -> Path
     if native_shell is not None:
         native_shell = native_shell.expanduser().resolve()
         validate_native_shell(native_shell)
+        include_hub = True
     source = ROOT / 'components/voice'
     provenance = json.loads((ROOT / 'research/voice-adoption.json').read_text())
+    hub_provenance = None
+    if include_hub:
+        hub_provenance = json.loads((ROOT / 'research/hub-adoption.json').read_text())['source']
+        if not (ROOT / 'components/hub/standalone.py').is_file():
+            raise ValueError('Bundled Hub entry point is missing')
+        if not subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '--',
+                                        'components/hub/standalone.py']).strip():
+            raise ValueError('Hub source must be added to Git before staging the bundle')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = bool(subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip())
     version = (ROOT / 'VERSION').read_text().strip()
@@ -102,17 +111,30 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None) -> Path
                                'source_sha256': tree_digest(voice)}},
         'runtime_sha256': runtime_hash,
     }
-    executable = contents / 'MacOS/StudioHubVoice'
+    if include_hub:
+        hub = resources / 'components/hub'
+        copy_tracked_tree(ROOT / 'components/hub', hub)
+        shutil.copyfile(ROOT / 'components/model_packages.py', resources / 'components/model_packages.py')
+        copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
+        shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
+        release['components']['hub'] = {
+            'upstream_commit': hub_provenance['commit'],
+            'upstream_version': hub_provenance['version'],
+            'source_sha256': tree_digest(hub), 'runtime': 'voice',
+        }
+    service_name = 'StudioHubService' if include_hub else 'StudioHubVoice'
+    entry_point = 'hub_worker.py' if include_hub else 'voice_worker.py'
+    executable = contents / f'MacOS/{service_name}'
     executable.parent.mkdir()
     executable.write_text('#!/bin/sh\nset -eu\n'
         'BUNDLE_BIN=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
         'exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=en_US.UTF-8 '
         '"$BUNDLE_BIN/../Resources/runtimes/voice/bin/python3" -I -B '
-        '"$BUNDLE_BIN/../Resources/voice_worker.py" "$@"\n')
+        f'"$BUNDLE_BIN/../Resources/{entry_point}" "$@"\n')
     executable.chmod(0o755)
-    plist = {'CFBundleExecutable': 'StudioHubVoice',
-        'CFBundleIdentifier': 'local.studiohub.voiceproof',
-        'CFBundleName': 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',
+    plist = {'CFBundleExecutable': service_name,
+        'CFBundleIdentifier': 'local.studiohub.hubproof' if include_hub else 'local.studiohub.voiceproof',
+        'CFBundleName': 'Studio Hub Local Proof' if include_hub else 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',
         'CFBundleShortVersionString': version, 'CFBundleVersion': '1',
         'LSMinimumSystemVersion': '14.0', 'LSUIElement': True}
     if native_shell is not None:
@@ -142,5 +164,6 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-shell', type=Path)
+    parser.add_argument('--hub', action='store_true', help='Include the local Hub service (always enabled for native app builds)')
     args = parser.parse_args()
-    print(stage(args.runtime, args.output, native_shell=args.native_shell))
+    print(stage(args.runtime, args.output, native_shell=args.native_shell, include_hub=args.hub))

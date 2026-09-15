@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "/build/pinokio/api/studiohub-mac",
+    "commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+    "version": "2.22.0",
+    "read_only": true
+  },
+  "destination": "components/hub/backend",
+  "retained": [
+    "activity.py", "alerts.py", "artifact_metadata.py", "auth.py",
+    "automatic_recovery.py", "broker.py", "capabilities.py", "chat_jobs.py",
+    "cloud_guard.py", "control.py", "control_plane.py",
+    "controller_settings_lock.py", "execution_assets.py",
+    "execution_identity.py", "hardware_profiles.py", "job_storage.py",
+    "ledger.py", "memory_admission.py", "memory_control.py", "metrics.py",
+    "model_exposure.py", "monitor.py", "peers.py", "registry.py",
+    "resources.py", "shared_voices.py", "transcription_jobs.py",
+    "workload_policy.py"
+  ],
+  "packaged_extensions": [
+    "components/hub/standalone.py",
+    "components/hub/standalone_config.py",
+    "components/hub/model_downloads.py",
+    "components/hub/delivery.py",
+    "components/hub/operator_controls.py",
+    "components/hub/statistics.py",
+    "dynamic owner-only STUDIOHUB_WORKERS_FILE registry",
+    "STUDIOHUB_DATA_DIR external durable state",
+    "STUDIOHUB_MODELS_DIR external verified model library",
+    "STUDIOHUB_PACKAGED and STUDIOHUB_REQUIRE_AUTH authenticated loopback mode"
+  ],
+  "excluded": {
+    "entry_points": ["main.py", "frontend/"],
+    "management": [
+      "auto_update.py", "auto_update_config.py", "fleet_auto_updates.py",
+      "fleet_ops.py", "fleet_storage.py", "gateway.py",
+      "release_reconciliation.py", "startup_services.py"
+    ],
+    "enrollment_repair": [
+      "enrollment.py", "enrollment_repair.py", "enrollment_repair_executor.py",
+      "enrollment_repair_store.py", "enrollment_repair_transport.py"
+    ],
+    "live_state": [
+      "credentials", "environment files", "logs", "job databases",
+      "model caches", "Pinokio launcher files"
+    ]
+  },
+  "deliberate_adaptations": [
+    "Registry recognizes only Image, Voice and independent Subtitle descriptors, and loads the truthful nonempty subset currently running from the private manifest; no fixed ports or Pinokio checkout discovery.",
+    "The packaged API registers only Hub jobs, Subtitle jobs, settings, workers and model-package lifecycle routes.",
+    "Packaged authentication rejects uncredentialed loopback API access and disables the legacy default owner password.",
+    "The legacy Git/pterm updater and lifecycle paths are not registered; release identity is supplied by the packaging manifest.",
+    "Packaged local worker descriptors use their declared private endpoint even when their stable physical machine ID differs from the legacy local key; worker-supplied absolute URLs must match that endpoint before a Studio credential is attached.",
+    "Queued and restored Subtitle batches recheck the packaged model/runtime/OS admission gate before physical-machine leasing; Voice workers cannot serve as their fallback.",
+    "Packaged Subtitle HTTP attempts whose worker outcome is unknown retain their attempt identity and require manual action after response loss, gateway timeout, cancellation, or Hub restart; delivered 400/401/409/503 worker refusals keep the retained error or retry behavior without holding a physical-machine fence. The retained Pinokio lane keeps its historical retry behavior.",
+    "Exact GenStudio Subtitle replays and payload conflicts are checked against the durable execution fence before current model readiness, without persisting a new fence for refused submissions.",
+    "Packaged Subtitle dispatch does not start the retained legacy output cleanup timer; terminal cleanup remains with the forthcoming shared protected-output policy, while the original launcher mode keeps its timer.",
+    "A possibly accepted packaged Subtitle attempt persists its physical machine identity; uncertain items hold that machine in the existing shared admission lease after Hub restart until worker reconciliation is available.",
+    "Existing verified artifact receipt and generation statistics APIs are mounted on the authenticated packaged Hub without changing their retained ledger contracts.",
+    "Existing authenticated machine and studio pause controls are mounted for packaged workers and wake the shared schedulers after an operator change.",
+    "Model package file verification is combined with separate runtime, OS/chip and later scheduler admission state; files_verified is never reported as dispatch-ready."
+  ]
+}

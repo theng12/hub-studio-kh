@@ -68,7 +68,7 @@ final class StudioController: ObservableObject {
             try ShellConfiguration.requireDirectory(models)
             try configuration.save()
             try? FileManager.default.removeItem(at: configuration.readyFile)
-            let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubVoice")
+            let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
                 throw ShellFailure(message: "The bundled local services are missing. Replace this app with a complete build.")
             }
@@ -103,12 +103,13 @@ final class StudioController: ObservableObject {
                         self.starting = false
                         self.readyURL = ready.url
                         self.status = "Local services ready"
-                        await self.workspace.connect(baseURL: ready.url, dataDirectory: self.configuration.dataDirectory)
+                        await self.workspace.connect(baseURL: ready.url, dataDirectory: self.configuration.dataDirectory, token: ready.token)
                         let session = URLSession(configuration: .ephemeral)
                         defer { session.invalidateAndCancel() }
                         while !Task.isCancelled && process.isRunning && !self.stopping {
                             do {
                                 var request = URLRequest(url: ready.url.appendingPathComponent("api/health"))
+                                request.setValue("Bearer \(ready.token)", forHTTPHeaderField: "Authorization")
                                 request.timeoutInterval = 5
                                 let (body, response) = try await session.data(for: request)
                                 guard (response as? HTTPURLResponse)?.statusCode == 200,

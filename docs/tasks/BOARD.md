@@ -7,7 +7,7 @@ ST-01 foundation has current implementation evidence; later app phases remain pe
 | --- | --- | --- | --- | --- |
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
-| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | READY | Unassigned |
+| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | REVIEW | root / implementation/st-02 |
 | [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | WAITING | Unassigned |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
@@ -68,5 +68,5 @@ real Turbo offline import/relocation/tokenizer and real small-file HTTPS verific
 The retained Image audit's 115 relocation issues are explicitly ST-03.RELOCATE work;
 new model inference and physical M1/Sonoma qualification remain later checkpoints.
 
-**ST-02 is READY.** Its input contract names the helper/catalog, source adoption and
-existing controller routing. No other phase status changed and no new app was released.
+**ST-02 is in review.** Its input contract names the helper/catalog, source adoption
+and existing controller routing. Later phases remain waiting until reviewed integration.
