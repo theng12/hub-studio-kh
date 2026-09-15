@@ -123,4 +123,11 @@ and preserved the previously unrecorded real Image generation as tracked evidenc
 - **Whole-task dependencies require a DONE prerequisite,** so ST-04/05/06/08 correctly
   remain WAITING while ST-03 is IN_PROGRESS. Do not start them yet.
 - **ST-09 start-at-login is source/fixture-qualified only.** No live `SMAppService`
-  registration was performed; physical login/logout/reboot belongs to ST-11.
+  registration was performed; physical login/logout/reboot belongs to ST-11. The running
+  app exposes it as a `Start at login` switch, observed off on 2026-09-15.
+- **Stop owned processes before yielding.** A st-03 session left the assembled app, Hub
+  worker and Image worker running for 3 h 44 min. Verify with
+  `pgrep -fl 'StudioHub|hub_worker|voice_worker|image_worker'`.
+- **Pixel screenshots need Screen Recording permission** for the agent host;
+  `screencapture` otherwise fails with `could not create image from display`. The
+  Accessibility tree is available and was used instead.

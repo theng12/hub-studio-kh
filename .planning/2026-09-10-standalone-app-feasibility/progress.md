@@ -185,3 +185,27 @@ physical login/logout/reboot check remains ST-11.
 Record-keeping cautions were added to `docs/tasks/BOARD.md`: the checkout is ~54 GB but only
 ~2.7 MB is tracked; there is no Git remote; `.worktrees/` must not be deleted; and test
 counts in receipts are historical. Undo point for this pass: `backup/pre-handoff-7aa7775`.
+
+### 2026-09-15 — GUI smoke and leftover-process cleanup
+
+Launched `dist/Studio Hub 0.4.0 Integrated Proof.app` (bundle `local.studiohub.standalone`).
+The window opened, the bundled Hub plus private Voice worker started, and the shell
+reported `Local services ready` with the project model library and offline mode on.
+Accessibility introspection of the Settings page confirms automatic startup is present
+and exposed as a **`Start at login` switch** (`AXCheckBox`, current value 0 = off),
+described as "Closing the window keeps local jobs running. Quit stops the app and its
+services." The switch was deliberately **not** toggled, so no login item was registered;
+`System Events` login items were identical before and after (no Studio Hub entry).
+Graceful quit removed `hub-ready.json` and `hub/image-ready.json`; `app.lock` remains.
+
+Pixel screenshots were not available to this session: `screencapture` failed with
+`could not create image from display` because Screen Recording permission is not granted
+to the agent host. Accessibility (which is granted) was used instead. Grant Screen
+Recording to the host if a future session needs real screenshots.
+
+Cleanup finding: the st-03 session had left `ST03 Image Integration.app` plus its
+`hub_worker` and `image_worker` running for **3 h 44 min** (PIDs 36844/36862/36891,
+parented to the Codex app-server, not to PID 1). They were identified by exact command
+line and terminated with SIGTERM; the designed parent-loss cleanup reaped both workers and
+no project process remained. The project's exit rule — stop owned processes before
+yielding — was not followed by that session.
