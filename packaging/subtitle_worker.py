@@ -90,6 +90,10 @@ def main() -> None:
         'STUDIOHUB_MODELS_DIR': str(models),
         'STUDIOHUB_VOICE_APP_DIR': str(voice_app),
         'STUDIOHUB_SUBTITLE_MANIFESTS': str(resources / 'model-manifests'),
+        # The adopted Voice cache module resolves models through the packaged manifests and the
+        # verified-package index, so this worker needs the same catalogue name the Voice worker
+        # uses; without it, Whisper base/small could never resolve a loadable view.
+        'STUDIOHUB_MODEL_MANIFESTS': str(resources / 'model-manifests'),
         'STUDIOHUB_RELEASE_MANIFEST': str(release_path),
         'STUDIOHUB_FLEET_TOKEN': token,
         'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',

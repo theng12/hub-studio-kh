@@ -211,6 +211,58 @@ class SubtitleEngine:
     def export_source(self) -> dict:
         return dict(self._export)
 
+    def _loadable_model_folder(self, folder: Path, package_id: str, revision: str,
+                               model_id: str | None = None) -> Path:
+        """Return a folder mlx-audio can actually load.
+
+        mlx-audio's Whisper loader globs ``*.safetensors`` while the pinned base/small packages
+        ship ``weights.npz``. The shared Voice cache module already builds a complete, loadable
+        view for a repository — merged weights+tokenizer, with npz converted — so reuse that
+        rather than maintaining a second copy of the same logic. Verified library bytes are
+        never modified either way.
+        """
+        if model_id:
+            try:
+                from components.voice.app.backend import cache as voice_cache
+                shared = voice_cache.package_snapshot(model_id)
+                if shared is not None and (shared[1] / 'config.json').is_file():
+                    return shared[1]
+            except Exception:
+                pass
+        model = folder / 'model'
+        if any(model.glob('*.safetensors')):
+            return model
+        npz_files = sorted(model.glob('*.npz'))
+        # This worker carries its own state root name, so accept either.
+        state = (os.environ.get('STUDIOHUB_DATA_DIR')
+                 or os.environ.get('STUDIOHUB_SUBTITLE_DATA_DIR'))
+        if not npz_files or not state:
+            return model
+        view = Path(state) / 'snapshot-views' / f'{package_id}-{revision[:16]}' / 'model'
+        marker = view / '.studiohub-weights'
+        if marker.is_file():
+            return view
+        try:
+            view.mkdir(parents=True, exist_ok=True)
+            for entry in model.iterdir():
+                link = view / entry.name
+                if not link.exists() and not link.is_symlink():
+                    os.symlink(entry.resolve(), link)
+            companions = folder / 'companions' / 'processor'
+            if companions.is_dir():
+                for entry in companions.iterdir():
+                    link = view / entry.name
+                    if not link.exists() and not link.is_symlink():
+                        os.symlink(entry.resolve(), link)
+            import mlx.core as mx
+            for npz in npz_files:
+                mx.save_safetensors(str(view / (npz.stem + '.safetensors')),
+                                    dict(mx.load(str(npz))))
+            marker.write_text(f'{package_id}@{revision}\n', encoding='utf-8')
+        except (OSError, ValueError, ImportError):
+            return model
+        return view
+
     def package(self, package_id: str) -> PackageLocation:
         manifest = self.manifests.get(package_id)
         if manifest is None:
@@ -218,7 +270,8 @@ class SubtitleEngine:
         folder = self.library / package_id / manifest['revision']
         return PackageLocation(
             package_id=package_id, revision=manifest['revision'], folder=folder,
-            model_folder=folder / 'model',
+            model_folder=self._loadable_model_folder(
+                folder, package_id, manifest['revision'], manifest.get('model_id')),
             processor_folder=folder / 'companions' / 'processor', manifest=manifest)
 
     def _weight_files(self, location: PackageLocation) -> list[Path]:

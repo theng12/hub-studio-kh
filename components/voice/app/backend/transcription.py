@@ -162,6 +162,20 @@ _PROCESSOR_BASE = {
 }
 
 
+def _local_tokenizer_source() -> Optional[str]:
+    """A locally installed Whisper package that carries the shared multilingual tokenizer.
+
+    Every multilingual Whisper size shares one tokenizer vocabulary, and the ``openai/…``
+    repositories these packages reference are unreachable offline. Reusing a local copy keeps
+    base/small usable with no network; returns None when no local copy exists.
+    """
+    for candidate in _PROCESSOR_BASE:
+        view = cache.package_snapshot(candidate)
+        if view is not None and (view[1] / "tokenizer.json").is_file():
+            return str(view[1])
+    return None
+
+
 # Whisper decodes 30-second windows. By default (`condition_on_previous_text=True`)
 # it feeds its own previous output back in as the prompt for the next window. That
 # is helpful on clean speech, but it makes hallucination self-reinforcing: one bad
@@ -754,6 +768,14 @@ class TranscriptionManager:
         # fail with an empty tokenizer.
         local = cache.package_snapshot(repo)
         source = str(local[1]) if local is not None else base
+        # Whisper base/small packages ship weights only — no tokenizer companions at all.
+        # Every multilingual Whisper size shares one tokenizer vocabulary, so reuse the copy
+        # another locally installed Whisper package already carries rather than requiring a
+        # network fetch that a standalone offline install cannot perform.
+        if local is None or not (local[1] / "tokenizer.json").is_file():
+            donor = _local_tokenizer_source()
+            if donor is not None:
+                source = donor
         print(f"[stt] {repo} ships no processor — attaching tokenizer from {source}", flush=True)
         attempts: list[str] = []
 

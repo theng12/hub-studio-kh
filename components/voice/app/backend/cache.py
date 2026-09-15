@@ -410,7 +410,8 @@ def _merged_snapshot_view(package_id: str, revision: str, folder: Path) -> Path 
     The view is built under the app data directory with symlinks, never inside the model
     library, so verified model bytes are untouched.
     """
-    state = os.environ.get("STUDIOHUB_DATA_DIR")
+    # The Subtitle worker carries its own state root, so accept either name for the view.
+    state = os.environ.get("STUDIOHUB_DATA_DIR") or os.environ.get("STUDIOHUB_SUBTITLE_DATA_DIR")
     if not state:
         return None
     view = Path(state) / "snapshot-views" / f"{package_id}-{revision[:16]}"
@@ -429,8 +430,16 @@ def _merged_snapshot_view(package_id: str, revision: str, folder: Path) -> Path 
                 if link.exists() or link.is_symlink():
                     continue
                 os.symlink(entry.resolve(), link)
+        # mlx-audio's Whisper loader globs ``*.safetensors``. Some pinned packages (whisper
+        # base/small) ship ``weights.npz`` instead, which is why they were "catalog-only".
+        # Convert once into the view; the verified library bytes are never touched.
+        if not any(view.glob("*.safetensors")):
+            import mlx.core as mx  # local import: only needed for the conversion path
+            for npz in sorted(weights.glob("*.npz")):
+                arrays = mx.load(str(npz))
+                mx.save_safetensors(str(view / (npz.stem + ".safetensors")), dict(arrays))
         marker.write_text(f"{package_id}@{revision}\n", encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError, ImportError):
         return None
     return view
 
