@@ -16,6 +16,23 @@ QWEN_BASE_REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
 CHATTERBOX_REPO = "mlx-community/chatterbox-4bit"
 
 
+def test_completed_output_receipt_ack_is_idempotent(monkeypatch, tmp_path: Path) -> None:
+    output = tmp_path / "receipt.wav"
+    output.write_bytes(b"fixture")
+    manager = generation.GenerationManager()
+    job = generation.GenerationJob(job_id="receipt", mode="txt2speech", params={},
+                                   state="done", output_path=str(output))
+    manager._jobs[job.job_id] = job
+    monkeypatch.setattr(manager, "_persist", lambda **_kwargs: None)
+
+    assert manager.acknowledge_output(job.job_id)
+    first = job.receipt_acked_at
+    assert first is not None
+    assert manager.acknowledge_output(job.job_id)
+    assert job.receipt_acked_at == first
+    assert job.serialize()["receipt_acked_at"] == first
+
+
 def _tone(seconds: float, sample_rate: int = 1_000) -> np.ndarray:
     samples = round(seconds * sample_rate)
     return 0.3 * np.sin(2 * np.pi * 110 * np.arange(samples) / sample_rate)
