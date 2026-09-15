@@ -522,6 +522,8 @@ class StagingTests(unittest.TestCase):
                 'research/image-adoption.json': json.dumps({'source': {'commit': 'e' * 40, 'version': '1.32.2'}}),
                 'components/image/app/backend/main.py': '# image fixture',
                 'packaging/image_worker.py': '# image worker',
+                'components/subtitle/app/backend/main.py': '# subtitle fixture',
+                'packaging/subtitle_worker.py': '# subtitle worker',
             }
             for name, content in files.items():
                 path = repo / name
