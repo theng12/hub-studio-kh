@@ -20,6 +20,11 @@ final class StudioController: ObservableObject {
     private var worker: Process?
     private var logHandle: FileHandle?
     private var pollTask: Task<Void, Never>?
+    private var restartTask: Task<Void, Never>?
+    private var forceStopTask: Task<Void, Never>?
+    private var automaticRestartAttempts = 0
+    private var healthySince: Date?
+    private var startupTimedOut = false
     private var instanceLock: InstanceLock?
     var onStopped: (() -> Void)?
 
@@ -31,6 +36,9 @@ final class StudioController: ObservableObject {
     var running: Bool { worker?.isRunning == true }
     var canConfigure: Bool { !running && !starting && !stopping && instanceLock != nil }
     var hasLibrary: Bool { configuration.modelsDirectory != nil }
+    /// Lets the operator cancel a pending restart or timeout recovery while
+    /// keeping the owned worker's normal shutdown escalation available.
+    var canCancelRecovery: Bool { restartTask != nil || startupTimedOut }
 
     func chooseLibrary() {
         guard canConfigure else { return }
@@ -47,6 +55,7 @@ final class StudioController: ObservableObject {
                 try ShellConfiguration.requireDirectory(url)
                 configuration.modelsDirectory = url.resolvingSymlinksInPath()
                 try configuration.save()
+                enableLoginByDefault()
                 failure = nil
                 start()
             } catch { failure = error.localizedDescription }
@@ -59,15 +68,31 @@ final class StudioController: ObservableObject {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             configuration.modelsDirectory = url
             try configuration.save()
+            enableLoginByDefault()
             start()
         } catch { failure = error.localizedDescription }
     }
     func start() {
+        restartTask?.cancel()
+        restartTask = nil
+        automaticRestartAttempts = 0
+        healthySince = nil
+        start(automaticRecovery: false)
+    }
+    private func start(automaticRecovery: Bool) {
         guard canConfigure, let models = configuration.modelsDirectory else { return }
         do {
             try ShellConfiguration.requireDirectory(models)
             try configuration.save()
-            try? FileManager.default.removeItem(at: configuration.readyFile)
+            // A stale readiness record is never proof of a running owner.
+            if FileManager.default.fileExists(atPath: configuration.readyFile.path) {
+                var info = stat()
+                guard lstat(configuration.readyFile.path, &info) == 0,
+                      info.st_mode & S_IFMT == S_IFREG else {
+                    throw ShellFailure(message: "The local Hub readiness record is not a regular file.")
+                }
+                try? FileManager.default.removeItem(at: configuration.readyFile)
+            }
             let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
                 throw ShellFailure(message: "The bundled local services are missing. Replace this app with a complete build.")
@@ -90,6 +115,7 @@ final class StudioController: ObservableObject {
             }
             failure = nil
             starting = true
+            startupTimedOut = false
             status = "Starting local services…"
             worker = process
             try process.run()
@@ -97,10 +123,11 @@ final class StudioController: ObservableObject {
                 guard let self else { return }
                 for _ in 0..<240 {
                     if Task.isCancelled || !process.isRunning { return }
-                    if let data = try? Data(contentsOf: self.configuration.readyFile),
+                    if let data = readPrivateRegularFile(self.configuration.readyFile),
                        let ready = try? WorkerReady.decode(data, expectedPID: process.processIdentifier) {
                         guard !Task.isCancelled, !self.stopping, process.isRunning else { return }
                         self.starting = false
+                        self.healthySince = Date()
                         self.readyURL = ready.url
                         self.status = "Local services ready"
                         await self.workspace.connect(baseURL: ready.url, dataDirectory: self.configuration.dataDirectory, token: ready.token)
@@ -129,6 +156,10 @@ final class StudioController: ObservableObject {
                     self.failure = "The local services did not become ready within two minutes. Open its log, then stop it before retrying."
                     self.status = "Startup needs attention"
                     self.starting = false
+                    self.startupTimedOut = true
+                    self.stopping = true
+                    process.terminate()
+                    self.scheduleForceStop(for: process)
                 }
             }
         } catch {
@@ -138,25 +169,81 @@ final class StudioController: ObservableObject {
             logHandle = nil
             failure = error.localizedDescription
             status = "Unable to start local services"
+            if automaticRecovery { scheduleRecovery() }
         }
     }
     private func workerExited(code: Int32) {
         pollTask?.cancel()
+        forceStopTask?.cancel()
+        forceStopTask = nil
         let expectedStop = stopping
+        let startupFailure = startupTimedOut
+        automaticRestartAttempts = StartupRecovery.attemptsAfterHealthyUptime(
+            automaticRestartAttempts, readyAt: healthySince)
+        healthySince = nil
         worker = nil
         readyURL = nil
         starting = false
         stopping = false
+        startupTimedOut = false
         canForceStop = false
         workspace.disconnect()
         try? logHandle?.close()
         logHandle = nil
-        if expectedStop { status = "Local services stopped" }
-        else { status = "Local services stopped unexpectedly"; failure = "The engine exited (code \(code)). Open its log for details, then try Start again." }
+        if expectedStop {
+            status = startupFailure ? "Startup needs attention" : "Local services stopped"
+            if startupFailure { scheduleRecovery() }
+        } else {
+            status = "Local services stopped unexpectedly"
+            failure = "The engine exited (code \(code)). Open its log for details, then try Start again."
+            scheduleRecovery()
+        }
         onStopped?()
     }
+    private func scheduleRecovery() {
+        guard restartTask == nil else { return }
+        let attempt = automaticRestartAttempts
+        let libraryAvailable = configuration.modelsDirectory.map {
+            FileManager.default.fileExists(atPath: $0.path)
+        } ?? false
+        switch StartupRecovery.nextAction(attempt: attempt, libraryAvailable: libraryAvailable,
+                                          ownerRunning: running, userStopped: false,
+                                          maxAttempts: configuration.recoveryMaxAttempts,
+                                          delays: configuration.recoveryBackoffSeconds) {
+        case .stop(let message):
+            status = message
+            failure = message
+        case .wait(let delay):
+            automaticRestartAttempts += 1
+            status = "Recovering local services…"
+            restartTask = Task { [weak self] in
+                if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.restartTask = nil
+                    self.start(automaticRecovery: true)
+                }
+            }
+        }
+    }
     func stop() {
-        guard let worker, worker.isRunning, !stopping else { return }
+        let cancelledRecovery = restartTask != nil
+        restartTask?.cancel()
+        restartTask = nil
+        automaticRestartAttempts = 0
+        healthySince = nil
+        // A timeout is an automatic stop. An explicit Stop while it is
+        // winding down cancels the follow-up recovery without interrupting
+        // the existing force-stop escalation.
+        if stopping {
+            startupTimedOut = false
+            return
+        }
+        guard let worker, worker.isRunning, !stopping else {
+            if cancelledRecovery { status = "Local services stopped"; onStopped?() }
+            return
+        }
         pollTask?.cancel()
         stopping = true
         starting = false
@@ -164,14 +251,19 @@ final class StudioController: ObservableObject {
         workspace.disconnect()
         status = "Stopping local services…"
         worker.terminate()
-        Task { [weak self] in
+        scheduleForceStop(for: worker)
+    }
+    private func scheduleForceStop(for process: Process) {
+        forceStopTask?.cancel()
+        forceStopTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
-            guard let self, self.stopping, worker.isRunning else { return }
+            guard let self, !Task.isCancelled, self.stopping, process.isRunning else { return }
             self.status = "Local services are still stopping"
             self.canForceStop = true
             self.confirmForceStop()
         }
     }
+    var recoveryPending: Bool { restartTask != nil }
     func confirmForceStop() {
         guard let worker, worker.isRunning, canForceStop else { return }
         let alert = NSAlert()
@@ -200,13 +292,33 @@ final class StudioController: ObservableObject {
         configuration.offline = value
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
+    func setRecoveryPolicy(maxAttempts: Int, backoffSeconds: [TimeInterval]) {
+        guard canConfigure else { return }
+        do {
+            try configuration.setRecoveryPolicy(maxAttempts: maxAttempts, backoffSeconds: backoffSeconds)
+            try configuration.save()
+        } catch { failure = error.localizedDescription }
+    }
     func setLogin(_ enabled: Bool) {
+        configuration.startAtLogin = enabled
         do {
             if enabled { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
             loginStatus = SMAppService.mainApp.status
+            try configuration.save()
             if loginStatus == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
         } catch { failure = "Could not change login startup: \(error.localizedDescription)"; loginStatus = SMAppService.mainApp.status }
+    }
+    private func enableLoginByDefault() {
+        guard configuration.startAtLogin, loginStatus == .notRegistered else { return }
+        do {
+            try SMAppService.mainApp.register()
+            loginStatus = SMAppService.mainApp.status
+            try configuration.save()
+        } catch {
+            // Registration is optional during setup; keep the actual OS status visible.
+            loginStatus = SMAppService.mainApp.status
+        }
     }
     func openLog() {
         if FileManager.default.fileExists(atPath: configuration.logFile.path) { NSWorkspace.shared.open(configuration.logFile) }
@@ -289,7 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openWindow(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard controller?.running == true else { return .terminateNow }
+        guard controller?.running == true || controller?.recoveryPending == true else { return .terminateNow }
         if quitPending { return .terminateLater }
         let alert = NSAlert()
         alert.messageText = "Quit Studio Hub and stop its engine?"
@@ -299,7 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
         quitPending = true
         controller.stop()
-        return .terminateLater
+        return controller.running ? .terminateLater : .terminateNow
     }
 }
 

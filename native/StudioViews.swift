@@ -459,8 +459,9 @@ struct StudioContent: View {
                 Section("Local services") {
                     LabeledContent("Status", value: studio.status)
                     HStack {
-                        if studio.canForceStop { Button("Force Stop…") { studio.confirmForceStop() } }
-                        else if studio.running { Button(studio.stopping ? "Stopping…" : "Stop Services…") { studio.confirmStop() }.disabled(studio.stopping) }
+                    if studio.canForceStop { Button("Force Stop…") { studio.confirmForceStop() } }
+                    if studio.canCancelRecovery { Button("Cancel Recovery") { studio.stop() } }
+                    else if studio.running { Button(studio.stopping ? "Stopping…" : "Stop Services…") { studio.confirmStop() }.disabled(studio.stopping) }
                         else { Button("Start Services") { studio.start() }.disabled(!studio.canConfigure || !studio.hasLibrary) }
                         Button("Release Model Memory") { Task { await workspace.releaseMemory() } }.disabled(!connected)
                         Button("Open Log") { studio.openLog() }
