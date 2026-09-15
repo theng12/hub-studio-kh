@@ -14,6 +14,11 @@ then the one task card you are claiming.
   GenStudio connection. Model-fit checking is the owner's call — do not spend time proving
   a model fits a given RAM tier. Distribution is "copy the built app to the Mac and open it
   with right-click → Open"; signing/notarization stays out of scope.
+- **Voice cloning requirement (owner, 2026-09-15, stated after planning):** TTS must use
+  **clone-based generation for voice consistency**, not preset speakers. Both origins are
+  required and must converge on ONE Hub reference-asset contract: a reference clip chosen
+  locally in the app, and a clone pushed from GenStudio through the controller. See design
+  §2 and checkpoints ST-04.CLONE / ST-10.CLONE. This is the primary Voice mechanism.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
 - **IN PROGRESS — ST-03 packaged Image.** Real generation, Hub output registration,

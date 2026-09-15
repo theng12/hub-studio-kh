@@ -294,3 +294,27 @@ today, so Qwen Base voice cloning cannot work from the app even though the backe
 references. Folded into the ST-04 worker with a request for the exact wire contract; the
 native Audio UI (reference picker + transcript, Base model choices) is coordinator-owned and
 follows that contract.
+
+### 2026-09-15 — owner clarification: clone-based TTS is the primary voice mechanism
+
+The owner stated a requirement that was missed during the original planning pass: **voice
+generation must use voice cloning for consistency**, not preset speakers, and it must work
+from **both** a locally chosen reference clip and a clone pushed from GenStudio. This is
+recorded now so it cannot be lost again:
+
+- `docs/standalone-plan.md` §2 gained an explicit owner-confirmed requirement for two-way
+  voice cloning converging on one Hub reference-asset contract.
+- `docs/tasks/ST-04.md` gained checkpoint **ST-04.CLONE**: one reference contract serves a
+  locally chosen clip and a GenStudio-pushed clone, same validation, same resulting voice
+  identity, and a clone never has to exist as a local file.
+- `docs/tasks/ST-10.md` gained checkpoint **ST-10.CLONE**: accept a GenStudio-pushed
+  reference (source asset identity, checksum, optional transcript, language, expiry) with no
+  local file, and prove the same voice identity as a local clone.
+- The board's TAKE OVER HERE block records it as a primary Voice mechanism.
+- The `st-04` worker was re-briefed: the ingestion route must not be local-only, and the
+  existing GenStudio `source_asset_id` semantics and tests must not be weakened.
+
+This makes the half-built reference path found earlier the centre of the Voice feature rather
+than an edge case: today neither origin can stage a reference in production, so clone-based
+TTS cannot work from the app at all. Native Audio UI (reference picker + optional transcript,
+Base model choices) remains coordinator-owned and will follow the settled wire contract.

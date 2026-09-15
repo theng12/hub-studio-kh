@@ -30,6 +30,16 @@ or guarantee compatibility with every future macOS release.
 - Native standalone app; no Pinokio, Git, pip, uv, Homebrew, Xcode or system Python needed on a target device.
 - Image: the fleet's FLUX.2 Klein 4B MLX 4-bit model.
 - Voice: Qwen3 TTS 0.6B Base and 1.7B Base; VoxCPM2 4-bit, 8-bit and full; OmniVoice full.
+- **Voice cloning is the primary voice-consistency mechanism** (owner clarification, 2026-09-15,
+  added after planning). Text-to-speech should generate from a reference clip rather than rely on
+  preset speakers, so one voice stays consistent across jobs. Both directions are required:
+  - **Local clone** — the owner chooses a reference audio clip (and an optional reference
+    transcript) inside the app and uses it for generation.
+  - **GenStudio clone** — a reference pushed from GenStudio through the location controller
+    (carrying its own source asset identity) is accepted and used the same way, without a local file.
+  Both must converge on **one Hub reference-asset contract**, so a clone behaves identically
+  whichever direction it arrived from, keeping the existing checksum, size, transcript, expiry and
+  privacy rules, and keeping reference files outside generated-output cleanup.
 - Subtitle Studio: its own workspace and backend/job lifecycle, with three Whisper options.
 - Hub controls jobs, installed models, availability, memory, storage, devices and connections.
 - Automatic startup, with editable startup settings.
