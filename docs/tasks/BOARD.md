@@ -4,9 +4,9 @@ Updated: 2026-09-15 (record reconciliation). [Design](../standalone-plan.md) · 
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
 integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was
 merged into `implementation/voice-runtime` and a **real packaged 1K generation is
-evidenced** ([receipt](../../qualification/st03-image-real-inference.md)), but it is not
-complete: export/receipt acknowledgement, restart-history checks, retry counts and
-independent review remain open. Historical 0.3.0
+evidenced** ([receipt](../../qualification/st03-image-real-inference.md)) with the
+**export/receipt acknowledgement now proven** and the native save path wired; restart-history
+checks, retry counts and independent review remain open. Historical 0.3.0
 evidence does not complete these cards.
 
 | ID | Phase / deliverable | Depends on | Status | Owner/session |
@@ -14,7 +14,7 @@ evidence does not complete these cards.
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
 | [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | DONE | root / implementation/st-02 |
-| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | st03_image (Sol/high); merged `cd6ed5d`; real 1K generation evidenced, export/retries/review open |
+| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | st03_image (Sol/high); merged `cd6ed5d`; generation + receipt ACK proven, restart-history/retries/review open |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
 | [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | WAITING | Unassigned |
@@ -92,23 +92,32 @@ Recorded verification of the integrated tree (local; Apple M4, 16 GiB, macOS 26.
 root `unittest discover -s tests -p 'test_*.py'` — 124 tests OK, 1 skipped; retained Hub
 regression wrapper — passed; adopted Voice `pytest` — 639 passed, 2 skipped; `bash native/build.sh`
 — boundary and API contract checks passed. The Image private-server smoke is skipped
-unless the pinned Image runtime is built. Staged artifact:
-`dist/Studio Hub 0.4.0 Integrated Proof.app` — Hub + Voice only; staging Image requires
-`--image-runtime <built runtime>`, and the pinned Image runtime currently exists only in
-`.worktrees/st-03/.build/st03-image-runtime-worker`. The earlier recorded 0.4.0 artifact is preserved.
+unless the pinned Image runtime is built. Staged artifacts: `dist/Studio Hub 0.4.0 Integrated Proof.app`
+(Hub + Voice) and `dist/Studio Hub 0.4.0 Image Proof.app` (`implementation_commit 86b11d3`,
+payload `0cabfe857b9afaef74e22d9cd54dd90c4fbacfb2cd0179d931fcfb0402a6f63a`, bundling
+`runtimes/image` + `image_worker.py`). The pinned Image runtime is preserved at
+`.build/st03-image-runtime-worker` (tree SHA `c9cd56a6…`, verified). The earlier recorded
+0.4.0 artifact is preserved.
 
 What the 2026-09-15 reconciliation changed: merged `implementation/st-03`; committed 71
 pre-existing progress lines plus two stranded research handoffs; marked ST-09 DONE with
 its integration commit; fixed the wrong build-runtime path in `tests/test_image_bundle.py`;
-and preserved the previously unrecorded real Image generation as tracked evidence under
-`qualification/evidence/`. Undo point for all of it: branch `backup/pre-handoff-7aa7775`.
+preserved the previously unrecorded real Image generation as tracked evidence under
+`qualification/evidence/`; and wired verified Image saves to the Hub receipt route, proving
+the contract end to end. Undo point for all of it: branch `backup/pre-handoff-7aa7775`.
 
 ## Cautions for the next session
 
 - **Never delete `.worktrees/`.** `st-01`, `st-02` and `st-03` retain build-side runtime
   and model proof that is not reproducible from Git. The checkout is ~54 GB but only
   ~2.7 MB is tracked; `model-library/`, `.build/` and `dist/` are intentionally ignored.
-- **There is no Git remote.** Nothing is backed up off-machine. Commit before yielding.
+- **The only remote is `icloud`** — a bare repo at
+  `~/Library/Mobile Documents/com~apple~CloudDocs/studiohub-standalone-backups/studiohub-standalone.git`,
+  with a dated `git bundle` beside it. There is no hosted remote, so nothing is shared or
+  reviewed externally. `git push icloud --all` before yielding.
+- **Re-staging over an existing app fails on read-only runtime files.** Run
+  `chmod -R u+w "<app>"` before `rm -rf`; `rm -rf` alone reports permission-denied for the
+  bundled runtime and leaves a partial bundle.
 - **Run root and Hub tests with the build runtime, not system Python.** System `python3`
   is 3.9.6 and fails on `dict | None` and on pytest 9 (`typing.TypeAlias`). Use
   `.build/voice-runtime/bin/python3` (3.12), with `PYTHONPATH=.build/test-deps` for pytest.

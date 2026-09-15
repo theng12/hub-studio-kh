@@ -75,5 +75,45 @@ Still open:
 - The assembled `ST03 Image Integration.app` was built from `4377237` in the
   `st-03` worktree and predates the `cd6ed5d` integration merge. Re-stage from the
   merged tree before citing artifact hashes: staging Image requires
-  `--image-runtime <built runtime>` and the pinned Image runtime is **not** present
-  in the main checkout's `.build/` (it remains in `.worktrees/st-03/.build/st03-image-runtime-worker`).
+  `--image-runtime <built runtime>`. The pinned Image runtime was later preserved at
+  `.build/st03-image-runtime-worker` in the main checkout (tree SHA verified against
+  `c9cd56a6…`, copied out of the disposable `.worktrees/st-03/.build/`).
+
+## Export / receipt acknowledgement — proven 2026-09-15
+
+The Hub ↔ worker receipt contract was exercised end to end against the
+Image-inclusive artifact re-staged **from the merged tree**
+(`dist/Studio Hub 0.4.0 Image Proof.app`, `implementation_commit 5c8f85d`,
+bundling `runtimes/image` and `image_worker.py`):
+
+| Step | Result |
+| --- | --- |
+| Submit through the Hub | `POST /api/hub/jobs` → HTTP 200, batch `d8c27a4e8e` |
+| Real generation | `done`; 1,696,066 bytes; SHA-256 `5e4cd5dbdfdd550cca2835e4d1cdd6c350a6f8981686919c07129666be43f5d9`; 107.36 s; studio job `c6ee61743e46479482bbc93a7f31f7be` |
+| Before acknowledgement | `receipt_acked_at: null` |
+| `POST /api/hub/jobs/d8c27a4e8e/items/0/ack` | HTTP 200, `{"ok": true}` |
+| After acknowledgement | `receipt_acked_at: 1789482968.542187` |
+
+Full batch detail: [`evidence/st03-ack-proof.json`](evidence/st03-ack-proof.json).
+The app was then stopped; both readiness files were removed and no project process
+remained.
+
+### Native wiring
+
+`native/StudioAPI.swift` `saveImage` now acknowledges delivery **after** the written
+file is byte-verified, so an unverified or failed save can never acknowledge. It
+checks the returned `ok`; on failure it reports "saved and verified, but its delivery
+could not be acknowledged" and leaves the file on disk. The managed copy then stays
+protected and ST-07 cleanup treats it as undelivered — the conservative direction.
+
+`tests/native/api_main.swift` covers both branches: an unverified read acknowledges
+nothing, a verified save acknowledges exactly
+`/api/hub/jobs/image-job/items/0/ack` once, and a rejected acknowledgement is reported
+while the saved file remains. `bash native/build.sh` passes boundary and API contract
+checks.
+
+Still open: exercising the same path through the real GUI **Save** panel against a live
+Hub (the proof above drove the Hub API directly), restart-history checks, ST-03.6 retry
+counts and independent review. Separately, `StudioViews.swift` `saveAudio` still writes
+audio bytes with no verified-destination acknowledgement, so the same wiring is owed for
+Voice export under ST-08.

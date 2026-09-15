@@ -209,3 +209,41 @@ parented to the Codex app-server, not to PID 1). They were identified by exact c
 line and terminated with SIGTERM; the designed parent-loss cleanup reaped both workers and
 no project process remained. The project's exit rule — stop owned processes before
 yielding — was not followed by that session.
+
+### 2026-09-15 — ST-03 export/receipt acknowledgement closed; durability added
+
+Durability: the pinned Image runtime was copied out of the disposable
+`.worktrees/st-03/.build/` into `.build/st03-image-runtime-worker` and verified against the
+recorded tree SHA `c9cd56a6d1cde6b72dee8ba22cf45fcbd640538207038087261cae91ec67f67e`
+(content and modes identical). A `git bundle` of all refs was written and copied off-disk
+to iCloud Drive, and a bare remote `icloud` was added and pushed (`--all` and `--tags`), so
+history is no longer single-disk only. No hosted remote exists; nothing was published.
+
+Artifact: `dist/Studio Hub 0.4.0 Image Proof.app` was staged from the merged tree with
+`--image-runtime`, so it bundles `runtimes/image` and `image_worker.py`. Its manifest
+records `implementation_commit 86b11d3`, payload
+`0cabfe857b9afaef74e22d9cd54dd90c4fbacfb2cd0179d931fcfb0402a6f63a` and the verified Image
+runtime tree SHA. Re-staging over the previous bundle first required `chmod -R u+w`; `rm -rf`
+alone fails on the read-only bundled runtime and leaves a partial bundle.
+
+Export/receipt acknowledgement, previously the largest open ST-03 gap: exercised end to end
+through the Hub with a real generation (batch `d8c27a4e8e`, studio job
+`c6ee61743e46479482bbc93a7f31f7be`, 1,696,066 bytes, SHA-256 `5e4cd5db…`, 107.36 s).
+`receipt_acked_at` was null before, and `POST /api/hub/jobs/d8c27a4e8e/items/0/ack` returned
+`{"ok": true}` and set `receipt_acked_at = 1789482968.542187`. Batch detail is preserved at
+`qualification/evidence/st03-ack-proof.json`; the app was then stopped and both readiness
+files were removed with no process left behind.
+
+Native wiring `86b11d3`: `native/StudioAPI.swift` `saveImage` now acknowledges delivery only
+after the written file is byte-verified, checks the returned `ok`, and reports a rejected
+acknowledgement while leaving the file on disk (the managed copy stays protected, so cleanup
+never treats an unacknowledged output as delivered). `tests/native/api_main.swift` covers
+no-ack-on-unverified-read, ack-exactly-once-on-verified-save and the rejected path;
+`bash native/build.sh` passes boundary and API contract checks. The root suite still passes
+124 tests (1 skipped) and Hub regression passes.
+
+ST-03.3 is now closed. ST-03.5 still needs restart-history checks and a live GUI **Save**
+against a real Hub (the proof above drove the Hub API directly), ST-03.6 retry counts remain,
+and independent review is still owed before ST-03 can be DONE. Separately,
+`StudioViews.swift` `saveAudio` writes audio with no verified-destination acknowledgement, so
+the same wiring is owed for Voice export under ST-08.
