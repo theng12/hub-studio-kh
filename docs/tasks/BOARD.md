@@ -136,10 +136,13 @@ then the one task card you are claiming.
 - **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
   true, and put every result in a committed file — not in a chat message.
 
-*Plain-English position:* the hard engine work is done and the app can already make a
-real image end to end. What is left is proving the remaining behaviours carefully,
-then three more engines, then real-hardware sign-off. Roughly halfway by task count,
-but past the riskiest part.
+*Plain-English position:* four engines are now proven working through the real packaged app —
+image generation (FLUX), subtitles (Whisper), Qwen voice cloning, and OmniVoice. The only engine
+not yet producing output on this 16 GiB machine is VoxCPM2, and it fails with its own explicit
+memory message rather than a defect, so it needs one of the owner's 24/32 GB Macs. Everything the
+hardest part required — a standalone app that finds its models, loads them offline, and runs them
+— is done and verified. What remains is exposing the heavy voices and the Subtitle export in the
+app's screens, the fleet connection, and real-hardware sign-off. Past the riskiest part.
 
 Updated: 2026-09-15 (record reconciliation). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
@@ -156,10 +159,10 @@ evidence does not complete these cards.
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
 | [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | DONE | root / implementation/st-02 |
-| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | st03_image (Sol/high); merged `cd6ed5d`; generation + receipt ACK proven, restart-history/retries/review open |
-| [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
-| [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
-| [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | WAITING | Unassigned |
+| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | st03_image (Sol/high), coordinator reviews; **real image + receipt ACK + restart history proven**; needs one manual GUI Save click-through |
+| [ST-04](ST-04.md) | C · Qwen Base | ST-03 | IN_PROGRESS | coordinator; **Qwen Base clone works end-to-end in the packaged app** (`6f8fa8b`); needs cancellation/restart receipts + review |
+| [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | IN_PROGRESS | coordinator; **OmniVoice works end-to-end**; VoxCPM2 is host-memory-bound (re-probe on 24/32 GB) + UI exposure + review |
+| [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | IN_PROGRESS | coordinator; **real transcript in the packaged app** (`418da53`); needs native SRT export/ack + review |
 | [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | DONE | st07_storage (Terra/high), root integrated |
 | [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | WAITING | Unassigned |
 | [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | DONE | st09_startup (Luna/high), root integrated `7aa7775` |
