@@ -346,7 +346,7 @@ struct StudioContent: View {
                         if workspace.submittingAudio { ProgressView().controlSize(.small) }
                         Button("Generate Audio") { Task { await workspace.generateAudio() } }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!connected || workspace.submittingAudio || workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAudioModel?.cached != true || selectedAudioModel?.supported != true || selectedAudioModel?.runtimeReady != true)
+                            .disabled(!connected || workspace.submittingAudio || workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAudioModel?.cached != true || selectedAudioModel?.supported != true || selectedAudioModel?.runtimeReady != true || (selectedAudioModel?.requiresReference == true && workspace.audioReferenceAssetId == nil))
                     }
                     Divider().padding(.top, 8)
                     HStack { Text("Recent audio").font(.headline); Spacer(); if player.playing { Button("Stop Playback") { player.stop() } }; Button("All Jobs") { studio.select(.jobs) } }
@@ -358,10 +358,38 @@ struct StudioContent: View {
                     VStack(alignment: .leading, spacing: 18) {
                         Text("Generation").font(.headline)
                         modelPicker(.audio)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Speaker").font(.callout)
-                            Picker("Speaker", selection: $workspace.audioSpeaker) { ForEach(workspace.audioSpeakers, id: \.self) { Text($0).tag($0) } }.labelsHidden()
-                            Text("Speakers are supplied by the selected runtime.").font(.caption).foregroundStyle(.secondary)
+                        if selectedAudioModel?.requiresReference == true {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Reference clip").font(.callout)
+                                HStack(spacing: 8) {
+                                    Button("Choose Clip…") { chooseReferenceClip() }
+                                    Text(workspace.audioReferencePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                }
+                                Text("A short, clean recording of the voice you want to reuse.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Reference transcript").font(.callout)
+                                TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
+                                    .textFieldStyle(.roundedBorder)
+                                Text("Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 8) {
+                                Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
+                                    .disabled(!connected || workspace.stagingReference
+                                              || workspace.audioReferencePath == nil
+                                              || workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                if workspace.stagingReference { ProgressView().controlSize(.small) }
+                                if let status = workspace.audioReferenceStatus {
+                                    Text(status).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Speaker").font(.callout)
+                                Picker("Speaker", selection: $workspace.audioSpeaker) { ForEach(workspace.audioSpeakers, id: \.self) { Text($0).tag($0) } }.labelsHidden()
+                                Text("Speakers are supplied by the selected runtime.").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Language").font(.callout)
@@ -635,6 +663,13 @@ struct StudioContent: View {
     private func chooseTranscriptionFile() {
         let panel = NSOpenPanel(); panel.title = "Choose a recording"; panel.allowedContentTypes = [.audio, .movie]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK { workspace.transcriptionFile = panel.url }
+    }
+    /// Reference clip for Qwen Base voice cloning. The Hub accepts the same audio formats the
+    /// Voice worker does; validation stays on the Hub so the app and GenStudio behave identically.
+    private func chooseReferenceClip() {
+        let panel = NSOpenPanel(); panel.title = "Choose a reference clip"
+        panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url { workspace.audioReferencePath = url.path }
     }
     private func saveImage(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "image-\(job.id).png"; panel.allowedContentTypes = [.png]

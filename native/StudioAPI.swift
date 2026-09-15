@@ -50,6 +50,8 @@ struct NativeModel: Identifiable, Equatable {
     let runtimeReady: Bool
     let supportsWordTimestamps: Bool
     let speakers: [String]
+    /// Qwen3-TTS *Base* models clone from a reference clip instead of using preset speakers.
+    var requiresReference: Bool = false
 }
 
 struct NativeJob: Identifiable, Equatable {
@@ -124,6 +126,12 @@ private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
 @MainActor
 final class NativeWorkspaceStore: ObservableObject {
     static let qwenCustomVoice = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+    /// Requested Qwen3-TTS Base (voice-cloning) models. These clone from a reference clip and
+    /// its exact transcript instead of using preset speakers.
+    static let qwenBaseRepos: Set<String> = [
+        "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+        "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+    ]
     static let whisperTurbo = "mlx-community/whisper-large-v3-turbo"
 
     @Published private(set) var models: [NativeModel] = []
@@ -142,6 +150,13 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var audioModel = qwenCustomVoice { didSet { scheduleSave() } }
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
+    /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
+    /// transcript invalidates the staged asset, because the Hub derives the asset id from both.
+    @Published var audioReferencePath: String? { didSet { invalidateStagedReference() } }
+    @Published var audioReferenceTranscript = "" { didSet { invalidateStagedReference() } }
+    @Published private(set) var audioReferenceAssetId: String?
+    @Published private(set) var audioReferenceStatus: String?
+    @Published private(set) var stagingReference = false
     @Published var transcriptionModel = whisperTurbo { didSet { scheduleSave() } }
     @Published var transcriptionFile: URL? { didSet { scheduleSave() } }
     @Published var transcriptionLanguage = "" { didSet { scheduleSave() } }
@@ -297,6 +312,62 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// Stage a locally chosen reference clip through the same Hub contract GenStudio pushes use.
+    /// The Hub derives the asset id from the audio plus the transcript, so editing either
+    /// invalidates the staged asset and it must be prepared again.
+    func stageVoiceReference() async {
+        guard !stagingReference, let requestConnection = connectionID else { return }
+        do {
+            guard let path = audioReferencePath else {
+                throw NativeAPIError.message("Choose a reference clip first.")
+            }
+            let file = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                throw NativeAPIError.message("The reference clip is no longer at that location. Choose it again.")
+            }
+            let transcript = audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else {
+                throw NativeAPIError.message("Enter the exact words spoken in the reference clip.")
+            }
+            guard let uploadDirectory = dataDirectory else {
+                throw NativeAPIError.message("The app data directory is unavailable.")
+            }
+            stagingReference = true
+            defer { if connectionID == requestConnection { stagingReference = false } }
+            let boundary = "StudioHub-\(UUID().uuidString)"
+            let fields = [
+                "transcript": transcript,
+                "language": audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+            let uploadFile = try await Task.detached(priority: .userInitiated) {
+                try Self.makeMultipartFile(
+                    boundary: boundary, file: file, fields: fields,
+                    dataDirectory: uploadDirectory, fileField: "audio"
+                )
+            }.value
+            defer { try? FileManager.default.removeItem(at: uploadFile) }
+            guard connectionID == requestConnection else { return }
+            var request = try makeRequest(["api", "hub", "voice-references"], method: "POST")
+            request.timeoutInterval = 300
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            let wire: HubVoiceReference = try await performUpload(request, fromFile: uploadFile)
+            guard connectionID == requestConnection else { return }
+            audioReferenceAssetId = wire.assetId
+            audioReferenceStatus = "Voice ready — \(wire.bytes) bytes, transcript stored."
+            error = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            audioReferenceAssetId = nil
+            audioReferenceStatus = nil
+            self.error = Self.actionable(error, action: "Prepare the reference voice")
+        }
+    }
+
+    private func invalidateStagedReference() {
+        if audioReferenceAssetId != nil { audioReferenceAssetId = nil }
+        if audioReferenceStatus != nil { audioReferenceStatus = nil }
+    }
+
     func generateAudio() async {
         guard !submittingAudio, let requestConnection = connectionID else { return }
         do {
@@ -307,15 +378,34 @@ final class NativeWorkspaceStore: ObservableObject {
                 let text = audioText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
                 guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
-                guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
-                    throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
+                let language = audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                if model.requiresReference {
+                    guard audioReferencePath != nil else {
+                        throw NativeAPIError.message("Choose a reference clip before generating with this voice model.")
+                    }
+                    guard !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw NativeAPIError.message("This Qwen Base voice needs the exact words spoken in the reference clip.")
+                    }
+                    guard let assetID = audioReferenceAssetId else {
+                        throw NativeAPIError.message("Prepare the reference voice before generating.")
+                    }
+                    body = HubAudioRequest(
+                        modality: "voice", model: model.repo,
+                        clientRequestId: "native:\(UUID().uuidString)",
+                        items: [HubAudioItem(text: text, params: HubAudioParams(
+                            presetSpeaker: "", language: language))],
+                        voiceReferenceAssetId: assetID)
+                } else {
+                    guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
+                        throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
+                    }
+                    body = HubAudioRequest(
+                        modality: "voice", model: model.repo,
+                        clientRequestId: "native:\(UUID().uuidString)",
+                        items: [HubAudioItem(text: text, params: HubAudioParams(
+                            presetSpeaker: audioSpeaker, language: language))],
+                        voiceReferenceAssetId: nil)
                 }
-                body = HubAudioRequest(
-                    modality: "voice", model: model.repo,
-                    clientRequestId: "native:\(UUID().uuidString)",
-                    items: [HubAudioItem(text: text, params: HubAudioParams(
-                        presetSpeaker: audioSpeaker,
-                        language: audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)))])
             }
             submittingAudio = true
             defer { if connectionID == requestConnection { submittingAudio = false } }
@@ -670,25 +760,32 @@ final class NativeWorkspaceStore: ObservableObject {
         packages: [String: HubModelPackage]
     ) -> [NativeModel] {
         let audioModels = audio.filter { $0.capabilities?.contains("tts") == true }.map { item in
-            let formCompatible = item.family == "qwen3-tts" && item.repo.localizedCaseInsensitiveContains("CustomVoice")
+            let isQwen = item.family == "qwen3-tts"
+            let isClone = isQwen && item.repo.localizedCaseInsensitiveContains("Base")
+            let formCompatible = isQwen && (isClone || item.repo.localizedCaseInsensitiveContains("CustomVoice"))
             let package = packages[item.repo]
             let supported = formCompatible && package != nil
             let cached = item.cache?.state == "cached"
             let ready = (item.runtimeReady ?? false) && item.memoryEligible != false
                 && package?.dispatchState == "eligible"
-            let qualified = item.repo == qwenCustomVoice
+            let qualified = item.repo == qwenCustomVoice || Self.qwenBaseRepos.contains(item.repo)
             let note = supported
                 ? (cached && ready
-                    ? (qualified ? "Tested local Qwen CustomVoice workflow." : "Compatible Qwen CustomVoice contract; this exact model has not completed the native pilot test.")
+                    ? (qualified
+                        ? (isClone
+                            ? "Requested Qwen Base voice — clones from a reference clip and its exact transcript."
+                            : "Tested local Qwen CustomVoice workflow.")
+                        : "Compatible Qwen contract; this exact model has not completed the native pilot test.")
                     : "Native Audio compatible; install the model and ensure its runtime is ready.")
                 : (package == nil
-                    ? "This model is outside the packaged model catalog. Native Audio controls for the approved Base models are planned for the next phase."
+                    ? "This model is outside the packaged model catalog."
                     : "This native Audio form does not yet expose the model-specific controls required by this runtime entry.")
             return NativeModel(
                 id: "audio:\(item.repo)", repo: item.repo, label: item.label, family: item.family ?? "Audio",
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
                 capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
-                supportsWordTimestamps: false, speakers: supported ? speakers : []
+                supportsWordTimestamps: false, speakers: (supported && !isClone) ? speakers : [],
+                requiresReference: isClone
             )
         }
         let transcriptionModels = transcription.map { item in
@@ -857,7 +954,8 @@ final class NativeWorkspaceStore: ObservableObject {
         boundary: String,
         file: URL,
         fields: [String: String],
-        dataDirectory: URL
+        dataDirectory: URL,
+        fileField: String = "files"
     ) throws -> URL {
         let uploadDirectory = dataDirectory.appendingPathComponent("Uploads", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -878,7 +976,7 @@ final class NativeWorkspaceStore: ObservableObject {
             try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n")
         }
         let filename = file.lastPathComponent.replacingOccurrences(of: "\"", with: "")
-        try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+        try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
         let input = try FileHandle(forReadingFrom: file)
         defer { try? input.close() }
         while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
@@ -1105,6 +1203,22 @@ private struct HubAudioRequest: Codable {
     let model: String
     let clientRequestId: String
     let items: [HubAudioItem]
+    /// Staged voice-clone reference. Sent for Qwen Base models; the Hub streams the clip to the
+    /// worker's reference endpoint and supplies the transcript from the staged asset.
+    let voiceReferenceAssetId: String?
+    enum CodingKeys: String, CodingKey {
+        case modality, model, clientRequestId, items
+        case voiceReferenceAssetId = "voice_reference_asset_id"
+    }
+}
+
+/// Response of POST /api/hub/voice-references (one contract, local or GenStudio origin).
+private struct HubVoiceReference: Decodable {
+    let assetId: String
+    let sha256: String
+    let bytes: Int
+    let transcriptSupplied: Bool?
+    let origin: String?
 }
 private struct HubAudioItem: Codable { let text: String; let params: HubAudioParams }
 private struct HubAudioParams: Codable {
