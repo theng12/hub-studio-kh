@@ -267,3 +267,30 @@ it into the native save path (`86b11d3`); and added the `▶ TAKE OVER HERE` blo
 That block is now the single place to look first: it names the current holder, the integration
 commit, what is DONE, the one task in progress, what unlocks next, and the rules that will bite
 a newcomer. Undo point for the whole pass: `backup/pre-handoff-7aa7775`.
+
+### 2026-09-15 — owner scope set; ST-04/05/06 dispatched
+
+Owner confirmed the remaining scope: finish the whole app including the fleet/GenStudio
+connection. Model-fit checking is the owner's call and must not consume agent time — the
+owner has an M1-8, M1-16, M2-8, M2-16, M4-16, M4-24 and M2 Max-32 and will state the RAM a
+model needs directly. Distribution is "copy the built app to the Mac and open it with
+right-click → Open", so an unsigned build is acceptable and signing/notarization stays out
+of scope. Recorded in the board's TAKE OVER HERE block.
+
+Dispatched three workers in isolated worktrees: `st-06` (independent Subtitle backend),
+`st-04` (Qwen Base backend) and a read-only independent reviewer for ST-03. The coordinator
+owns native/UI and staging integration for all of them, and recorded a deliberate exception
+that unlocked ST-04/05/06 before ST-03 formally reached DONE, because the packaged-worker
+pattern they depend on is already proven by the working Image slice.
+
+Coordinator discovery while scoping ST-04 — the voice-reference path is HALF-BUILT:
+`components/hub/backend/execution_assets.stage_voice_reference()` exists and is unit-tested,
+and `broker.py` consumes `voice_reference_asset_id` and streams the staged clip to the Voice
+worker's `/api/generate/txt2speech/reference`, but **nothing in production code calls
+`stage_voice_reference`** — its only callers are tests. It also requires a GenStudio
+`source_asset_id`, and there is no Hub route that stages a reference from a locally chosen
+file. Consequence: a user of the standalone app cannot create a voice reference at all
+today, so Qwen Base voice cloning cannot work from the app even though the backend supports
+references. Folded into the ST-04 worker with a request for the exact wire contract; the
+native Audio UI (reference picker + transcript, Base model choices) is coordinator-owned and
+follows that contract.
