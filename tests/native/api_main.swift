@@ -21,6 +21,8 @@ final class FixtureProtocol: URLProtocol {
     static var uncertainTranscription = false
     static var corruptImage = false
     static var uncertainImage = false
+    static var imageAckPaths: [String] = []
+    static var imageAckRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
@@ -41,6 +43,8 @@ final class FixtureProtocol: URLProtocol {
     static func recordedTranscriptionPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return transcriptionPorts }
     static func setCorruptImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptImage = value }
     static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
+    static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
+    static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
@@ -117,6 +121,9 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs/image-job/items/0/artifact"):
             Self.lock.lock(); let corrupt = Self.corruptImage; Self.lock.unlock()
             result = (200, "image/png", corrupt ? Data([0]) : Self.png)
+        case ("POST", "/api/hub/jobs/image-job/items/0/ack"):
+            Self.lock.lock(); Self.imageAckPaths.append(path); let rejects = Self.imageAckRejects; Self.lock.unlock()
+            result = (200, "application/json", Data(rejects ? #"{"ok":false}"#.utf8 : #"{"ok":true}"#.utf8))
         case ("POST", "/api/hub/jobs/image-job/items/0/reconcile"):
             Self.lock.lock()
             Self.uncertainImage = false
@@ -286,10 +293,25 @@ struct NativeAPITests {
         do { _ = try await store.imageData(for: image); fatalError("corrupt Image artifact was accepted") }
         catch { require(error.localizedDescription.contains("verification"), "Image hash mismatch needs actionable message") }
         FixtureProtocol.setCorruptImage(false)
+        require(FixtureProtocol.imageAckRequests().isEmpty, "failed or unverified Image reads must not acknowledge delivery")
         let imageDestination = temporary.appendingPathComponent("saved-image.png")
         try await store.saveImage(image, to: imageDestination)
         let savedImage = try Data(contentsOf: imageDestination)
         require(savedImage == FixtureProtocol.png, "Image export bytes")
+        require(FixtureProtocol.imageAckRequests() == ["/api/hub/jobs/image-job/items/0/ack"],
+                "a verified Image save must acknowledge delivery exactly once")
+        FixtureProtocol.setImageAckRejects(true)
+        let rejectedDestination = temporary.appendingPathComponent("rejected-image.png")
+        do {
+            try await store.saveImage(image, to: rejectedDestination)
+            fatalError("a rejected delivery acknowledgement must be reported")
+        } catch {
+            require(error.localizedDescription.contains("could not be acknowledged"),
+                    "rejected acknowledgement needs an actionable message")
+        }
+        require(FileManager.default.fileExists(atPath: rejectedDestination.path),
+                "the verified file must remain on disk when acknowledgement fails")
+        FixtureProtocol.setImageAckRejects(false)
         store.restoreImageDefaults()
         require(store.imageSettings?.steps == 4 && store.imageSettings?.seed == -1, "Restore Image Defaults must use runtime values")
 

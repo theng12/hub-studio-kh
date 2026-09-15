@@ -433,7 +433,16 @@ final class NativeWorkspaceStore: ObservableObject {
         guard try Data(contentsOf: destination) == data else {
             throw NativeAPIError.message("Saved image verification failed. Choose another destination and save again.")
         }
-        // The shared delivery phase connects verified destination saves to ACK.
+        // The destination is verified, so delivery may now be acknowledged. Only a
+        // verified save reaches the Hub receipt; if acknowledgement fails the managed
+        // copy stays protected instead of being treated as delivered.
+        do {
+            let receipt: HubAckReceipt = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", "0", "ack"], method: "POST")
+            if !receipt.ok { throw NativeAPIError.message("rejected") }
+        } catch {
+            throw NativeAPIError.message("The image was saved and verified, but its delivery could not be acknowledged. The protected copy remains available and cleanup will retry later.")
+        }
     }
 
     func transcribe() async {
@@ -1086,6 +1095,7 @@ private struct HubImageRequest: Codable {
     let items: [HubImageItem]
 }
 private struct HubImageItem: Codable { let prompt: String; let params: NativeImageSettings }
+private struct HubAckReceipt: Decodable { let ok: Bool }
 private struct HubAudioRequest: Codable {
     let modality: String
     let model: String
