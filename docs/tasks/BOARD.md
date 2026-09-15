@@ -32,14 +32,21 @@ then the one task card you are claiming.
   blocker** and all seven evidence/test defects it raised are fixed. The **only** item left is a
   single interactive GUI **Save…** by a human: automation successfully navigated the app to
   Image Studio but could not drive the unlabelled SwiftUI save panel.
-- **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend and
-  `st-04` Qwen Base backend. **ST-04 is merged** (`71611bb`): the unified voice-reference
-  staging contract (local upload + GenStudio push), Qwen Base clone requirements, and its
-  focused tests, paired with the native clone UI (`1a010e5`). Integrated-tree evidence: root
-  suite **150 OK**, Voice regression **664 passed / 2 skipped**, native build passes. ST-04 is
-  still open for its real-model receipts (QWEN06/QWEN17), its `qualification/st04.md` receipt
-  and independent review. The ST-03 review is complete; ST-06 has written its receipts but has
-  not committed yet. The coordinator retains native/UI and staging integration.
+- **ST-04 merged** (`71611bb`): the unified voice-reference staging contract (local upload +
+  GenStudio push), Qwen Base clone requirements, and its focused tests, paired with the native
+  clone UI (`1a010e5`). **ST-06 merged** (`0d792c9`): the independent Subtitle worker plus real
+  packaged Turbo transcription evidence. Integrated-tree evidence: root suite **188 OK
+  (5 skipped)**, Hub regression passed, Voice regression **664 passed / 2 skipped**, native build
+  passes. ST-04 and ST-06 are both still **PARTIAL and not DONE**: ST-04 needs real QWEN06/QWEN17
+  receipts and its receipt file; ST-06 needs its packaging/staging/Hub/native integration applied
+  (exact checklist on the ST-06 card), the Subtitle screen, and review. Whisper Base/Small are
+  blocked by an `mlx-audio` `weights.npz` vs safetensors loader limitation.
+- **Coordinator decision recorded:** public Subtitle jobs are served by the `subtitle` worker;
+  Voice keeps its Whisper quality check internal to the parent Voice job and does not advertise
+  `modality == "transcription"` to the packaged public scheduler.
+- **Next:** apply the ST-06 integration checklist (packaging, staging, Hub read routes, native
+  Subtitle page + history tab), then ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining native
+  work, ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
