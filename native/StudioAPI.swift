@@ -140,6 +140,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var models: [NativeModel] = []
     @Published private(set) var audioJobs: [NativeJob] = []
     @Published private(set) var imageJobs: [NativeJob] = []
+    /// Independent Subtitle studio history, read from the Hub's transcription jobs (durable),
+    /// which the packaged Hub now routes to the subtitle worker.
+    @Published private(set) var subtitleJobs: [NativeJob] = []
     @Published private(set) var imageConfigurations: [String: NativeImageConfiguration] = [:]
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
     @Published var imageModel = "" { didSet { if imageModel != oldValue { imageSettings = nil }; scheduleSave() } }
@@ -259,13 +262,14 @@ final class NativeWorkspaceStore: ObservableObject {
         do {
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
             async let packages: HubModelPackagesResponse = get(["api", "hub", "model-packages"])
-            async let transcription: TranscriptionAvailability = get(["studio", "voice", "api", "transcribe", "availability"])
+            async let transcription: TranscriptionAvailability = get(["studio", "subtitle", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability = get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse = get(["api", "hub", "jobs"])
             async let transfers: DownloadsResponse = get(["studio", "voice", "api", "downloads"])
             async let settings: TokenStatusWire = get(["studio", "voice", "api", "settings"])
-            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue) =
-                try await (catalog, packages, transcription, generation, jobs, transfers, settings)
+            async let subtitleHistory: HubTranscriptionList = get(["api", "hub", "transcription", "jobs"])
+            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
+                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
             guard connectionID == requestConnection else { return }
             modelPackages = Dictionary(uniqueKeysWithValues: packagesValue.models.map { ($0.modelId, $0) })
             audioSpeakers = (generationValue.qwen3PresetSpeakers ?? []).map(\.id)
@@ -295,6 +299,20 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            var subtitles: [NativeJob] = []
+            for batch in subtitleValue.batches {
+                let batchState = batch.status ?? "unknown"
+                subtitles.append(NativeJob(
+                    id: batch.id,
+                    state: batchState,
+                    progress: batchState == "done" ? 1 : 0,
+                    text: batch.label ?? batch.episode ?? "",
+                    model: batch.model ?? "",
+                    createdAt: batch.createdAt,
+                    outputURL: nil,
+                    error: nil))
+            }
+            subtitleJobs = subtitles.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
             for (runID, repo) in hubDownloadRuns {
                 let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
@@ -1262,6 +1280,12 @@ private struct HubTranscriptionSummary: Decodable {
     let id: String
     let project: String?
     let episode: String?
+    /// Present on the list route; used for the Subtitle history so the studio's own jobs are
+    /// visible without opening each one.
+    let status: String?
+    let model: String?
+    let createdAt: Double?
+    let label: String?
 }
 private struct HubTranscriptionDetail: Decodable {
     let model: String

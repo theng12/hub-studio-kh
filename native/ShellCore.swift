@@ -23,6 +23,9 @@ enum StudioPage: String, CaseIterable, Identifiable {
     case music = "Music", video = "Video", chat = "Chat"
     case models = "Models", jobs = "Jobs", connections = "Connections", settings = "Settings"
     var id: String { rawValue }
+    /// Owner-facing name. The raw value stays stable because it is also the StudioFunction
+    /// lookup key and is persisted in saved state.
+    var title: String { self == .transcription ? "Subtitle" : rawValue }
     static let workspaces: [Self] = [.audio, .transcription, .image, .music, .video, .chat]
     static let management: [Self] = [.models, .jobs, .connections, .settings]
     var function: StudioFunction? { StudioFunction(rawValue: rawValue) }

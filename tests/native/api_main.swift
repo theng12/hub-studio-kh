@@ -90,6 +90,9 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"whisper","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
+        case ("GET", "/studio/subtitle/api/transcribe/availability"):
+            // The Subtitle studio reads its availability from the subtitle worker, not Voice.
+            result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"whisper","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
         case ("GET", "/studio/voice/api/generate/availability"):
             result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}]}"#.utf8))
         case ("GET", "/studio/voice/api/settings"):
@@ -167,6 +170,9 @@ final class FixtureProtocol: URLProtocol {
             Self.transcriptionPorts.append(request.url?.port ?? -1)
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"batch_id":"stt-batch","items":1,"queued":1}"#.utf8))
+        case ("GET", "/api/hub/transcription/jobs"):
+            // Durable Subtitle history list read during refresh.
+            result = (200, "application/json", Data(#"{"batches":[{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","created_at":40,"label":"Fixture subtitle"}],"stats":{}}"#.utf8))
         case ("GET", "/api/hub/transcription/jobs/stt-batch"):
             Self.lock.lock(); let uncertain = Self.uncertainTranscription; Self.lock.unlock()
             if uncertain {

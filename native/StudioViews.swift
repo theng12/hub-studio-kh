@@ -30,7 +30,7 @@ enum HistoryTab: String, CaseIterable, Identifiable {
     case all = "All"
     case image = "Image"
     case audio = "Audio"
-    case transcription = "Transcription"
+    case subtitle = "Subtitle"
     var id: String { rawValue }
 }
 
@@ -79,10 +79,10 @@ struct StudioContent: View {
             List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
                 Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
                 Section("Create") {
-                    ForEach(StudioPage.workspaces) { page in Label(page.rawValue, systemImage: page.symbol).tag(page) }
+                    ForEach(StudioPage.workspaces) { page in Label(page.title, systemImage: page.symbol).tag(page) }
                 }
                 Section("Library & app") {
-                    ForEach(StudioPage.management) { page in Label(page.rawValue, systemImage: page.symbol).tag(page) }
+                    ForEach(StudioPage.management) { page in Label(page.title, systemImage: page.symbol).tag(page) }
                 }
             }
             .listStyle(.sidebar)
@@ -184,7 +184,7 @@ struct StudioContent: View {
                         HStack(spacing: 14) {
                             Image(systemName: page.symbol).font(.title3).frame(width: 24)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(page.rawValue).font(.headline)
+                                Text(page.title).font(.headline)
                                 Text(workspaceDescription(page)).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -436,7 +436,7 @@ struct StudioContent: View {
 
     private var transcriptionWorkspace: some View {
         VStack(alignment: .leading, spacing: 20) {
-            heading("Transcription", "Import a recording, review its transcript and export text or subtitles.")
+            heading("Subtitle Studio", "Import a recording, review its transcript and export text or subtitles.")
             if !connected { setup }
             HSplitView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -478,8 +478,12 @@ struct StudioContent: View {
                             TextField("Auto-detect", text: $workspace.transcriptionLanguage).textFieldStyle(.roundedBorder)
                             Text("Leave blank to detect the language, or enter a code such as en.").font(.caption).foregroundStyle(.secondary)
                         }
+                        Divider().padding(.top, 8)
+                        HStack { Text("Recent subtitles").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
+                        if workspace.subtitleJobs.isEmpty { Text("Completed subtitles will appear here.").foregroundStyle(.secondary).font(.callout) }
+                        ForEach(workspace.subtitleJobs.prefix(5)) { job in jobRow(job, compact: true) }
                         Text("This workspace keeps its recording, model and transcript separate from Audio.").font(.callout).foregroundStyle(.secondary)
-                        Button("Manage Transcription Models") { modelFilter = "Transcription"; studio.select(.models) }
+                        Button("Manage Subtitle Models") { modelFilter = "Transcription"; studio.select(.models) }
                     }.padding(.leading, 20).padding(.bottom, 20)
                 }.frame(minWidth: 245, idealWidth: 280, maxWidth: 330)
             }
@@ -565,13 +569,13 @@ struct StudioContent: View {
                     if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
                     ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
                 }
-                if historyTab == .all || historyTab == .transcription {
-                    sectionTitle("Transcription")
+                if historyTab == .all || historyTab == .subtitle {
+                    sectionTitle("Subtitle")
+                    if workspace.subtitleJobs.isEmpty { Text("No subtitle jobs yet.").foregroundStyle(.secondary) }
+                    ForEach(workspace.subtitleJobs) { job in jobRow(job, compact: false); Divider() }
                     if let result = workspace.transcriptionResult {
-                        HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Transcript") { studio.select(.transcription) } }
-                        Text("Subtitle keeps its own full history once the independent Subtitle studio is connected.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if !workspace.transcribing { Text("No completed transcript yet.").foregroundStyle(.secondary) }
+                        HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Subtitle") { studio.select(.transcription) } }
+                    }
                 }
                 if historyTab == .all {
                     Divider()
