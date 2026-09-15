@@ -101,10 +101,49 @@ def stage_voice_reference(
     declared_sha256: str, transcript: str = "", transcript_segments: object = None,
     language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
 ) -> dict[str, Any]:
+    """GenStudio-owned variant: binds the execution copy to a durable source asset."""
     if not source_asset_id.strip() or len(source_asset_id) > 500:
         raise ExecutionAssetError(
             "SOURCE_ASSET_ID_REQUIRED", "GenStudio source_asset_id is required."
         )
+    return _stage_voice_reference(
+        audio_bytes=audio_bytes, filename=filename,
+        source_fingerprint=hashlib.sha256(
+            source_asset_id.strip().encode()
+        ).hexdigest(),
+        declared_sha256=declared_sha256, transcript=transcript,
+        transcript_segments=transcript_segments, language=language,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def stage_local_voice_reference(
+    *, audio_bytes: bytes, filename: str, declared_sha256: str = "",
+    transcript: str = "", transcript_segments: object = None,
+    language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> dict[str, Any]:
+    """Local-ingestion variant: one app-chosen file, no GenStudio source.
+
+    The Hub already owns this Mac's data directory, so there is no durable
+    upstream asset to fingerprint, but every other rule (type, size, optional
+    declared checksum, transcript, expiry, idempotency, 0600 bytes) is exactly
+    the GenStudio contract. Both variants return the same asset id that
+    ``/api/hub/jobs`` consumes as ``voice_reference_asset_id``.
+    """
+    return _stage_voice_reference(
+        audio_bytes=audio_bytes, filename=filename,
+        source_fingerprint="",
+        declared_sha256=declared_sha256, transcript=transcript,
+        transcript_segments=transcript_segments, language=language,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _stage_voice_reference(
+    *, audio_bytes: bytes, filename: str, source_fingerprint: str,
+    declared_sha256: str, transcript: str, transcript_segments: object,
+    language: str, ttl_seconds: int,
+) -> dict[str, Any]:
     if not audio_bytes:
         raise ExecutionAssetError("REFERENCE_AUDIO_EMPTY", "The private voice reference is empty.")
     if len(audio_bytes) > MAX_BYTES:
@@ -115,21 +154,21 @@ def stage_voice_reference(
     if extension not in ALLOWED_EXTENSIONS:
         raise ExecutionAssetError("REFERENCE_AUDIO_TYPE_UNSUPPORTED", "The reference audio type is unsupported.")
     digest = hashlib.sha256(audio_bytes).hexdigest()
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", declared_sha256 or ""):
-        raise ExecutionAssetError(
-            "REFERENCE_AUDIO_CHECKSUM_REQUIRED", "A full source SHA-256 is required."
-        )
-    if not hashlib.sha256(audio_bytes).hexdigest() == declared_sha256.lower():
-        raise ExecutionAssetError(
-            "REFERENCE_AUDIO_CHECKSUM_MISMATCH",
-            "The uploaded reference does not match GenStudio's checksum.",
-        )
+    if declared_sha256:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", declared_sha256):
+            raise ExecutionAssetError(
+                "REFERENCE_AUDIO_CHECKSUM_REQUIRED", "A full source SHA-256 is required."
+            )
+        if digest != declared_sha256.lower():
+            raise ExecutionAssetError(
+                "REFERENCE_AUDIO_CHECKSUM_MISMATCH",
+                "The uploaded reference does not match the declared checksum.",
+            )
     segments = _segments(transcript_segments)
     transcript = transcript.strip()
     if len(transcript) > 200_000:
         raise ExecutionAssetError("REFERENCE_TRANSCRIPT_TOO_LARGE", "The reference transcript is too long.")
     ttl = max(300, min(int(ttl_seconds), MAX_TTL_SECONDS))
-    source_fingerprint = hashlib.sha256(source_asset_id.strip().encode()).hexdigest()
     identity = hashlib.sha256(
         json.dumps({
             "source": source_fingerprint,

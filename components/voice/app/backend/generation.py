@@ -2461,6 +2461,78 @@ class GenerationManager:
         finally:
             stt_manager.release_memory_locked("qwen-output-validation-complete")
 
+    @staticmethod
+    def _require_readable_qwen_reference(
+        reference_path: Optional[Path], *, source: str,
+    ) -> None:
+        """Fail with one machine-readable, actionable code per reference defect.
+
+        A missing voice, a dangling path, a directory, an unreadable file and a
+        zero-byte clip are different user problems; reporting them all as
+        "unavailable" left the caller with nothing to act on.  No path or
+        transcript is retained in the evidence.
+        """
+        evidence = {
+            "validator_revision": qwen_quality.VALIDATOR_REVISION,
+            "reference_source": source,
+        }
+        if reference_path is None:
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_MISSING",
+                "No Qwen reference voice is selected. Choose a voice from the Voices "
+                "library or attach a reference clip, then generate again.",
+                {**evidence, "reason": "not_selected"},
+            )
+        try:
+            is_file = reference_path.is_file()
+        except OSError as exc:
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_UNAVAILABLE",
+                "The selected Qwen reference voice could not be inspected. "
+                "Re-select or re-upload the reference clip.",
+                {**evidence, "reason": "unreadable", "error_type": type(exc).__name__},
+            ) from exc
+        if not is_file:
+            if reference_path.exists():
+                raise qwen_quality.QwenQualityError(
+                    "QWEN_REFERENCE_AUDIO_UNAVAILABLE",
+                    "The selected Qwen reference is not a regular audio file. "
+                    "Re-upload the reference clip.",
+                    {**evidence, "reason": "not_a_file"},
+                )
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_MISSING",
+                "The selected Qwen reference audio no longer exists. "
+                "Re-upload the reference clip or choose another voice.",
+                {**evidence, "reason": "absent"},
+            )
+        try:
+            size = reference_path.stat().st_size
+        except OSError as exc:
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_UNAVAILABLE",
+                "The selected Qwen reference audio could not be read. "
+                "Re-upload the reference clip.",
+                {**evidence, "reason": "unreadable", "error_type": type(exc).__name__},
+            ) from exc
+        if size <= 0:
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_EMPTY",
+                "The selected Qwen reference audio is empty. Upload a 3-15 second clip "
+                "of continuous speech.",
+                {**evidence, "reason": "empty", "bytes": size},
+            )
+        try:
+            with reference_path.open("rb") as handle:
+                handle.read(1)
+        except OSError as exc:
+            raise qwen_quality.QwenQualityError(
+                "QWEN_REFERENCE_AUDIO_UNREADABLE",
+                "The selected Qwen reference audio could not be opened for reading. "
+                "Check the file's permissions, then re-upload it.",
+                {**evidence, "reason": "not_readable", "error_type": type(exc).__name__},
+            ) from exc
+
     def _validate_qwen_reference_locked(self, job: GenerationJob) -> None:
         """Validate the exact reference inside the already durable local job."""
         if not self._is_qwen_clone_job(job):
@@ -2469,26 +2541,27 @@ class GenerationManager:
             return
         private_path = str(job.params.get("_reference_audio_path") or "").strip()
         transcript = str(job.params.get("ref_transcript") or "").strip()
+        source = "private_reference"
         if private_path:
             reference_path = Path(private_path)
         else:
             from . import voices as voices_module
 
+            source = "voice_library"
             voice_id = str(job.params.get("voice_library_id") or "").strip()
             reference_path = voices_module.library.reference_path(voice_id)
             if not transcript:
                 transcript = voices_module.library.transcript(voice_id) or ""
-        if reference_path is None or not reference_path.is_file():
-            raise qwen_quality.QwenQualityError(
-                "QWEN_REFERENCE_AUDIO_UNAVAILABLE",
-                "The selected Qwen reference voice is unavailable.",
-                {"validator_revision": qwen_quality.VALIDATOR_REVISION},
-            )
+        self._require_readable_qwen_reference(reference_path, source=source)
         if not transcript.strip():
             raise qwen_quality.QwenQualityError(
                 "QWEN_REFERENCE_TRANSCRIPT_REQUIRED",
-                "Qwen3-TTS Base needs the exact transcript for its reference audio.",
-                {"validator_revision": qwen_quality.VALIDATOR_REVISION},
+                "Qwen3-TTS Base needs the exact transcript for its reference audio. "
+                "Add the reference transcript to the selected voice before generating.",
+                {
+                    "validator_revision": qwen_quality.VALIDATOR_REVISION,
+                    "reference_source": source,
+                },
             )
 
         cache_key = qwen_quality.reference_cache_key(reference_path, transcript)
@@ -2519,6 +2592,7 @@ class GenerationManager:
                     "Whisper Large could not validate the Qwen reference.",
                     {
                         "validator_revision": qwen_quality.VALIDATOR_REVISION,
+                        "reference_source": source,
                         "error_type": type(exc).__name__,
                     },
                 ) from exc
