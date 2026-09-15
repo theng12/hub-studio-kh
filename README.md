@@ -93,6 +93,37 @@ Model libraries may live in Application Support or on an external SSD. The selec
 
 The app has no signing, notarization, login-registration or physical Sonoma test evidence yet. Login-item status is read from macOS service management, but login/reboot behavior remains unqualified.
 
+## Running this build on a test machine
+
+The current build is `dist/Studio Hub 0.4.0 Subtitle Proof.app`. It is unsigned, so:
+
+1. **Copy the app and the model library to the target Mac.** Copy `model-library/` as well — the
+   app is offline and never downloads models by itself.
+2. **First launch: right-click the app → Open** (a plain double-click is blocked once by macOS).
+3. **Choose the model library when asked.** On first run the app has no library recorded and asks
+   you to pick one; point it at the copied `model-library` folder. The folder must live outside the
+   app bundle — the app refuses a library inside itself. The choice is remembered per machine.
+4. **Wait for `Local services ready`** (bottom-left). The app owns four processes: Hub, Voice,
+   Image and Subtitle.
+
+What each studio needs, in the current build:
+
+| Studio | Working models |
+| --- | --- |
+| Image | FLUX.2 Klein 4B MLX 4-bit |
+| Subtitle | Whisper large-v3-turbo. Base/Small are catalogued but refuse, because `mlx-audio` reads `*.safetensors` while those pinned revisions ship `weights.npz`. |
+| Voice | Qwen3-TTS **Base** (clone: reference clip **and** its exact transcript required), Qwen3-TTS **CustomVoice** (preset speakers), **OmniVoice** (clone: reference clip only). |
+| Voice (heavy) | **VoxCPM2** is exposed but needs more free unified memory than a 16 GB Mac has with the other engines resident; it fails with its own explicit memory message rather than misbehaving. Run it on a 24/32 GB machine with memory free. |
+
+### Measuring generation speed per machine
+
+Every job already records what you need, tagged with the machine: elapsed seconds, output bytes and
+SHA-256, peak process RSS, and the exact model revision and runtime identity. The Hub aggregates
+them at `GET /api/hub/stats` (`by_machine`, `by_modality`, `by_model`, `model_rows`, a time
+`timeline`, and `fleet_activity` per machine including `completed`, `failed` and
+`median_runtime_s`). Run one generation per model per machine and the comparison is recorded — no
+separate benchmark needed.
+
 ## Historical Voice proof
 
 The following command builds the earlier command-line Voice proof and is retained as historical packaging evidence:
