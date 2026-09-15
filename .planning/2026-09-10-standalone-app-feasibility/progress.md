@@ -133,3 +133,55 @@ imports, source changes or inference were started. Exact sources/files/checksums
 missing URLs: .build/model-availability-2026-09-15.json. The inventory used one hash
 per unchanged physical source file and completed its full read in 22.8 seconds.
 ST-02 remains READY; this inventory does not mark model inference qualified.
+
+## 2026-09-15 — record reconciliation and verification
+
+Handoff audit (read-only) found the integration branch, board, task cards and canonical
+progress disagreeing with Git. Reconciled without changing application behavior:
+
+- `implementation/st-03` (the only unmerged branch; `317267d`, 32 files, +2910/−142) was
+  merged into `implementation/voice-runtime` by `cd6ed5d`. The branch's ST-03 card
+  (IN_PROGRESS, owner st03_image, start `5358a52`, worktree, evidence) had never reached
+  the integration branch, so the branch's card read READY/Unassigned while the board said
+  IN_PROGRESS. No task work is stranded on an unmerged branch now.
+- 71 pre-existing progress lines were committed (`b46b4cb`) together with two finished
+  research handoffs that were untracked and therefore invisible to every worktree and lost
+  on a fresh clone: `research/ssd-refresh-handoff.md` and `research/yume-i2v-24gb.md`. The
+  Graphify query stamp stays uncommitted as a regenerable cache entry.
+- ST-09 was `IN_PROGRESS` on the board and `REVIEW` on its card although `7aa7775` had
+  already merged `c0855d4`. The card now records implementation `c0855d4`, integration
+  `7aa7775` and DONE. Physical login/logout/reboot remains ST-11.
+- `tests/test_image_bundle.py` computed `BUILD_PYTHON` from `ROOT.parents[1]`, resolving to
+  the nonexistent `/build/.build/voice-runtime/bin/python3`, so the merged tree
+  could not pass. Fixed to `ROOT / '.build/voice-runtime/bin/python3'`.
+
+Previously unrecorded finished work found during the audit: a **real packaged FLUX.2 Klein
+1K generation** through the assembled native UI + Hub + Image worker, run by st03_image
+after `qualification/st03-image.md` was written and never recorded on the card or board.
+Job `af4913b2b52b41b0931f919112daf969`, 1280×720, 4 steps, guidance 1.0, seed 42,
+105.943 s, 1,696,066 bytes, SHA-256
+`290d2fb8cf0cd927d7d0633412bb157a9ee8675684ed2da7e2e1267c6ce919bd`, peak RSS ~1.03 GiB,
+Hub output group finalized, `receipt_acked_at` null. Copied out of the st-03 worktree's
+gitignored `.build/` into `qualification/evidence/` and recorded in
+`qualification/st03-image-real-inference.md`. Export/receipt acknowledgement,
+restart-history checks, retry counts and independent review remain open.
+
+Verification of the integrated tree, local on Apple M4 / 16 GiB / macOS 26.6.2: root
+`unittest discover -s tests -p 'test_*.py'` 124 tests OK (1 skipped); retained Hub
+regression wrapper passed; adopted Voice `pytest` 639 passed / 2 skipped; `bash native/build.sh`
+passed boundary and API contract checks. Root and Hub suites must use
+`.build/voice-runtime/bin/python3` (3.12) with `PYTHONPATH=.build/test-deps`; system
+`python3` is 3.9.6 and fails on `dict | None` and pytest 9. The historical 107/640 counts
+were not reproduced as-is on the merged tree.
+
+Automatic startup status: implemented and integrated. `native/StudioHub.swift` maps
+`SMAppService.mainApp.status`, registers/unregisters on an explicit preference change,
+opens Login Items when approval is required, and registers during normal setup when
+enabled; `native/ShellCore.swift` persists `startAtLogin` with a default of on; the bounded
+recovery policy lives in `native/StartupRecovery.swift` with five focused tests. No live
+registration was performed, so start-at-login is source/fixture-qualified only and the
+physical login/logout/reboot check remains ST-11.
+
+Record-keeping cautions were added to `docs/tasks/BOARD.md`: the checkout is ~54 GB but only
+~2.7 MB is tracked; there is no Git remote; `.worktrees/` must not be deleted; and test
+counts in receipts are historical. Undo point for this pass: `backup/pre-handoff-7aa7775`.

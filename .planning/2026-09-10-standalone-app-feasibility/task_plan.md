@@ -5,9 +5,12 @@ Updated: 2026-09-15. Canonical planning directory remains this directory.
 ## Current goal
 
 Execute the owner-authorized standalone Hub + Image + Voice + Subtitle plan.
-ST-01 is integrated. The September 15 owner instruction authorizes the remaining
-work and both missing Whisper downloads. Continue eligible phases in board order,
-using bounded parallel assignments and reviewed integration.
+`implementation/voice-runtime` @ `cd6ed5d` is the integration line. ST-01 foundation,
+ST-02 bundled Hub, ST-07 output storage and ST-09 startup/recovery are DONE and
+integrated. ST-03 Packaged FLUX is merged and a real packaged 1K generation is
+evidenced, but export/receipt acknowledgement, retry counts and independent review
+remain, so ST-04/05/06/08 correctly stay WAITING on it. The September 15 owner
+instruction authorizes the remaining work and both missing Whisper downloads.
 
 ## Confirmed scope
 
@@ -42,15 +45,19 @@ using bounded parallel assignments and reviewed integration.
 
 ## Implementation state
 
-Current built preview: 0.3.0, Voice-only packaging with real Qwen CustomVoice and Whisper
-Turbo evidence. Native shell, immutable runtime and relocation proof are reusable.
-Requested Qwen Base is not proven by CustomVoice. Hub/Image are not bundled.
-Historical 676 regressions and 28 packaging tests are not new test runs.
+Current built artifact: 0.4.0, bundled Hub with a private Voice worker and real Qwen
+CustomVoice / Whisper Turbo evidence; ST-02 added the authenticated Hub, editable device
+policy and independent Subtitle registry, and ST-09 added bounded startup recovery.
+Requested Qwen **Base** models are still not proven by CustomVoice evidence. Image is
+merged in source but not bundled into the recorded artifact: staging it needs
+`--image-runtime` and the pinned Image runtime currently exists only in
+`.worktrees/st-03/.build/st03-image-runtime-worker`.
 
-ST-00 planning is complete. ST-01 foundation is DONE and locally integrated; ST-02 through ST-11
-remain pending and their board controls readiness. Start runtime/model contracts, then bundled local Hub, then packaged FLUX.
-Physical hardware and distribution conditions remain explicit, not reasons to stall
-independent local implementation.
+ST-00 planning and ST-01/02/07/09 are complete and integrated. ST-03 is the only open
+foundation and gates ST-04/05/06/08. Historical 676 / 107 / 640 regressions are prior
+runs; the current integrated counts are recorded on the board. Physical hardware and
+distribution conditions remain explicit, not reasons to stall independent local
+implementation.
 
 ## Preflight and exit snapshot
 
@@ -72,7 +79,7 @@ Their original tests/limitations remain evidence for those artifacts only.
 
 ## Latest owner addition
 
-Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 is DONE; ST-02 is READY. ST-10.TOPOLOGY is resolved: preserve GenStudio-to-location-controller-to-nodes routing. Future standalone GenStudio implementation remains deferred.
+Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 and ST-02 are DONE. ST-10.TOPOLOGY is resolved: preserve GenStudio-to-location-controller-to-nodes routing. Future standalone GenStudio implementation remains deferred.
 
 ## Older-device addition
 

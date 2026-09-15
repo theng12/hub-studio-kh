@@ -47,7 +47,10 @@ are now downloaded and fully file-verified; transcription qualification is separ
 The native shell connects to a bundled Hub, which owns the private Voice process.
 The Hub exposes authenticated jobs, model import/download/verification and editable
 device policy settings. Worker death stops the owner so the shell can show a failed
-service instead of leaving a stale healthy connection. Restart automation remains ST-09.
+service instead of leaving a stale healthy connection. Automatic login startup and bounded
+recovery are implemented and integrated (ST-09); physical login/logout/reboot acceptance
+remains ST-11, and start-at-login is source/fixture-qualified only — no live registration
+has been performed.
 
 This is an intermediate build. The narrowed model-specific controls, independent
 Subtitle process and generated-output cleanup enforcement are still on the task board.

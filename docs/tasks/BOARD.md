@@ -1,20 +1,26 @@
 # Studio Hub task board
 
-Updated: 2026-09-15. [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
-ST-01 foundation and ST-02 bundled Hub are reviewed and locally integrated; subsequent app phases remain pending. Historical 0.3.0 evidence does not complete these cards.
+Updated: 2026-09-15 (record reconciliation). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
+ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
+integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was
+merged into `implementation/voice-runtime` and a **real packaged 1K generation is
+evidenced** ([receipt](../../qualification/st03-image-real-inference.md)), but it is not
+complete: export/receipt acknowledgement, restart-history checks, retry counts and
+independent review remain open. Historical 0.3.0
+evidence does not complete these cards.
 
 | ID | Phase / deliverable | Depends on | Status | Owner/session |
 | --- | --- | --- | --- | --- |
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
 | [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | DONE | root / implementation/st-02 |
-| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | root + st03_image (Sol/high) |
+| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | st03_image (Sol/high); merged `cd6ed5d`; real 1K generation evidenced, export/retries/review open |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
 | [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | WAITING | Unassigned |
 | [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | DONE | st07_storage (Terra/high), root integrated |
 | [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | WAITING | Unassigned |
-| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | IN_PROGRESS | st09_startup (Luna/high) |
+| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | DONE | st09_startup (Luna/high), root integrated `7aa7775` |
 | [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | WAITING | Unassigned |
 | [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | WAITING | Unassigned |
 
@@ -31,7 +37,7 @@ One coordinator updates the shared board. Workers update only their assigned car
 
 ## ST-00 evidence
 
-Baseline: 29d0baa. Deliverables: revised PRODUCT.md, DESIGN.md, README.md, canonical design, execution plan, task cards and three research/rescope-*-2026-09-15.md source inventories.
+Baseline: 29d0baa. Deliverables: revised PRODUCT.md, DESIGN.md, README.md, canonical design, execution plan, task cards and four research/rescope-*-2026-09-15.md source inventories.
 Proof: 20 Markdown files and 142 local links validated; 11 task cards match the acyclic board dependencies; git diff --check clean. Independent scope_hub_storage review resolved sequencing/storage findings and confirmed no remaining design/handoff blocker. Recorded in canonical progress. Documentation integrated into the local working tree; no app implementation or new release commit.
 No application code, runtime, credentials or installed node changed. No new model qualification claimed.
 
@@ -71,6 +77,50 @@ new model inference and physical M1/Sonoma qualification remain later checkpoint
 **ST-02 is DONE.** Implementation `4a5124c` is reviewed and locally integrated.
 [Phase receipt](../../qualification/st02.md) records the 0.4.0 native Hub/Voice artifact,
 107 project tests, 640 Voice tests, final admission/retained regressions and assembled
-process/job proofs. ST-03 and ST-09 are in progress. ST-07 is reviewed and integrated
-at `0e97d98`; its 12 focused tests also pass after integration. See the
-[storage receipt](../../qualification/st07.md).
+process/job proofs. ST-07 is reviewed and integrated at `0e97d98`; its 12 focused tests
+also pass after integration. See the [storage receipt](../../qualification/st07.md).
+ST-09 is DONE: implementation `c0855d4`, integrated by `7aa7775`; see the
+[startup receipt](../../qualification/st09.md).
+
+## Integration state — 2026-09-15
+
+`implementation/voice-runtime` @ `cd6ed5d` is the single integration line. All five task
+branches are now merged into it; `implementation/st-03` was the last one and was merged
+on 2026-09-15. No task work remains stranded on an unmerged branch.
+
+Recorded verification of the integrated tree (local; Apple M4, 16 GiB, macOS 26.6.2):
+root `unittest discover -s tests -p 'test_*.py'` — 124 tests OK, 1 skipped; retained Hub
+regression wrapper — passed; adopted Voice `pytest` — 639 passed, 2 skipped; `bash native/build.sh`
+— boundary and API contract checks passed. The Image private-server smoke is skipped
+unless the pinned Image runtime is built. Staged artifact:
+`dist/Studio Hub 0.4.0 Integrated Proof.app` — Hub + Voice only; staging Image requires
+`--image-runtime <built runtime>`, and the pinned Image runtime currently exists only in
+`.worktrees/st-03/.build/st03-image-runtime-worker`. The earlier recorded 0.4.0 artifact is preserved.
+
+What the 2026-09-15 reconciliation changed: merged `implementation/st-03`; committed 71
+pre-existing progress lines plus two stranded research handoffs; marked ST-09 DONE with
+its integration commit; fixed the wrong build-runtime path in `tests/test_image_bundle.py`;
+and preserved the previously unrecorded real Image generation as tracked evidence under
+`qualification/evidence/`. Undo point for all of it: branch `backup/pre-handoff-7aa7775`.
+
+## Cautions for the next session
+
+- **Never delete `.worktrees/`.** `st-01`, `st-02` and `st-03` retain build-side runtime
+  and model proof that is not reproducible from Git. The checkout is ~54 GB but only
+  ~2.7 MB is tracked; `model-library/`, `.build/` and `dist/` are intentionally ignored.
+- **There is no Git remote.** Nothing is backed up off-machine. Commit before yielding.
+- **Run root and Hub tests with the build runtime, not system Python.** System `python3`
+  is 3.9.6 and fails on `dict | None` and on pytest 9 (`typing.TypeAlias`). Use
+  `.build/voice-runtime/bin/python3` (3.12), with `PYTHONPATH=.build/test-deps` for pytest.
+- **Records live in Git, not in chat.** A commit SHA or result that exists only in a
+  handoff message is lost to the next session. Record it on the card.
+- **DONE requires integration.** This board listed ST-09 as `IN_PROGRESS` after `7aa7775`
+  had already merged it. Check Git before trusting a status row.
+- **Test counts in receipts are historical.** Re-run before citing; a recorded count does
+  not automatically hold after a merge.
+- **Evidence under `.build/` is disposable.** `.build/` is gitignored; anything that must
+  survive belongs in `qualification/` or `research/` as a tracked file.
+- **Whole-task dependencies require a DONE prerequisite,** so ST-04/05/06/08 correctly
+  remain WAITING while ST-03 is IN_PROGRESS. Do not start them yet.
+- **ST-09 start-at-login is source/fixture-qualified only.** No live `SMAppService`
+  registration was performed; physical login/logout/reboot belongs to ST-11.
