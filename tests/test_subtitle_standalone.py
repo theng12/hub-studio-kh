@@ -712,5 +712,58 @@ class SubtitleModelIdentifierTests(unittest.TestCase):
         self.assertIn('manifests', source)
 
 
+class SubtitleMemoryPolicyTests(unittest.TestCase):
+    """The Subtitle worker must not hold a Whisper model resident forever.
+
+    Voice has an idle-release policy; Subtitle had ``engine.unload()`` with nothing calling
+    it, so a model could stay in memory for the process lifetime — the leak that matters most
+    on an 8 GB machine.
+    """
+
+    def test_modes_match_the_voice_worker(self) -> None:
+        from components.subtitle.app.backend import memory_policy
+
+        self.assertEqual(set(memory_policy.MODES),
+                         {'performance', 'balanced', 'memory_saver', 'immediate'})
+        self.assertIsNone(memory_policy.MODES['performance']['idle_seconds'])
+        self.assertEqual(memory_policy.MODES['immediate']['idle_seconds'], 0)
+
+    def test_small_machines_default_to_immediate_release(self) -> None:
+        from components.subtitle.app.backend import memory_policy
+
+        original = memory_policy.machine_bytes
+        try:
+            memory_policy.machine_bytes = lambda: 8 * 1024**3
+            self.assertEqual(memory_policy.default_mode(), 'immediate')
+            memory_policy.machine_bytes = lambda: 32 * 1024**3
+            self.assertEqual(memory_policy.default_mode(), 'balanced')
+        finally:
+            memory_policy.machine_bytes = original
+
+    def test_an_operator_choice_beats_the_machine_default(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from components.subtitle.app.backend import memory_policy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            original = memory_policy.settings_file
+            memory_policy.settings_file = lambda: Path(temporary) / 'memory_policy.json'
+            try:
+                self.assertIn(memory_policy.save('memory_saver')['mode'], {'memory_saver'})
+                self.assertEqual(memory_policy.status()['idle_seconds'], 120)
+                with self.assertRaises(ValueError):
+                    memory_policy.save('bogus')
+            finally:
+                memory_policy.settings_file = original
+
+    def test_active_work_is_never_released(self) -> None:
+        from unittest.mock import patch
+        from components.subtitle.app.backend import memory_policy
+
+        with patch.object(memory_policy, '_active', return_value=True):
+            with self.assertRaisesRegex(RuntimeError, 'active'):
+                memory_policy.release_now('idle')
+
+
 if __name__ == '__main__':
     unittest.main()

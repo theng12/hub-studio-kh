@@ -17,6 +17,7 @@ import tempfile
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from . import memory_policy
 from .engine import ModelPackageError, host_eligibility
 from .manager import SubtitleManager, safe_input_name, validate_request
 
@@ -25,6 +26,9 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
     if not token:
         raise ValueError('Private Subtitle worker requires its owning Hub credential')
     app = FastAPI(title='Studio Hub Subtitle', version='1')
+    # One resident Whisper model, released when idle. Without this a Subtitle model stayed
+    # loaded for the life of the process, which is the memory that matters on an 8 GB Mac.
+    memory_policy.start_background(manager)
 
     @app.middleware('http')
     async def require_owner(request: Request, call_next):
@@ -60,6 +64,26 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
                 'default_model': manager.default_package(),
                 'export_source': manager.engine.export_source(),
                 'host': host_eligibility()}
+
+    # ── model memory policy ────────────────────────────────────────────────
+
+    @app.get('/api/memory/policy')
+    def memory_policy_status() -> dict:
+        return memory_policy.status()
+
+    @app.post('/api/memory/policy')
+    def memory_policy_save(body: dict | None = None) -> dict:
+        try:
+            return memory_policy.save(str((body or {}).get('mode') or ''))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post('/api/memory/release')
+    def memory_release() -> dict:
+        try:
+            return memory_policy.release_now('manual')
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get('/api/transcribe/availability')
     def transcribe_availability() -> dict:
