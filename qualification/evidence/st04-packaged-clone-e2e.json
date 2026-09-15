@@ -1,5 +1,5 @@
 {
-  "captured_at": 1789494142.693799,
+  "captured_at": 1789494384.2107258,
   "reference": {
     "file": "reference.wav",
     "bytes": 296682,
@@ -15,12 +15,12 @@
     "origin": "local",
     "transcript_supplied": true
   },
-  "batch_id": "5b71fe41fd",
+  "batch_id": "0ea0ae5a42",
   "final_state": "error",
   "studio": "voice",
   "error": "QwenQualityError: Whisper Large could not validate the Qwen reference.",
   "bytes": null,
   "sha256": null,
-  "duration_s": 12.432231187820435,
+  "duration_s": 12.4600350856781,
   "artifact_bytes_fetched": null
 }

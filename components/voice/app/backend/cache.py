@@ -392,6 +392,43 @@ def _manifest_catalog() -> dict[str, tuple[str, str]]:
     return catalog
 
 
+def _merged_snapshot_view(package_id: str, revision: str, folder: Path) -> Path | None:
+    """Build (once) a read-only snapshot view that mlx-audio can actually load.
+
+    A Studio Hub package separates ``<revision>/model/`` (config + weights) from
+    ``<revision>/companions/processor/`` (tokenizer/processor), while Hugging Face snapshot
+    layout — which mlx-audio expects — has both side by side. Handed only ``model/``,
+    mlx-audio loads the weights and silently falls back to an empty tokenizer, which then
+    raises ``IndexError`` from ``encode(" -")[0]`` during decoding.
+
+    The view is built under the app data directory with symlinks, never inside the model
+    library, so verified model bytes are untouched.
+    """
+    state = os.environ.get("STUDIOHUB_DATA_DIR")
+    if not state:
+        return None
+    view = Path(state) / "snapshot-views" / f"{package_id}-{revision[:16]}"
+    marker = view / ".studiohub-view"
+    if marker.is_file():
+        return view
+    weights = folder / "model" if (folder / "model").is_dir() else folder
+    sources = [weights, folder / "companions" / "processor"]
+    try:
+        view.mkdir(parents=True, exist_ok=True)
+        for source in sources:
+            if not source.is_dir():
+                continue
+            for entry in source.iterdir():
+                link = view / entry.name
+                if link.exists() or link.is_symlink():
+                    continue
+                os.symlink(entry.resolve(), link)
+        marker.write_text(f"{package_id}@{revision}\n", encoding="utf-8")
+    except OSError:
+        return None
+    return view
+
+
 def package_snapshot(repo: str) -> tuple[str, Path] | None:
     """Resolve a repository through the Studio Hub verified-package library.
 
@@ -432,8 +469,11 @@ def package_snapshot(repo: str) -> tuple[str, Path] | None:
         return None
     # A Studio Hub package keeps the model files under a ``model/`` subfolder next to
     # ``companions/``, while the Hugging Face snapshot layout (which every caller here was
-    # written for) has the files at the folder root. Return the folder that actually holds the
-    # weights so the existing loaders find them.
+    # written for) has the files at the folder root. Prefer a merged view that presents both
+    # halves together; fall back to the weights folder alone.
+    merged = _merged_snapshot_view(package_id, revision, candidate)
+    if merged is not None:
+        return revision, merged
     weights = candidate / "model"
     try:
         if weights.is_dir():
