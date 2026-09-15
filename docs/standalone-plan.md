@@ -1,7 +1,9 @@
 # Studio Hub Standalone — focused first-release design
 
 Updated: 2026-09-15. This is the canonical design. It supersedes the earlier six-function release plan.
-Current built artifact: 0.3.0; the changes below are planned, not implemented.
+Implementation progress: ST-01 model/runtime contracts and ST-02 local Hub have
+current evidence; the 0.4.0 local proof bundles Hub and Voice. See the task board
+for remaining engine, storage, native and fleet work. The 0.3.0 Voice preview is preserved.
 Execution: [implementation plan](implementation-plan.md) · [task board](tasks/BOARD.md).
 Evidence: [current model inventory](../research/rescope-model-inventory-2026-09-15.md), [Hub/storage inventory](../research/rescope-hub-storage-2026-09-15.md), [packaging inventory](../research/rescope-packaging-2026-09-15.md).
 
@@ -37,7 +39,7 @@ or guarantee compatibility with every future macOS release.
 - Protected reveal/copy of the existing Hub token: GenStudio connects to each location controller; its nodes connect only to that controller.
 - Phased implementation with independently reviewable tasks and durable agent/session handoffs.
 
-## 3. What already exists
+## 3. Initial planning baseline (0.3.0)
 
 | Area | Evidence | Decision |
 | --- | --- | --- |

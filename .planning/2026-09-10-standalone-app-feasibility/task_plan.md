@@ -156,3 +156,14 @@ Voice 640 passed (34.59 s); native boundary/API/full build passed. Final assembl
 artifact and review disposition remain required. Whisper Base/Small are fully
 file-verified and stock receipts are retained; no further model download is needed
 for the current scoped catalog inventory.
+
+
+## ST-02 exit
+
+DONE on 2026-09-15: implementation 4a5124c is independently reviewed and locally
+integrated. Final native 0.4.0 app is in the original dist/ directory; eight bundled
+job-contract cases, real Hub/Voice startup/settings/auth/pause/statistics and relocated
+startup all pass, with no child processes or readiness files left. Payload/runtime/tree
+hashes match after execution. See qualification/st02.md for exact evidence.
+The 0.3.0 preview and original unrelated files are preserved. No remote, hosted compute,
+publication, deployment, old-node changes or new model inference. ST-03, ST-07, ST-09 READY.

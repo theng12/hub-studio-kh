@@ -1,20 +1,20 @@
 # Studio Hub task board
 
 Updated: 2026-09-15. [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
-ST-01 foundation has current implementation evidence; later app phases remain pending. Historical 0.3.0 evidence does not complete these cards.
+ST-01 foundation and ST-02 bundled Hub are reviewed and locally integrated; subsequent app phases remain pending. Historical 0.3.0 evidence does not complete these cards.
 
 | ID | Phase / deliverable | Depends on | Status | Owner/session |
 | --- | --- | --- | --- | --- |
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
-| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | REVIEW | root / implementation/st-02 |
-| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | WAITING | Unassigned |
+| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | DONE | root / implementation/st-02 |
+| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | READY | Unassigned |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
 | [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | WAITING | Unassigned |
-| [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | WAITING | Unassigned |
+| [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | READY | Unassigned |
 | [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | WAITING | Unassigned |
-| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | WAITING | Unassigned |
+| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | READY | Unassigned |
 | [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | WAITING | Unassigned |
 | [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | WAITING | Unassigned |
 
@@ -68,5 +68,7 @@ real Turbo offline import/relocation/tokenizer and real small-file HTTPS verific
 The retained Image audit's 115 relocation issues are explicitly ST-03.RELOCATE work;
 new model inference and physical M1/Sonoma qualification remain later checkpoints.
 
-**ST-02 is in review.** Its input contract names the helper/catalog, source adoption
-and existing controller routing. Later phases remain waiting until reviewed integration.
+**ST-02 is DONE.** Implementation `4a5124c` is reviewed and locally integrated.
+[Phase receipt](../../qualification/st02.md) records the 0.4.0 native Hub/Voice artifact,
+107 project tests, 640 Voice tests, final admission/retained regressions and assembled
+process/job proofs. ST-03, ST-07 and ST-09 are READY.

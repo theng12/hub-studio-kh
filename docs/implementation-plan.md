@@ -6,7 +6,10 @@
 **Architecture:** Native client → bundled Hub → private studio workers. Qualified immutable runtimes, external model packages and one device output policy.
 **Tech stack:** Existing SwiftUI/AppKit, Python, MLX, SQLite and macOS ServiceManagement.
 **Spec:** [Focused design](standalone-plan.md).
-**Status:** ST-01 foundation implemented from checkpoint 2fc8ee0; see the board for review/integration state and [phase evidence](../qualification/st01.md). Later app integration and model inference remain pending.
+**Status:** ST-01 foundation and ST-02 local Hub now have implementation evidence;
+see the board for review/integration state and [Hub phase receipt](../qualification/st02.md).
+FLUX, scoped Voice/Subtitle inference, shared cleanup, complete native workflows and
+fleet integration remain their named subsequent phases.
 
 ## Shared constraints
 
@@ -110,7 +113,9 @@ For the adopted Voice regression suite, run from components/voice with its pytes
 ../../.build/voice-runtime/bin/python3 -m pytest
 ~~~
 
-Inspect current tests/runtime before execution. ST-02/03 record the assembled app build command; the existing stage_voice.py command currently bundles Voice only.
+Inspect current tests/runtime before execution. ST-02 records the assembled native
+Hub/Voice build command; stage_voice.py includes Hub for native builds. ST-03 adds
+the independent Image worker/runtime.
 
 ## Release completion
 
