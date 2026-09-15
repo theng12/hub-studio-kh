@@ -87,7 +87,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"whisper","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
         case ("GET", "/studio/subtitle/api/transcribe/availability"):
@@ -192,7 +192,7 @@ final class FixtureProtocol: URLProtocol {
         finish(result)
     }
 
-    private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}}]}"#.utf8)
+    private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -222,10 +222,16 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
-        require(store.models.count == 5, "combined model catalog")
+        require(store.models.count == 6, "combined model catalog")
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
-        require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"], "native Audio support guard")
+        require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "mlx-community/VoxCPM2-4bit"], "native Audio support guard")
+        // The heavy voice families must be reachable from the Audio form, not filtered out by the
+        // Qwen-only gate: VoxCPM2 and OmniVoice clone from a reference clip and were previously
+        // excluded despite working end to end through the Hub.
+        let vox = store.models.first { $0.repo == "mlx-community/VoxCPM2-4bit" }
+        require(vox?.requiresReference == true, "VoxCPM2 must be exposed as a clone model")
+        require(vox?.requiresTranscript == false, "VoxCPM2 does not need a reference transcript")
         require(supportedSTT.map(\.repo) == ["mlx-community/whisper-large-v3-turbo"], "native Transcription support guard")
         require(store.models.first { $0.repo == "other/tts" }?.supportNote.contains("packaged model catalog") == true, "unsupported runtime model needs a catalog note")
         require(store.audioJobs.first?.id == "old-job", "existing audio jobs must load")

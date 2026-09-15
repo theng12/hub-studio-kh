@@ -782,13 +782,22 @@ final class NativeWorkspaceStore: ObservableObject {
         packages: [String: HubModelPackage]
     ) -> [NativeModel] {
         let audioModels = audio.filter { $0.capabilities?.contains("tts") == true }.map { item in
-            let isQwen = item.family == "qwen3-tts"
+            let family = item.family ?? ""
+            let isQwen = family == "qwen3-tts"
+            // Voice-cloning families the packaged Voice worker supports. Qwen CustomVoice is the
+            // preset-speaker path; Qwen Base, VoxCPM2 and OmniVoice clone from a reference clip.
+            let isVoxCPM = family.hasPrefix("voxcpm")
+            let isOmniVoice = family == "omnivoice"
+            let isCloneFamily = isVoxCPM || isOmniVoice
             // Prefer the runtime's own capability claim; fall back to the model name only if the
             // catalog omits it, so a catalog change cannot silently drift from the UI.
             let declaredClone = item.referenceAudio?.supported ?? item.referenceAudio?.declared ?? false
-            let isClone = isQwen && (declaredClone || item.repo.localizedCaseInsensitiveContains("Base"))
-            let transcriptRequired = isClone && (item.referenceAudio?.transcript ?? "required") == "required"
-            let formCompatible = isQwen && (isClone || item.repo.localizedCaseInsensitiveContains("CustomVoice"))
+            let isClone = isCloneFamily
+                || (isQwen && (declaredClone || item.repo.localizedCaseInsensitiveContains("Base")))
+            // Qwen Base conditions on the reference transcript; VoxCPM2 and OmniVoice do not.
+            let transcriptRequired = isClone
+                && (item.referenceAudio?.transcript ?? (isQwen ? "required" : "optional")) == "required"
+            let formCompatible = isQwen || isCloneFamily
             let package = packages[item.repo]
             let supported = formCompatible && package != nil
             let cached = item.cache?.state == "cached"
