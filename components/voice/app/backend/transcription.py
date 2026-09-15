@@ -680,6 +680,13 @@ class TranscriptionManager:
         repo_dir = cache.repo_cache_dir(repo)
         snapshots = repo_dir / "snapshots"
         if not snapshots.exists():
+            # Verified Studio Hub package install: <library>/<package>/<revision>/ holds the
+            # files directly, so that revision folder is the snapshot folder. The internal
+            # Qwen reference quality check uses this path, so without the fallback a model the
+            # app installed and verified could not be used to validate a clone reference.
+            package = cache.package_snapshot(repo)
+            if package is not None and package[1].is_dir():
+                return package[1]
             raise RuntimeError(
                 f"Transcription model {repo} is not downloaded. "
                 "Download it first (Models tab, or POST /api/downloads)."

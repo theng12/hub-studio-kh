@@ -430,6 +430,16 @@ def package_snapshot(repo: str) -> tuple[str, Path] | None:
             return None
     except OSError:
         return None
+    # A Studio Hub package keeps the model files under a ``model/`` subfolder next to
+    # ``companions/``, while the Hugging Face snapshot layout (which every caller here was
+    # written for) has the files at the folder root. Return the folder that actually holds the
+    # weights so the existing loaders find them.
+    weights = candidate / "model"
+    try:
+        if weights.is_dir():
+            candidate = weights
+    except OSError:
+        pass
     return revision, candidate
 
 
