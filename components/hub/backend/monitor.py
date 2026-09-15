@@ -163,6 +163,18 @@ def is_cached(model: dict) -> bool:
 # gates, so cloud filtering must exempt it.
 LOCAL_ONLY_MODALITIES = {"render"}
 
+# Transcription availability is reported by the Voice Studio's internal STT subsystem AND by
+# the standalone Subtitle worker, whose modality is "transcription". Both must be refreshed and
+# folded into the aggregate catalog: when only "voice" was refreshed, the packaged dispatcher's
+# cache-only view of the Subtitle worker was permanently empty and every Subtitle job sat
+# queued forever with no explanation.
+TRANSCRIPTION_MODALITIES = {"voice", "transcription"}
+
+
+def reports_transcription(studio: dict) -> bool:
+    """Whether this studio contributes Whisper/transcription availability."""
+    return studio.get("modality") in TRANSCRIPTION_MODALITIES
+
 
 class StudioMonitor:
     def __init__(self, *, catalog_state_path: Path | None = None):
@@ -428,7 +440,7 @@ class StudioMonitor:
             if meta.get("catalog_last_error"):
                 return {"studio_id": sid, "refreshed": False,
                         "reason": meta["catalog_last_error"]}
-            if studio.get("modality") == "voice":
+            if reports_transcription(studio):
                 source = "transcription"
                 transcription = await self.get_transcription(studio, force=force)
                 if transcription is None:
@@ -437,7 +449,7 @@ class StudioMonitor:
                     return {"studio_id": sid, "refreshed": False,
                             "reason": meta["transcription_last_error"]}
             errors = [meta.get("catalog_last_error")]
-            if studio.get("modality") == "voice":
+            if reports_transcription(studio):
                 errors.append(meta.get("transcription_last_error"))
             if any(errors):
                 return {"studio_id": sid, "refreshed": False,
@@ -838,8 +850,8 @@ class StudioMonitor:
         # Whisper/STT is a separate Voice Studio subsystem and therefore is not
         # present in /api/catalog. Fold it into the fleet catalog as its own
         # modality so clients never need direct Voice Studio URLs for discovery.
-        voice_studios = [s for s in self.registry if s.get("modality") == "voice"]
-        for studio, availability in zip(voice_studios, transcription):
+        transcription_studios = [s for s in self.registry if reports_transcription(s)]
+        for studio, availability in zip(transcription_studios, transcription):
             if not availability:
                 continue
             sid = studio["id"]
@@ -878,13 +890,12 @@ class StudioMonitor:
             self._catalog_cache.get(studio["id"], (0.0, None))[1]
             for studio in self.registry
         ]
-        voice_studios = [
-            studio for studio in self.registry
-            if studio.get("modality") == "voice"
+        transcription_studios = [
+            studio for studio in self.registry if reports_transcription(studio)
         ]
         transcription = [
             self._transcribe_cache.get(studio["id"], (0.0, None))[1]
-            for studio in voice_studios
+            for studio in transcription_studios
         ]
         return self._assemble_aggregate_catalog(results, transcription)
 
@@ -940,9 +951,9 @@ class StudioMonitor:
         results = await asyncio.gather(
             *(self._catalog_for_aggregate(s, force) for s in self.registry)
         )
-        voice_studios = [s for s in self.registry if s.get("modality") == "voice"]
+        transcription_studios = [s for s in self.registry if reports_transcription(s)]
         transcription = await asyncio.gather(
-            *(self.get_transcription(s, force=force) for s in voice_studios)
+            *(self.get_transcription(s, force=force) for s in transcription_studios)
         )
         assembled = self._assemble_aggregate_catalog(results, transcription)
         if force:

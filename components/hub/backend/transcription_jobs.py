@@ -429,33 +429,83 @@ def _execution_matches_model(entry: dict, execution: dict | None) -> bool:
 
 
 async def _eligible_studios(monitor, model: str, item: dict | None = None,
-                            execution: dict | None = None) -> list[dict]:
+                            execution: dict | None = None,
+                            reasons: list[str] | None = None) -> list[dict]:
+    """Studios that may take this model.
+
+    ``reasons`` (optional) collects one short sentence per rejected studio. A transcription
+    job that can be dispatched by nobody used to sit queued forever with no explanation; the
+    collector is what lets ``dispatch_once`` tell the owner which gate is holding it.
+    """
     eligible = []
     now = time.time()
     avoided = (item or {}).get("avoid_machines") or {}
     expected_modality = "transcription" if os.environ.get("STUDIOHUB_PACKAGED") == "1" else "voice"
     for studio in monitor.registry:
-        if (studio.get("modality") != expected_modality or studio["id"] in busy_studios
-                or broker.in_maintenance(studio["id"])):
+        sid = studio.get("id", "?")
+        if studio.get("modality") != expected_modality:
+            if reasons is not None:
+                reasons.append(f"{sid}: modality {studio.get('modality')!r} != {expected_modality!r}")
+            continue
+        if sid in busy_studios:
+            if reasons is not None:
+                reasons.append(f"{sid}: already busy")
+            continue
+        if broker.in_maintenance(sid):
+            if reasons is not None:
+                reasons.append(f"{sid}: in maintenance")
             continue
         machine = studio.get("machine", "local")
-        if (monitor.status.get(studio["id"], {}).get("status") != "up"
-                or not machine_enabled(machine)
-                or not studio_enabled(machine, studio["id"])
-                or machine in broker.busy_machines()
-                or broker.machine_is_quarantined(machine)
-                or float(avoided.get(machine, 0) or 0) > now):
+        status = monitor.status.get(sid, {}).get("status")
+        if status != "up":
+            if reasons is not None:
+                reasons.append(f"{sid}: health status is {status!r}")
+            continue
+        if not machine_enabled(machine):
+            if reasons is not None:
+                reasons.append(f"{sid}: machine {machine} is disabled")
+            continue
+        if not studio_enabled(machine, sid):
+            if reasons is not None:
+                reasons.append(f"{sid}: studio is disabled on {machine}")
+            continue
+        if machine in broker.busy_machines():
+            if reasons is not None:
+                reasons.append(f"{sid}: machine {machine} is busy with other work")
+            continue
+        if broker.machine_is_quarantined(machine):
+            if reasons is not None:
+                reasons.append(f"{sid}: machine {machine} is quarantined")
+            continue
+        if float(avoided.get(machine, 0) or 0) > now:
+            if reasons is not None:
+                reasons.append(f"{sid}: machine {machine} is being avoided after a failure")
             continue
         if not peers.dispatch_ready(studio):
+            if reasons is not None:
+                reasons.append(f"{sid}: worker authority is not ready")
             continue
         availability = await monitor.scheduling_transcription(studio)
         models = (availability or {}).get("models", [])
-        if ((availability or {}).get("available") and any(
-                m.get("repo") == model
-                and (_execution_matches_model(m, execution)
-                     if execution is not None else m.get("cached", True))
-                for m in models)):
-            eligible.append(studio)
+        if not (availability or {}).get("available"):
+            if reasons is not None:
+                reasons.append(f"{sid}: reports transcription unavailable")
+            continue
+        match = next((m for m in models if m.get("repo") == model), None)
+        if match is None:
+            if reasons is not None:
+                reasons.append(f"{sid}: does not list model {model}")
+            continue
+        if execution is not None:
+            if not _execution_matches_model(match, execution):
+                if reasons is not None:
+                    reasons.append(f"{sid}: {model} does not match the execution identity")
+                continue
+        elif not match.get("cached", True):
+            if reasons is not None:
+                reasons.append(f"{sid}: {model} is not cached/ready")
+            continue
+        eligible.append(studio)
     eligible.sort(key=lambda studio: (
         broker._studio_total_memory_gb(studio), studio["id"],
     ))
@@ -572,9 +622,18 @@ async def dispatch_once(monitor) -> int:
             item = next((i for i in batch["items"] if i["state"] == "queued"), None)
             if not item:
                 continue
-            for studio in await _eligible_studios(
-                    monitor, batch["model"], item,
-                    batch.get("genstudio_execution")):
+            reasons: list[str] = []
+            eligible = await _eligible_studios(
+                monitor, batch["model"], item,
+                batch.get("genstudio_execution"), reasons)
+            if not eligible:
+                reason = "no transcription studio can take this job: " + (
+                    "; ".join(reasons) if reasons else "no transcription studio is registered")
+                if batch.get("governor_note") != reason:
+                    batch["governor_note"] = reason
+                    _save(batch)
+                continue
+            for studio in eligible:
                 machine = studio.get("machine", "local")
                 from . import chat_jobs
                 if not broker.external_dispatch_allowed(
@@ -586,10 +645,14 @@ async def dispatch_once(monitor) -> int:
                 entry = next((row for row in (availability or {}).get("models", [])
                               if row.get("repo") == batch["model"]),
                              {"repo": batch["model"]})
-                decision, _note = await broker.prepare_machine_memory(
+                decision, note = await broker.prepare_machine_memory(
                     monitor._client, studio, batch["model"], entry)
                 if decision != "run":
                     broker.note_external_memory_block(machine, "transcription")
+                    blocked = f"memory admission on {machine} returned {decision}: {note or 'no detail'}"
+                    if batch.get("governor_note") != blocked:
+                        batch["governor_note"] = blocked
+                        _save(batch)
                     continue
                 generation = peers.dispatch_generation(studio)
                 if not peers.dispatch_ready(studio, generation):
