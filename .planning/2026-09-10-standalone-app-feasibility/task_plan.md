@@ -46,7 +46,7 @@ Turbo evidence. Native shell, immutable runtime and relocation proof are reusabl
 Requested Qwen Base is not proven by CustomVoice. Hub/Image are not bundled.
 Historical 676 regressions and 28 packaging tests are not new test runs.
 
-ST-00 planning is complete. ST-01 foundation is in final review; ST-02 through ST-11
+ST-00 planning is complete. ST-01 foundation is DONE and locally integrated; ST-02 through ST-11
 remain pending and their board controls readiness. Start runtime/model contracts, then bundled local Hub, then packaged FLUX.
 Physical hardware and distribution conditions remain explicit, not reasons to stall
 independent local implementation.
@@ -71,7 +71,7 @@ Their original tests/limitations remain evidence for those artifacts only.
 
 ## Latest owner addition
 
-Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 is in final implementation review. ST-10.TOPOLOGY is resolved: preserve GenStudio-to-location-controller-to-nodes routing. Future standalone GenStudio implementation remains deferred.
+Model download/copy-folder paths, location membership/telemetry and deployment-independent IP/token APIs are added. ST-01 is DONE; ST-02 is READY. ST-10.TOPOLOGY is resolved: preserve GenStudio-to-location-controller-to-nodes routing. Future standalone GenStudio implementation remains deferred.
 
 ## Older-device addition
 
@@ -84,11 +84,21 @@ Preserve original M1/MLX support on the oldest qualified Sonoma release, without
   file receipt validation and resumable download/copy implementation are complete.
 - Real Turbo copy/import verified 1,618,590,987 bytes; moved library and offline
   tokenizer round trip passed. Real HTTPS smoke verified 89,500 companion bytes.
-- Existing Voice regression: 640 passed, five warnings. Final foundation checks and
-  integration are recorded in qualification/st01.md and docs/tasks/ST-01.md.
+- Existing Voice regression: 640 passed, five warnings. Foundation checks: 84 passed
+  across the full suite and subsequently resolved runtime-path skip. Local integration
+  commit `072abf6`; 724 passing tests total. Details are recorded in qualification/st01.md and docs/tasks/ST-01.md.
 - Independent review covers filesystem races/durability, explicit full Verify,
   source-adoption identity and model/runtime qualification boundaries.
 - Original user progress/research/graph changes are preserved outside this worktree.
 - Pinokio launcher creation, URL capture, destination and example rules are not
   applicable: no launcher is being edited. Existing fleet/source checkouts remain
   read-only. No hosted compute, publication, deployment or model-weight download.
+
+## ST-01 exit
+
+Complete: all ST-01 checkpoints, independent review and local integration are recorded.
+ST-02 is READY; ST-03 and later phases remain WAITING. No remote exists for a PR.
+The clean implementation worktree is retained with build-side runtime/model proof
+artifacts; disposable input scaffolding and superseded exploratory runtime were removed.
+All owned test processes exited. Applicable preflight/exit checks are satisfied; no
+launcher, native app artifact, installed fleet machine or credential was changed.

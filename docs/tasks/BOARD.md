@@ -6,8 +6,8 @@ ST-01 foundation has current implementation evidence; later app phases remain pe
 | ID | Phase / deliverable | Depends on | Status | Owner/session |
 | --- | --- | --- | --- | --- |
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
-| [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | REVIEW | root / implementation/st-01 |
-| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | WAITING | Unassigned |
+| [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
+| [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | READY | Unassigned |
 | [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | WAITING | Unassigned |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
@@ -59,3 +59,14 @@ Original-M1/older-OS support is now explicit in ST-01/02/08/09/11. The baseline
 candidate is Sonoma 14.0, subject to real per-model and point-release qualification.
 Keeping a compatible release working while OS upgrades are deferred is required;
 generation during an OS installation restart is not promised.
+
+## ST-01 evidence and next owner
+
+Implementation `072abf6` is reviewed and locally integrated on 2026-09-15. See
+[phase receipt](../../qualification/st01.md): 724 passing tests, ten pinned manifests,
+real Turbo offline import/relocation/tokenizer and real small-file HTTPS verification.
+The retained Image audit's 115 relocation issues are explicitly ST-03.RELOCATE work;
+new model inference and physical M1/Sonoma qualification remain later checkpoints.
+
+**ST-02 is READY.** Its input contract names the helper/catalog, source adoption and
+existing controller routing. No other phase status changed and no new app was released.
