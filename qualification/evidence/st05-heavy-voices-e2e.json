@@ -1,0 +1,38 @@
+{
+  "captured_at": 1789495840.603081,
+  "reference": {
+    "bytes": 296440,
+    "sha256": "5390d9119e73165b4927fcf47c7279c559817cf7d87710847bf78ca3e10c9a93",
+    "transcript": "The quick brown fox jumps over the lazy dog. Packaged voice cloning now works end to end from the app model library."
+  },
+  "results": {
+    "mlx-community/OmniVoice-bfloat16": {
+      "state": "done",
+      "error": null,
+      "bytes": 197804,
+      "sha256": "c5683385c3898b3fba72407d060d1e08cd8e46199ec7abf8c80dfe07171173e0",
+      "duration_s": 21.895897150039673
+    },
+    "mlx-community/VoxCPM2-4bit": {
+      "state": "error",
+      "error": "RuntimeError: RuntimeError: voxcpm-mlx produced no audio. 57-character section. host has 17.2 GB unified memory, 6.1 GB free. this is usually the request being too large for the available memory \u2014 shorten the section, or free memory and retry. Temp dir: [local path]",
+      "bytes": null,
+      "sha256": null,
+      "duration_s": 1.2078771591186523
+    },
+    "mlx-community/VoxCPM2-8bit": {
+      "state": "queued",
+      "error": null,
+      "bytes": null,
+      "sha256": null,
+      "duration_s": null
+    },
+    "mlx-community/VoxCPM2-bf16": {
+      "state": "error",
+      "error": "RuntimeError: RuntimeError: voxcpm-mlx produced no audio. 57-character section. host has 17.2 GB unified memory, 4.6 GB free. this is usually the request being too large for the available memory \u2014 shorten the section, or free memory and retry. Temp dir: [local path]",
+      "bytes": null,
+      "sha256": null,
+      "duration_s": 2.41371488571167
+    }
+  }
+}

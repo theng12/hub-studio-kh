@@ -102,9 +102,18 @@ then the one task card you are claiming.
   local companion files; and `snapshot_revision` lacking package evidence. Commits `bc0119b` …
   `6f8fa8b`; Voice suite **664 passed**, root suite **192 OK**.
 - **Three of four studios are now proven working end to end: Image, Subtitle and Voice.**
-- **Next:** ST-05 (VoxCPM2/OmniVoice) — it shares the resolver just fixed, so it should now be a
-  matter of capability/UI wiring plus real receipts — then ST-08's remaining native work, ST-10
-  fleet and ST-11 hardware.
+- **ST-05 heavy voices: OmniVoice works; VoxCPM2 is a host-memory result.** Probed through the
+  packaged app with the fixed resolver: **`OmniVoice-bfloat16` produced real audio** (197,804
+  bytes, sha256 `c5683385…`, 21.9 s) while `VoxCPM2-4bit` and `-bf16` failed with the model's own
+  explicit message that the host lacked free unified memory (17.2 GB total, 4.6–6.1 GB free with
+  three engines resident). All four packages verify and dispatch, so this is **hardware, not code** —
+  the owner's M4-24 and M2 Max-32 machines should be used for the VoxCPM2 receipts, with
+  `-8bit` re-probed rather than inferred. Evidence:
+  `qualification/evidence/st05-heavy-voices-e2e.json`. Still outstanding: VoxCPM2 receipts on
+  suitable hardware, VoxCPM2/OmniVoice exposure in the Audio UI (which currently targets Qwen),
+  and review.
+- **Next:** ST-08's remaining native work (VoxCPM2/OmniVoice in the Audio form, the Subtitle
+  export/ack path, settings), then ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
