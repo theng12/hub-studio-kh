@@ -13,6 +13,9 @@ from typing import Any
 
 DEFAULT_MAX_BYTES = 50_000_000_000
 DEFAULT_RETENTION_DAYS = 30
+DEFAULT_CLEANUP_ENABLED = True
+DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
+DEFAULT_MINIMUM_FREE_BYTES = 1_000_000_000
 _REQUIRED_WORKERS = {
     "image": "image",
     "voice": "voice",
@@ -84,6 +87,10 @@ def _worker(value: object) -> dict[str, Any]:
     if supplied_studio_token is not None and supplied_studio_token != worker["hub_token"]:
         raise ValueError(f"worker {worker_id} has a mismatched Studio token")
     worker["studio_token"] = worker["hub_token"]
+    roots = worker.get("managed_output_roots", [])
+    if roots is not None and (not isinstance(roots, list) or not all(isinstance(path, str) and path for path in roots)):
+        raise ValueError(f"worker {worker_id} has invalid managed output roots")
+    worker["managed_output_roots"] = roots or []
     worker.setdefault("title", f"{worker_id.title()} Studio")
     worker.setdefault("emoji", "🧩")
     worker["base_url"] = f"http://{worker['host']}:{worker['port']}"
@@ -123,32 +130,61 @@ def _settings_path() -> Path:
     return data_dir() / _SETTINGS_FILE
 
 
-def _settings() -> dict[str, int]:
+def _settings() -> dict[str, int | bool]:
     try:
         value = json.loads(_settings_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         value = {}
     max_bytes = value.get("max_bytes", DEFAULT_MAX_BYTES) if isinstance(value, dict) else DEFAULT_MAX_BYTES
     retention_days = value.get("retention_days", DEFAULT_RETENTION_DAYS) if isinstance(value, dict) else DEFAULT_RETENTION_DAYS
+    enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
+    interval = value.get("cleanup_interval_seconds", DEFAULT_CLEANUP_INTERVAL_SECONDS) if isinstance(value, dict) else DEFAULT_CLEANUP_INTERVAL_SECONDS
+    minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
     return {
         "max_bytes": max_bytes if isinstance(max_bytes, int) and max_bytes > 0 else DEFAULT_MAX_BYTES,
         "retention_days": retention_days if isinstance(retention_days, int) and retention_days > 0 else DEFAULT_RETENTION_DAYS,
+        "cleanup_enabled": enabled if isinstance(enabled, bool) else DEFAULT_CLEANUP_ENABLED,
+        "cleanup_interval_seconds": interval if isinstance(interval, int) and interval >= 60 else DEFAULT_CLEANUP_INTERVAL_SECONDS,
+        "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
     }
 
 
-def load_device_settings() -> dict[str, dict[str, int]]:
+def load_device_settings() -> dict[str, dict[str, int | bool]]:
     return {
-        "defaults": {"max_bytes": DEFAULT_MAX_BYTES, "retention_days": DEFAULT_RETENTION_DAYS},
+        "defaults": {"max_bytes": DEFAULT_MAX_BYTES, "retention_days": DEFAULT_RETENTION_DAYS,
+                     "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
+                     "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
+                     "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES},
         "effective": _settings(),
     }
 
 
-def save_device_settings(*, max_bytes: int, retention_days: int) -> dict[str, dict[str, int]]:
+def preview_device_settings(**changes: object) -> dict[str, int | bool]:
+    current = _settings()
+    value = {key: changes.get(key, current[key]) for key in current}
+    max_bytes, retention_days = value["max_bytes"], value["retention_days"]
+    enabled, interval, minimum_free = value["cleanup_enabled"], value["cleanup_interval_seconds"], value["minimum_free_bytes"]
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes must be a positive integer")
     if isinstance(retention_days, bool) or not isinstance(retention_days, int) or retention_days <= 0:
         raise ValueError("retention_days must be a positive integer")
-    _atomic_write(_settings_path(), {"max_bytes": max_bytes, "retention_days": retention_days})
+    if not isinstance(enabled, bool):
+        raise ValueError("cleanup_enabled must be a boolean")
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 60:
+        raise ValueError("cleanup_interval_seconds must be at least 60")
+    if isinstance(minimum_free, bool) or not isinstance(minimum_free, int) or minimum_free < 0:
+        raise ValueError("minimum_free_bytes must be a non-negative integer")
+    return value
+
+
+def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled: bool = DEFAULT_CLEANUP_ENABLED,
+                         cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
+                         minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES) -> dict[str, dict[str, int | bool]]:
+    value = preview_device_settings(max_bytes=max_bytes, retention_days=retention_days,
+                                    cleanup_enabled=cleanup_enabled,
+                                    cleanup_interval_seconds=cleanup_interval_seconds,
+                                    minimum_free_bytes=minimum_free_bytes)
+    _atomic_write(_settings_path(), value)
     return load_device_settings()
 
 
@@ -156,6 +192,9 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
     _atomic_write(_settings_path(), {
         "max_bytes": DEFAULT_MAX_BYTES,
         "retention_days": DEFAULT_RETENTION_DAYS,
+        "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
+        "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
+        "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
     })
     return load_device_settings()
 

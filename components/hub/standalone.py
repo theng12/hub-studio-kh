@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-from . import standalone_config
+from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, transcription_jobs
 from .backend.monitor import StudioMonitor
 
@@ -105,6 +105,17 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     if state["dispatch_state"] != "eligible":
         return {"code": "MODEL_NOT_READY", "detail": "model files, runtime, OS, or chip are not ready",
                 "readiness": state}
+    settings = standalone_config.load_device_settings()["effective"]
+    workers = [worker for worker in monitor.registry
+               if worker.get("modality") == expected_modality and worker.get("local") is True]
+    blocked = [output_storage.admission(machine=worker.get("machine", "local"), max_bytes=settings["max_bytes"],
+               retention_days=settings["retention_days"], enabled=settings["cleanup_enabled"],
+               minimum_free_bytes=settings["minimum_free_bytes"],
+               managed_output_roots=worker.get("managed_output_roots"))
+               for worker in workers]
+    blocked = [refusal for refusal in blocked if refusal]
+    if workers and len(blocked) == len(workers):
+        return blocked[0]
     return None
 
 
@@ -119,9 +130,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         ledger.prepare_database()
+        output_storage.prepare()
+        output_storage.recover_process_leases()
         broker.restore_batches()
         transcription_jobs.restore_batches()
         if start_background:
+            output_storage.start_background(
+                lambda: {worker.get("machine", "local") for worker in monitor.registry},
+                standalone_config.load_device_settings,
+            )
             monitor.start()
             broker.start_dispatcher()
             transcription_jobs.start_dispatcher(monitor)
@@ -150,15 +167,40 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return {"version": _app_version(), "source": "studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}
 
     @app.get("/api/hub/settings")
-    def settings() -> dict[str, dict[str, int]]:
+    def settings() -> dict[str, dict[str, int | bool]]:
         return standalone_config.load_device_settings()
 
     @app.put("/api/hub/settings")
-    def save_settings(body: dict[str, Any]) -> dict[str, dict[str, int]]:
+    def save_settings(body: dict[str, Any]) -> dict[str, dict[str, int | bool]]:
         try:
+            value = standalone_config.preview_device_settings(**body)
             return standalone_config.save_device_settings(
-                max_bytes=body.get("max_bytes"), retention_days=body.get("retention_days"),
+                max_bytes=value["max_bytes"], retention_days=value["retention_days"],
+                cleanup_enabled=value["cleanup_enabled"],
+                cleanup_interval_seconds=value["cleanup_interval_seconds"],
+                minimum_free_bytes=value["minimum_free_bytes"],
             )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/hub/settings/preview")
+    def preview_settings(body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            value = standalone_config.preview_device_settings(**body)
+            roots_by_machine: dict[str, set[str]] = {}
+            for worker in monitor.registry:
+                if worker.get("local") is not True:
+                    continue
+                machine = str(worker.get("machine") or "local")
+                roots = roots_by_machine.setdefault(machine, set())
+                roots.update(root for root in worker.get("managed_output_roots", [])
+                             if isinstance(root, str) and root)
+            return {"effective": value, "machines": [output_storage.preview(
+                machine=machine, max_bytes=value["max_bytes"], retention_days=value["retention_days"],
+                enabled=value["cleanup_enabled"],
+                minimum_free_bytes=value["minimum_free_bytes"],
+                managed_output_roots=sorted(roots))
+                for machine, roots in roots_by_machine.items()]}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -390,14 +432,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             # Never follow a worker-supplied URL outside its private origin or
             # attach the worker credential to an arbitrary location.
             raise HTTPException(502, "worker artifact reference is invalid")
+        release_reader = output_storage.acquire_reader(batch_id=batch_id, item_index=item_index)
         try:
             client, response = await open_worker_artifact(worker, expected)
         except httpx.HTTPError as exc:
+            release_reader()
             raise HTTPException(502, "worker artifact could not be read") from exc
 
         async def close_stream() -> None:
             await response.aclose()
             await client.aclose()
+            release_reader()
 
         media_type = item.get("media_type") or response.headers.get("content-type") or "application/octet-stream"
         headers = {}

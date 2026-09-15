@@ -8,6 +8,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class StandaloneHubConfigTests(unittest.TestCase):
@@ -16,24 +17,31 @@ class StandaloneHubConfigTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.data_dir = self.root / "Node State"
         self.workers_file = self.root / "private-workers.json"
+        self.output_roots = [self.root / "image-output", self.root / "voice-output",
+                             self.root / "subtitle-output"]
+        for root in self.output_roots:
+            root.mkdir()
         self.workers_file.write_text(json.dumps([
             {
                 "id": "image", "title": "Image Studio", "modality": "image",
                 "host": "127.0.0.1", "port": 51101, "machine": "node-a",
                 "local": True, "runtime_identity": {"id": "image-runtime"},
                 "hub_token": "same-existing-hub-token",
+                "managed_output_roots": [str(self.output_roots[0])],
             },
             {
                 "id": "voice", "title": "Voice Studio", "modality": "voice",
                 "host": "127.0.0.1", "port": 51102, "machine": "node-a",
                 "local": True, "runtime_identity": {"id": "voice-runtime"},
                 "hub_token": "same-existing-hub-token",
+                "managed_output_roots": [str(self.output_roots[1])],
             },
             {
                 "id": "subtitle", "title": "Subtitle Studio", "modality": "transcription",
                 "host": "127.0.0.1", "port": 51103, "machine": "node-a",
                 "local": True, "runtime_identity": {"id": "subtitle-runtime"},
                 "hub_token": "same-existing-hub-token",
+                "managed_output_roots": [str(self.output_roots[2])],
             },
         ]))
         os.chmod(self.workers_file, 0o600)
@@ -107,8 +115,16 @@ class StandaloneHubConfigTests(unittest.TestCase):
 
         self.assertEqual(defaults["effective"]["max_bytes"], 50_000_000_000)
         self.assertEqual(defaults["effective"]["retention_days"], 30)
-        self.assertEqual(changed["effective"], {"max_bytes": 60_000_000_000, "retention_days": 14})
-        self.assertEqual(restored["effective"], {"max_bytes": 50_000_000_000, "retention_days": 30})
+        self.assertEqual(changed["effective"], {
+            "max_bytes": 60_000_000_000, "retention_days": 14,
+            "cleanup_enabled": True, "cleanup_interval_seconds": 300,
+            "minimum_free_bytes": 1_000_000_000,
+        })
+        self.assertEqual(restored["effective"], {
+            "max_bytes": 50_000_000_000, "retention_days": 30,
+            "cleanup_enabled": True, "cleanup_interval_seconds": 300,
+            "minimum_free_bytes": 1_000_000_000,
+        })
         self.assertEqual(stat.S_IMODE((self.data_dir / "device_settings.json").stat().st_mode), 0o600)
 
     def test_rejects_boolean_device_settings(self) -> None:
@@ -118,6 +134,8 @@ class StandaloneHubConfigTests(unittest.TestCase):
             config.save_device_settings(max_bytes=True, retention_days=30)
         with self.assertRaises(ValueError):
             config.save_device_settings(max_bytes=50_000_000_000, retention_days=False)
+        with self.assertRaises(ValueError):
+            config.save_device_settings(max_bytes=50_000_000_000, retention_days=30, minimum_free_bytes=-1)
 
     def test_runtime_readiness_keeps_os_ineligibility_separate_from_model_files(self) -> None:
         config = self._fresh_config()
@@ -146,16 +164,30 @@ class StandaloneHubConfigTests(unittest.TestCase):
         from components.hub.standalone import create_app
 
         app = create_app(start_background=False)
-        with TestClient(app) as client:
-            denied = client.get("/api/hub/settings")
-            accepted = client.get(
-                "/api/hub/settings",
-                headers={"Authorization": "Bearer same-existing-hub-token"},
-            )
+        preview_calls = []
+        def capture_preview(**kwargs):
+            preview_calls.append(kwargs)
+            return {"machine": kwargs["machine"]}
+        with patch("components.hub.output_storage.preview", side_effect=capture_preview):
+            with TestClient(app) as client:
+                denied = client.get("/api/hub/settings")
+                accepted = client.get(
+                    "/api/hub/settings",
+                    headers={"Authorization": "Bearer same-existing-hub-token"},
+                )
+                preview = client.post(
+                    "/api/hub/settings/preview", json={},
+                    headers={"Authorization": "Bearer same-existing-hub-token"},
+                )
 
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 50_000_000_000)
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual([row["machine"] for row in preview.json()["machines"]], ["node-a"])
+        self.assertEqual(len(preview_calls), 1)
+        self.assertEqual(preview_calls[0]["managed_output_roots"],
+                         sorted(str(root) for root in self.output_roots))
 
     def test_packaged_artifact_metadata_never_sends_token_to_foreign_url(self) -> None:
         import asyncio

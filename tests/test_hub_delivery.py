@@ -21,15 +21,15 @@ batch={'id':'batch-1','items':[item]}
 delivery.broker.batches={'batch-1':batch}
 worker={'id':'voice','host':'127.0.0.1','port':54321,'machine':'local','studio_token':'private-token'}
 app=FastAPI(); delivery.register_routes(app,SimpleNamespace(registry=[worker]))
-calls=[]; saved=[]; status=503
+calls=[]; saved=[]; marks=[]; status=503; worker_ok=True
 class WorkerClient:
     def __init__(self,**kwargs): assert kwargs.get('follow_redirects') is False
     async def __aenter__(self): return self
     async def __aexit__(self,*args): pass
     async def post(self,url,**kwargs):
         calls.append((url,kwargs))
-        return httpx.Response(status,request=httpx.Request('POST',url),json={'ok':True})
-with TestClient(app) as client, patch.object(delivery.httpx,'AsyncClient',WorkerClient), patch.object(delivery.ledger,'save_batch',lambda row:saved.append(dict(row))):
+        return httpx.Response(status,request=httpx.Request('POST',url),json={'ok':worker_ok})
+with TestClient(app) as client, patch.object(delivery.httpx,'AsyncClient',WorkerClient), patch.object(delivery.ledger,'save_batch',lambda row:saved.append(dict(row))), patch.object(delivery.output_storage,'mark_receipt_acked',lambda **row:marks.append(row)):
     path='/api/hub/jobs/batch-1/items/0/ack'
     assert client.post(path).status_code==409
     assert not calls and not saved
@@ -41,10 +41,16 @@ with TestClient(app) as client, patch.object(delivery.httpx,'AsyncClient',Worker
     assert saved and item['receipt_acked_at']>0
     assert calls[-1][0]=='http://127.0.0.1:54321/api/generate/jobs/worker-1/ack'
     assert calls[-1][1]['headers']=={'X-Studio-Token':'private-token'}
+    assert marks==[{'batch_id':'batch-1','item_index':0}]
     count=len(calls); stamp=item['receipt_acked_at']
     assert client.post(path).json()=={'ok':True}
     assert len(calls)==count and item['receipt_acked_at']==stamp
+    assert len(marks)==2, 'idempotent receipt retry did not repair the output index'
     item.pop('receipt_acked_at')
+    worker_ok=False; before=len(saved)
+    assert client.post(path).status_code==502
+    assert len(saved)==before and not item.get('receipt_acked_at')
+    worker_ok=True
     with patch.object(delivery.ledger,'save_batch',side_effect=OSError('disk unavailable')):
         try: client.post(path)
         except OSError: pass
