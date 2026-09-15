@@ -47,6 +47,10 @@ or guarantee compatibility with every future macOS release.
 - Operating defaults are editable; settings must show the effective value and allow restoring the default.
 - Each generator can gain supported models later without rebuilding its entire interface.
 - Protected reveal/copy of the existing Hub token: GenStudio connects to each location controller; its nodes connect only to that controller.
+- **Generation history (owner clarification, 2026-09-15, added after planning).** Every
+  generation page — Image, Voice and Subtitle — must show its own easy-to-view history of that
+  studio's generations, and there must also be **one unified history presented with tabs**, so
+  the owner can switch between all work and per-studio work without leaving the page.
 - Phased implementation with independently reviewable tasks and durable agent/session handoffs.
 
 ## 3. Initial planning baseline (0.3.0)

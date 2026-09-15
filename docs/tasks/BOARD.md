@@ -19,6 +19,11 @@ then the one task card you are claiming.
   required and must converge on ONE Hub reference-asset contract: a reference clip chosen
   locally in the app, and a clone pushed from GenStudio through the controller. See design
   §2 and checkpoints ST-04.CLONE / ST-10.CLONE. This is the primary Voice mechanism.
+- **Generation-history requirement (owner, 2026-09-15, stated after planning):** every
+  generation page (Image / Voice / Subtitle) needs its own easy-to-view history, **plus one
+  unified history presented with tabs**. Image and Voice already show a short recent list;
+  Subtitle has no history view and the Jobs page is a flat two-section list rather than tabbed.
+  See design §2 and checkpoint ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
 - **IN PROGRESS — ST-03 packaged Image.** Proven: real generation, Hub output registration,

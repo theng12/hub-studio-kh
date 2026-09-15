@@ -295,6 +295,19 @@ references. Folded into the ST-04 worker with a request for the exact wire contr
 native Audio UI (reference picker + transcript, Base model choices) is coordinator-owned and
 follows that contract.
 
+### 2026-09-15 — owner clarification: per-page and unified (tabbed) generation history
+
+Second requirement missed during planning. The owner wants **each generation page to show its
+own easy-to-view history** of that studio's generations **and one unified history presented with
+tabs**. Recorded in `docs/standalone-plan.md` §2, as checkpoint **ST-08.HISTORY**, and in the
+board's TAKE OVER HERE block.
+
+Current state, verified by reading the native shell: Image shows "Recent images" (5) with an
+All-Jobs button; Voice shows "Recent audio" (5) likewise; **Subtitle has no history view at all**
+and only holds the latest transcription result; the shared **Jobs** page is a flat two-section
+scroll (image jobs, then audio jobs) rather than a tabbed unified history. So this requirement is
+partly built and partly missing, and it is now explicit rather than assumed.
+
 ### 2026-09-15 — owner clarification: clone-based TTS is the primary voice mechanism
 
 The owner stated a requirement that was missed during the original planning pass: **voice
