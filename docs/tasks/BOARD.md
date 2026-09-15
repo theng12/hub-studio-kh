@@ -73,8 +73,12 @@ then the one task card you are claiming.
   worked earlier only because that proof used an HF-cache-shaped library. Image is unaffected —
   ST-03 generated a real image from this same library. **This is a user-facing gap**: the app
   would say a model is installed and verified, then refuse to use it. Next step is on the ST-04
-  card: find the Voice worker's snapshot resolver and make it read the package layout, as Image
-  does.
+  card: the resolver is `components/voice/app/backend/cache.py` (`hub_dir`/`repo_cache_dir`/
+  `snapshot_revision`/`status_snapshot`), which only understands an **HF cache**
+  (`<hf_home>/hub/models--org--name`) and never looks at `<models-dir>/<package>/<revision>/`.
+  The fix is to answer from the verified package library, falling back to the HF cache, counting
+  only **verified** packages as cached. Image already resolves the package layout, which is why
+  it works.
 - **Next:** fix that Voice library-format gap so a real clone comes out of the app (matching
   Subtitle), then ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11
   hardware.
