@@ -167,3 +167,22 @@ startup all pass, with no child processes or readiness files left. Payload/runti
 hashes match after execution. See qualification/st02.md for exact evidence.
 The 0.3.0 preview and original unrelated files are preserved. No remote, hosted compute,
 publication, deployment, old-node changes or new model inference. ST-03, ST-07, ST-09 READY.
+
+
+## Parallel batch after ST-02
+
+Owner authorized continuing remaining implementation with cheap-model fanout.
+Dispatch baseline 5358a52; isolated worktrees:
+- st03_image, Sol/high, .worktrees/st-03: Image source/runtime/private worker; proof
+  offline relocatable runtime, private API/lifecycle and actual 1K FLUX receipt.
+  Root owns shared native Image UI/API, Hub wrapper and staging integration there.
+- st07_storage, Terra/high, .worktrees/st-07: Hub shared output index/settings,
+  admission/protected cleanup and Voice private receipt; proof temporary-file policy
+  tests plus affected retained regressions. Never delete real generated outputs.
+- st09_startup, Luna/high, .worktrees/st-09: native StudioHub/ShellCore lifecycle,
+  login settings and fixtures; proof native build, lifecycle cases and physical-test
+  procedure. No live login registration. Root leaves these native files to this owner.
+Shared board/version/changelog are root-owned. API/View/native Image edits remain
+separate from startup-owned files. Agents supply contracts before integration; whole
+phase completion still requires independent review, exact tests and local integration.
+No new Git remote, deployment, signing, fleet enrollment or physical qualification.

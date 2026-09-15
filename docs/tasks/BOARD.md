@@ -8,13 +8,13 @@ ST-01 foundation and ST-02 bundled Hub are reviewed and locally integrated; subs
 | ST-00 | Source review and narrowed plan | — | DONE | Current planning session |
 | [ST-01](ST-01.md) | A · Runtime/model contracts | ST-00 | DONE | root / implementation/st-01 |
 | [ST-02](ST-02.md) | A · Bundled local Hub | ST-01 | DONE | root / implementation/st-02 |
-| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | READY | Unassigned |
+| [ST-03](ST-03.md) | B · Packaged FLUX | ST-02 | IN_PROGRESS | root + st03_image (Sol/high) |
 | [ST-04](ST-04.md) | C · Qwen Base | ST-03 | WAITING | Unassigned |
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | WAITING | Unassigned |
 | [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | WAITING | Unassigned |
-| [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | READY | Unassigned |
+| [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | IN_PROGRESS | st07_storage (Terra/high) |
 | [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | WAITING | Unassigned |
-| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | READY | Unassigned |
+| [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | IN_PROGRESS | st09_startup (Luna/high) |
 | [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | WAITING | Unassigned |
 | [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | WAITING | Unassigned |
 
