@@ -79,9 +79,21 @@ then the one task card you are claiming.
   The fix is to answer from the verified package library, falling back to the HF cache, counting
   only **verified** packages as cached. Image already resolves the package layout, which is why
   it works.
-- **Next:** fix that Voice library-format gap so a real clone comes out of the app (matching
-  Subtitle), then ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11
-  hardware.
+- **Voice library bridge is IN and verified as far as it goes.** `cache.py` now resolves models
+  through the packaged manifests plus `<library>/.studiohub/installed.json` (exact revision, only
+  an indexed/verified package counts), `cache_state`/`status_snapshot`/`model_dir` use it,
+  `generation.py` falls back to the package revision folder for the mlx-audio snapshot, and
+  `voice_worker.py` passes `STUDIOHUB_MODEL_MANIFESTS` (the worker ran with a minimal env).
+  **Confirmed through the packaged app: the Hub gate passes, the job dispatches to `voice`, the
+  model loads from the app library, and the reference clip is accepted and duration-validated
+  (4.57 s of real work).** Remaining failure is the **internal Whisper quality check**:
+  `QwenQualityError: Whisper Large could not validate the Qwen reference` — i.e. the quality
+  check's own Whisper resolution/caching inside the Voice worker is the next (and likely last)
+  step for a real cloned voice. Note the earlier `Qwen3TTS-0.6B` attempt also showed a
+  too-short-reference guard at <3 s of usable speech, so any future test clip must be ~5 s+.
+- **Next:** fix the internal Whisper quality-check resolution, produce a real cloned voice
+  through the packaged app, then ST-05 (VoxCPM2/OmniVoice) — which shares this same resolver — then
+  ST-08, ST-10 and ST-11.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
