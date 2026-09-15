@@ -308,6 +308,52 @@ and only holds the latest transcription result; the shared **Jobs** page is a fl
 scroll (image jobs, then audio jobs) rather than a tabbed unified history. So this requirement is
 partly built and partly missing, and it is now explicit rather than assumed.
 
+### 2026-09-15 — ST-04 and ST-06 integrated; native clone UI and tabbed history
+
+Both worker tasks were merged and verified on the integration branch.
+
+`implementation/st-04` (`d24150f`, `4939329`; merged `71611bb` + follow-up): unified
+voice-reference staging (local upload and GenStudio push through one contract), Qwen Base clone
+requirements in the Voice backend, the Hub envelope lift so a top-level
+`voice_reference_asset_id` reaches the item params, and **real offline receipts for both tiers** —
+QWEN06 `50f45ef0…` job `4991b1731e6f` and QWEN17 `e7dd0585…` job `195fc324ad7f`, both TER/CER
+0.0 on reference and output, 0 retries, 1.97/1.84 GiB peak RSS. Coordinator applied the
+native/staging checklist: clone-vs-preset and the transcript requirement are now derived from the
+catalog's `reference_audio` claim rather than the model name, and `components/voice/model-audits`
+stays in the bundle because the reference contract is audit-bound.
+
+`implementation/st-06` (`9c0f676`; merged `0d792c9`): the independent Subtitle worker, its dispatch
+regression and focused tests, and real packaged Turbo transcription evidence. The worker's turn
+was stopped and its uncommitted work checkpoint-committed by the coordinator. Its five-step
+integration checklist was then applied: `hub_worker.py` starts a `subtitle` child that reuses the
+shared Voice runtime with its own state root and an explicit `modality: "transcription"`;
+`stage_voice.py` bundles the Subtitle source and worker and records the component with the shipped
+Voice runtime identity; `standalone.py` grew a generic `worker_read` helper plus the
+`/studio/subtitle/api/*` reads. **Verified live**: a freshly staged app starts three workers —
+`voice` / `voice`, `image` / `image`, `subtitle` / **transcription** — and
+`/studio/subtitle/api/transcribe/availability` returns 200 from the Subtitle worker.
+
+Integrated evidence: root suite **188 OK (5 skipped)**, Hub regression passed, Voice regression
+**664 passed / 2 skipped**, native build passes.
+
+Coordinator decision (from the ST-06 handoff's open question): public Subtitle jobs are served by
+the `subtitle` worker, while the Voice worker keeps its Whisper quality check internal to the
+parent Voice job and does not advertise `modality == "transcription"` to the packaged public
+scheduler. No dual-routing rule was introduced.
+
+Honest limits recorded, not smoothed over: ST-04 and ST-06 are both **PARTIAL**. Whisper Base and
+Small are **catalog-only** — `mlx-audio` loads only `*.safetensors` while those pinned revisions
+ship `weights.npz`, so the app refuses them with an explicit reason. The Subtitle screen and its
+history do not exist in the app yet. Neither task has had independent review.
+
+New finding worth its own attention: `components/model_packages._stamp()` includes `st_ctime_ns`,
+so **hard-linking a model-library file changes the stamp**. The ST-04 proof harness builds its
+offline cache by hard-linking the shipped library, and the packaged app consequently reported
+`File changed; verify again` for Whisper Turbo even though the file hashes to its recorded value
+(confirmed directly; the file now carries 4 hard links). The owner remedy is a **Verify** pass; the
+harness should copy instead of hard-linking, and whether `ctime` should count as tampering is a
+question for ST-11.
+
 ### 2026-09-15 — owner clarification: clone-based TTS is the primary voice mechanism
 
 The owner stated a requirement that was missed during the original planning pass: **voice

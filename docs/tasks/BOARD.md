@@ -32,21 +32,24 @@ then the one task card you are claiming.
   blocker** and all seven evidence/test defects it raised are fixed. The **only** item left is a
   single interactive GUI **Save…** by a human: automation successfully navigated the app to
   Image Studio but could not drive the unlabelled SwiftUI save panel.
-- **ST-04 merged** (`71611bb`): the unified voice-reference staging contract (local upload +
-  GenStudio push), Qwen Base clone requirements, and its focused tests, paired with the native
-  clone UI (`1a010e5`). **ST-06 merged** (`0d792c9`): the independent Subtitle worker plus real
-  packaged Turbo transcription evidence. Integrated-tree evidence: root suite **188 OK
-  (5 skipped)**, Hub regression passed, Voice regression **664 passed / 2 skipped**, native build
-  passes. ST-04 and ST-06 are both still **PARTIAL and not DONE**: ST-04 needs real QWEN06/QWEN17
-  receipts and its receipt file; ST-06 needs its packaging/staging/Hub/native integration applied
-  (exact checklist on the ST-06 card), the Subtitle screen, and review. Whisper Base/Small are
-  blocked by an `mlx-audio` `weights.npz` vs safetensors loader limitation.
+- **ST-04 merged** (`71611bb` + follow-up): the unified voice-reference staging contract (local
+  upload + GenStudio push), Qwen Base clone requirements, the native clone UI, and **real
+  offline receipts for both tiers** — QWEN06 and QWEN17, TER/CER 0.0 on reference and output,
+  0 retries. **ST-06 merged** (`0d792c9`) and its packaging integration is applied: a staged app
+  now starts a `subtitle` worker with `modality: transcription` and serves the
+  `/studio/subtitle/api/*` reads. Integrated-tree evidence: root suite **188 OK (5 skipped)**
+  (150 before ST-06), Hub regression passed, Voice regression **664 passed / 2 skipped**, native
+  build passes. Both tasks remain **PARTIAL and not DONE**: ST-04 needs cancellation/restart
+  receipts, an assembled real-model clone job and review; ST-06 needs the native Subtitle screen,
+  Subtitle history and review.
 - **Coordinator decision recorded:** public Subtitle jobs are served by the `subtitle` worker;
   Voice keeps its Whisper quality check internal to the parent Voice job and does not advertise
   `modality == "transcription"` to the packaged public scheduler.
-- **Next:** apply the ST-06 integration checklist (packaging, staging, Hub read routes, native
-  Subtitle page + history tab), then ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining native
-  work, ST-10 fleet and ST-11 hardware.
+- **Whisper Base/Small are catalog-only.** `mlx-audio` loads only `*.safetensors` while those
+  pinned revisions ship `weights.npz`; the app refuses them with an explicit reason instead of
+  loading the wrong thing. Scoped as its own checkpoint.
+- **Next:** the native Subtitle screen + its history tab, then ST-05 (VoxCPM2/OmniVoice), then
+  ST-08's remaining work, ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
@@ -61,6 +64,11 @@ then the one task card you are claiming.
   ST-03's independent review is what closes that card out.
 - **The rule that will bite you:** run tests with `.build/voice-runtime/bin/python3`.
   The system `python3` is 3.9.6 and fails.
+- **Model verification is `ctime`-sensitive.** `components/model_packages._stamp()` includes
+  `st_ctime_ns`, so anything that hard-links a library file (the ST-04 proof harness builds an
+  offline cache that way) makes the app report `File changed; verify again` even though the bytes
+  are unchanged — confirmed on `whisper-turbo`. Remedy is a **Verify** pass in Models; future
+  proof harnesses should copy rather than hard-link the shipped library.
 - **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
   true, and put every result in a committed file — not in a chat message.
 
