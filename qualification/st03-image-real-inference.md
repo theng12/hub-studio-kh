@@ -129,7 +129,20 @@ checks.
 Still open: exercising the path through the real GUI **Save** panel against a live Hub (the
 proof above drove the Hub API directly), ST-03.6 retry-count confirmation, and a
 human-driven click-through of history in the window. Restart history is verified above and
-independent review has run — see below. Separately, `StudioViews.swift` `saveAudio` still
+independent review has run — see below.
+
+**Automated GUI-save attempt (2026-09-15).** macOS Accessibility was used to drive the packaged
+app: the Image workspace button was pressed successfully and the Image Studio page rendered with
+the completed job in *Recent images*. However the SwiftUI **Save…** button and the save panel
+expose no accessible labels (every button reports as `button`) and their coordinates changed
+between consecutive reads, so the click-through could not be completed by automation. The job
+remained un-acknowledged afterwards (`receipt_acked_at: null`), confirming no save had occurred —
+so this attempt is recorded as *not evidence of a working save*. The code path is short and
+covered (`StudioViews.saveImage` → `workspace.saveImage` → verified write → Hub acknowledgement,
+with the API contract fixture testing success, write-failure and rejection), and a single manual
+**Save…** by a human is the recommended acceptance step.
+
+Separately, `StudioViews.swift` `saveAudio` still
 writes audio bytes with no verified-destination acknowledgement, so the same wiring is owed
 for Voice export under ST-08.
 

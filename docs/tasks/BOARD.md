@@ -22,10 +22,11 @@ then the one task card you are claiming.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
 - **IN PROGRESS — ST-03 packaged Image.** Proven: real generation, Hub output registration,
-  receipt acknowledgement (pre-ACK `null` → post-ACK stamp, captured on the same job), and
-  restart-history at the packaged level. An independent review found **no code blocker** but
-  flagged evidence/provenance and test-coverage defects, which are being fixed. Still owed:
-  a live GUI Save against a real Hub, and ST-03.6 retry-count confirmation.
+  receipt acknowledgement (pre-ACK `null` → post-ACK stamp on the same job), restart-history at
+  the packaged level, and ST-03.6 retry/attempt counting. The independent review found **no code
+  blocker** and all seven evidence/test defects it raised are fixed. The **only** item left is a
+  single interactive GUI **Save…** by a human: automation successfully navigated the app to
+  Image Studio but could not drive the unlabelled SwiftUI save panel.
 - **IN FLIGHT (dispatched 2026-09-15, isolated worktrees):** `st-06` Subtitle backend and
   `st-04` Qwen Base backend — ST-04 has published its voice-reference wire contract. The
   ST-03 review is complete. The coordinator retains native/UI and staging integration.
