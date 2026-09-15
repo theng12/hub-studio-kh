@@ -56,7 +56,19 @@ then the one task card you are claiming.
   Verified live: a staged app shows the Subtitle entry; the tab/filter logic is covered by the
   native API fixture. Sidebar navigation cannot be driven reliably by Accessibility automation,
   so the click-through remains a manual check.
-- **Next:** ST-05 (VoxCPM2/OmniVoice), then ST-08's remaining work, ST-10 fleet and ST-11 hardware.
+- **Subtitle end-to-end is blocked at the last gate.** A packaged-app test submitted a real
+  WAV through `POST /api/hub/transcription/jobs`. It exposed and fixed a release-blocking bug —
+  the persisted batch had no `modality`, so every dispatch was refused with
+  `MODEL_MODALITY_MISMATCH` (`bc0119b`). After that fix the job passes admission but still never
+  dispatches: it sits `queued` with no error and no studio, while the subtitle worker is
+  demonstrably healthy (registered as modality `transcription`, availability `available: true`
+  with turbo `cached/ready`, health `ok`). The cause is one of the **silent** gates in
+  `dispatch_once` → `_eligible_studios` → `broker.prepare_machine_memory` (most likely the memory
+  gate, which records only `note_external_memory_block`, never `governor_note`). Full evidence and
+  the two candidates are on the ST-06 card. **Making that gate visible is the next step** — a
+  healthy worker plus an eternal `queued` is the worst thing to debug.
+- **Next:** resolve and instrument the Subtitle dispatch gate, then ST-05 (VoxCPM2/OmniVoice),
+  then ST-08's remaining work, ST-10 fleet and ST-11 hardware.
 - **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
   clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
   action that posts to the same Hub reference route GenStudio pushes use, and submits
