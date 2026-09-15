@@ -519,6 +519,39 @@ class HubJobProofTests(unittest.TestCase):
         self.assertEqual((self.worker.transcription_posts, self.worker.transcription_completed), (2, 2))
         transcription_jobs.batches.clear()
 
+    def test_subtitle_index_error_preserves_completed_result(self) -> None:
+        studio = {"id": "subtitle", "modality": "transcription", "host": "127.0.0.1",
+                  "port": self.worker.port, "machine": "local", "local": True,
+                  "studio_token": _TOKEN, "hub_token": _TOKEN}
+        input_path = _ROOT / "storage-subtitle.wav"
+        input_path.write_bytes(_AUDIO)
+        batch = {"id": "storage-subtitle", "idempotency_key": "storage-subtitle-key",
+                 "created_at": time.time(), "model": "fixture/subtitle", "cancelled": False,
+                 "items": [{"index": 0, "item_id": "clip-storage", "filename": "clip.wav",
+                            "input_path": str(input_path), "state": "running", "tries": 1,
+                            "studio": "subtitle", "studio_task_id": "stt-storage-0"}]}
+        (transcription_jobs.ROOT / batch["id"] / "output").mkdir(parents=True)
+
+        async def run_with_failed_index():
+            from components.hub import output_storage
+            original = output_storage.register_finalized_output
+            def fail_index(*args, **kwargs):
+                raise OSError("index unavailable")
+            output_storage.register_finalized_output = fail_index
+            try:
+                async with httpx.AsyncClient() as real:
+                    await transcription_jobs._run_item(
+                        SimpleNamespace(_client=real, _transcribe_cache={}),
+                        batch, batch["items"][0], studio, "storage-owner")
+            finally:
+                output_storage.register_finalized_output = original
+
+        asyncio.run(run_with_failed_index())
+        item = batch["items"][0]
+        self.assertEqual(item["state"], "done")
+        self.assertIn("OSError: index unavailable", item.get("output_storage_error", ""))
+        self.assertTrue(Path(item["artifact_path"]).is_file())
+
     def test_packaged_subtitle_dispatcher_skips_legacy_cleanup_timer(self) -> None:
         async def check():
             monitor = SimpleNamespace(registry=[], status={})

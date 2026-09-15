@@ -1720,6 +1720,7 @@ class GenerationJob:
     chunk_total: Optional[int] = None       # number of long-form local segments
     execution_run_id: Optional[str] = None  # opaque active child execution identity
     executor_generation: Optional[int] = None
+    receipt_acked_at: Optional[float] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
     created_at: float = field(default_factory=time.time)
@@ -1754,6 +1755,8 @@ class GenerationJob:
             "started_at": self.started_at,
             "cancel_requested_at": self.cancel_requested_at,
             "finished_at": self.finished_at,
+            "generated_at": self.finished_at,
+            "receipt_acked_at": self.receipt_acked_at,
             "duration_seconds": duration,
             "resource_usage": self.resource_usage,
             "quality_validation": self.quality_validation,
@@ -2075,6 +2078,22 @@ class GenerationManager:
             except Exception as e:
                 print(f"[gen] delete_job unlink failed: {e}", file=sys.stderr, flush=True)
         self._persist()
+        return True
+
+    def acknowledge_output(self, job_id: str) -> bool:
+        """Persist an idempotent private Hub receipt for one final audio file."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.state != "done" or not job.output_path:
+                return False
+            if job.receipt_acked_at is not None:
+                return True
+            job.receipt_acked_at = time.time()
+            try:
+                self._persist(strict=True)
+            except PersistenceError:
+                job.receipt_acked_at = None
+                return False
         return True
 
     def output_stats(self) -> dict:
@@ -4269,6 +4288,7 @@ class GenerationManager:
             "started_at": job.started_at,
             "cancel_requested_at": job.cancel_requested_at,
             "finished_at": job.finished_at,
+            "receipt_acked_at": job.receipt_acked_at,
             "model_revision": job.model_revision,
             "voice_revision": job.voice_revision,
             "media_type": job.media_type,
@@ -4321,6 +4341,7 @@ class GenerationManager:
                 started_at=raw.get("started_at"),
                 cancel_requested_at=raw.get("cancel_requested_at"),
                 finished_at=raw.get("finished_at"),
+                receipt_acked_at=raw.get("receipt_acked_at"),
                 model_revision=raw.get("model_revision"),
                 voice_revision=raw.get("voice_revision"),
                 media_type=raw.get("media_type"),

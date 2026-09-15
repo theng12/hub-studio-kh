@@ -694,6 +694,19 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
             media_duration_seconds=payload.get("duration"),
             metadata={k: v for k, v in payload.items() if k != "srt"},
         )
+        # Hub-owned SRTs join the same device index. Input uploads stay outside
+        # this call and are never retention candidates.
+        from .. import output_storage
+        try:
+            output_storage.register_finalized_output(
+                machine=str(studio.get("machine") or "local"), studio="subtitle",
+                job_id=str(item.get("studio_task_id") or f"{batch['id']}:{item['index']}"),
+                managed_output_roots=[str(artifact.parent)], output_path=str(artifact),
+                generated_at=time.time(), batch_id=batch["id"], item_index=item["index"],
+                attempt=item.get("tries", 0), model=batch.get("model"),
+            )
+        except Exception as exc:
+            item["output_storage_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         broker.mark_external_machine_success(studio)
     except asyncio.CancelledError:
         if _packaged():

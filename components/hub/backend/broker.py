@@ -1650,6 +1650,26 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         artifact_url=worker_url, batch_id=b["id"],
         item_index=item["index"], duration_s=runtime, runtime_s=runtime,
     )
+    # The Hub owns the deletion index. A worker path is only accepted when the
+    # packaged descriptor supplied that exact managed root.
+    from .. import output_storage
+    try:
+        output_storage.register_finalized_output(
+            machine=str(studio.get("machine") or "local"), studio=str(studio["id"]),
+            job_id=str(job.get("id") or item.get("studio_job_id") or ""),
+            managed_output_roots=studio.get("managed_output_roots"),
+            output_path=job.get("output_path"), generated_at=job.get("generated_at", job.get("finished_at")),
+            batch_id=b["id"], item_index=item["index"], attempt=item.get("tries", 0),
+            model=b.get("model"), runtime_identity=job.get("runtime_revision"),
+            bytes=job.get("bytes"), sha256=job.get("sha256"),
+            derivatives=job.get("derivative_output_paths"),
+        )
+    except Exception as exc:
+        # The worker has already finished.  Keep its verified result terminal
+        # and unacknowledged rather than dispatching another inference attempt.
+        item["output_storage_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    else:
+        item.pop("output_storage_error", None)
     # Publish terminal state only after metadata, revision evidence, and the
     # stable asset identity are complete. Pollers must never observe a partial
     # "done" result while the Hub is still finalizing the worker artifact.

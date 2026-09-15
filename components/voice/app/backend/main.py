@@ -1453,6 +1453,14 @@ def get_generation_audio(job_id: str) -> FileResponse:
     return FileResponse(job.output_path, media_type=mt, headers=headers)
 
 
+@app.post("/api/generate/jobs/{job_id}/ack")
+def acknowledge_generation_output(job_id: str) -> dict:
+    """Private idempotent receipt used by the Hub after verified delivery."""
+    if not gen_manager.acknowledge_output(job_id):
+        raise HTTPException(status_code=409, detail="only completed output can be acknowledged")
+    return {"ok": True}
+
+
 @app.delete("/api/generate/jobs/{job_id}")
 def cancel_generation_job(job_id: str) -> dict:
     ok = gen_manager.cancel(job_id)
