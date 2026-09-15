@@ -1,0 +1,26 @@
+{
+  "captured_at": 1789492780.445031,
+  "reference": {
+    "file": "reference.wav",
+    "bytes": 115812,
+    "sha256": "c4294636224d6c17a487a72cb93bd3015683c336d3ca4a7965e32ee6880877d0",
+    "transcript": "The quick brown fox jumps over the lazy dog."
+  },
+  "package": {
+    "package_id": "qwen3-tts-12hz-0-6b-base-8bit",
+    "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+  },
+  "staged_asset": {
+    "asset_id": "6a53b7f8020021f53192c930",
+    "origin": "local",
+    "transcript_supplied": true
+  },
+  "batch_id": "8d97be6fec",
+  "final_state": "queued",
+  "studio": null,
+  "error": null,
+  "bytes": null,
+  "sha256": null,
+  "duration_s": null,
+  "artifact_bytes_fetched": null
+}
