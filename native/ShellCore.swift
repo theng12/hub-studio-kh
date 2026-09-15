@@ -48,6 +48,9 @@ struct ShellConfiguration {
     var dataDirectory: URL
     var modelsDirectory: URL?
     var offline: Bool
+    var startAtLogin: Bool
+    var recoveryMaxAttempts: Int
+    var recoveryBackoffSeconds: [TimeInterval]
     var readyFile: URL { dataDirectory.appendingPathComponent("hub-ready.json") }
     var logFile: URL { dataDirectory.appendingPathComponent("hub-worker.log") }
     var preferencesFile: URL { dataDirectory.appendingPathComponent("app-preferences.json") }
@@ -57,6 +60,9 @@ struct ShellConfiguration {
             .appendingPathComponent("Library/Application Support/StudioHub Standalone")
         modelsDirectory = nil
         offline = false
+        startAtLogin = true
+        recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
+        recoveryBackoffSeconds = StartupRecovery.defaultDelays
         var explicitModels: URL?
         var explicitOffline = false
         var index = 1
@@ -70,9 +76,15 @@ struct ShellConfiguration {
             } else { if argument == "--offline" { explicitOffline = true }; index += 1 }
         }
         try Self.requireExternal(dataDirectory, bundle: bundle)
-        if let data = try? Data(contentsOf: preferencesFile), let saved = try? JSONDecoder().decode(Preferences.self, from: data) {
+        if let data = readPrivateRegularFile(preferencesFile), let saved = try? JSONDecoder().decode(Preferences.self, from: data) {
             modelsDirectory = URL(fileURLWithPath: saved.modelsPath).standardizedFileURL.resolvingSymlinksInPath()
             offline = saved.offline
+            startAtLogin = saved.startAtLogin
+            if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
+                                           delays: saved.recoveryBackoffSeconds) {
+                recoveryMaxAttempts = saved.recoveryMaxAttempts
+                recoveryBackoffSeconds = saved.recoveryBackoffSeconds
+            }
         }
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
@@ -98,11 +110,49 @@ struct ShellConfiguration {
     func save() throws {
         guard let modelsDirectory else { return }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory.path, offline: offline))
+        let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory.path, offline: offline,
+                                                        startAtLogin: startAtLogin,
+                                                        recoveryMaxAttempts: recoveryMaxAttempts,
+                                                        recoveryBackoffSeconds: recoveryBackoffSeconds))
         try data.write(to: preferencesFile, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesFile.path)
     }
-    private struct Preferences: Codable { let modelsPath: String; let offline: Bool }
+    private struct Preferences: Codable {
+        let modelsPath: String
+        let offline: Bool
+        let startAtLogin: Bool
+        let recoveryMaxAttempts: Int
+        let recoveryBackoffSeconds: [TimeInterval]
+
+        init(modelsPath: String, offline: Bool, startAtLogin: Bool,
+             recoveryMaxAttempts: Int, recoveryBackoffSeconds: [TimeInterval]) {
+            self.modelsPath = modelsPath
+            self.offline = offline
+            self.startAtLogin = startAtLogin
+            self.recoveryMaxAttempts = recoveryMaxAttempts
+            self.recoveryBackoffSeconds = recoveryBackoffSeconds
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            modelsPath = try values.decode(String.self, forKey: .modelsPath)
+            offline = try values.decode(Bool.self, forKey: .offline)
+            // Older previews did not persist this preference; the first-release default is on.
+            startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true
+            recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
+                ?? StartupRecovery.defaultMaxAutomaticAttempts
+            recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)
+                ?? StartupRecovery.defaultDelays
+        }
+    }
+
+    mutating func setRecoveryPolicy(maxAttempts: Int, backoffSeconds: [TimeInterval]) throws {
+        guard StartupRecovery.validPolicy(maxAttempts: maxAttempts, delays: backoffSeconds) else {
+            throw ShellFailure(message: "Recovery attempts must be 0–10 with delays from 0 to 300 seconds.")
+        }
+        recoveryMaxAttempts = maxAttempts
+        recoveryBackoffSeconds = backoffSeconds
+    }
 }
 
 struct WorkerReady: Decodable {
@@ -134,6 +184,19 @@ func openPrivateLog(_ url: URL) throws -> FileHandle {
         throw ShellFailure(message: "The local service log must be a private regular file.")
     }
     return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+}
+
+func readPrivateRegularFile(_ url: URL) -> Data? {
+    let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0)
+    guard descriptor >= 0 else { return nil }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+          info.st_uid == geteuid(), info.st_mode & 0o077 == 0 else {
+        close(descriptor)
+        return nil
+    }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    return try? handle.readToEnd()
 }
 
 final class InstanceLock {
