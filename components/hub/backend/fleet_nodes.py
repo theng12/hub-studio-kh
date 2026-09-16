@@ -17,10 +17,12 @@ from pathlib import Path
 import tempfile
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from .registry import DATA_DIR
+from .peers import fleet_token
 
 FILE_NAME = "fleet_nodes.json"
 MAX_NODES = 64
@@ -94,6 +96,36 @@ def validate_address(value: object) -> str:
     return f"http://{address}:{parsed.port}"
 
 
+# The modalities a node may offer. A controller dispatches by modality, so this is the only
+# vocabulary the fleet routing understands.
+NODE_MODALITIES = {"image", "voice", "transcription"}
+
+
+def _studios(value: object) -> list[dict[str, str]]:
+    """Validate what a node says it runs.
+
+    A node reports its own studios rather than the controller assuming all three: a Mac whose
+    Image worker failed to start must not be handed image work, and a future build may run
+    fewer studios than this one.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 8:
+        raise ValueError("studios must be a list of at most 8 entries")
+    seen: list[dict[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("each studio must be an object")
+        worker = str(entry.get("id") or "").strip().lower()
+        modality = str(entry.get("modality") or "").strip().lower()
+        if not ID_PATTERN.fullmatch(worker):
+            raise ValueError("studio id must be lowercase letters, numbers, dots, dashes or underscores")
+        if modality not in NODE_MODALITIES:
+            raise ValueError(f"studio modality must be one of {sorted(NODE_MODALITIES)}")
+        seen.append({"id": worker, "modality": modality})
+    return seen
+
+
 def join(payload: dict[str, Any]) -> dict[str, Any]:
     """Record one node, or refresh what a rejoining node reports about itself."""
     node_id = str(payload.get("node_id") or "").strip().lower()
@@ -103,6 +135,7 @@ def join(payload: dict[str, Any]) -> dict[str, Any]:
     if not 1 <= len(name) <= 120:
         raise ValueError("name must be between 1 and 120 characters")
     address = validate_address(payload.get("address"))
+    studios = _studios(payload.get("studios"))
     nodes = _read()
     if node_id not in nodes and len(nodes) >= MAX_NODES:
         raise ValueError(f"this controller already has {MAX_NODES} nodes")
@@ -112,6 +145,7 @@ def join(payload: dict[str, Any]) -> dict[str, Any]:
         "name": name,
         "address": address,
         "role": "agent",
+        "studios": studios,
         "joined_at": existing.get("joined_at") or time.time(),
         "updated_at": time.time(),
     }
@@ -126,6 +160,51 @@ def leave(node_id: str) -> bool:
     del nodes[node_id]
     _write(nodes)
     return True
+
+
+def remote_studios() -> list[dict[str, Any]]:
+    """Dispatchable studio entries for every joined node.
+
+    These take the shape the Hub's own workers use, with two differences that decide how the
+    existing routing treats them: `machine` is the node's identity rather than "local", which
+    sends the request down the peer path, and the credential is the fleet token, which is the
+    only thing a controller holds for someone else's Mac.
+    """
+    entries: list[dict[str, Any]] = []
+    nodes = _read()
+    token = fleet_token() or ""
+    for node_id in sorted(nodes):
+        node = nodes[node_id]
+        address = node.get("address") or ""
+        try:
+            parsed = urlsplit(address)
+            host, port = parsed.hostname, parsed.port
+        except ValueError:
+            continue
+        if not host or not port:
+            continue
+        for studio in node.get("studios") or []:
+            worker, modality = studio.get("id"), studio.get("modality")
+            if not worker or modality not in NODE_MODALITIES:
+                continue
+            entries.append({
+                "id": f"{node_id}:{worker}",
+                "title": f"{node.get('name') or node_id} · {worker.title()}",
+                "modality": modality,
+                "host": host,
+                "port": port,
+                "hub_port": port,
+                "machine": node_id,
+                "local": False,
+                "hub_token": token,
+                "studio_token": token,
+                "runtime_identity": {"id": f"fleet:{node_id}", "compatible": True},
+                "managed_output_roots": [],
+                "base_url": f"http://{host}:{port}",
+                "emoji": "🛰️",
+                "fleet_node": node_id,
+            })
+    return entries
 
 
 async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -> dict[str, Any]:

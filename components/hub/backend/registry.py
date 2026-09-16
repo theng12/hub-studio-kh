@@ -223,7 +223,11 @@ def load_registry() -> list[dict]:
     """Defaults merged with the optional per-machine studios.json."""
     if _os.environ.get("STUDIOHUB_PACKAGED") == "1":
         from ..standalone_config import load_workers
-        return load_workers()
+        from . import fleet_nodes
+        # This Mac's own workers, plus one entry per studio on every joined node. A joined
+        # node's entry carries its own machine identity, which is what routes a dispatch to it
+        # over the peer path instead of to a local worker.
+        return load_workers() + fleet_nodes.remote_studios()
     studios = {s["id"]: dict(s) for s in DEFAULT_STUDIOS}
     if REGISTRY_FILE.exists():
         try:

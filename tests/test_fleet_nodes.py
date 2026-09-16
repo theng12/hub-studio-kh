@@ -60,6 +60,75 @@ class FakeClient:
         return None
 
 
+class RemoteStudioTests(unittest.TestCase):
+    """A joined node must become something the Hub can actually dispatch to."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-remote-")
+        self.old = os.environ.copy()
+        self.old_data = fleet_nodes.DATA_DIR
+        os.environ["STUDIOHUB_DATA_DIR"] = self.temporary.name
+        fleet_nodes.DATA_DIR = Path(self.temporary.name)
+        os.environ.pop("STUDIOHUB_FLEET_TOKEN", None)
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        fleet_nodes.DATA_DIR = self.old_data
+        os.environ.clear()
+        os.environ.update(self.old)
+        self.temporary.cleanup()
+
+    def test_a_joined_node_becomes_one_entry_per_studio(self) -> None:
+        fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                          "address": "http://192.168.1.21:47873",
+                          "studios": [{"id": "image", "modality": "image"},
+                                      {"id": "voice", "modality": "voice"},
+                                      {"id": "subtitle", "modality": "transcription"}]})
+        entries = {row["id"]: row for row in fleet_nodes.remote_studios()}
+        self.assertEqual(sorted(entries),
+                         ["mac-mini-2:image", "mac-mini-2:subtitle", "mac-mini-2:voice"])
+        image = entries["mac-mini-2:image"]
+        self.assertEqual(image["modality"], "image")
+        self.assertEqual(image["host"], "192.168.1.21")
+        self.assertEqual(image["port"], 47873)
+        self.assertEqual(image["hub_port"], 47873)
+        # These three are what decide how the existing routing treats the entry.
+        self.assertEqual(image["machine"], "mac-mini-2")
+        self.assertIs(image["local"], False)
+        self.assertTrue(image["hub_token"])
+
+    def test_a_node_with_no_studios_contributes_nothing(self) -> None:
+        # A Mac whose workers all failed to start must not be handed work.
+        fleet_nodes.join({"node_id": "empty", "name": "Empty",
+                          "address": "http://192.168.1.21:47873", "studios": []})
+        self.assertEqual(fleet_nodes.remote_studios(), [])
+
+    def test_a_node_cannot_claim_a_studio_it_may_not_run(self) -> None:
+        for studios in ([{"id": "image", "modality": "video"}],
+                        [{"id": "image", "modality": ""}],
+                        [{"id": "BAD ID", "modality": "image"}],
+                        [{"id": "image"}],
+                        "not a list",
+                        [{"id": "image", "modality": "image"}] * 9):
+            with self.subTest(studios=studios):
+                with self.assertRaises(ValueError):
+                    fleet_nodes.join({"node_id": "n", "name": "N",
+                                      "address": "http://192.168.1.21:47873",
+                                      "studios": studios})
+
+    def test_a_remote_entry_routes_over_the_peer_path(self) -> None:
+        """The point of the entry shape: the request must go to the node, not a local worker."""
+        from components.hub.backend import peers
+        fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                          "address": "http://192.168.1.21:47873",
+                          "studios": [{"id": "image", "modality": "image"}]})
+        entry = fleet_nodes.remote_studios()[0]
+        self.assertFalse(peers.is_local_studio(entry))
+        url, headers = peers.studio_request(entry, "/api/generate/txt2img")
+        self.assertEqual(url, "http://192.168.1.21:47873/studio/image/api/generate/txt2img")
+        self.assertIn("X-Hub-Token", headers)
+
+
 class FleetNodeStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-fleet-")
