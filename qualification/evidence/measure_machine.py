@@ -236,6 +236,27 @@ def main() -> int:
             for worker, rows in sorted(packages.items())
         }
 
+        # Accepting a machine includes accepting its storage policy: record the limits in
+        # force and what this Mac is already holding, so the receipt shows why cleanup has or
+        # has not freed space.
+        status, settings = http(base, "/api/hub/settings", token)
+        if status == 200:
+            effective = settings.get("effective") or {}
+            status, preview = http(
+                base, "/api/hub/settings/preview", token, method="POST",
+                payload={"max_bytes": effective.get("max_bytes"),
+                         "retention_days": effective.get("retention_days"),
+                         "cleanup_enabled": effective.get("cleanup_enabled"),
+                         "cleanup_interval_seconds": effective.get("cleanup_interval_seconds"),
+                         "minimum_free_bytes": effective.get("minimum_free_bytes")})
+            receipt["storage"] = {
+                "effective": effective,
+                "defaults": settings.get("defaults"),
+                "preview_status": status,
+                "machines": preview.get("machines") if status == 200 else None,
+                "detail": preview.get("detail") if status != 200 else None,
+            }
+
         # Accepting a machine includes accepting its model library: verify one installed
         # package through the same Hub route the Models screen's Verify button calls, so a
         # copied or hard-linked library that reads as "file changed" is caught here.

@@ -183,6 +183,41 @@ struct NativeVersion: Decodable, Equatable {
     let source: String
 }
 
+/// The Hub's per-device storage policy and the bytes it currently accounts for.
+///
+/// `protectedBytes` is the part cleanup must never touch: unfinished work, output whose
+/// delivery has not been acknowledged, and anything with a reader. Showing it beside the
+/// limit is what makes "why did cleanup not free space" answerable.
+struct NativeDeviceSettings: Decodable, Equatable {
+    let defaults: NativeStorageLimits
+    let effective: NativeStorageLimits
+}
+
+struct NativeStorageLimits: Decodable, Equatable {
+    let maxBytes: Int64
+    let retentionDays: Int
+    let cleanupEnabled: Bool
+    let cleanupIntervalSeconds: Int
+    let minimumFreeBytes: Int64?
+}
+
+struct NativeStoragePreview: Decodable, Equatable {
+    let effective: NativeStorageLimits
+    let machines: [NativeMachineUsage]
+}
+
+struct NativeMachineUsage: Decodable, Equatable, Identifiable {
+    let machine: String
+    let usedBytes: Int64
+    let protectedBytes: Int64
+    let maxBytes: Int64
+    let retentionDays: Int
+    let enabled: Bool
+    let overLimit: Bool
+    let freeBytes: Int64?
+    var id: String { machine }
+}
+
 /// The Hub's own generation analytics, read straight from the job ledger.
 ///
 /// Every number here is recorded by the job that produced it — runtime, model, machine and
@@ -338,6 +373,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Per-machine model memory, read on demand rather than on the two-second poll: it fans
     /// out to every Studio, and nothing on the generation screens depends on it.
     @Published private(set) var memoryInventory: NativeMemoryInventory?
+    @Published private(set) var deviceSettings: NativeDeviceSettings?
+    @Published private(set) var storageUsage: [NativeMachineUsage] = []
+    @Published private(set) var storageNote: String?
+    @Published private(set) var savingStorage = false
     /// Measured generation history from the Hub, refreshed on demand.
     @Published private(set) var statistics: NativeStatistics?
     @Published private(set) var statisticsHours: Int?
@@ -436,6 +475,10 @@ final class NativeWorkspaceStore: ObservableObject {
         hubVersion = nil
         statistics = nil
         statisticsHours = nil
+        deviceSettings = nil
+        storageUsage = []
+        storageNote = nil
+        savingStorage = false
         modelNote = nil
         updatingModels = false
     }
@@ -986,6 +1029,69 @@ final class NativeWorkspaceStore: ObservableObject {
             memoryInventory = nil
             memoryNote = Self.actionable(error, action: "Read model memory settings")
         }
+    }
+
+    /// Read the storage policy and what each machine is currently holding.
+    func refreshStorage() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let settings: NativeDeviceSettings = try await get(["api", "hub", "settings"])
+            guard connectionID == requestConnection else { return }
+            deviceSettings = settings
+            let preview: NativeStoragePreview = try await sendJSON(
+                ["api", "hub", "settings", "preview"], method: "POST",
+                body: StoragePreviewBody(
+                    maxBytes: settings.effective.maxBytes,
+                    retentionDays: settings.effective.retentionDays,
+                    cleanupEnabled: settings.effective.cleanupEnabled,
+                    cleanupIntervalSeconds: settings.effective.cleanupIntervalSeconds,
+                    minimumFreeBytes: settings.effective.minimumFreeBytes ?? 0))
+            guard connectionID == requestConnection else { return }
+            storageUsage = preview.machines
+        } catch {
+            guard connectionID == requestConnection else { return }
+            deviceSettings = nil
+            storageUsage = []
+            storageNote = Self.actionable(error, action: "Read local storage settings")
+        }
+    }
+
+    /// Apply new limits. The Hub validates them before anything is written.
+    func saveStorageLimits(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool) async {
+        guard let requestConnection = connectionID else { return }
+        savingStorage = true
+        defer { if connectionID == requestConnection { savingStorage = false } }
+        do {
+            let settings: NativeDeviceSettings = try await sendJSON(
+                ["api", "hub", "settings"], method: "PUT",
+                body: StorageLimitsBody(maxBytes: maxBytes, retentionDays: retentionDays,
+                                        cleanupEnabled: cleanupEnabled))
+            guard connectionID == requestConnection else { return }
+            deviceSettings = settings
+            storageNote = "Saved. Cleanup keeps at most \(Self.gigabytes(settings.effective.maxBytes)) and keeps finished work for \(settings.effective.retentionDays) days."
+            error = nil
+            await refreshStorage()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Save local storage settings") } }
+    }
+
+    /// Restore the shipped limits for this device.
+    func restoreStorageDefaults() async {
+        guard let requestConnection = connectionID else { return }
+        savingStorage = true
+        defer { if connectionID == requestConnection { savingStorage = false } }
+        do {
+            let settings: NativeDeviceSettings = try await sendEmpty(
+                ["api", "hub", "settings", "restore-defaults"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            deviceSettings = settings
+            storageNote = "Restored the shipped limits for this Mac."
+            error = nil
+            await refreshStorage()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Restore the storage defaults") } }
+    }
+
+    static func gigabytes(_ bytes: Int64) -> String {
+        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 
     /// Read the Hub's generation statistics, optionally limited to the last N hours.
@@ -1567,6 +1673,18 @@ private struct HubModelPackage: Decodable {
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
+private struct StorageLimitsBody: Encodable {
+    let maxBytes: Int64
+    let retentionDays: Int
+    let cleanupEnabled: Bool
+}
+private struct StoragePreviewBody: Encodable {
+    let maxBytes: Int64
+    let retentionDays: Int
+    let cleanupEnabled: Bool
+    let cleanupIntervalSeconds: Int
+    let minimumFreeBytes: Int64
+}
 /// The Hub returns the package's readiness row; only the fields the app reads are declared.
 private struct HubModelState: Decodable {
     let packageId: String

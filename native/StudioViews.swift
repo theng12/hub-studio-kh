@@ -55,6 +55,10 @@ struct StudioContent: View {
     @State private var connectionNote: String?
     /// 0 means all time; otherwise the window in hours.
     @State private var statisticsWindow = 0
+    @State private var showingStorageEditor = false
+    @State private var draftGigabytes = 50.0
+    @State private var draftRetentionDays = 30
+    @State private var draftCleanup = true
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -764,6 +768,11 @@ struct StudioContent: View {
                         .font(.callout).foregroundStyle(.secondary)
                     memoryControls
                 }
+                Section("Local storage") {
+                    Text("Finished work is cleaned up on this Mac only. Anything still being written, not yet acknowledged, or in use is protected and is never deleted.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    storageControls
+                }
                 Section("App data") {
                     LabeledContent("Location") { Text(studio.configuration.dataDirectory.path).textSelection(.enabled).multilineTextAlignment(.trailing) }
                     Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
@@ -771,7 +780,40 @@ struct StudioContent: View {
                 }
             }.formStyle(.grouped)
         }
-        .task { if connected { await workspace.refreshMemoryPolicy() } }
+        .task { if connected { await workspace.refreshMemoryPolicy(); await workspace.refreshStorage() } }
+        .sheet(isPresented: $showingStorageEditor) { storageEditor }
+    }
+
+    /// Editing is a sheet so the saved values stay visible behind it: the operator can see what
+    /// the limits are now while deciding what to change them to.
+    private var storageEditor: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Local storage limits").font(.title2.weight(.semibold))
+            Text("These apply to this Mac only. Protected work is never deleted, so lowering the limit can leave this Mac above it.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Form {
+                Stepper(value: $draftGigabytes, in: 1...2000, step: 5) {
+                    Text("Keep at most \(String(format: "%.0f", draftGigabytes)) GB")
+                }
+                Stepper(value: $draftRetentionDays, in: 1...365, step: 1) {
+                    Text("Keep finished work for \(draftRetentionDays) days")
+                }
+                Toggle("Clean up automatically", isOn: $draftCleanup)
+            }.formStyle(.grouped).frame(height: 190)
+            HStack {
+                Button("Cancel") { showingStorageEditor = false }
+                Spacer()
+                Button("Save") {
+                    showingStorageEditor = false
+                    Task {
+                        await workspace.saveStorageLimits(
+                            maxBytes: Int64(draftGigabytes * 1_000_000_000),
+                            retentionDays: draftRetentionDays,
+                            cleanupEnabled: draftCleanup)
+                    }
+                }.buttonStyle(.borderedProminent).disabled(workspace.savingStorage)
+            }
+        }.padding(24).frame(width: 460)
     }
     private var connections: some View {
         ScrollView {
@@ -951,6 +993,49 @@ struct StudioContent: View {
         let held = policy.resident
         guard !held.isEmpty else { return "No model loaded" }
         return "Holding " + held.map { modelName($0) }.joined(separator: ", ")
+    }
+
+    /// Per-device storage limits, with the bytes that cleanup may not touch shown beside them.
+    @ViewBuilder private var storageControls: some View {
+        if let settings = workspace.deviceSettings {
+            LabeledContent("Size limit", value: NativeWorkspaceStore.gigabytes(settings.effective.maxBytes))
+            LabeledContent("Keep finished work for", value: "\(settings.effective.retentionDays) days")
+            LabeledContent("Automatic cleanup", value: settings.effective.cleanupEnabled ? "On" : "Off")
+            ForEach(workspace.storageUsage) { usage in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(usage.machine == "local" ? "This Mac" : usage.machine).font(.headline)
+                        Spacer()
+                        Text(NativeWorkspaceStore.gigabytes(usage.usedBytes)).font(.system(.body, design: .monospaced))
+                    }
+                    Text("Protected and never deleted: \(NativeWorkspaceStore.gigabytes(usage.protectedBytes))"
+                         + (usage.freeBytes.map { " · \(NativeWorkspaceStore.gigabytes($0)) free on disk" } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if usage.overLimit {
+                        Text("Over the size limit. Cleaning up is possible, but only work that is finished and acknowledged.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }.padding(.vertical, 2)
+            }
+            HStack {
+                Button("Change Limits…") {
+                    draftGigabytes = Double(settings.effective.maxBytes) / 1_000_000_000
+                    draftRetentionDays = settings.effective.retentionDays
+                    draftCleanup = settings.effective.cleanupEnabled
+                    showingStorageEditor = true
+                }
+                .disabled(!connected || workspace.savingStorage)
+                Button("Restore Defaults") { Task { await workspace.restoreStorageDefaults() } }
+                    .disabled(!connected || workspace.savingStorage)
+                if workspace.savingStorage { ProgressView().controlSize(.small) }
+            }
+            if let note = workspace.storageNote {
+                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text(connected ? "Storage settings are unavailable in this build." : "Start local services to read and change storage limits.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     private func chooseTranscriptionFile() {

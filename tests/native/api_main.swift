@@ -27,6 +27,10 @@ final class FixtureProtocol: URLProtocol {
     static var transcriptionAckRejects = false
     static var modelRoutes: [String] = []
     static var statisticsQueries: [String] = []
+    static var storageCalls: [String] = []
+    static var storageBody: [String: Any]?
+    static var storageLimits: [String: Any]?
+    static var storagePreviewRejects = false
     static var modelImportBody: [String: Any]?
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
@@ -60,6 +64,9 @@ final class FixtureProtocol: URLProtocol {
     static func setTranscriptionAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; transcriptionAckRejects = value }
     static func modelCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return modelRoutes }
     static func statisticsPaths() -> [String] { lock.lock(); defer { lock.unlock() }; return statisticsQueries }
+    static func storageRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return storageCalls }
+    static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
+    static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
     static func setModelVerifyRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; modelVerifyRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
@@ -136,6 +143,29 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
             result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+        case ("GET", "/api/hub/settings"):
+            Self.lock.lock(); Self.storageCalls.append("get"); Self.lock.unlock()
+            result = (200, "application/json", Self.settingsFixture)
+        case ("POST", "/api/hub/settings/preview"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.storageCalls.append("preview")
+            Self.storageBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            let rejects = Self.storagePreviewRejects
+            Self.lock.unlock()
+            result = rejects
+                ? (400, "application/json", Data(#"{"detail":"max_bytes must be a positive integer"}"#.utf8))
+                : (200, "application/json", Self.storagePreviewFixture)
+        case ("PUT", "/api/hub/settings"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.storageCalls.append("put")
+            Self.storageLimits = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"defaults":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"effective":{"max_bytes":120000000000,"retention_days":14,"cleanup_enabled":false,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000}}"#.utf8))
+        case ("POST", "/api/hub/settings/restore-defaults"):
+            Self.lock.lock(); Self.storageCalls.append("restore-defaults"); Self.lock.unlock()
+            result = (200, "application/json", Self.settingsFixture)
         case ("GET", "/api/hub/stats"):
             Self.lock.lock()
             Self.statisticsQueries.append(request.url?.query ?? "")
@@ -276,6 +306,10 @@ final class FixtureProtocol: URLProtocol {
         finish(result)
     }
 
+    private static let settingsFixture = Data(#"{"defaults":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000}}"#.utf8)
+
+    private static let storagePreviewFixture = Data(#"{"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"machines":[{"machine":"local","used_bytes":7200000000,"protected_bytes":1500000000,"max_bytes":50000000000,"retention_days":30,"enabled":true,"over_limit":false,"free_bytes":410000000000}]}"#.utf8)
+
     /// Shaped like the Hub's real reply, including a model with no timed run so the app's
     /// "not measured" path is exercised rather than assumed.
     private static let statisticsFixture = Data(#"{"total":3,"by_machine":{"local":{"count":3,"avg_s":45.5,"modalities":{"image":1,"transcription":2}}},"by_modality":{"image":{"count":1,"avg_s":94.47},"transcription":{"count":2,"avg_s":21.02}},"by_model":{"fixture/flux":{"count":1,"avg_s":94.47,"modality":"image"},"mlx-community/whisper-large-v3-turbo":{"count":2,"avg_s":21.02,"modality":"transcription"}},"model_rows":[{"model":"fixture/flux","count":1,"avg_s":94.47,"modality":"image"},{"model":"mlx-community/whisper-large-v3-turbo","count":2,"avg_s":21.02,"modality":"transcription"},{"model":"mlx-community/whisper-base-mlx","count":1,"avg_s":null,"modality":"transcription"}],"matrix":[],"by_source":{"job":3},"available_machines":["local"],"available_modalities":["image","voice","transcription"]}"#.utf8)
@@ -313,6 +347,42 @@ struct NativeAPITests {
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 6, "combined model catalog")
+
+        // Local storage: the limits come from the Hub, and the bytes cleanup may not touch
+        // are shown beside them - including on a machine that is over its limit.
+        await store.refreshStorage()
+        require(FixtureProtocol.storageRequests() == ["get", "preview"],
+                "reading storage must not change it: \(FixtureProtocol.storageRequests())")
+        require(store.deviceSettings?.effective.maxBytes == 50_000_000_000, "the Hub's own limit")
+        require(store.deviceSettings?.defaults.retentionDays == 30, "the shipped default")
+        require(store.storageUsage.count == 1, "the per-machine usage row")
+        require(store.storageUsage.first?.protectedBytes == 1_500_000_000,
+                "protected bytes must be shown, not just the total")
+        require(store.storageUsage.first?.overLimit == false, "an under-limit machine is not flagged")
+
+        await store.saveStorageLimits(maxBytes: 120_000_000_000, retentionDays: 14, cleanupEnabled: false)
+        require((FixtureProtocol.storageLimitsBody()?["max_bytes"] as? NSNumber)?.int64Value
+                    == 120_000_000_000,
+                "the new limit must reach the Hub")
+        require(FixtureProtocol.storageLimitsBody()?["retention_days"] as? Int == 14,
+                "the new retention must reach the Hub")
+        require(FixtureProtocol.storageLimitsBody()?["cleanup_enabled"] as? Bool == false,
+                "the cleanup choice must reach the Hub")
+        require(store.storageNote?.contains("Saved") == true, "a save needs a visible result")
+
+        await store.restoreStorageDefaults()
+        // The refresh that follows the restore appends its own reads, so this checks that the
+        // restore happened at all rather than that it was last.
+        require(FixtureProtocol.storageRequests().contains("restore-defaults"),
+                "Restore Defaults must call the Hub route: \(FixtureProtocol.storageRequests())")
+        require(store.deviceSettings?.effective.retentionDays == 30, "defaults must come back")
+
+        // A rejected limit surfaces the Hub's own reason rather than a generic failure.
+        FixtureProtocol.setStoragePreviewRejects(true)
+        await store.refreshStorage()
+        require(store.storageNote?.contains("max_bytes") == true,
+                "a refused read must explain why, got: \(store.storageNote ?? "nil")")
+        FixtureProtocol.setStoragePreviewRejects(false)
 
         // Measured history: the Overview shows what the Hub actually recorded, including a
         // model with no timed run reported as unmeasured rather than as zero.

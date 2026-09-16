@@ -140,10 +140,11 @@ are current; the longer narrative under it is historical and is kept for provena
    seven real defects in ST-03. Every one of those cards is still unreviewed. The two most
    productive questions so far have been "does the fixture agree with the real server?" and "does
    the production path ever actually write the row the query reads?" — both found real defects.
-3. **ST-08's remaining native work**: Models has Verify and Import Folder, Subtitle export
-   acknowledges delivery, and the Overview now shows the Hub's own measured generation times per
-   model and per machine. What is left is ST-08.4 (per-device usage bytes), the manual GUI
-   click-throughs, and ST-08.OS.
+3. **ST-08 is nearly closed**: Models has Verify and Import Folder, Subtitle export acknowledges
+   delivery, the Overview shows the Hub's measured generation times per model and per machine, and
+   Settings shows storage limits with the protected bytes cleanup may not touch. What is left is
+   the manual GUI click-throughs, ST-08.OS (hardware), and 08.PILOT (waits on independent review of
+   the ST-04/ST-06 receipts).
 4. **ST-10.4 / ST-10.6 / ST-10.DATA** need a second real machine and a counterpart, so they stay
    partial. If a second Mac becomes available, per-location aggregation and node deduplication are
    the first things to exercise.
