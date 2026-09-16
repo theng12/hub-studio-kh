@@ -300,6 +300,16 @@ final class StudioController: ObservableObject {
         if alert.runModal() == .alertSecondButtonReturn { stop() }
     }
     func select(_ value: StudioPage) { selection = value }
+    /// Set every network this Hub should answer on. Loopback is implied and added by the Hub.
+    func setListenHosts(_ hosts: [String]) {
+        guard canConfigure else { return }
+        let unique = hosts.reduce(into: [String]()) { result, host in
+            if !result.contains(host) { result.append(host) }
+        }
+        configuration.listenHost = unique.isEmpty ? "127.0.0.1" : unique.joined(separator: ",")
+        saveConfiguration()
+    }
+
     /// Persist a configuration change made from a picker, and say that it needs a restart.
     func saveConfiguration() {
         guard canConfigure else { return }

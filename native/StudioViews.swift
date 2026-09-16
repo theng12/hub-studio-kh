@@ -946,16 +946,23 @@ struct StudioContent: View {
             Divider()
 
             LabeledContent("Listening on", value: listenTitle(studio.configuration.listenHost))
-            Picker("Listen address", selection: Binding(
-                get: { studio.configuration.listenHost },
-                set: { studio.configuration.listenHost = $0; studio.saveConfiguration() }
-            )) {
-                Text("This Mac only").tag("127.0.0.1")
-                ForEach(LocalAddresses.current()) { entry in
-                    Text("Reachable at \(entry.title)").tag(entry.address)
-                }
-                Text("Any address on any network").tag("0.0.0.0")
+            Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // Several addresses at once, because a Mac serving its office LAN and its tailnet is
+            // the normal case; loopback is always included by the Hub, so it is never a choice.
+            ForEach(LocalAddresses.current()) { entry in
+                Toggle("Reachable at \(entry.title)", isOn: Binding(
+                    get: { studio.configuration.listenHosts.contains(entry.address) },
+                    set: { included in
+                        var hosts = studio.configuration.listenHosts.filter { $0 != "0.0.0.0" }
+                        if included { hosts.append(entry.address) }
+                        else { hosts.removeAll { $0 == entry.address } }
+                        studio.setListenHosts(hosts)
+                    }))
             }
+            Toggle("Any address on any network", isOn: Binding(
+                get: { studio.configuration.listenHosts.contains("0.0.0.0") },
+                set: { studio.setListenHosts($0 ? ["0.0.0.0"] : []) }))
             .disabled(!studio.canConfigure)
             listenWarning
 
@@ -986,15 +993,17 @@ struct StudioContent: View {
     }
 
     private func listenTitle(_ host: String) -> String {
-        if host == "127.0.0.1" { return "This Mac only" }
-        if host == "0.0.0.0" { return "Every network this Mac is on" }
-        return "Only \(host)"
+        let hosts = host.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let reachable = hosts.filter { $0 != "127.0.0.1" }
+        if reachable.isEmpty { return "This Mac only" }
+        if reachable.contains("0.0.0.0") { return "Every network this Mac is on" }
+        return reachable.joined(separator: ", ")
     }
 
     /// One plain sentence about who can reach this Mac, because the difference between the
     /// three choices is the whole security question.
     @ViewBuilder private var listenWarning: some View {
-        switch studio.configuration.listenHost {
+        switch listenWarningKey {
         case "127.0.0.1":
             Text("Only this Mac can reach the Hub. Nothing on your network can see it. This is the safe default.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1006,9 +1015,16 @@ struct StudioContent: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         if !studio.canConfigure {
-            Text("Stop the services to change the address, then start them again. Changing it restarts the Hub.")
+            Text("Stop the services to change the addresses, then start them again. Changing them restarts the Hub.")
                 .font(.callout).foregroundStyle(.secondary)
         }
+    }
+
+    /// Which warning to show: loopback, the wildcard, or a named list.
+    private var listenWarningKey: String {
+        let hosts = studio.configuration.listenHosts.filter { $0 != "127.0.0.1" }
+        if hosts.isEmpty { return "127.0.0.1" }
+        return hosts.contains("0.0.0.0") ? "0.0.0.0" : hosts.joined(separator: ",")
     }
     private var unavailableWorkspace: some View {
         VStack(alignment: .leading, spacing: 24) {
