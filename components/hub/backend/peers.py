@@ -267,6 +267,7 @@ async def _refresh_stale(machines, stale, client, now):
                 "host": data.get("host"),
                 "studios": data.get("studios", {}),
                 "proxy": data.get("proxy"),
+                "version": data.get("version"),
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False

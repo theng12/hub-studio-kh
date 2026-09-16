@@ -249,7 +249,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             proxy = resource_stats.proxy_stats()
         except Exception:
             proxy = None
-        return {"host": host, "studios": studios, "proxy": proxy}
+        # The version travels with the host snapshot because it is what tells an operator
+        # whether a node is running the build they think it is, and a snapshot is the only
+        # thing a controller has to go on for a Mac it does not own.
+        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version()}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:

@@ -92,6 +92,16 @@ are current; the longer narrative under it is historical and is kept for provena
   machine-aware default (under 16 GiB releases immediately), the model it is holding right now,
   and a machine-wide Release button. Verified against the staged bundle with all three workers up
   — `qualification/evidence/st10-memory-policy-packaged.json`.
+- **The fleet is complete in the app.** A job submitted to a controller runs on a joined node for
+  all three studios; the artifact lives on the node and is pulled through the controller; cancel
+  and retry work; and a node that dies mid-job is regenerated elsewhere rather than marked
+  uncertain. A node adopts the controller's fleet credential as part of joining, so one new Mac
+  needs only the controller's address and fleet token. `machine:<id>` pins a Mac — for Subtitle
+  too, whose own dispatcher used to ignore the pin — and an unknown name is refused at submission.
+  **Connections → Fleet overview** is one row per Mac (reachable, version, chip, memory, free
+  disk, completed jobs, measured average seconds) from the new `GET /api/hub/fleet/overview`, and
+  **Send here** sets the standing pin. **Settings → General → Start services at login** exists,
+  defaults **off**, and gates only an at-login launch.
 - **Connections is real.** It shows the address the Hub bound, role, station and controller IDs,
   the Hub version and migration stage, and the Hub token masked with owner-only Reveal/Copy. It
   used to say "Controller connection is not available in this build." `d114c40`.

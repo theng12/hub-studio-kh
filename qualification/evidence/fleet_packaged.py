@@ -282,6 +282,11 @@ def main() -> int:
             node_row = evidence["overview"]["node"]
             if not node_row.get("reachable"):
                 problems.append(f"the node that just ran the job reads as absent: {node_row}")
+            # The operator has to be able to tell which build a node is running, and the
+            # controller can only know it if the node's snapshot carries it.
+            if node_row.get("version") != evidence["overview"]["local"].get("version"):
+                problems.append("the node does not report the build the controller is running: "
+                                f"{node_row.get('version')!r}")
             if node_row.get("jobs") != 1 or node_row.get("average_seconds") is None:
                 problems.append("the node's measured work is missing from its row: "
                                 f"{node_row}")

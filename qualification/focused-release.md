@@ -30,6 +30,41 @@ Generate or refresh the manifest with:
 It exits non-zero if the app advertises a package that the library does not contain at the
 pinned revision, so a kit cannot be described as complete when it is not.
 
+## Running more than one Mac
+
+A Mac is `Standalone`, a `Controller` or a `Node`, chosen in **Connections → Fleet**. Only a
+controller takes customer work; a node offers its Studios to the controller it joined.
+
+Joining is two fields: the controller's address and the fleet token it shows under
+**Connections → Local API → Fleet token**. A node reports the address it will answer on itself —
+loopback-only Macs refuse to join, because a controller could never reach them — and it adopts
+the controller's fleet credential as part of joining, so one new machine needs nothing else
+pre-configured.
+
+**Connections → Fleet overview** is the one place that answers "how is my fleet doing": one row
+per Mac with reachability, app version, chip, memory, free disk, completed jobs and the average
+seconds measured from real runs. **Send here** pins new Image, Voice and Subtitle work to that
+Mac until it is cleared; **Automatic** (the default) lets the Hub choose.
+
+Replacing a controller means promoting a node to `Controller` in its own Settings and pointing
+the other machines at its address and token. Nothing needs to be migrated: an artifact lives on
+the Mac that produced it and is pulled through whichever controller asked for it, and a
+controller's job history is disposable.
+
+**Settings → General → Start services at login** is off by default. With it on, signing in starts
+the Hub and its Studios, so a node is ready for work without anyone opening the app.
+
+Run the fleet path against the staged bundle — two packaged Hubs, a join, a real Subtitle job,
+and the artifact pulled back through the controller:
+
+```sh
+.build/voice-runtime/bin/python3 qualification/evidence/fleet_packaged.py
+```
+
+It writes `qualification/evidence/fleet-packaged.json` and exits non-zero if the job does not run
+on the node, if the artifact does not come back through the controller, or if the fleet overview
+does not report both Macs with the node's measured work.
+
 ## Install
 
 1. Copy the app and the model library folder to the target Mac. Keep `model-library/` outside

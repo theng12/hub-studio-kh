@@ -3,7 +3,7 @@
   "adopted": true,
   "status": 200
  },
- "app": "dist/Studio Hub 0.4.0.app",
+ "app": "dist/Studio Hub 0.4.0.app.new",
  "artifact": {
   "bytes": 43,
   "preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
@@ -14,7 +14,7 @@
   "governor_note": null,
   "items": [
    {
-    "duration_seconds": 16.61,
+    "duration_seconds": 20.54,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -35,10 +35,42 @@
   }
  },
  "ok": true,
+ "overview": {
+  "local": {
+   "chip": "Apple M4",
+   "disk_free_gb": 401.06,
+   "memory_gb": 17.18,
+   "reachable": true,
+   "version": "0.4.0"
+  },
+  "machines": [
+   "local",
+   "node-a"
+  ],
+  "node": {
+   "average_seconds": 20.54,
+   "chip": "Apple M4",
+   "disk_free_gb": 401.08,
+   "jobs": 1,
+   "modalities": {
+    "image": 0,
+    "transcription": 1,
+    "voice": 0
+   },
+   "reachable": true,
+   "version": null
+  },
+  "status": 200,
+  "summary": {
+   "reachable": 2,
+   "total": 2,
+   "unreachable": 0
+  }
+ },
  "problems": [],
  "steps": [],
  "submit": {
-  "batch_id": "d1f67da59f93",
+  "batch_id": "66a53171a167",
   "detail": null,
   "status": 200
  },
