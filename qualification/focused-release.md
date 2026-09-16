@@ -67,6 +67,19 @@ run on the node, when the pin is not honoured or is not refused, when the artifa
 back through the controller, or when the fleet overview does not report both Macs with the node's
 measured work.
 
+A second probe proves the part a node actually is — a Hub serving a real network address:
+
+```sh
+.build/voice-runtime/bin/python3 qualification/evidence/fleet_network.py
+```
+
+It binds the node to `127.0.0.1` plus this Mac's own LAN or Tailscale address, then checks that
+the node still answers on loopback, that its readiness record keeps this Mac's own app on
+loopback, that its resources are published over the network, that it adopts the controller's
+credential, and that a Subtitle job runs on the network node and returns its artifact. Receipt:
+`qualification/evidence/fleet-network.json`. It reports why it cannot run on a Mac with no
+non-loopback address rather than passing vacuously.
+
 ## Install
 
 1. Copy the app and the model library folder to the target Mac. Keep `model-library/` outside
@@ -78,6 +91,42 @@ measured work.
    and the Voice, Image and Subtitle workers.
 5. Open **Settings → Model memory** and confirm each Studio reports a state. A Studio reading
    *Needs an update* or *Not running* is a real problem, not a cosmetic one.
+
+### If macOS refuses to open the app
+
+The app is unsigned by decision, so Gatekeeper blocks the first launch. Two remedies, in order:
+
+1. **Right-click the app → Open → Open.** This is the normal path and is all most Macs need.
+2. If the app was copied through iCloud Drive, AirDrop, Mail or a downloaded archive, macOS adds
+   a quarantine flag that can survive right-click → Open. Clear it once, then open again:
+
+   ```sh
+   xattr -cr "/Applications/Studio Hub 0.4.0.app"
+   ```
+
+   `-c` clears every extended attribute, `-r` does it through the whole bundle. Point it at the
+   copy you actually installed — clearing attributes on the copy you are still holding on the
+   SSD does not help the one on the Mac. Then right-click → Open once more.
+
+   Until the app is signed, do this on each Mac rather than assuming the last one's result
+   carries over; quarantine is recorded per machine, per copy.
+
+### What each Mac can run
+
+This is a compatibility target, not a qualified result per tier: only a 16 GiB M4 has ever run
+the kit here, and it produced real Image, Subtitle and Voice output.
+
+| Memory | Image (FLUX.2 Klein 4B) | Subtitle (Whisper) | Voice (Qwen / OmniVoice) |
+| --- | --- | --- | --- |
+| 8 GB | No — not enough unified memory | Yes | Yes, smaller tiers only |
+| 16 GB | Yes | Yes | Yes |
+| 24 GB | Yes | Yes | Yes, including the larger tiers |
+| 32 GB | Yes | Yes | Yes, with the most headroom |
+
+An 8 GB Mac is still a useful fleet member: give it Subtitle and Voice work and let the larger
+Macs take Image. Each Studio keeps at most one model in memory and the shipped memory mode
+releases an idle model immediately, which is what keeps sibling Studios from stalling each other
+on the smaller machines.
 
 ## Models and what they need
 

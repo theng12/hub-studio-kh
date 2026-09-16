@@ -15,10 +15,10 @@
   "status": 400
  },
  "job": {
-  "governor_note": null,
+  "governor_note": "no transcription studio can take this job: voice: modality 'voice' != 'transcription'; image: modality 'image' != 'transcription'; subtitle: reports transcription unavailable; node-a:subtitle: worker authority is not ready",
   "items": [
    {
-    "duration_seconds": 17.53,
+    "duration_seconds": 20.11,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -42,7 +42,7 @@
  "overview": {
   "local": {
    "chip": "Apple M4",
-   "disk_free_gb": 403.22,
+   "disk_free_gb": 401.71,
    "memory_gb": 17.18,
    "reachable": true,
    "version": "0.4.0"
@@ -52,9 +52,9 @@
    "node-a"
   ],
   "node": {
-   "average_seconds": 10.14,
+   "average_seconds": 11.79,
    "chip": "Apple M4",
-   "disk_free_gb": 403.22,
+   "disk_free_gb": 402.79,
    "jobs": 2,
    "modalities": {
     "image": 0,
@@ -76,12 +76,12 @@
   "artifact_preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
   "artifact_sha256": "4e88d0e6c7627f90847bc4217a99e05a8e1ce3a77557fcd4eee38fa2858a20bd",
   "artifact_status": 200,
-  "batch_id": "610623956001",
+  "batch_id": "f015f4322480",
   "detail": null,
   "governor_note": null,
   "items": [
    {
-    "duration_seconds": 2.74,
+    "duration_seconds": 3.48,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -94,7 +94,7 @@
  "problems": [],
  "steps": [],
  "submit": {
-  "batch_id": "4464a96159c6",
+  "batch_id": "c0457e79d7ce",
   "detail": null,
   "status": 200
  },
