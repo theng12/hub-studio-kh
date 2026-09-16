@@ -18,7 +18,7 @@
   "governor_note": null,
   "items": [
    {
-    "duration_seconds": 21.6,
+    "duration_seconds": 21.96,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -42,7 +42,7 @@
  "overview": {
   "local": {
    "chip": "Apple M4",
-   "disk_free_gb": 361.73,
+   "disk_free_gb": 295.59,
    "memory_gb": 17.18,
    "reachable": true,
    "version": "0.4.0"
@@ -52,9 +52,9 @@
    "node-a"
   ],
   "node": {
-   "average_seconds": 12.04,
+   "average_seconds": 12.61,
    "chip": "Apple M4",
-   "disk_free_gb": 361.73,
+   "disk_free_gb": 295.59,
    "jobs": 2,
    "modalities": {
     "image": 0,
@@ -76,12 +76,12 @@
   "artifact_preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
   "artifact_sha256": "4e88d0e6c7627f90847bc4217a99e05a8e1ce3a77557fcd4eee38fa2858a20bd",
   "artifact_status": 200,
-  "batch_id": "8bde86dbb84a",
+  "batch_id": "39104477fab6",
   "detail": null,
   "governor_note": "no transcription studio can take this job: routing 'machine:node-a' excludes every Studio that could otherwise take this job; voice: modality 'voice' != 'transcription'; image: modality 'image' != 'transcription'; node-a:subtitle: worker authority is not ready",
   "items": [
    {
-    "duration_seconds": 2.48,
+    "duration_seconds": 3.26,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -94,7 +94,7 @@
  "problems": [],
  "steps": [],
  "submit": {
-  "batch_id": "489f750da8da",
+  "batch_id": "0ac67f767cc2",
   "detail": null,
   "status": 200
  },
@@ -119,7 +119,7 @@
   "status": 200
  },
  "voice_remove": {
-  "deleted": "1396a4712eda",
+  "deleted": "eb5ace31e06e",
   "status": 200
  },
  "workers": [
