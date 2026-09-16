@@ -213,6 +213,42 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     def restore_settings() -> dict[str, dict[str, int]]:
         return standalone_config.restore_device_defaults()
 
+    @app.get("/api/hub/resources")
+    def resources(local_only: bool = True) -> dict[str, Any]:
+        """This Mac's host and studio snapshot, as a peer Hub reads it.
+
+        A controller will not send work to a machine it cannot see. Its `peers.dispatch_ready`
+        needs a fresh snapshot from this endpoint, so without it a joined node is listed, is
+        reachable, passes every other check - and is never dispatched to, with nothing said
+        about why. `local_only=true` keeps this Mac from fanning the question back out to its
+        own peers.
+        """
+        from .backend import resources as resource_stats
+        try:
+            host = resource_stats.host_stats()
+        except Exception:
+            host = {"error": "host statistics are unavailable"}
+        studios: dict[str, Any] = {}
+        for worker in monitor.registry:
+            if local_only and worker.get("local") is not True:
+                continue
+            try:
+                process = resource_stats.studio_process_stats(worker["port"])
+            except Exception:
+                process = None
+            state = monitor.status.get(worker["id"]) or {}
+            studios[worker["modality"]] = {
+                "id": worker["id"],
+                "machine": worker.get("machine", "local"),
+                "status": state.get("status", "unknown"),
+                "process": process,
+            }
+        try:
+            proxy = resource_stats.proxy_stats()
+        except Exception:
+            proxy = None
+        return {"host": host, "studios": studios, "proxy": proxy}
+
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
         # Token and process metadata are intentionally excluded from responses.

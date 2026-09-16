@@ -19,7 +19,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 import urllib.error
 import urllib.parse
@@ -56,11 +58,14 @@ class HubProcess:
     """One real Hub process bound to a loopback port, started from a chosen state root."""
 
     def __init__(self, root: Path, name: str, token: str, data: Path | None = None,
-                 host: str = "127.0.0.1", joined: list[dict] | None = None):
+                 host: str = "127.0.0.1", joined: list[dict] | None = None,
+                 workers: list[dict] | None = None, env: dict | None = None):
         self.root = root
         self.token = token
         self.host = host
         self.joined = joined or []
+        self.override_workers = workers
+        self.extra_env = env or {}
         self.data = data or (root / name / "state")
         self.data.mkdir(parents=True, exist_ok=True)
         token_file = self.data / ".hub_token"
@@ -77,15 +82,17 @@ class HubProcess:
                                  "updated_at": 1.0}
                 for row in self.joined}))
             os.chmod(fleet, 0o600)
-        worker_port = free_port()
         self.workers = root / name / "workers.json"
         self.workers.parent.mkdir(parents=True, exist_ok=True)
-        self.workers.write_text(json.dumps([{
-            "id": "voice", "modality": "voice", "host": "127.0.0.1", "port": worker_port,
+        descriptors = [{
+            "id": row["id"], "title": f"{row['id'].title()} Studio",
+            "modality": row["modality"], "host": "127.0.0.1", "port": row["port"],
             "machine": "local", "local": True, "hub_token": token,
             "runtime_identity": {"id": "fixture-runtime", "compatible": True},
-            "managed_output_roots": [str(self.root / name / "outputs")],
-        }]))
+            "managed_output_roots": [str(self.root / name / f"{row['id']}-outputs")],
+        } for row in (self.override_workers
+                      or [{"id": "voice", "modality": "voice", "port": free_port()}])]
+        self.workers.write_text(json.dumps(descriptors))
         os.chmod(self.workers, 0o600)
         self.ready = self.data / "ready.json"
         # The packaged app reports the version from its release manifest, so the fixture
@@ -111,7 +118,8 @@ class HubProcess:
                        # Model an off-box caller: loopback auto-authentication is off, so
                        # the address, port and authentication header must be enough.
                        "STUDIOHUB_REQUIRE_AUTH": "1",
-                       "PYTHONPATH": str(PROJECT_ROOT)}
+                       "PYTHONPATH": str(PROJECT_ROOT),
+                       **self.extra_env}
         self.log = open(self.root / f"{self.script.parent.name}.log", "wb")
         self.process = subprocess.Popen(
             [sys.executable, "-I", "-B", str(self.script)], cwd=str(self.data),
@@ -348,6 +356,206 @@ class IndependentClientTests(unittest.TestCase):
         host = self.hub.base.split("://", 1)[1].split(":", 1)[0]
         self.assertEqual(host, "127.0.0.1")
         self.assertIn("127.0.0.1", self.hub.base)
+
+
+class FleetDispatchTests(unittest.TestCase):
+    """A controller must be able to send real work to a joined node.
+
+    Everything up to here was proven in pieces. This runs two real Hubs: a node whose Image
+    studio is a recording stub, and a controller that was told about it. A job submitted to the
+    controller has to come out the other side at the stub.
+    """
+
+    @unittest.skip("blocked on sharing the fleet credential: see the test docstring")
+    def test_a_job_submitted_to_the_controller_runs_on_the_node(self) -> None:
+        """Blocked, and the reason is worth stating.
+
+        Everything up to the last hop works: the job is accepted, the node is in the registry,
+        the monitor can reach it, and the dispatcher runs. It stops because a controller will
+        not dispatch to a machine whose peer snapshot it cannot trust, and it cannot trust it
+        because every Hub mints its own fleet token - so the controller presents a credential
+        the node does not recognise, the node answers 401, and the node is skipped **without a
+        governor note**. Silent, exactly like the two other fleet defects found this session.
+
+        Joining a fleet therefore has to mean adopting the fleet's credential. That is a
+        deliberate decision about membership, not a bug to patch quietly, so it is recorded
+        here rather than guessed at.
+        """
+        # Cleanups unwind last-in-first-out, so the temporary directory is registered first and
+        # removed last - after both Hubs have stopped writing into it.
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-dispatch-")
+        self.addCleanup(temporary.cleanup)
+        worker = StubImageWorker()
+        self.addCleanup(worker.stop)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+
+        # The controller's packaged catalog is the trusted boundary for what it will accept, so
+        # this Mac needs the same model installed - which is how the fleet is actually set up:
+        # every Mac is copied from the same library.
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        # The controller runs an Image studio but does not have the model installed, so the
+        # only place this job can run is the node. This is the case the fleet exists for.
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     # The controller must reach the node at the address the node bound.
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+
+        if True:
+            status, submitted, _ = controller.post_json(
+                "/api/hub/jobs",
+                {"modality": "image", "model": FLUX_MODEL_ID,
+                 "clientRequestId": "fleet-dispatch-1",
+                 "items": [{"prompt": "a quiet harbour", "params": {}}]},
+                token=controller.token)
+            self.assertEqual(status, 200, submitted)
+            batch = submitted.get("batch_id")
+            self.assertIsNotNone(batch, submitted)
+
+            # The job has to reach the node's studio, not sit queued on the controller.
+            deadline = time.time() + 45
+            while time.time() < deadline and not worker.submissions:
+                time.sleep(0.5)
+            self.assertTrue(worker.submissions,
+                            "the controller never dispatched to the joined node; "
+                            f"governor said: {self.governor(controller, batch)}; "
+                            f"the controller's own studio got {len(controller_worker.submissions)}")
+            # And it must not have run it locally as well.
+            self.assertEqual(controller_worker.submissions, [],
+                             "a job must run in one place, not two")
+            self.assertIn("/api/generate/txt2img", worker.submissions[0]["path"])
+            self.assertIn("a quiet harbour", worker.submissions[0]["body"])
+            # The node's worker must be given the node's own credential to accept, never the
+            # controller's.
+            self.assertEqual(worker.submissions[0]["token"], node.token)
+
+    @staticmethod
+    def governor(controller, batch: str) -> str:
+        status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(job unreadable: {status})"
+        return str(payload.get("governor_note"))
+
+
+FLUX_MODEL_ID = "fixture/flux"
+
+
+def tiny_flux_install(root: Path) -> tuple[Path, Path]:
+    """One verified image package and the manifest catalog that names it.
+
+    The controller refuses a job for a model outside its packaged catalog, so a real dispatch
+    test needs a real - if tiny - installation rather than a fixture that only looks like one.
+    """
+    import json as json_module
+    from hashlib import sha256
+    from components import model_packages
+
+    original = json_module.loads(
+        (PROJECT_ROOT / "model-manifests/flux2-klein-4b-mlx-4bit.json").read_text())
+    original["model_id"] = FLUX_MODEL_ID
+    original["package_id"] = "fixture-flux"
+    source = root / "source"
+    for entry in original["files"]:
+        value = (entry["path"] + "\n").encode()
+        target = source / entry["source_path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(value)
+        entry["size"] = len(value)
+        entry["sha256"] = sha256(value).hexdigest()
+    model_packages.validate_manifest(original)
+    library = root / "library"
+    library.mkdir(parents=True, exist_ok=True)
+    model_packages.import_folder(original, source, library)
+    manifests = root / "manifests"
+    manifests.mkdir(parents=True, exist_ok=True)
+    (manifests / "fixture-flux.json").write_text(json_module.dumps(original))
+    return manifests, library
+
+
+class StubImageWorker:
+    """A recording stand-in for a studio.
+
+    `catalog` decides whether this studio reports the model as installed. A controller that has
+    the model itself will use its own studio, which is correct - so the controller's studio here
+    reports an empty catalog, exactly like a Mac where the model was never verified.
+    """
+
+    def __init__(self, *, catalog: bool = True) -> None:
+        self.submissions: list[dict] = []
+        self.has_catalog = catalog
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code: int, payload: dict) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path.endswith("/api/health"):
+                    # A studio the monitor cannot see as healthy is never dispatched to, so the
+                    # stub has to answer health the way a real studio does.
+                    self._send(200, {"ok": True, "generation": {
+                        "available": True, "busy": False, "queued": 0, "running": 0}})
+                elif self.path.endswith("/api/catalog"):
+                    models = [{
+                        "repo": FLUX_MODEL_ID, "model_id": FLUX_MODEL_ID, "label": "FLUX fixture",
+                        "family": "flux2-klein", "capabilities": ["txt2img"],
+                        "runtime_ready": True, "memory_eligible": True,
+                        "cache": {"state": "cached"},
+                    }] if outer.has_catalog else []
+                    self._send(200, {"models": models})
+                elif "/api/generate/jobs/" in self.path:
+                    self._send(200, {"job": {"id": "job-1", "state": "done",
+                                             "progress": 1.0, "bytes": 4,
+                                             "sha256": "0" * 64}})
+                else:
+                    self._send(200, {"job": {"id": "job-1", "state": "running"}})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                if self.path.endswith("/api/generate/txt2img"):
+                    try:
+                        parsed = json.loads(raw or b"{}")
+                    except ValueError:
+                        parsed = {}
+                    outer.submissions.append({
+                        "path": self.path, "body": raw.decode("utf-8", "replace"),
+                        "token": self.headers.get("X-Hub-Token"), "request": parsed,
+                    })
+                    self._send(200, {"job": {"id": "job-1", "state": "queued"}})
+                else:
+                    self._send(200, {"job": {"id": "job-1", "state": "done"}})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def port(self) -> int:
+        return self.server.server_address[1]
+
+    def stop(self) -> None:
+        self.server.shutdown()
 
 
 class ControllerRegistryTests(unittest.TestCase):

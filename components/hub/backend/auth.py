@@ -414,6 +414,7 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
     ("GET", r"^/api/hub/workers$"),
+    ("GET", r"^/api/hub/resources$"),
     ("GET", r"^/api/hub/capabilities$"),
     ("GET", r"^/api/hub/catalog$"),
     ("GET", r"^/api/hub/models$"),
