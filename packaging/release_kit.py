@@ -126,6 +126,8 @@ def build(app: Path, library: Path) -> dict:
         "operator_steps": [
             "Copy the app and the model library folder to the target Mac.",
             "Right-click the app and choose Open, then confirm.",
+            "If macOS still refuses it, run: xattr -cr "
+            "'/Applications/Studio Hub 0.4.0.app' and open it again.",
             "Choose the copied model library when the app asks for one.",
             "Wait for the status line to read 'Local services ready'.",
             "Run one generation per model to record that machine's speed and memory.",

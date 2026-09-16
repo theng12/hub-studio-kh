@@ -37,8 +37,8 @@
   "notarized": false,
   "signed": false
  },
- "generated_at": 1789553243.654473,
- "generated_at_iso": "2026-09-16T10:07:23Z",
+ "generated_at": 1789553366.446929,
+ "generated_at_iso": "2026-09-16T10:09:26Z",
  "implementation_commit": "aa9816b030bb5c078b5dd93ca0da5705aa8b8e55",
  "library": {
   "index": ".studiohub/installed.json",
@@ -191,6 +191,7 @@
  "operator_steps": [
   "Copy the app and the model library folder to the target Mac.",
   "Right-click the app and choose Open, then confirm.",
+  "If macOS still refuses it, run: xattr -cr '/Applications/Studio Hub 0.4.0.app' and open it again.",
   "Choose the copied model library when the app asks for one.",
   "Wait for the status line to read 'Local services ready'.",
   "Run one generation per model to record that machine's speed and memory."

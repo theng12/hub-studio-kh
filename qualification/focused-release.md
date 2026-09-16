@@ -111,6 +111,22 @@ The app is unsigned by decision, so Gatekeeper blocks the first launch. Two reme
    Until the app is signed, do this on each Mac rather than assuming the last one's result
    carries over; quarantine is recorded per machine, per copy.
 
+### When you turn a Mac into a fleet node
+
+Two macOS prompts are normal the first time, and neither is a defect:
+
+- **"Studio Hub would like to find devices on your local network"** — grant it. Without local
+  network access the Mac can listen but other Macs on the LAN may not reach it. It appears the
+  first time this Mac is bound to something other than loopback.
+- **A firewall prompt about accepting incoming connections** — choose *Allow*. A node that
+  denies incoming connections is invisible to its controller even though it looks like it
+  started cleanly.
+
+Prefer the tailnet for a fleet that is not all on one trusted LAN: a Tailscale address is
+accepted by the same field the LAN address goes in, needs no firewall exception, and does not
+depend on which desk a Mac is sitting at. Loopback-only Macs refuse to join at all, with that
+reason stated in the join form, because a controller could never reach them.
+
 ### What each Mac can run
 
 This is a compatibility target, not a qualified result per tier: only a 16 GiB M4 has ever run
