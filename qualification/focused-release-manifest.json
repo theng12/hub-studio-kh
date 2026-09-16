@@ -1,32 +1,32 @@
 {
  "app": {
-  "bytes": 2906677528,
+  "bytes": 2906690304,
   "name": "Studio Hub 0.4.0.app",
-  "recorded_tree_sha256": "93a67a45e2c558de1371d781b83c5ee86f9d3f859ec5de70d49ee1a0a38007c4",
-  "resource_payload_sha256": "0506cb95659a02062bfcc42e039330670e6eb9c27a6d81c78ab3efd421cebbce",
-  "tree_sha256_recomputed": "93a67a45e2c558de1371d781b83c5ee86f9d3f859ec5de70d49ee1a0a38007c4"
+  "recorded_tree_sha256": "7195067a309bbf48f5dcb28d8c32a9c699ea1e286dad1b59bec07c1e2f5f6be9",
+  "resource_payload_sha256": "8c6e16df955a98172d2538b7d759cc92ae8926424f1533dfaf9131c43db25259",
+  "tree_sha256_recomputed": "7195067a309bbf48f5dcb28d8c32a9c699ea1e286dad1b59bec07c1e2f5f6be9"
  },
  "components": {
   "hub": {
    "runtime": "voice",
-   "source_sha256": "c3d7e2be9acd416bb76416333f1fcaa7dbf2d99d91b55744fd7209ffab7b0117",
+   "source_sha256": "6ae77704f7aaf9f91f820e6b92355e518b14872d8a67b506cc03c6647b7aff0a",
    "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
    "upstream_version": "2.22.0"
   },
   "image": {
    "runtime": "image",
    "runtime_sha256": "c9cd56a6d1cde6b72dee8ba22cf45fcbd640538207038087261cae91ec67f67e",
-   "source_sha256": "130ec6762654f2f79ab60091168303d4b699fce1a4158bd264ba484d8dd2280e",
+   "source_sha256": "01ab7168836495e0fb1cba2c32b1cfde33e544e132e7704d50ecd72bdaad7bd4",
    "upstream_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
    "upstream_version": "1.32.2"
   },
   "subtitle": {
    "runtime": "voice",
    "runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6",
-   "source_sha256": "b313e80356a748ab309a9042bc876c72eafc448ded8c4dea9f82688b3c432168"
+   "source_sha256": "092318b9bc361cf31a095dc0b2da7aab6a9750ba3b3fa5f0b25a34e9a84bd1aa"
   },
   "voice": {
-   "source_sha256": "a906ba265652f2f9628385f9a111422387b8389f852ad9fd7a846c301e293191",
+   "source_sha256": "3a557ec972232f48fa5400f5a7806fe0e04aff72c2d6692f77a5f784b4f1c4d6",
    "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
    "upstream_version": "2.7.2"
   }
@@ -37,9 +37,9 @@
   "notarized": false,
   "signed": false
  },
- "generated_at": 1789553366.446929,
- "generated_at_iso": "2026-09-16T10:09:26Z",
- "implementation_commit": "aa9816b030bb5c078b5dd93ca0da5705aa8b8e55",
+ "generated_at": 1789565824.339044,
+ "generated_at_iso": "2026-09-16T13:37:04Z",
+ "implementation_commit": "f9feca57df0bd0f940ffa681fd1981b55237eb85",
  "library": {
   "index": ".studiohub/installed.json",
   "installed_bytes": 24494855896,
