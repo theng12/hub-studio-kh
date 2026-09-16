@@ -95,4 +95,55 @@ require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunn
 require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: false, ownerRunning: false, userStopped: false) == .stop("The selected model library is unavailable"), "missing SSD must not create replacement state")
 require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeIntervalSince1970: 100), now: Date(timeIntervalSince1970: 130)) == 2, "brief ready period must retain crash bound")
 require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeIntervalSince1970: 100), now: Date(timeIntervalSince1970: 160)) == 0, "sustained health resets crash bound")
+// ── fleet binding ──────────────────────────────────────────────────────────
+// Binding beyond loopback is the act that stops the Hub being private, so the address is
+// validated rather than trusted, and the app is told to connect to the address that answers.
+for good in ["127.0.0.1", "0.0.0.0", "192.168.1.20", "100.101.102.103"] {
+    try ShellConfiguration.requireBindableHost(good)
+}
+for bad in ["", "localhost", "http://100.1.1.1", "100.1.1.1:8080", "100.1.1.0/24",
+            "::1", "256.1.1.1", "100.1.1", "100.1.1.1.1", "not an address", " 127.0.0.1"] {
+    do { try ShellConfiguration.requireBindableHost(bad); fatalError("invalid listen address accepted: \(bad)") } catch {}
+}
+require(ShellConfiguration.clientHost(for: "0.0.0.0") == "127.0.0.1",
+        "a wildcard bind still answers on loopback, so the app keeps using loopback")
+require(ShellConfiguration.clientHost(for: "127.0.0.1") == "127.0.0.1", "loopback client address")
+require(ShellConfiguration.clientHost(for: "100.101.102.103") == "100.101.102.103",
+        "a scoped bind is only reachable at the address it bound")
+
+// Tailscale hands out addresses from the carrier-grade NAT range and is the network this is
+// meant to be reached over, so it is named rather than left as a bare number.
+require(LocalAddress(address: "100.101.102.103", interface: "utun4").isTailscale,
+        "a Tailscale address must be recognised")
+require(!LocalAddress(address: "100.63.0.1", interface: "en0").isTailscale,
+        "the range below the Tailscale block is not Tailscale")
+require(!LocalAddress(address: "100.128.0.1", interface: "en0").isTailscale,
+        "the range above the Tailscale block is not Tailscale")
+require(!LocalAddress(address: "192.168.1.20", interface: "en0").isTailscale,
+        "a LAN address is not Tailscale")
+require(LocalAddress(address: "100.101.102.103", interface: "utun4").title.contains("Tailscale"),
+        "a Tailscale address must be labelled")
+
+// The Hub may only report itself at the address it was asked to bind.
+let boundReady = Data("{\"url\":\"http://100.101.102.103:45678\",\"pid\":1234,\"version\":\"0.4.0\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}".utf8)
+_ = try WorkerReady.decode(boundReady, expectedPID: 1234, expectedHost: "100.101.102.103")
+do { _ = try WorkerReady.decode(boundReady, expectedPID: 1234); fatalError("a Hub bound elsewhere was accepted as loopback") } catch {}
+let loopbackReady = Data("{\"url\":\"http://127.0.0.1:45678\",\"pid\":1234,\"version\":\"0.4.0\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}".utf8)
+do { _ = try WorkerReady.decode(loopbackReady, expectedPID: 1234, expectedHost: "100.101.102.103"); fatalError("a Hub bound elsewhere reported loopback and was accepted") } catch {}
+
+// A preference file written before fleet support must stay loopback-only, and the address is
+// persisted so the choice survives a restart.
+let legacyRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-legacy-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: legacyRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: legacyRoot) }
+let preferencesURL = legacyRoot.appendingPathComponent("app-preferences.json")
+try Data("{\"modelsPath\":\"\(legacyRoot.path)/models\",\"offline\":false,\"startAtLogin\":true}".utf8)
+    .write(to: preferencesURL, options: .atomic)
+try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
+let legacy = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", legacyRoot.path],
+                                    bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(legacy.listenHost == "127.0.0.1", "an older preference file must default to loopback")
+require(legacy.clientHost == "127.0.0.1", "a default configuration must reach its own Hub on loopback")
+
 print("Native boundary checks passed")

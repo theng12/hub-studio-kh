@@ -391,6 +391,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Truthful Hub identity for the Connections screen.
     @Published private(set) var controllerIdentity: NativeControllerIdentity?
     @Published private(set) var hubVersion: NativeVersion?
+    @Published private(set) var roleNote: String?
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
     private let session: URLSession
@@ -416,10 +417,11 @@ final class NativeWorkspaceStore: ObservableObject {
         session = URLSession(configuration: configuration, delegate: redirectDelegate, delegateQueue: nil)
     }
 
-    func connect(baseURL: URL, dataDirectory: URL, token: String) async {
+    func connect(baseURL: URL, dataDirectory: URL, token: String,
+                 allowedHost: String = "127.0.0.1") async {
         disconnect()
         do {
-            self.baseURL = try Self.validatedBase(baseURL)
+            self.baseURL = try Self.validatedBase(baseURL, allowedHost: allowedHost)
             guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw NativeAPIError.message("The local Hub credential is unavailable.")
             }
@@ -476,6 +478,7 @@ final class NativeWorkspaceStore: ObservableObject {
         updatingMemory = false
         controllerIdentity = nil
         hubVersion = nil
+        roleNote = nil
         statistics = nil
         statisticsHours = nil
         deviceSettings = nil
@@ -1178,6 +1181,25 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change model memory settings") } }
     }
 
+    /// Change this Hub's role. Standalone creates locally; Controller serves other Macs and
+    /// reports their work; Node does local work only and defers customer jobs to a controller.
+    func setRole(_ role: String) async {
+        guard let requestConnection = connectionID else { return }
+        roleNote = nil
+        do {
+            // The Hub's controller route is a PUT; the job-envelope helper always POSTs.
+            let _: NativeControllerIdentity = try await sendJSON(
+                ["api", "hub", "controller"], method: "PUT", body: RoleChange(role: role))
+            guard connectionID == requestConnection else { return }
+            await refreshConnection()
+            // The note names the role the way the picker does, and reports the Hub's answer
+            // rather than the operator's request.
+            let applied = role == "agent" ? "Node" : role.capitalized
+            roleNote = "This Mac is now a \(applied)."
+            error = nil
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change this Mac's role") } }
+    }
+
     /// Read the Hub's own role and identity, plus the version it reports.
     func refreshConnection() async {
         guard let requestConnection = connectionID else { return }
@@ -1436,15 +1458,18 @@ final class NativeWorkspaceStore: ObservableObject {
         )
     }
 
-    private static func validatedBase(_ url: URL) throws -> URL {
+    /// Accept a plain http address on this Mac's loopback or on the one address the operator
+    /// chose to bind. Anything else is refused: the app talks to its own Hub, never to an
+    /// arbitrary host it was pointed at.
+    private static func validatedBase(_ url: URL, allowedHost: String = "127.0.0.1") throws -> URL {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.scheme == "http", components.host == "127.0.0.1",
+              components.scheme == "http", components.host == allowedHost,
               let port = components.port, (1...65535).contains(port),
               components.user == nil, components.password == nil, components.query == nil, components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
-            throw NativeAPIError.message("The worker address must be http://127.0.0.1:<port> with no extra path.")
+            throw NativeAPIError.message("The Hub address must be http://\(allowedHost):<port> with no extra path.")
         }
-        return URL(string: "http://127.0.0.1:\(port)")!
+        return URL(string: "http://\(allowedHost):\(port)")!
     }
 
     private func makeRequest(_ components: [String], method: String = "GET") throws -> URLRequest {
@@ -1520,8 +1545,8 @@ final class NativeWorkspaceStore: ObservableObject {
     private func validateResponse(data: Data, response: URLResponse, request: URLRequest) throws {
         guard let http = response as? HTTPURLResponse else { throw NativeAPIError.message("The local engine returned no HTTP response.") }
         guard let final = http.url,
-              final.scheme == "http", final.host == "127.0.0.1", final.port == baseURL?.port else {
-            throw NativeAPIError.message("The local engine attempted to redirect outside its loopback address.")
+              final.scheme == "http", final.host == baseURL?.host, final.port == baseURL?.port else {
+            throw NativeAPIError.message("The local engine attempted to redirect outside the address it was reached at.")
         }
         guard (200..<300).contains(http.statusCode) else {
             let detail = Self.errorDetail(data) ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
@@ -1701,6 +1726,7 @@ private struct HubModelPackage: Decodable {
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
+private struct RoleChange: Encodable { let role: String }
 private struct StorageLimitsBody: Encodable {
     let maxBytes: Int64
     let retentionDays: Int

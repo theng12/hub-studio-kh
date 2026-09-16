@@ -19,6 +19,8 @@ final class StudioController: ObservableObject {
     @Published var canForceStop = false
     @Published var configuration: ShellConfiguration
     @Published var loginStatus = SMAppService.mainApp.status
+    /// What the operator last did to the fleet address, so the choice reports itself.
+    @Published var fleetNote: String?
     let workspace = NativeWorkspaceStore()
     private var worker: Process?
     private var logHandle: FileHandle?
@@ -106,7 +108,8 @@ final class StudioController: ObservableObject {
             process.executableURL = executable
             process.arguments = ["--data-dir", configuration.dataDirectory.path,
                                  "--models-dir", models.path, "--ready-file", configuration.readyFile.path,
-                                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier)]
+                                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
+                                 "--listen-host", configuration.listenHost]
                 + (configuration.offline ? ["--offline"] : [])
             process.currentDirectoryURL = configuration.dataDirectory
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
@@ -127,14 +130,18 @@ final class StudioController: ObservableObject {
                 for _ in 0..<240 {
                     if Task.isCancelled || !process.isRunning { return }
                     if let data = readPrivateRegularFile(self.configuration.readyFile),
-                       let ready = try? WorkerReady.decode(data, expectedPID: process.processIdentifier) {
+                       let ready = try? WorkerReady.decode(data, expectedPID: process.processIdentifier,
+                                                           expectedHost: configuration.clientHost) {
                         guard !Task.isCancelled, !self.stopping, process.isRunning else { return }
                         self.starting = false
                         self.healthySince = Date()
                         self.readyURL = ready.url
                         self.connectionToken = ready.token
                         self.status = "Local services ready"
-                        await self.workspace.connect(baseURL: ready.url, dataDirectory: self.configuration.dataDirectory, token: ready.token)
+                        await self.workspace.connect(baseURL: ready.url,
+                                                     dataDirectory: self.configuration.dataDirectory,
+                                                     token: ready.token,
+                                                     allowedHost: self.configuration.clientHost)
                         let session = URLSession(configuration: .ephemeral)
                         defer { session.invalidateAndCancel() }
                         while !Task.isCancelled && process.isRunning && !self.stopping {
@@ -293,6 +300,15 @@ final class StudioController: ObservableObject {
         if alert.runModal() == .alertSecondButtonReturn { stop() }
     }
     func select(_ value: StudioPage) { selection = value }
+    /// Persist a configuration change made from a picker, and say that it needs a restart.
+    func saveConfiguration() {
+        guard canConfigure else { return }
+        do {
+            try configuration.save()
+            fleetNote = "Saved. Stop and start the services to use this address."
+        } catch { failure = error.localizedDescription }
+    }
+
     func setOffline(_ value: Bool) {
         guard canConfigure else { return }
         configuration.offline = value

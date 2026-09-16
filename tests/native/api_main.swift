@@ -28,6 +28,8 @@ final class FixtureProtocol: URLProtocol {
     static var modelRoutes: [String] = []
     static var statisticsQueries: [String] = []
     static var storageCalls: [String] = []
+    static var roleChanges: [String] = []
+    static var currentRole = "standalone"
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
     static var storagePreviewRejects = false
@@ -65,6 +67,7 @@ final class FixtureProtocol: URLProtocol {
     static func modelCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return modelRoutes }
     static func statisticsPaths() -> [String] { lock.lock(); defer { lock.unlock() }; return statisticsQueries }
     static func storageRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return storageCalls }
+    static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
@@ -174,8 +177,21 @@ final class FixtureProtocol: URLProtocol {
             Self.statisticsQueries.append(request.url?.query ?? "")
             Self.lock.unlock()
             result = (200, "application/json", Self.statisticsFixture)
+        case ("PUT", "/api/hub/controller"):
+            let body = requestBody()
+            Self.lock.lock()
+            let requested = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["role"] as? String ?? ""
+            Self.roleChanges.append(requested)
+            let accepted = ["controller", "agent", "standalone"].contains(requested)
+            if accepted { Self.currentRole = requested }
+            let current = Self.currentRole
+            Self.lock.unlock()
+            result = accepted
+                ? (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{},\"readiness\":{\"ready\":true,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{}}".utf8))
+                : (400, "application/json", Data(#"{"detail":"role must be one of ['agent', 'controller', 'standalone']"}"#.utf8))
         case ("GET", "/api/hub/controller"):
-            result = (200, "application/json", Data(#"{"settings":{"version":2,"role":"standalone","site_id":"studiohub-local","site_name":"This Mac","controller_id":"controller-local","database_mode":"off","machine_name":"Studio Mini","database_configured":false,"sqlite_authoritative":true,"global_authority":"genstudio","migration_stage":"local"},"runtime":{"state":"idle"},"readiness":{"ready":true,"role":"standalone","site_id":"studiohub-local","controller_id":"controller-local","migration_stage":"local","sqlite_authoritative":true,"global_job_claiming":false,"global_authority":"genstudio","reason":null,"telemetry_warning":null},"capacity":{"machines":1,"queue_depth":0}}"#.utf8))
+            Self.lock.lock(); let roleNow = Self.currentRole; Self.lock.unlock()
+            result = (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
         case ("GET", "/api/version"):
             result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
@@ -350,6 +366,26 @@ struct NativeAPITests {
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 6, "combined model catalog")
+
+        // Fleet: one app can be told what it is. The role is the Hub's own setting, saved
+        // through its controller route, and the screen shows the Hub's answer rather than the
+        // choice the operator just made.
+        // The role lives on the Hub, so read it before asserting anything about it.
+        await store.refreshConnection()
+        require(store.controllerIdentity?.settings.role == "standalone", "the starting role")
+        await store.setRole("controller")
+        require(FixtureProtocol.roleRequests() == ["controller"],
+                "the role change must reach the Hub: \(FixtureProtocol.roleRequests())")
+        require(store.controllerIdentity?.settings.role == "controller",
+                "the screen must show the Hub's own answer, not the requested value")
+        require(store.roleNote?.contains("Controller") == true, "a role change needs a visible result")
+
+        await store.setRole("nonsense")
+        require(store.error?.contains("role must be one of") == true,
+                "a refused role must carry the Hub's reason, got: \(store.error ?? "nil")")
+        await store.setRole("standalone")
+        require(store.controllerIdentity?.settings.role == "standalone", "the role must be settable back")
+        store.error = nil
 
         // Local storage: the limits come from the Hub, and the bytes cleanup may not touch
         // are shown beside them - including on a machine that is over its limit.

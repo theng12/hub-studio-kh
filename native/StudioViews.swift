@@ -839,6 +839,8 @@ struct StudioContent: View {
                 Divider()
                 localAPI
                 Divider()
+                fleetSection
+                Divider()
                 controllerSection
             }.padding(28)
         }
@@ -917,7 +919,95 @@ struct StudioContent: View {
                 Text("Remote control is optional and not required to create assets locally.")
                     .foregroundStyle(.secondary)
             }
-            LabeledContent("Enrolment", value: "Existing fleet tokens; no new credential scope")
+        }
+    }
+
+    /// Role, reachability and the address other Macs use — the whole fleet picture in one place.
+    private var fleetSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("Fleet")
+            LabeledContent("This Mac is a", value: roleTitle(workspace.controllerIdentity?.settings.role))
+            Text(roleExplanation(workspace.controllerIdentity?.settings.role))
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Picker("Role", selection: Binding(
+                get: { workspace.controllerIdentity?.settings.role ?? "standalone" },
+                set: { value in Task { await workspace.setRole(value) } }
+            )) {
+                Text("Standalone").tag("standalone")
+                Text("Controller").tag("controller")
+                Text("Node").tag("agent")
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            .disabled(!connected || workspace.controllerIdentity == nil)
+            if let note = workspace.roleNote {
+                Text(note).font(.callout).foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            LabeledContent("Listening on", value: listenTitle(studio.configuration.listenHost))
+            Picker("Listen address", selection: Binding(
+                get: { studio.configuration.listenHost },
+                set: { studio.configuration.listenHost = $0; studio.saveConfiguration() }
+            )) {
+                Text("This Mac only").tag("127.0.0.1")
+                ForEach(LocalAddresses.current()) { entry in
+                    Text("Reachable at \(entry.title)").tag(entry.address)
+                }
+                Text("Any address on any network").tag("0.0.0.0")
+            }
+            .disabled(!studio.canConfigure)
+            listenWarning
+
+            if let note = studio.fleetNote {
+                Text(note).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func roleTitle(_ role: String?) -> String {
+        switch role {
+        case "controller": return "Controller"
+        case "agent": return "Node"
+        case "standalone": return "Standalone"
+        default: return "Not reporting"
+        }
+    }
+
+    private func roleExplanation(_ role: String?) -> String {
+        switch role {
+        case "controller":
+            return "Other Macs on your network can send work here, and this Mac reports what the whole group is doing. GenStudio still owns accounts, billing and assets."
+        case "agent":
+            return "This Mac creates locally and does not accept customer jobs directly; a controller sends it work. Nothing here contacts GenStudio."
+        default:
+            return "This Mac creates on its own. Nothing else can send it work and it contacts nothing else."
+        }
+    }
+
+    private func listenTitle(_ host: String) -> String {
+        if host == "127.0.0.1" { return "This Mac only" }
+        if host == "0.0.0.0" { return "Every network this Mac is on" }
+        return "Only \(host)"
+    }
+
+    /// One plain sentence about who can reach this Mac, because the difference between the
+    /// three choices is the whole security question.
+    @ViewBuilder private var listenWarning: some View {
+        switch studio.configuration.listenHost {
+        case "127.0.0.1":
+            Text("Only this Mac can reach the Hub. Nothing on your network can see it. This is the safe default.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        case "0.0.0.0":
+            Text("Any device on any network this Mac joins — including café or hotel Wi-Fi — can reach the Hub and try to send it work. They still need the token, but the token travels in the clear unless you are on Tailscale. Prefer a named address.")
+                .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        default:
+            Text("Only devices that can reach this one address can use the Hub. A Tailscale address is the intended choice: it is encrypted and only your own machines can reach it.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if !studio.canConfigure {
+            Text("Stop the services to change the address, then start them again. Changing it restarts the Hub.")
+                .font(.callout).foregroundStyle(.secondary)
         }
     }
     private var unavailableWorkspace: some View {

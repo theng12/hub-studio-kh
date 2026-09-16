@@ -47,11 +47,65 @@ struct ShellFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// One address this Mac can be reached at, with the interface that carries it.
+struct LocalAddress: Identifiable, Equatable {
+    let address: String
+    let interface: String
+    var id: String { address }
+    /// Tailscale hands out addresses from the carrier-grade NAT range. It is the network this
+    /// app is meant to be reached over, so it is named rather than left as a bare number.
+    var isTailscale: Bool {
+        let parts = address.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts[0] == 100 else { return false }
+        return (64...127).contains(parts[1])
+    }
+    var title: String {
+        isTailscale ? "Tailscale · \(address)" : "\(address) · \(interface)"
+    }
+}
+
+/// The addresses this Mac can be reached at, so the operator picks a real one instead of
+/// guessing, and Tailscale is named rather than left as a bare number.
+enum LocalAddresses {
+    static func current() -> [LocalAddress] {
+        var found: [LocalAddress] = []
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return [] }
+        defer { freeifaddrs(head) }
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(pointer.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
+                  let address = pointer.pointee.ifa_addr,
+                  address.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host,
+                              socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let value = String(cString: host)
+            guard !value.isEmpty, value != "0.0.0.0",
+                  !found.contains(where: { $0.address == value }) else { continue }
+            found.append(LocalAddress(address: value,
+                                      interface: String(cString: pointer.pointee.ifa_name)))
+        }
+        // Tailscale first: it is the network this is meant to be used over.
+        return found.sorted { left, right in
+            left.isTailscale == right.isTailscale ? left.address < right.address : left.isTailscale
+        }
+    }
+}
+
 struct ShellConfiguration {
     var dataDirectory: URL
     var modelsDirectory: URL?
     var offline: Bool
     var startAtLogin: Bool
+    /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
+    var listenHost: String
+    /// The address the owner app connects to. A wildcard bind also answers on loopback, so
+    /// that case still uses it; a scoped bind is only reachable at the address it bound.
+    var clientHost: String { ShellConfiguration.clientHost(for: listenHost) }
+    static func clientHost(for listenHost: String) -> String {
+        ["0.0.0.0", "::"].contains(listenHost) ? "127.0.0.1" : listenHost
+    }
     var recoveryMaxAttempts: Int
     var recoveryBackoffSeconds: [TimeInterval]
     var readyFile: URL { dataDirectory.appendingPathComponent("hub-ready.json") }
@@ -64,10 +118,12 @@ struct ShellConfiguration {
         modelsDirectory = nil
         offline = false
         startAtLogin = true
+        listenHost = "127.0.0.1"
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
         recoveryBackoffSeconds = StartupRecovery.defaultDelays
         var explicitModels: URL?
         var explicitOffline = false
+        var explicitHost: String?
         var index = 1
         while index < arguments.count {
             let argument = arguments[index]
@@ -76,6 +132,10 @@ struct ShellConfiguration {
                 let url = URL(fileURLWithPath: NSString(string: arguments[index + 1]).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath()
                 if argument == "--data-dir" { dataDirectory = url } else { explicitModels = url }
                 index += 2
+            } else if argument == "--listen-host" {
+                guard index + 1 < arguments.count else { throw ShellFailure(message: "Missing address for --listen-host.") }
+                explicitHost = arguments[index + 1]
+                index += 2
             } else { if argument == "--offline" { explicitOffline = true }; index += 1 }
         }
         try Self.requireExternal(dataDirectory, bundle: bundle)
@@ -83,6 +143,7 @@ struct ShellConfiguration {
             modelsDirectory = URL(fileURLWithPath: saved.modelsPath).standardizedFileURL.resolvingSymlinksInPath()
             offline = saved.offline
             startAtLogin = saved.startAtLogin
+            listenHost = saved.listenHost
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
                 recoveryMaxAttempts = saved.recoveryMaxAttempts
@@ -91,10 +152,24 @@ struct ShellConfiguration {
         }
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
+        if let explicitHost { listenHost = explicitHost }
+        try Self.requireBindableHost(listenHost)
         if let modelsDirectory {
             try Self.requireExternal(modelsDirectory, bundle: bundle)
             // Persisted missing volumes stay selected and visible for recovery. Explicit CLI input fails early.
             if explicitModels != nil { try Self.requireDirectory(modelsDirectory) }
+        }
+    }
+    /// A bind address must be a single IPv4 address (or the wildcard). Refusing anything else
+    /// keeps a typo from silently widening what can reach this Mac.
+    static func requireBindableHost(_ host: String) throws {
+        if ["127.0.0.1", "0.0.0.0"].contains(host) { return }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ part in
+            guard let value = Int(part), String(value) == part || part == "0" else { return false }
+            return (0...255).contains(value)
+        }) else {
+            throw ShellFailure(message: "The listen address must be an IPv4 address such as 127.0.0.1.")
         }
     }
     static func requireExternal(_ url: URL, bundle: URL) throws {
@@ -114,7 +189,7 @@ struct ShellConfiguration {
         guard let modelsDirectory else { return }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory.path, offline: offline,
-                                                        startAtLogin: startAtLogin,
+                                                        startAtLogin: startAtLogin, listenHost: listenHost,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds))
         try data.write(to: preferencesFile, options: .atomic)
@@ -124,14 +199,16 @@ struct ShellConfiguration {
         let modelsPath: String
         let offline: Bool
         let startAtLogin: Bool
+        let listenHost: String
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
 
-        init(modelsPath: String, offline: Bool, startAtLogin: Bool,
+        init(modelsPath: String, offline: Bool, startAtLogin: Bool, listenHost: String,
              recoveryMaxAttempts: Int, recoveryBackoffSeconds: [TimeInterval]) {
             self.modelsPath = modelsPath
             self.offline = offline
             self.startAtLogin = startAtLogin
+            self.listenHost = listenHost
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
         }
@@ -142,6 +219,9 @@ struct ShellConfiguration {
             offline = try values.decode(Bool.self, forKey: .offline)
             // Older previews did not persist this preference; the first-release default is on.
             startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true
+            // Every build before fleet support was loopback-only, and that stays the default
+            // for preferences written by them.
+            listenHost = try values.decodeIfPresent(String.self, forKey: .listenHost) ?? "127.0.0.1"
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)
@@ -163,11 +243,11 @@ struct WorkerReady: Decodable {
     let pid: Int32
     let version: String
     let token: String
-    static func decode(_ data: Data, expectedPID: Int32) throws -> WorkerReady {
+    static func decode(_ data: Data, expectedPID: Int32, expectedHost: String = "127.0.0.1") throws -> WorkerReady {
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard value.pid == expectedPID, (24...256).contains(value.token.utf8.count),
               value.token.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }),
-              value.url.scheme == "http", value.url.host == "127.0.0.1",
+              value.url.scheme == "http", value.url.host == expectedHost,
               let port = value.url.port, (1...65535).contains(port), value.url.user == nil,
               value.url.password == nil, value.url.query == nil, value.url.fragment == nil,
               value.url.path.isEmpty || value.url.path == "/" else {
