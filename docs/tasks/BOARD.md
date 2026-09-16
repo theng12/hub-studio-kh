@@ -140,10 +140,9 @@ are current; the longer narrative under it is historical and is kept for provena
    seven real defects in ST-03. Every one of those cards is still unreviewed. The two most
    productive questions so far have been "does the fixture agree with the real server?" and "does
    the production path ever actually write the row the query reads?" — both found real defects.
-3. **ST-08's remaining native work** is now only the manual GUI click-throughs (Image Save,
-   Subtitle export) and ST-08.OS. The Subtitle export acknowledgement landed in `5315c2a`: the Hub
-   gained a transcription ack route and the app verifies the Hub's own artifact before writing and
-   acknowledging.
+3. **ST-08's remaining native work**: Models now has Verify and Import Folder, and Subtitle export
+   acknowledges delivery. What is left is ST-08.4 (per-device usage bytes) and ST-08.DATA (an
+   in-app view of the Hub's generation statistics), plus the manual GUI click-throughs and ST-08.OS.
 4. **ST-10.4 / ST-10.6 / ST-10.DATA** need a second real machine and a counterpart, so they stay
    partial. If a second Mac becomes available, per-location aggregation and node deduplication are
    the first things to exercise.

@@ -236,6 +236,23 @@ def main() -> int:
             for worker, rows in sorted(packages.items())
         }
 
+        # Accepting a machine includes accepting its model library: verify one installed
+        # package through the same Hub route the Models screen's Verify button calls, so a
+        # copied or hard-linked library that reads as "file changed" is caught here.
+        for worker, rows in sorted(packages.items()):
+            if not rows:
+                continue
+            candidate = rows[0]
+            status, verified = http(
+                base, f"/api/hub/model-packages/{candidate['package_id']}/verify",
+                token, method="POST")
+            receipt["verify"] = {"package_id": candidate["package_id"],
+                                 "worker": worker, "status": status,
+                                 "state": verified.get("state"),
+                                 "dispatch_state": verified.get("dispatch_state"),
+                                 "detail": verified.get("detail") if status != 200 else None}
+            break
+
         kinds = [kind.strip() for kind in arguments.kinds.split(",") if kind.strip()]
         if "subtitle" in kinds:
             # The Hub's transcription route takes the repository name, and Turbo is the

@@ -25,6 +25,9 @@ final class FixtureProtocol: URLProtocol {
     static var imageAckRejects = false
     static var transcriptionAckPaths: [String] = []
     static var transcriptionAckRejects = false
+    static var modelRoutes: [String] = []
+    static var modelImportBody: [String: Any]?
+    static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
@@ -54,6 +57,9 @@ final class FixtureProtocol: URLProtocol {
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
     static func transcriptionAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return transcriptionAckPaths }
     static func setTranscriptionAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; transcriptionAckRejects = value }
+    static func modelCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return modelRoutes }
+    static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
+    static func setModelVerifyRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; modelVerifyRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
     static func memoryBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastMemoryBody }
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
@@ -91,6 +97,33 @@ final class FixtureProtocol: URLProtocol {
                 DispatchQueue.global().async { [self] in
                     _ = Self.releaseCatalog.wait(timeout: .now() + 5)
                     finish((200, "application/json", Self.catalogFixture))
+                }
+                return
+            }
+        }
+        // Any package can be imported or verified; a per-package switch would silently rot
+        // as the catalog grows, and Verify All must reach every installed model.
+        if path.hasPrefix("/api/hub/model-packages/") {
+            let parts = path.split(separator: "/")
+            // /api/hub/model-packages/<package>/<action>
+            // String.split drops the leading empty component: [api, hub, model-packages,
+            // <package>, <action>].
+            if (method == "POST" || method == "PUT"), parts.count == 5,
+               parts[4] == "verify" || parts[4] == "import" {
+                let package = String(parts[3])
+                let action = String(parts[4])
+                Self.lock.lock()
+                Self.modelRoutes.append("\(action):\(package)")
+                let rejects = Self.modelVerifyRejects
+                if action == "import" {
+                    Self.modelImportBody = (try? JSONSerialization.jsonObject(
+                        with: requestBody())) as? [String: Any]
+                }
+                Self.lock.unlock()
+                if rejects && action == "verify" {
+                    finish((409, "application/json", Data(#"{"detail":"File changed; verify again: model/model.safetensors"}"#.utf8)))
+                } else {
+                    finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"files_verified\",\"dispatch_state\":\"eligible\",\"reason\":null}".utf8)))
                 }
                 return
             }
@@ -269,6 +302,49 @@ struct NativeAPITests {
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 6, "combined model catalog")
+
+        // Models: a folder copied onto this Mac becomes a verified library entry without a
+        // second download, and any installed package can be re-verified. Verification is
+        // timestamp-sensitive, so a copied or hard-linked library needs this without a
+        // terminal; there was no button for it.
+        let whisper = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }!
+        await store.verifyModel(whisper)
+        require(FixtureProtocol.modelCalls() == ["verify:whisper-turbo"],
+                "Verify Files must call the Hub package verify route")
+        require(store.modelNote?.contains("Verified") == true, "a verification needs a visible result")
+
+        let copied = store.models.first { $0.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit" }!
+        await store.importModel(copied, from: URL(fileURLWithPath: "/Volumes/Backup/model-library/synthetic-custom-voice"))
+        require(FixtureProtocol.modelCalls().last == "import:synthetic-custom-voice",
+                "Import Folder must call the Hub package import route")
+        require(FixtureProtocol.importedFolder() == "/Volumes/Backup/model-library/synthetic-custom-voice",
+                "the chosen folder must reach the Hub unchanged")
+        require(store.modelNote?.contains("Imported") == true, "an import needs a visible result")
+
+        FixtureProtocol.setModelVerifyRejects(true)
+        do {
+            await store.verifyModel(copied)
+            // A refused verification surfaces through the shared error banner, not a fake note.
+            require(store.error?.contains("File changed") == true,
+                    "a refused verification must explain that a file changed")
+        }
+        FixtureProtocol.setModelVerifyRejects(false)
+        store.error = nil
+
+        // Verify All must reach every installed package that has an approved Hub package,
+        // exactly once. A catalog entry with no package cannot be verified and must not be
+        // silently counted as checked.
+        let beforeVerifyAll = FixtureProtocol.modelCalls().count
+        await store.verifyInstalledModels()
+        let verifyAll = Array(FixtureProtocol.modelCalls().dropFirst(beforeVerifyAll))
+        require(Set(verifyAll) == ["verify:synthetic-custom-voice", "verify:fixture-flux",
+                                   "verify:whisper-turbo", "verify:voxcpm2-4bit"],
+                "Verify All must check every installed model with a Hub package: \(verifyAll)")
+        require(verifyAll.count == 4, "Verify All must not verify a model twice")
+        // Six catalog entries report as cached, but only four have an approved Hub package.
+        // The summary must say so rather than claim everything was checked.
+        require(store.modelNote == "Verified 4 of 6. Could not verify: Other TTS, Moonshine.",
+                "Verify All must report what it could not verify, got: \(store.modelNote ?? "nil")")
 
         // Model memory: one Hub route the app reads, with the mode names, thresholds and
         // resolved per-machine default all reported by the Studios that own them.

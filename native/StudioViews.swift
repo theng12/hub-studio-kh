@@ -504,6 +504,9 @@ struct StudioContent: View {
                 }.frame(maxWidth: 230)
                 Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
                 Spacer()
+                Button("Verify All") { Task { await workspace.verifyInstalledModels() } }
+                    .help("Re-check every installed model against its pinned file digests")
+                    .disabled(!connected || workspace.updatingModels)
                 Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
             HSplitView {
@@ -530,11 +533,25 @@ struct StudioContent: View {
                             Text(model.supportNote).font(.callout).foregroundStyle(.secondary)
                             if model.cached {
                                 if model.supported { Button("Use in \(model.function.rawValue)") { if model.function == .audio { workspace.audioModel = model.repo; studio.select(.audio) } else { workspace.transcriptionModel = model.repo; studio.select(.transcription) } }.buttonStyle(.borderedProminent) }
-                                Button("Remove Download…") { confirmRemove(model) }.disabled(!connected)
+                                HStack {
+                                    // Verification is timestamp-sensitive: a library that was
+                                    // copied or hard-linked can read as changed even when the
+                                    // bytes match, and this is the only remedy.
+                                    Button(workspace.updatingModels ? "Verifying…" : "Verify Files") {
+                                        Task { await workspace.verifyModel(model) }
+                                    }.disabled(!connected || workspace.updatingModels)
+                                    Button("Remove Download…") { confirmRemove(model) }.disabled(!connected)
+                                }
                             } else {
-                                Button("Download Model") { Task { await workspace.startDownload(model) } }.buttonStyle(.borderedProminent).disabled(!connected || studio.configuration.offline || !model.supported)
-                                if studio.configuration.offline { Text("Offline mode is on. Change it in Settings before downloading.").font(.caption).foregroundStyle(.secondary) }
+                                HStack {
+                                    Button("Download Model") { Task { await workspace.startDownload(model) } }.buttonStyle(.borderedProminent).disabled(!connected || studio.configuration.offline || !model.supported)
+                                    // A folder copied onto this Mac becomes a verified library
+                                    // entry without a second download and without a terminal.
+                                    Button("Import Folder…") { chooseModelFolder(for: model) }.disabled(!connected || workspace.updatingModels)
+                                }
+                                if studio.configuration.offline { Text("Offline mode is on. Change it in Settings before downloading. Importing a folder works offline.").font(.caption).foregroundStyle(.secondary) }
                             }
+                            if let note = workspace.modelNote { Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                         }.padding(20)
                     } else { empty("Model details", "Select a model to inspect its status and available actions.", symbol: "externaldrive") }
                 }.frame(minWidth: 260, idealWidth: 320, maxWidth: 380)
@@ -862,6 +879,18 @@ struct StudioContent: View {
         let panel = NSOpenPanel(); panel.title = "Choose a reference clip"
         panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url { workspace.audioReferencePath = url.path }
+    }
+    /// The folder for a model that was copied onto this Mac, rather than downloaded.
+    private func chooseModelFolder(for model: NativeModel) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the folder for \(model.label)"
+        panel.message = "Select the folder you copied for this model. The Hub checks its manifest and every file before accepting it."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await workspace.importModel(model, from: url) }
+        }
     }
     private func saveImage(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "image-\(job.id).png"; panel.allowedContentTypes = [.png]

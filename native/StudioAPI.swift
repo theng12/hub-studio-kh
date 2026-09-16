@@ -305,6 +305,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Per-machine model memory, read on demand rather than on the two-second poll: it fans
     /// out to every Studio, and nothing on the generation screens depends on it.
     @Published private(set) var memoryInventory: NativeMemoryInventory?
+    /// Result of the last import or verify, so the Models screen can say what happened.
+    @Published private(set) var modelNote: String?
+    @Published private(set) var updatingModels = false
     @Published private(set) var memoryNote: String?
     @Published private(set) var updatingMemory = false
     /// Truthful Hub identity for the Connections screen.
@@ -395,6 +398,8 @@ final class NativeWorkspaceStore: ObservableObject {
         updatingMemory = false
         controllerIdentity = nil
         hubVersion = nil
+        modelNote = nil
+        updatingModels = false
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -843,6 +848,77 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the model download") } }
+    }
+
+    /// Register a model folder that was copied onto this Mac, without downloading it again.
+    ///
+    /// This is the app half of "copy the built app and the model library over": a folder that
+    /// arrived by USB, a snapshot, or a Finder copy becomes a verified library entry. The Hub
+    /// validates the manifest, every file digest and the layout, so a partial or altered copy
+    /// is refused with the reason rather than quietly accepted.
+    func importModel(_ model: NativeModel, from folder: URL) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard let package = modelPackages[model.repo] else {
+                throw NativeAPIError.message("This model has no approved Hub package.")
+            }
+            updatingModels = true
+            defer { if connectionID == requestConnection { updatingModels = false } }
+            // The Hub's import route reads `source_folder`, so this goes through the
+            // snake_case encoder rather than the camelCase one used for job envelopes.
+            let _: HubModelState = try await sendJSON(
+                ["api", "hub", "model-packages", package.packageId, "import"],
+                method: "POST", body: HubModelImport(sourceFolder: folder.path))
+            guard connectionID == requestConnection else { return }
+            modelNote = "Imported \(model.label) from \(folder.lastPathComponent)."
+            error = nil
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Import the model folder") } }
+    }
+
+    /// Re-check one installed package's files against its pinned manifest.
+    ///
+    /// Verification is timestamp-sensitive, so a library that was hard-linked or copied with
+    /// tools that rewrite metadata reports "File changed" even when the bytes match. This is
+    /// the remedy, and it is why it must be reachable without a terminal.
+    func verifyModel(_ model: NativeModel) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard let package = modelPackages[model.repo] else {
+                throw NativeAPIError.message("This model has no approved Hub package.")
+            }
+            updatingModels = true
+            defer { if connectionID == requestConnection { updatingModels = false } }
+            let _: HubModelState = try await sendEmpty(
+                ["api", "hub", "model-packages", package.packageId, "verify"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            modelNote = "Verified \(model.label)."
+            error = nil
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Verify the model files") } }
+    }
+
+    /// Verify every installed package, reporting how many are now ready.
+    func verifyInstalledModels() async {
+        guard let requestConnection = connectionID else { return }
+        let installed = models.filter { $0.cached }
+        guard !installed.isEmpty else { modelNote = "No installed models to verify."; return }
+        updatingModels = true
+        defer { if connectionID == requestConnection { updatingModels = false } }
+        var failed: [String] = []
+        for model in installed {
+            guard connectionID == requestConnection else { return }
+            guard let package = modelPackages[model.repo] else { failed.append(model.label); continue }
+            do {
+                let _: HubModelState = try await sendEmpty(
+                    ["api", "hub", "model-packages", package.packageId, "verify"], method: "POST")
+            } catch { failed.append(model.label) }
+        }
+        guard connectionID == requestConnection else { return }
+        modelNote = failed.isEmpty
+            ? "Verified all \(installed.count) installed models."
+            : "Verified \(installed.count - failed.count) of \(installed.count). Could not verify: \(failed.joined(separator: ", "))."
+        await refresh()
     }
 
     func cancelAudio(_ job: NativeJob) async {
@@ -1425,6 +1501,14 @@ private struct HubModelPackage: Decodable {
     let dispatchState: String
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
+private struct HubModelImport: Encodable { let sourceFolder: String }
+/// The Hub returns the package's readiness row; only the fields the app reads are declared.
+private struct HubModelState: Decodable {
+    let packageId: String
+    let state: String
+    let dispatchState: String?
+    let reason: String?
+}
 private struct EmptyBody: Encodable {}
 private struct CatalogReferenceAudio: Decodable {
     let declared: Bool?

@@ -1,13 +1,13 @@
 {
  "app": "Studio Hub 0.4.0.app",
- "captured_at": 1789521806.47398,
- "captured_at_iso": "2026-09-16T01:23:26Z",
+ "captured_at": 1789522809.251016,
+ "captured_at_iso": "2026-09-16T01:40:09Z",
  "host": {
   "machine": "arm64",
   "macos": "26.6.2",
   "memory": "17179869184",
   "platform": "macOS-26.6.2-arm64-arm-64bit",
-  "swap": "total = 4096.00M  used = 2728.44M  free = 1367.56M  (encrypted)"
+  "swap": "total = 6144.00M  used = 4621.38M  free = 1522.62M  (encrypted)"
  },
  "hub_health": {
   "ok": true,
@@ -25,25 +25,18 @@
   ],
   "by_machine": {
    "local": {
-    "avg_s": 58.9,
-    "count": 2,
+    "avg_s": 20.05,
+    "count": 1,
     "modalities": {
-     "image": 1,
+     "image": 0,
      "transcription": 1,
      "voice": 0
     }
    }
   },
   "by_modality": {
-   "image": {
-    "avg_s": 94.47,
-    "count": 1,
-    "machines": {
-     "local": 1
-    }
-   },
    "transcription": {
-    "avg_s": 23.34,
+    "avg_s": 20.05,
     "count": 1,
     "machines": {
      "local": 1
@@ -51,19 +44,14 @@
    }
   },
   "by_model": {
-   "AITRADER/FLUX2-klein-4B-mlx-4bit": {
-    "avg_s": 94.47,
-    "count": 1,
-    "modality": "image"
-   },
    "mlx-community/whisper-large-v3-turbo": {
-    "avg_s": 23.34,
+    "avg_s": 20.05,
     "count": 1,
     "modality": "transcription"
    }
   },
   "by_source": {
-   "job": 2
+   "job": 1
   },
   "filters": {
    "hours": null,
@@ -76,25 +64,25 @@
     {
      "completed": 1,
      "failed": 0,
-     "job_id": "stt-578b8942a2c5-0",
-     "last_activity_at": 1789521842.281239,
+     "job_id": "stt-ceb838285737-0",
+     "last_activity_at": 1789522853.0802891,
      "latest": {
-      "activity_received_at": 1789521842.2813911,
+      "activity_received_at": 1789522853.0802932,
       "error_code": null,
-      "finished_at": 1789521842.281239,
+      "finished_at": 1789522853.0802891,
       "hub_owned": 1,
-      "job_id": "stt-578b8942a2c5-0",
+      "job_id": "stt-ceb838285737-0",
       "machine": "local",
       "model": "mlx-community/whisper-large-v3-turbo",
-      "observed_at": 1789521842.2813911,
+      "observed_at": 1789522853.0802932,
       "operation": "transcription",
       "origin": "hub",
       "origin_device": null,
       "progress": 1.0,
-      "reported_at": 1789521842.2813911,
-      "runtime_s": 23.34,
+      "reported_at": 1789522853.0802932,
+      "runtime_s": 20.05,
       "source": "job",
-      "started_at": 1789521818.781953,
+      "started_at": 1789522832.9285572,
       "state": "done",
       "studio": "subtitle"
      },
@@ -109,78 +97,58 @@
      "relative_performance": null,
      "source": "job",
      "state": "just_finished",
-     "state_duration_s": 98.0,
-     "state_since": 1789521842.281239,
+     "state_duration_s": 0.0,
+     "state_since": 1789522853.0802891,
      "studio": "subtitle",
      "timeline": [
       {
-       "activity_received_at": 1789521937.929605,
+       "activity_received_at": 1789522853.0802932,
        "error_code": null,
-       "finished_at": null,
+       "finished_at": 1789522853.0802891,
        "hub_owned": 1,
-       "job_id": "e511e57cd4b14c779e067476d48ddb80",
-       "machine": "local",
-       "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
-       "observed_at": 1789521843.0342689,
-       "operation": "image",
-       "origin": "hub",
-       "origin_device": "Studio Hub KH \u00b7 Local site",
-       "progress": 0.05,
-       "reported_at": 1789521937.929605,
-       "runtime_s": null,
-       "source": "job",
-       "started_at": null,
-       "state": "running",
-       "studio": "image"
-      },
-      {
-       "activity_received_at": 1789521842.2813911,
-       "error_code": null,
-       "finished_at": 1789521842.281239,
-       "hub_owned": 1,
-       "job_id": "stt-578b8942a2c5-0",
+       "job_id": "stt-ceb838285737-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789521842.2813911,
+       "observed_at": 1789522853.0802932,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": null,
        "progress": 1.0,
-       "reported_at": 1789521842.2813911,
-       "runtime_s": 23.34,
+       "reported_at": 1789522853.0802932,
+       "runtime_s": 20.05,
        "source": "job",
-       "started_at": 1789521818.781953,
+       "started_at": 1789522832.9285572,
        "state": "done",
        "studio": "subtitle"
       },
       {
-       "activity_received_at": 1789521838.5189388,
+       "activity_received_at": 1789522852.1553202,
        "error_code": null,
        "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-578b8942a2c5-0",
+       "job_id": "stt-ceb838285737-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789521818.782,
+       "observed_at": 1789522832.928562,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": "Studio Hub KH \u00b7 Local site",
        "progress": null,
-       "reported_at": 1789521838.5189388,
+       "reported_at": 1789522852.1553202,
        "runtime_s": null,
        "source": "job",
-       "started_at": 1789521818.781953,
+       "started_at": 1789522832.9285572,
        "state": "running",
        "studio": "subtitle"
       }
      ],
      "utilization": {
       "evidence": "partial",
-      "ratio": 0.9155
+      "ratio": 0.6106
      }
     }
    ],
-   "observed_at": 1789521940.331226,
+   "observed_at": 1789522853.115177,
    "pulse": {
     "just_finished": 1,
     "long_idle": 0,
@@ -192,37 +160,23 @@
    },
    "schema": "studiohub.fleet_activity.v1",
    "window": {
-    "now": 1789521940.331226,
-    "since_s": 1786929940.331226
+    "now": 1789522853.115177,
+    "since_s": 1786930853.115177
    }
   },
   "matrix": [
    {
-    "avg_s": 94.47,
+    "avg_s": 20.05,
     "count": 1,
     "machine": "local",
-    "max_s": 94.47,
-    "min_s": 94.47,
-    "modality": "image"
-   },
-   {
-    "avg_s": 23.34,
-    "count": 1,
-    "machine": "local",
-    "max_s": 23.34,
-    "min_s": 23.34,
+    "max_s": 20.05,
+    "min_s": 20.05,
     "modality": "transcription"
    }
   ],
   "model_rows": [
    {
-    "avg_s": 94.47,
-    "count": 1,
-    "modality": "image",
-    "model": "AITRADER/FLUX2-klein-4B-mlx-4bit"
-   },
-   {
-    "avg_s": 23.34,
+    "avg_s": 20.05,
     "count": 1,
     "modality": "transcription",
     "model": "mlx-community/whisper-large-v3-turbo"
@@ -234,27 +188,24 @@
     1789516800
    ],
    "series": {
-    "image": [
-     1
-    ],
     "transcription": [
      1
     ]
    }
   },
-  "total": 2
+  "total": 1
  },
- "hub_url": "http://127.0.0.1:56725",
+ "hub_url": "http://127.0.0.1:63907",
  "label": "Mac mini M4 16GB",
  "runs": [
   {
-   "batch_id": "578b8942a2c5",
+   "batch_id": "ceb838285737",
    "input_bytes": 288044,
    "input_sha256": "2f606380c9c413d38f6edb8e5542d5a0a2977273e77956b174e4f27aa587f17c",
    "items": [
     {
      "bytes": null,
-     "duration_seconds": 23.34,
+     "duration_seconds": 20.05,
      "error": null,
      "maximum_swap_used_gb": null,
      "memory_failure": null,
@@ -270,29 +221,7 @@
    "package_id": "whisper-turbo",
    "status": "done",
    "submit_status": 200,
-   "wall_seconds": 30.267
-  },
-  {
-   "batch_id": "360dd44c0a",
-   "items": [
-    {
-     "bytes": 1122026,
-     "duration_seconds": 94.46626877784729,
-     "error": null,
-     "maximum_swap_used_gb": null,
-     "memory_failure": null,
-     "peak_mlx_active_gb": null,
-     "peak_worker_rss_gb": null,
-     "sha256": "a1fd88f4eae83cb550c071a8fc1b8a56a8a927b7c1b86f275a68c2df7994a062",
-     "state": "done",
-     "studio": "image"
-    }
-   ],
-   "kind": "image",
-   "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
-   "package_id": "flux2-klein-4b-mlx-4bit",
-   "submit_status": 200,
-   "wall_seconds": 97.349
+   "wall_seconds": 22.242
   }
  ],
  "skipped": [],
@@ -312,5 +241,13 @@
    "voxcpm2-8bit",
    "voxcpm2-bf16"
   ]
+ },
+ "verify": {
+  "detail": null,
+  "dispatch_state": "eligible",
+  "package_id": "flux2-klein-4b-mlx-4bit",
+  "state": "files_verified",
+  "status": 200,
+  "worker": "image"
  }
 }
