@@ -1,7 +1,7 @@
 {
  "app": "Studio Hub 0.4.0.app",
- "captured_at": 1789521748.740295,
- "captured_at_iso": "2026-09-16T01:22:28Z",
+ "captured_at": 1789521806.47398,
+ "captured_at_iso": "2026-09-16T01:23:26Z",
  "host": {
   "machine": "arm64",
   "macos": "26.6.2",
@@ -25,18 +25,25 @@
   ],
   "by_machine": {
    "local": {
-    "avg_s": 18.6,
-    "count": 1,
+    "avg_s": 58.9,
+    "count": 2,
     "modalities": {
-     "image": 0,
+     "image": 1,
      "transcription": 1,
      "voice": 0
     }
    }
   },
   "by_modality": {
+   "image": {
+    "avg_s": 94.47,
+    "count": 1,
+    "machines": {
+     "local": 1
+    }
+   },
    "transcription": {
-    "avg_s": 18.6,
+    "avg_s": 23.34,
     "count": 1,
     "machines": {
      "local": 1
@@ -44,14 +51,19 @@
    }
   },
   "by_model": {
+   "AITRADER/FLUX2-klein-4B-mlx-4bit": {
+    "avg_s": 94.47,
+    "count": 1,
+    "modality": "image"
+   },
    "mlx-community/whisper-large-v3-turbo": {
-    "avg_s": 18.6,
+    "avg_s": 23.34,
     "count": 1,
     "modality": "transcription"
    }
   },
   "by_source": {
-   "job": 1
+   "job": 2
   },
   "filters": {
    "hours": null,
@@ -64,25 +76,25 @@
     {
      "completed": 1,
      "failed": 0,
-     "job_id": "stt-f0b9087e6471-0",
-     "last_activity_at": 1789521779.001921,
+     "job_id": "stt-578b8942a2c5-0",
+     "last_activity_at": 1789521842.281239,
      "latest": {
-      "activity_received_at": 1789521779.001923,
+      "activity_received_at": 1789521842.2813911,
       "error_code": null,
-      "finished_at": 1789521779.001921,
+      "finished_at": 1789521842.281239,
       "hub_owned": 1,
-      "job_id": "stt-f0b9087e6471-0",
+      "job_id": "stt-578b8942a2c5-0",
       "machine": "local",
       "model": "mlx-community/whisper-large-v3-turbo",
-      "observed_at": 1789521779.001923,
+      "observed_at": 1789521842.2813911,
       "operation": "transcription",
       "origin": "hub",
       "origin_device": null,
       "progress": 1.0,
-      "reported_at": 1789521779.001923,
-      "runtime_s": 18.6,
+      "reported_at": 1789521842.2813911,
+      "runtime_s": 23.34,
       "source": "job",
-      "started_at": 1789521760.308291,
+      "started_at": 1789521818.781953,
       "state": "done",
       "studio": "subtitle"
      },
@@ -97,58 +109,78 @@
      "relative_performance": null,
      "source": "job",
      "state": "just_finished",
-     "state_duration_s": 0.7,
-     "state_since": 1789521779.67362,
+     "state_duration_s": 98.0,
+     "state_since": 1789521842.281239,
      "studio": "subtitle",
      "timeline": [
       {
-       "activity_received_at": 1789521779.001923,
+       "activity_received_at": 1789521937.929605,
        "error_code": null,
-       "finished_at": 1789521779.001921,
+       "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-f0b9087e6471-0",
+       "job_id": "e511e57cd4b14c779e067476d48ddb80",
+       "machine": "local",
+       "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+       "observed_at": 1789521843.0342689,
+       "operation": "image",
+       "origin": "hub",
+       "origin_device": "Studio Hub KH \u00b7 Local site",
+       "progress": 0.05,
+       "reported_at": 1789521937.929605,
+       "runtime_s": null,
+       "source": "job",
+       "started_at": null,
+       "state": "running",
+       "studio": "image"
+      },
+      {
+       "activity_received_at": 1789521842.2813911,
+       "error_code": null,
+       "finished_at": 1789521842.281239,
+       "hub_owned": 1,
+       "job_id": "stt-578b8942a2c5-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789521779.001923,
+       "observed_at": 1789521842.2813911,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": null,
        "progress": 1.0,
-       "reported_at": 1789521779.001923,
-       "runtime_s": 18.6,
+       "reported_at": 1789521842.2813911,
+       "runtime_s": 23.34,
        "source": "job",
-       "started_at": 1789521760.308291,
+       "started_at": 1789521818.781953,
        "state": "done",
        "studio": "subtitle"
       },
       {
-       "activity_received_at": 1789521774.626955,
+       "activity_received_at": 1789521838.5189388,
        "error_code": null,
        "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-f0b9087e6471-0",
+       "job_id": "stt-578b8942a2c5-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789521760.308295,
+       "observed_at": 1789521818.782,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": "Studio Hub KH \u00b7 Local site",
        "progress": null,
-       "reported_at": 1789521774.626955,
+       "reported_at": 1789521838.5189388,
        "runtime_s": null,
        "source": "job",
-       "started_at": 1789521760.308291,
+       "started_at": 1789521818.781953,
        "state": "running",
        "studio": "subtitle"
       }
      ],
      "utilization": {
       "evidence": "partial",
-      "ratio": 0.576
+      "ratio": 0.9155
      }
     }
    ],
-   "observed_at": 1789521780.411527,
+   "observed_at": 1789521940.331226,
    "pulse": {
     "just_finished": 1,
     "long_idle": 0,
@@ -160,23 +192,37 @@
    },
    "schema": "studiohub.fleet_activity.v1",
    "window": {
-    "now": 1789521780.411527,
-    "since_s": 1786929780.411527
+    "now": 1789521940.331226,
+    "since_s": 1786929940.331226
    }
   },
   "matrix": [
    {
-    "avg_s": 18.6,
+    "avg_s": 94.47,
     "count": 1,
     "machine": "local",
-    "max_s": 18.6,
-    "min_s": 18.6,
+    "max_s": 94.47,
+    "min_s": 94.47,
+    "modality": "image"
+   },
+   {
+    "avg_s": 23.34,
+    "count": 1,
+    "machine": "local",
+    "max_s": 23.34,
+    "min_s": 23.34,
     "modality": "transcription"
    }
   ],
   "model_rows": [
    {
-    "avg_s": 18.6,
+    "avg_s": 94.47,
+    "count": 1,
+    "modality": "image",
+    "model": "AITRADER/FLUX2-klein-4B-mlx-4bit"
+   },
+   {
+    "avg_s": 23.34,
     "count": 1,
     "modality": "transcription",
     "model": "mlx-community/whisper-large-v3-turbo"
@@ -188,24 +234,27 @@
     1789516800
    ],
    "series": {
+    "image": [
+     1
+    ],
     "transcription": [
      1
     ]
    }
   },
-  "total": 1
+  "total": 2
  },
- "hub_url": "http://127.0.0.1:55671",
+ "hub_url": "http://127.0.0.1:56725",
  "label": "Mac mini M4 16GB",
  "runs": [
   {
-   "batch_id": "f0b9087e6471",
+   "batch_id": "578b8942a2c5",
    "input_bytes": 288044,
    "input_sha256": "2f606380c9c413d38f6edb8e5542d5a0a2977273e77956b174e4f27aa587f17c",
    "items": [
     {
      "bytes": null,
-     "duration_seconds": 18.6,
+     "duration_seconds": 23.34,
      "error": null,
      "maximum_swap_used_gb": null,
      "memory_failure": null,
@@ -221,7 +270,29 @@
    "package_id": "whisper-turbo",
    "status": "done",
    "submit_status": 200,
-   "wall_seconds": 26.173
+   "wall_seconds": 30.267
+  },
+  {
+   "batch_id": "360dd44c0a",
+   "items": [
+    {
+     "bytes": 1122026,
+     "duration_seconds": 94.46626877784729,
+     "error": null,
+     "maximum_swap_used_gb": null,
+     "memory_failure": null,
+     "peak_mlx_active_gb": null,
+     "peak_worker_rss_gb": null,
+     "sha256": "a1fd88f4eae83cb550c071a8fc1b8a56a8a927b7c1b86f275a68c2df7994a062",
+     "state": "done",
+     "studio": "image"
+    }
+   ],
+   "kind": "image",
+   "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+   "package_id": "flux2-klein-4b-mlx-4bit",
+   "submit_status": 200,
+   "wall_seconds": 97.349
   }
  ],
  "skipped": [],

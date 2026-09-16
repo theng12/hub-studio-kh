@@ -148,11 +148,15 @@ and `fleet_activity` per machine including `completed`, `failed` and `median_run
 
 What each studio contributes to those aggregates:
 
-| Studio | Runtime | Output bytes / SHA-256 | Peak process RSS |
+| Studio | Runtime | Output bytes / SHA-256 | Peak worker memory |
 | --- | --- | --- | --- |
-| Image | yes | yes | yes |
+| Image | yes | yes | not measured by this job path |
 | Voice | yes | yes | yes |
-| Subtitle | yes | the SRT artifact is on disk and verified on delivery; the aggregate carries runtime only | not measured |
+| Subtitle | yes | the SRT artifact is on disk and verified on delivery; the aggregate carries runtime only | no telemetry |
+
+Runtime is the metric that is comparable across every studio. Peak worker memory is available
+for Voice only; the Image job path does not emit the telemetry payload the Hub accepts, and the
+Subtitle worker emits none.
 
 Run one generation per model per machine and the comparison is recorded — no separate benchmark
 needed. `qualification/evidence/measure_machine.py` does exactly that and writes one receipt per
