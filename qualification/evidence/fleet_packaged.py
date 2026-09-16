@@ -154,11 +154,12 @@ class Hub:
         self.url = ""
         self.token = ""
 
-    def start(self) -> None:
+    def start(self, host: str = "127.0.0.1") -> None:
         self.process = subprocess.Popen(
             [str(RESOURCES / "runtimes" / "voice" / "bin" / "python3"), "-I", "-B",
              str(RESOURCES / "hub_worker.py"), "--data-dir", str(self.data),
              "--models-dir", str(LIBRARY), "--ready-file", str(self.ready),
+             "--host", host,
              "--parent-pid", str(os.getpid()), "--offline"],
             cwd=str(self.data), stdout=self.log, stderr=subprocess.STDOUT)
         deadline = time.time() + 300

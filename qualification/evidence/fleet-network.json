@@ -1,0 +1,38 @@
+{
+ "address": "192.168.18.232",
+ "adopt": {
+  "adopted": true,
+  "status": 200
+ },
+ "app": "dist/Studio Hub 0.4.0.app",
+ "bound_hosts": "127.0.0.1,192.168.18.232",
+ "job": {
+  "artifact_bytes": 43,
+  "artifact_status": 200,
+  "status": "done",
+  "studio": "node-lan:subtitle"
+ },
+ "loopback": {
+  "status": 200,
+  "version": "0.4.0"
+ },
+ "network": {
+  "status": 200,
+  "url": "http://192.168.18.232:59593",
+  "version": "0.4.0"
+ },
+ "network_resources": {
+  "chip": "Apple M4",
+  "status": 200,
+  "studios": [
+   "image",
+   "transcription",
+   "voice"
+  ],
+  "version": "0.4.0"
+ },
+ "node_studio_online": true,
+ "ok": true,
+ "problems": [],
+ "ready_url_is_loopback": true
+}
