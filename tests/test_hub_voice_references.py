@@ -194,6 +194,36 @@ class VoiceReferenceRouteTests(unittest.TestCase):
         payload = self._stage(source_asset_id="   ").json()
         self.assertEqual(payload["origin"], "local")
 
+    def test_both_origins_deliver_the_same_voice_for_the_same_model(self) -> None:
+        """ST-10.CLONE: the clone's voice depends on the clip, not on who sent it.
+
+        The two asset ids deliberately differ — an execution copy binds its upstream
+        provenance — but everything the Voice worker uses to build the voice, together with
+        the model chosen on the job, must be identical, so a GenStudio-origin clone and an
+        app-chosen clone of the same clip produce the same voice identity.
+        """
+        transcript = "Exact words."
+        local = self._stage(transcript=transcript, language="en").json()
+        remote = self._stage(transcript=transcript, language="en",
+                             source_asset_id="genstudio-asset-123").json()
+        self.assertEqual((local["origin"], remote["origin"]), ("local", "genstudio"))
+        self.assertNotEqual(local["asset_id"], remote["asset_id"],
+                            "an execution copy keeps its upstream provenance")
+        voice_inputs = []
+        for payload in (local, remote):
+            metadata, path = execution_assets.resolve_voice_reference(payload["asset_id"])
+            voice_inputs.append({
+                "reference_bytes": path.read_bytes(),
+                "sha256": metadata["sha256"],
+                "transcript": metadata["transcript"],
+                "language": metadata["language"],
+                "media_type": metadata["media_type"],
+            })
+        self.assertEqual(voice_inputs[0], voice_inputs[1],
+                         "the same clip must reach the Voice worker identically")
+        self.assertEqual(voice_inputs[0]["sha256"], AUDIO_SHA)
+        self.assertEqual(voice_inputs[0]["language"], "en")
+
     # ── validation and machine-readable errors ────────────────────────
 
     def test_unsupported_extension_is_refused_with_a_code(self) -> None:

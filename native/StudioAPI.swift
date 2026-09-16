@@ -146,6 +146,43 @@ private struct MemoryModeBody: Encodable {
     let studioIds: [String]?
 }
 
+/// Truthful identity of the Hub this app is talking to. The Connections screen shows these
+/// values instead of a fake checkout or a promised update channel.
+struct NativeControllerIdentity: Decodable, Equatable {
+    let settings: NativeControllerSettings
+    let readiness: NativeControllerReadiness
+}
+
+struct NativeControllerSettings: Decodable, Equatable {
+    let role: String
+    let siteId: String
+    let siteName: String
+    let controllerId: String
+    let machineName: String
+    let databaseMode: String
+    let databaseConfigured: Bool?
+    let globalAuthority: String?
+    let migrationStage: String?
+}
+
+struct NativeControllerReadiness: Decodable, Equatable {
+    let ready: Bool
+    let role: String?
+    let siteId: String?
+    let controllerId: String?
+    let migrationStage: String?
+    let sqliteAuthoritative: Bool?
+    let globalJobClaiming: Bool?
+    let globalAuthority: String?
+    let reason: String?
+    let telemetryWarning: String?
+}
+
+struct NativeVersion: Decodable, Equatable {
+    let version: String
+    let source: String
+}
+
 struct NativeJob: Identifiable, Equatable {
     let id: String
     let state: String
@@ -267,6 +304,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var memoryInventory: NativeMemoryInventory?
     @Published private(set) var memoryNote: String?
     @Published private(set) var updatingMemory = false
+    /// Truthful Hub identity for the Connections screen.
+    @Published private(set) var controllerIdentity: NativeControllerIdentity?
+    @Published private(set) var hubVersion: NativeVersion?
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
     private let session: URLSession
@@ -350,6 +390,8 @@ final class NativeWorkspaceStore: ObservableObject {
         memoryInventory = nil
         memoryNote = nil
         updatingMemory = false
+        controllerIdentity = nil
+        hubVersion = nil
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -855,6 +897,31 @@ final class NativeWorkspaceStore: ObservableObject {
             error = nil
             await refreshMemoryPolicy()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change model memory settings") } }
+    }
+
+    /// Read the Hub's own role and identity, plus the version it reports.
+    func refreshConnection() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            async let identity: NativeControllerIdentity = get(["api", "hub", "controller"])
+            async let version: NativeVersion = get(["api", "version"])
+            let (identityValue, versionValue) = try await (identity, version)
+            guard connectionID == requestConnection else { return }
+            controllerIdentity = identityValue
+            hubVersion = versionValue
+        } catch {
+            guard connectionID == requestConnection else { return }
+            controllerIdentity = nil
+            hubVersion = nil
+        }
+    }
+
+    /// Show a credential without publishing it. The app already holds this token to talk to
+    /// its own Hub; masking keeps it out of screenshots, support logs and the status line
+    /// until the operator asks for it.
+    static func maskedToken(_ token: String) -> String {
+        guard token.count > 12 else { return String(repeating: "•", count: max(token.count, 8)) }
+        return "\(token.prefix(4))\(String(repeating: "•", count: 8))\(token.suffix(4))"
     }
 
     private static func releaseSummary(_ result: NativeMemoryChange) -> String {

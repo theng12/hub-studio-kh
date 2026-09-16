@@ -11,6 +11,9 @@ final class StudioController: ObservableObject {
     @Published var status = "Choose a model library"
     @Published var failure: String?
     @Published var readyURL: URL?
+    /// The credential this app already holds for its own Hub, so Connections can reveal it
+    /// on request. It is never written to the status line, a log, or a URL.
+    @Published private(set) var connectionToken: String?
     @Published var starting = false
     @Published var stopping = false
     @Published var canForceStop = false
@@ -129,6 +132,7 @@ final class StudioController: ObservableObject {
                         self.starting = false
                         self.healthySince = Date()
                         self.readyURL = ready.url
+                        self.connectionToken = ready.token
                         self.status = "Local services ready"
                         await self.workspace.connect(baseURL: ready.url, dataDirectory: self.configuration.dataDirectory, token: ready.token)
                         let session = URLSession(configuration: .ephemeral)
@@ -183,6 +187,7 @@ final class StudioController: ObservableObject {
         healthySince = nil
         worker = nil
         readyURL = nil
+        connectionToken = nil
         starting = false
         stopping = false
         startupTimedOut = false
@@ -248,6 +253,7 @@ final class StudioController: ObservableObject {
         stopping = true
         starting = false
         readyURL = nil
+        connectionToken = nil
         workspace.disconnect()
         status = "Stopping local services…"
         worker.terminate()

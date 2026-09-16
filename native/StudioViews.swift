@@ -51,6 +51,8 @@ struct StudioContent: View {
     @State private var selectedImageID: String?
     @State private var historyTab = HistoryTab.all
     @State private var loadingImage = false
+    @State private var revealedToken = false
+    @State private var connectionNote: String?
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -676,18 +678,87 @@ struct StudioContent: View {
                 heading("Connections", "Optional API access and external Studio Hub or GenStudio control.")
                 Text("Local creation works independently. Connecting a controller is optional.").font(.headline)
                 Divider()
-                VStack(alignment: .leading, spacing: 12) {
-                    sectionTitle("Local API")
-                    if let url = studio.readyURL { LabeledContent("Address") { Text(url.absoluteString).textSelection(.enabled) }; Text("Available only on this Mac in the current preview.").foregroundStyle(.secondary) }
-                    else { Text("Start local services to make the API available on this Mac.").foregroundStyle(.secondary) }
-                }
+                localAPI
                 Divider()
-                VStack(alignment: .leading, spacing: 12) {
-                    sectionTitle("Studio Hub & GenStudio")
-                    Text("Controller connection is not available in this build.").font(.headline)
-                    Text("Authenticated remote control and fleet integration are planned as optional features. They are not required to generate local assets.").foregroundStyle(.secondary)
-                }
+                controllerSection
             }.padding(28)
+        }
+        .task { if connected { await workspace.refreshConnection() } }
+    }
+
+    /// ST-10.2 — the private address, the identity behind it, and the credential, with the
+    /// secret masked until the operator reveals or copies it.
+    private var localAPI: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Local API")
+            if let url = studio.readyURL {
+                LabeledContent("Address") {
+                    Text(url.absoluteString).textSelection(.enabled).multilineTextAlignment(.trailing)
+                }
+                Text("Reachable only from this Mac on the loopback interface. A location controller reaches this Hub over the network; this build serves the loopback address.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if let identity = workspace.controllerIdentity {
+                    LabeledContent("Role", value: identity.settings.role.capitalized)
+                    LabeledContent("Station", value: identity.settings.siteName)
+                    LabeledContent("Station ID", value: identity.settings.siteId)
+                    LabeledContent("Controller ID", value: identity.settings.controllerId)
+                    LabeledContent("This machine", value: identity.settings.machineName)
+                    LabeledContent("Accepts customer jobs", value: identity.readiness.ready ? "Yes" : "No")
+                    Text("Node-to-node routing is unchanged: GenStudio reaches a location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("Reading this Hub's identity…").font(.callout).foregroundStyle(.secondary)
+                }
+                hubCredential
+            } else {
+                Text("Start local services to make the API available on this Mac.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var hubCredential: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Hub token") {
+                Text(revealedToken ? (studio.connectionToken ?? "Unavailable")
+                                   : (studio.connectionToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
+                    .textSelection(.enabled).multilineTextAlignment(.trailing)
+                    .font(.system(.body, design: .monospaced))
+            }
+            HStack {
+                Button(revealedToken ? "Hide Token" : "Reveal Token") { revealedToken.toggle() }
+                    .disabled(studio.connectionToken == nil)
+                Button("Copy Token") {
+                    if let token = studio.connectionToken {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(token, forType: .string)
+                        connectionNote = "Hub token copied"
+                    }
+                }.disabled(studio.connectionToken == nil)
+                if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
+            }
+            Text("This is the credential this app already uses for its own Hub; a controller presents the same token to reach it. It is never written to the log or to the status line.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private var controllerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Studio Hub & GenStudio")
+            if let identity = workspace.controllerIdentity, let version = workspace.hubVersion {
+                LabeledContent("Hub version", value: version.version)
+                LabeledContent("Data store", value: identity.readiness.sqliteAuthoritative == true ? "Local, authoritative" : identity.settings.databaseMode)
+                LabeledContent("Global authority", value: (identity.settings.globalAuthority ?? "genstudio").capitalized)
+                LabeledContent("Migration stage", value: identity.settings.migrationStage ?? identity.readiness.migrationStage ?? "local")
+                if let warning = identity.readiness.telemetryWarning {
+                    Text(warning).font(.callout).foregroundStyle(.orange)
+                }
+                Text("Jobs are recorded and claimed on this Mac. GenStudio remains the authority for accounts, billing and assets; this app reports the capabilities it actually has and offers no update channel it cannot honour.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text("Remote control is optional and not required to create assets locally.")
+                    .foregroundStyle(.secondary)
+            }
+            LabeledContent("Enrolment", value: "Existing fleet tokens; no new credential scope")
         }
     }
     private var unavailableWorkspace: some View {

@@ -115,6 +115,31 @@ What each studio needs, in the current build:
 | Voice | Qwen3-TTS **Base** (clone: reference clip **and** its exact transcript required), Qwen3-TTS **CustomVoice** (preset speakers), **OmniVoice** (clone: reference clip only). |
 | Voice (heavy) | **VoxCPM2** is exposed but needs more free unified memory than a 16 GB Mac has with the other engines resident; it fails with its own explicit memory message rather than misbehaving. Run it on a 24/32 GB machine with memory free. |
 
+### Connecting a controller or GenStudio
+
+A location controller reaches this app with an address, a port and the Hub token — nothing else.
+No browser login, no cloud domain and no shared database or filesystem are involved.
+
+1. In the app, open **Settings → Local services** and start the services. The status line reads
+   `Local services ready`.
+2. Open **Connections → Local API**. It shows the address the Hub bound on this Mac, the role, the
+   station name and IDs, and the Hub token masked.
+3. Use **Reveal Token** / **Copy Token** to obtain the credential, then present it on every request
+   as either `X-Hub-Token: <token>` or `Authorization: Bearer <token>`.
+
+```sh
+# Address and identity
+curl -s -H "X-Hub-Token: $HUB_TOKEN" http://127.0.0.1:<port>/api/hub/controller
+# What this site can actually serve
+curl -s -H "X-Hub-Token: $HUB_TOKEN" http://127.0.0.1:<port>/api/hub/capabilities
+```
+
+Routing is unchanged: GenStudio talks to a location controller, and joined nodes keep their existing
+enrolment and fleet credential. The Hub token and the fleet token are separate scopes and rotate
+independently; rotating one does not disturb the job ledger, and station/controller IDs stay stable
+when a node's address changes. `/api/health` and `/api/version` are public by design and carry no
+private state; everything else requires the credential.
+
 ### Measuring generation speed per machine
 
 Every job already records what you need, tagged with the machine: elapsed seconds, output bytes and

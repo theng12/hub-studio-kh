@@ -1,0 +1,792 @@
+{
+ "app": "dist/Studio Hub 0.4.0 Memory Proof.app",
+ "hub_url": "http://127.0.0.1:64287",
+ "ok": true,
+ "problems": [],
+ "ready_keys": [
+  "pid",
+  "token",
+  "url",
+  "version"
+ ],
+ "steps": [
+  {
+   "body": {
+    "default_mode": "immediate",
+    "options": [
+     {
+      "label": "Performance",
+      "mode": "performance"
+     },
+     {
+      "label": "Balanced",
+      "mode": "balanced"
+     },
+     {
+      "label": "Memory Saver",
+      "mode": "memory_saver"
+     },
+     {
+      "label": "Immediate",
+      "mode": "immediate"
+     }
+    ],
+    "studios": [
+     {
+      "detail": null,
+      "health": "up",
+      "id": "image",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "image",
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.190393,
+       "default_mode": "immediate",
+       "fixed": true,
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": 0,
+         "label": "After every job",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 0,
+       "release_policy": "The model is released when each job finishes.",
+       "resident": false
+      },
+      "state": "ready",
+      "supported": true,
+      "title": "Image Studio",
+      "url": "http://127.0.0.1:64291"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "subtitle",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "transcription",
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.0909429,
+       "default_mode": "balanced",
+       "idle_seconds": 600,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "balanced",
+       "model_idle_seconds": null,
+       "modes": {
+        "balanced": "Balanced",
+        "immediate": "Immediate",
+        "memory_saver": "Memory Saver",
+        "performance": "Performance"
+       },
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 0,
+       "resident": false
+      },
+      "state": "ready",
+      "supported": true,
+      "title": "Subtitle Studio",
+      "url": "http://127.0.0.1:64290"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "voice",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "voice",
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518205.050758,
+       "default_mode": "immediate",
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "process": {
+        "pid": 45468,
+        "started_at": 1789518205.050758,
+        "started_at_iso": "2026-09-16T07:23:25",
+        "uptime_seconds": 3.816
+       },
+       "process_title": "Voice Studio Mac",
+       "process_title_applied": true,
+       "release_count": 0
+      },
+      "state": "ready",
+      "supported": true,
+      "title": "Voice Studio",
+      "url": "http://127.0.0.1:64289"
+     }
+    ],
+    "summary": {
+     "offline": 0,
+     "ready": 3,
+     "total": 3,
+     "update_required": 0
+    }
+   },
+   "status": 200,
+   "step": "GET /api/hub/memory/policy"
+  },
+  {
+   "body": {
+    "action": "set_mode",
+    "failed": 0,
+    "mode": "memory_saver",
+    "ok": true,
+    "results": [
+     {
+      "detail": null,
+      "health": "up",
+      "id": "subtitle",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "transcription",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.0909429,
+       "default_mode": "balanced",
+       "idle_seconds": 120,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "memory_saver",
+       "model_idle_seconds": null,
+       "modes": {
+        "balanced": "Balanced",
+        "immediate": "Immediate",
+        "memory_saver": "Memory Saver",
+        "performance": "Performance"
+       },
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 0,
+       "resident": false
+      },
+      "result": "updated",
+      "title": "Subtitle Studio",
+      "url": "http://127.0.0.1:64290"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "voice",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "voice",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518205.050758,
+       "default_mode": "immediate",
+       "idle_seconds": 120,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "mode": "memory_saver",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "process": {
+        "pid": 45468,
+        "started_at": 1789518205.050758,
+        "started_at_iso": "2026-09-16T07:23:25",
+        "uptime_seconds": 3.829
+       },
+       "process_title": "Voice Studio Mac",
+       "process_title_applied": true,
+       "release_count": 0
+      },
+      "result": "updated",
+      "title": "Voice Studio",
+      "url": "http://127.0.0.1:64289"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "image",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "image",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.190393,
+       "default_mode": "immediate",
+       "fixed": true,
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": 0,
+         "label": "After every job",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 0,
+       "release_policy": "The model is released when each job finishes.",
+       "resident": false
+      },
+      "result": "fixed",
+      "state": "ready",
+      "supported": true,
+      "title": "Image Studio",
+      "url": "http://127.0.0.1:64291"
+     }
+    ],
+    "selected": 3,
+    "succeeded": 3
+   },
+   "status": 200,
+   "step": "PUT /api/hub/memory/policy memory_saver"
+  },
+  {
+   "body": {
+    "detail": "Hub token required for remote access. Open the dashboard on the Hub machine to see the token."
+   },
+   "status": 401,
+   "step": "PUT without a credential"
+  },
+  {
+   "body": {
+    "detail": "mode must be one of: performance, balanced, memory_saver, immediate"
+   },
+   "status": 400,
+   "step": "PUT with an unknown mode"
+  },
+  {
+   "body": {
+    "action": "release",
+    "failed": 0,
+    "ok": true,
+    "results": [
+     {
+      "detail": null,
+      "health": "up",
+      "id": "image",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "image",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.190393,
+       "default_mode": "immediate",
+       "error": null,
+       "fixed": true,
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "models": [],
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": 0,
+         "label": "After every job",
+         "mode": "immediate"
+        }
+       ],
+       "reason": "manual",
+       "release_count": 0,
+       "release_policy": "The model is released when each job finishes.",
+       "released": false,
+       "resident": false
+      },
+      "result": "released",
+      "title": "Image Studio",
+      "url": "http://127.0.0.1:64291"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "subtitle",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "transcription",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.0909429,
+       "default_mode": "balanced",
+       "error": null,
+       "idle_seconds": 120,
+       "last_error": null,
+       "last_release_at": 1789518208.888918,
+       "last_release_details": {
+        "models": [],
+        "reason": "manual",
+        "released": false
+       },
+       "last_release_reason": "manual",
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "memory_saver",
+       "model_idle_seconds": null,
+       "models": [],
+       "modes": {
+        "balanced": "Balanced",
+        "immediate": "Immediate",
+        "memory_saver": "Memory Saver",
+        "performance": "Performance"
+       },
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "reason": "manual",
+       "release_count": 1,
+       "released": false,
+       "resident": false
+      },
+      "result": "released",
+      "title": "Subtitle Studio",
+      "url": "http://127.0.0.1:64290"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "voice",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "voice",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518205.050758,
+       "default_mode": "immediate",
+       "idle_seconds": 120,
+       "last_error": null,
+       "last_release_at": 1789518211.9193459,
+       "last_release_details": {
+        "actions": [
+         "cleared Python, PyTorch, MLX and Metal allocator caches",
+         "cleared transcription MLX and Metal allocator caches"
+        ],
+        "models": [],
+        "reason": "manual",
+        "released": false
+       },
+       "last_release_reason": "manual",
+       "loaded_models": [],
+       "mode": "memory_saver",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "process": {
+        "pid": 45468,
+        "started_at": 1789518205.050758,
+        "started_at_iso": "2026-09-16T07:23:25",
+        "uptime_seconds": 6.869
+       },
+       "process_title": "Voice Studio Mac",
+       "process_title_applied": true,
+       "release_count": 1
+      },
+      "result": "released",
+      "title": "Voice Studio",
+      "url": "http://127.0.0.1:64289"
+     }
+    ],
+    "selected": 3,
+    "succeeded": 3
+   },
+   "status": 200,
+   "step": "POST /api/hub/memory/release"
+  },
+  {
+   "body": {
+    "action": "set_mode",
+    "failed": 0,
+    "mode": "immediate",
+    "ok": true,
+    "results": [
+     {
+      "detail": null,
+      "health": "up",
+      "id": "subtitle",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "transcription",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.0909429,
+       "default_mode": "balanced",
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": 1789518208.888918,
+       "last_release_details": {
+        "models": [],
+        "reason": "manual",
+        "released": false
+       },
+       "last_release_reason": "manual",
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "modes": {
+        "balanced": "Balanced",
+        "immediate": "Immediate",
+        "memory_saver": "Memory Saver",
+        "performance": "Performance"
+       },
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 1,
+       "resident": false
+      },
+      "result": "updated",
+      "title": "Subtitle Studio",
+      "url": "http://127.0.0.1:64290"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "voice",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "voice",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518205.050758,
+       "default_mode": "immediate",
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": 1789518211.9193459,
+       "last_release_details": {
+        "actions": [
+         "cleared Python, PyTorch, MLX and Metal allocator caches",
+         "cleared transcription MLX and Metal allocator caches"
+        ],
+        "models": [],
+        "reason": "manual",
+        "released": false
+       },
+       "last_release_reason": "manual",
+       "loaded_models": [],
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": null,
+         "label": "Performance",
+         "mode": "performance"
+        },
+        {
+         "idle_seconds": 600,
+         "label": "Balanced",
+         "mode": "balanced"
+        },
+        {
+         "idle_seconds": 120,
+         "label": "Memory Saver",
+         "mode": "memory_saver"
+        },
+        {
+         "idle_seconds": 0,
+         "label": "Immediate",
+         "mode": "immediate"
+        }
+       ],
+       "process": {
+        "pid": 45468,
+        "started_at": 1789518205.050758,
+        "started_at_iso": "2026-09-16T07:23:25",
+        "uptime_seconds": 6.879
+       },
+       "process_title": "Voice Studio Mac",
+       "process_title_applied": true,
+       "release_count": 1
+      },
+      "result": "updated",
+      "title": "Voice Studio",
+      "url": "http://127.0.0.1:64289"
+     },
+     {
+      "detail": null,
+      "health": "up",
+      "id": "image",
+      "machine": "local",
+      "machine_label": "local",
+      "modality": "image",
+      "ok": true,
+      "policy": {
+       "active_work": false,
+       "busy": false,
+       "counters_since": 1789518206.190393,
+       "default_mode": "immediate",
+       "fixed": true,
+       "idle_seconds": 0,
+       "last_error": null,
+       "last_release_at": null,
+       "last_release_details": null,
+       "last_release_reason": null,
+       "loaded_models": [],
+       "machine_bytes": 17179869184,
+       "mode": "immediate",
+       "model_idle_seconds": null,
+       "next_release_at": null,
+       "options": [
+        {
+         "idle_seconds": 0,
+         "label": "After every job",
+         "mode": "immediate"
+        }
+       ],
+       "release_count": 0,
+       "release_policy": "The model is released when each job finishes.",
+       "resident": false
+      },
+      "result": "fixed",
+      "state": "ready",
+      "supported": true,
+      "title": "Image Studio",
+      "url": "http://127.0.0.1:64291"
+     }
+    ],
+    "selected": 3,
+    "succeeded": 3
+   },
+   "status": 200,
+   "step": "PUT /api/hub/memory/policy immediate"
+  }
+ ],
+ "studios": {
+  "image": {
+   "default_mode": "immediate",
+   "fixed": true,
+   "loaded_models": [],
+   "machine_bytes": 17179869184,
+   "modality": "image",
+   "mode": "immediate",
+   "state": "ready"
+  },
+  "subtitle": {
+   "default_mode": "balanced",
+   "fixed": null,
+   "loaded_models": [],
+   "machine_bytes": 17179869184,
+   "modality": "transcription",
+   "mode": "balanced",
+   "state": "ready"
+  },
+  "voice": {
+   "default_mode": "immediate",
+   "fixed": null,
+   "loaded_models": [],
+   "machine_bytes": null,
+   "modality": "voice",
+   "mode": "immediate",
+   "state": "ready"
+  }
+ },
+ "subtitle_policy_file": {
+  "body": "{\"mode\": \"immediate\"}",
+  "exists": true,
+  "path": "state/subtitle/memory_policy.json"
+ }
+}

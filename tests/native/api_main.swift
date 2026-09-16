@@ -97,6 +97,10 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
             result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+        case ("GET", "/api/hub/controller"):
+            result = (200, "application/json", Data(#"{"settings":{"version":2,"role":"standalone","site_id":"studiohub-local","site_name":"This Mac","controller_id":"controller-local","database_mode":"off","machine_name":"Studio Mini","database_configured":false,"sqlite_authoritative":true,"global_authority":"genstudio","migration_stage":"local"},"runtime":{"state":"idle"},"readiness":{"ready":true,"role":"standalone","site_id":"studiohub-local","controller_id":"controller-local","migration_stage":"local","sqlite_authoritative":true,"global_job_claiming":false,"global_authority":"genstudio","reason":null,"telemetry_warning":null},"capacity":{"machines":1,"queue_depth":0}}"#.utf8))
+        case ("GET", "/api/version"):
+            result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
             Self.lock.lock(); let memoryDown = Self.memoryUnavailable; Self.lock.unlock()
             result = memoryDown
@@ -272,6 +276,21 @@ struct NativeAPITests {
         require(imageMemory?.policy?.isFixed == true, "Image releases inside every job and has no idle mode")
         require(imageMemory?.policy?.resident.isEmpty == true, "Image holds nothing between jobs")
         require(memory?.studios.first { $0.id == "voice" }?.policy?.busy == true, "a working Studio must be shown as busy")
+
+        // Connections: the Hub reports its own role and identity, and the credential this app
+        // already holds is shown masked rather than printed.
+        await store.refreshConnection()
+        require(store.controllerIdentity?.settings.role == "standalone", "the Hub role must be reported truthfully")
+        require(store.controllerIdentity?.settings.siteName == "This Mac", "the station name must come from the Hub")
+        require(store.controllerIdentity?.settings.globalAuthority == "genstudio", "GenStudio stays the global authority")
+        require(store.controllerIdentity?.readiness.ready == true, "a healthy local Hub must report ready")
+        require(store.hubVersion?.version == "0.4.0", "the app must show the Hub's own version")
+        let secret = "hub-token-abcdefghijklmnop"
+        let masked = NativeWorkspaceStore.maskedToken(secret)
+        require(masked != secret, "the token must never be shown unmasked by default")
+        require(!masked.contains("efghijkl"), "the middle of a credential must not be published")
+        require(masked.hasPrefix("hub-") && masked.hasSuffix("mnop"), "the mask must still be recognisable")
+        require(NativeWorkspaceStore.maskedToken("short") == "••••••••", "a short credential must be fully masked")
 
         await store.setMemoryMode("memory_saver", studioIDs: ["subtitle"])
         let (memoryMethod, memoryToken) = FixtureProtocol.memoryRequest()
