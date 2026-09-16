@@ -137,6 +137,23 @@ Change the path if you put the app somewhere else — running it straight from t
 `/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app/...`. If it prints that line,
 you are running the exact build the tests passed against.
 
+## Your own voices
+
+**Voices** in the sidebar (under Models) is the voice library: the saved reference clips a
+clone reuses. Add one with a clip and its exact transcript, edit it, play it, remove it, and
+use it for the next generation with **Use**.
+
+To bring over voices you already have, check the folder first:
+
+```sh
+sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/check-voices-folder.sh" "/path/to/your/voices"
+```
+
+It reports which voices are ready and which have no transcript. Then **Voices → Import
+Folder…** and choose the same folder. A voice with a clip but no transcript is skipped — a
+clone matches audio to words, so without them the result would sound wrong. Everything
+imported is recorded as *Owned by me*, with the consent box ticked.
+
 ## The proof, in this order
 
 Simplest first. If one of these fails, stop there — the next one needs it.

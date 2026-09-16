@@ -89,6 +89,24 @@ does not have - it is never needed by the app.
 
 
 ------------------------------------------------------------------
+2d. IMPORTING YOUR OLD VOICES
+------------------------------------------------------------------
+First check they are in a shape the importer reads - one folder per voice,
+containing a clip and (for cloning) a transcript file:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/check-voices-folder.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
+
+Point it at whichever folder holds them. It lists each voice and says whether it
+is ready, then in the app: Voices -> Import Folder... and choose the same folder.
+
+A voice with a clip but no transcript is skipped: a clone matches audio to words,
+and without them the engine would produce a wrong-sounding voice. Add the words in
+the app (Voices -> Edit...) and it becomes usable.
+
+Everything imported is recorded as "Owned by me" with the consent box ticked.
+
+
+------------------------------------------------------------------
 3. Open the folder that holds the log
 ------------------------------------------------------------------
 
