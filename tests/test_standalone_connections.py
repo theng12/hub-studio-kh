@@ -12,6 +12,7 @@ runs in a child process with the packaged environment already set — the same r
 """
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -467,6 +468,72 @@ class FleetDispatchTests(unittest.TestCase):
             # controller's.
             self.assertEqual(worker.submissions[0]["token"], node.token)
 
+
+    @unittest.skip("the controller never sees the node's job finish; see the docstring")
+    def test_the_controllers_artifact_comes_back_from_the_node(self) -> None:
+        """The work happens on the node; the result has to come back to the controller.
+
+        Dispatch is proven: the node's worker receives the job with the node's credential. What
+        is not yet working is completion. The controller records the item as `running` and never
+        moves it on, so the artifact route answers 404 for a job that finished on the node in
+        under a second.
+
+        The likely shape, from what the two Hubs do: the controller polls the node through the
+        same proxy, so it should see the same `state: done` the node's own poll would. Either
+        the poll is not happening for a studio on another machine, or the completion it receives
+        is not the shape it finalises on. Worth understanding before it is patched, because the
+        answer decides whether results stay on the node or are pulled back - which is still an
+        open question for the owner.
+        """
+        worker = StubImageWorker()
+        self.addCleanup(worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-artifact-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        node.post_json("/api/hub/fleet/adopt",
+                       {"token": (controller.data / ".fleet_token").read_text().strip()},
+                       token=node.token)
+
+        _, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-artifact-1",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 45
+        artifact = None
+        while time.time() < deadline:
+            status, _, response = controller.request(
+                f"/api/hub/jobs/{batch}/items/0/artifact", token=controller.token)
+            if status == 200:
+                artifact = response.read()
+                break
+            time.sleep(0.5)
+        self.assertIsNotNone(artifact, "the controller never served the artifact the node "
+                                       f"produced; job: {self.governor(controller, batch)}")
+        self.assertEqual(artifact, FLUX_PNG,
+                         "the controller must return the node's bytes unchanged")
+
     @staticmethod
     def tail(controller) -> str:
         import re as re_module
@@ -505,6 +572,13 @@ class FleetDispatchTests(unittest.TestCase):
 
 
 FLUX_MODEL_ID = "fixture/flux"
+# A one-pixel PNG, with the digest the stub reports for it, so the controller can verify the
+# artifact it fetches rather than accepting whatever comes back.
+FLUX_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d4944415478da63f8cfc000000301010018dd8db0"
+    "0000000049454e44ae426082")
+FLUX_SHA = sha256(FLUX_PNG).hexdigest()
 
 
 def tiny_flux_install(root: Path) -> tuple[Path, Path]:
@@ -580,10 +654,20 @@ class StubImageWorker:
                         "cache": {"state": "cached"},
                     }] if outer.has_catalog else []
                     self._send(200, {"models": models})
+                elif self.path.endswith("/image"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(FLUX_PNG)))
+                    self.send_header("X-Content-SHA256", FLUX_SHA)
+                    self.end_headers()
+                    self.wfile.write(FLUX_PNG)
                 elif "/api/generate/jobs/" in self.path:
                     self._send(200, {"job": {"id": "job-1", "state": "done",
-                                             "progress": 1.0, "bytes": 4,
-                                             "sha256": "0" * 64}})
+                                             "progress": 1.0,
+                                             "bytes": len(FLUX_PNG),
+                                             "sha256": FLUX_SHA,
+                                             "artifact_url":
+                                                 "/api/generate/jobs/job-1/image"}})
                 else:
                     self._send(200, {"job": {"id": "job-1", "state": "running"}})
 
