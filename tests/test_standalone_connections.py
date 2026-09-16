@@ -862,13 +862,19 @@ class StubImageWorker:
     reports an empty catalog, exactly like a Mac where the model was never verified.
     """
 
-    def __init__(self, *, catalog: bool = True, machine: str = "local") -> None:
+    def __init__(self, *, catalog: bool = True, machine: str = "local",
+                 hold: bool = False) -> None:
         self.submissions: list[dict] = []
         self.seen: list[str] = []
+        self.cancels: list[dict] = []
         self.has_catalog = catalog
         # The Hub refuses a completion whose machine identity is not the one it dispatched to,
         # which is what stops a node claiming work that ran somewhere else.
         self.machine = machine
+        # A job that stays running until it is cancelled, so cancellation has something to act
+        # on rather than a job that finished before anyone could stop it.
+        self.hold = hold
+        self.cancelled = False
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -906,6 +912,17 @@ class StubImageWorker:
                     self.end_headers()
                     self.wfile.write(FLUX_PNG)
                 elif "/api/generate/jobs/" in self.path:
+                    if outer.hold and not outer.cancelled:
+                        self._send(200, {"job": {"id": "job-1", "state": "running",
+                                                 "progress": 0.4,
+                                                 "worker_id": "image-fixture",
+                                                 "machine_id": outer.machine}})
+                        return
+                    if outer.cancelled:
+                        self._send(200, {"job": {"id": "job-1", "state": "cancelled",
+                                                 "worker_id": "image-fixture",
+                                                 "machine_id": outer.machine}})
+                        return
                     # A completion receipt has to be complete: the Hub rejects a job that
                     # claims done without the output URL, path, media type and a timestamp,
                     # which is the behaviour that keeps a half-written file from being treated
@@ -924,6 +941,16 @@ class StubImageWorker:
                     }})
                 else:
                     self._send(200, {"job": {"id": "job-1", "state": "running"}})
+
+            def do_DELETE(self):
+                outer.seen.append(self.path)
+                if "/api/generate/jobs/" in self.path:
+                    outer.cancels.append({"path": self.path,
+                                          "token": self.headers.get("X-Hub-Token")})
+                    outer.cancelled = True
+                    self._send(200, {"job": {"id": "job-1", "state": "cancelled"}})
+                else:
+                    self._send(200, {"ok": True})
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
@@ -1040,6 +1067,74 @@ class FleetVoiceDispatchTests(unittest.TestCase):
 
     @staticmethod
     def voice_state(controller, batch: str) -> str:
+        status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(unreadable: {status})"
+        return (f"note={payload.get('governor_note')!r} "
+                f"items={payload.get('items')!r}")
+
+
+class FleetCancelTests(unittest.TestCase):
+    """Stopping work on another Mac, from the Mac that asked for it."""
+
+    def test_cancelling_on_the_controller_stops_the_node(self) -> None:
+        worker = StubImageWorker(machine="node-a", hold=True)
+        self.addCleanup(worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-cancel-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        controller_fleet = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": controller_fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+
+        status, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-cancel-1",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not worker.submissions:
+            time.sleep(0.5)
+        self.assertTrue(worker.submissions, "the job never reached the node to be cancelled")
+
+        status, _, _ = controller.request(f"/api/hub/jobs/{batch}", method="DELETE",
+                                          token=controller.token)
+        self.assertIn(status, (200, 202), f"the controller refused the cancel: {status}")
+
+        deadline = time.time() + 45
+        while time.time() < deadline and not worker.cancels:
+            time.sleep(0.5)
+        self.assertTrue(worker.cancels,
+                        "the node kept working after the controller was told to stop it; "
+                        f"job: {self.cancel_state(controller, batch)}")
+        # And the node's own credential, not the controller's.
+        self.assertEqual(worker.cancels[0]["token"], node.token)
+
+    @staticmethod
+    def cancel_state(controller, batch: str) -> str:
         status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
         if status != 200:
             return f"(unreadable: {status})"
