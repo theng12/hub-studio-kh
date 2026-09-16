@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -697,6 +697,67 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if batch is None:
             raise HTTPException(404, "unknown transcription batch")
         return transcription_jobs.summary(batch)
+
+    # ── the fleet peer surface ─────────────────────────────────────────────
+    # A controller dispatches by talking to a peer Hub at /studio/<modality>/<path>, exactly
+    # as this Hub talks to its own workers. Serving that surface is what makes a packaged app a
+    # valid fleet member: the rest of the fleet logic already exists on the controller side and
+    # only ever needed somewhere to point.
+    WORKER_FOR_MODALITY = {"image": "image", "voice": "voice", "transcription": "subtitle"}
+
+    def _proxy_target(path: str) -> tuple[str, str]:
+        """Resolve a peer path to a local worker, or refuse it.
+
+        The path is appended to a worker address this Hub owns, so it can only ever reach a
+        local studio - but a traversal or an absolute URL would still let a caller reach worker
+        routes it was never meant to, so both are refused outright rather than normalised.
+        """
+        cleaned = path.strip("/")
+        if (not cleaned or ".." in cleaned.split("/")
+                or "//" in cleaned or ":" in cleaned.split("/")[0]
+                or "?" in cleaned or "#" in cleaned):
+            raise HTTPException(400, "invalid studio path")
+        segments = cleaned.split("/")
+        modality = segments[0]
+        worker_id = WORKER_FOR_MODALITY.get(modality)
+        if worker_id is None:
+            raise HTTPException(404, "unknown studio")
+        return worker_id, "/" + "/".join(segments[1:])
+
+    @app.api_route("/studio/{modality}/{path:path}",
+                   methods=["GET", "POST", "PUT", "DELETE"])
+    async def studio_proxy(modality: str, path: str, request: Request) -> Response:
+        """Forward one fleet request to this Mac's own worker for that studio.
+
+        The caller's credential is not passed on. The worker trusts only this Hub, so the
+        request is re-signed with the worker's own token: a fleet credential reaching this Mac
+        must never become a fleet credential reaching its workers.
+        """
+        worker_id, tail = _proxy_target(f"{modality}/{path}")
+        worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
+        if worker is None:
+            raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
+        url = worker["base_url"] + tail
+        if request.url.query:
+            url += "?" + request.url.query
+        body = await request.body()
+        headers = {"X-Hub-Token": worker["hub_token"]}
+        content_type = request.headers.get("content-type")
+        if content_type:
+            headers["Content-Type"] = content_type
+        try:
+            upstream = await monitor._client.request(
+                request.method, url, headers=headers, content=body or None,
+                timeout=httpx.Timeout(900.0, connect=5.0),
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            raise HTTPException(502, f"{worker_id.title()} worker request failed") from exc
+        passthrough = {}
+        for name in ("content-type", "content-disposition", "x-content-sha256"):
+            if name in upstream.headers:
+                passthrough[name] = upstream.headers[name]
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        headers=passthrough)
 
     from . import delivery, operator_controls, statistics
     delivery.register_routes(app, monitor)
