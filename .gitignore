@@ -11,3 +11,7 @@ __pycache__/
 /model-library/
 
 .worktrees/
+
+# Hub runtime state must never be committed
+components/.hub_token
+components/hub.db
