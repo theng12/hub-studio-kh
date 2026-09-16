@@ -35,6 +35,31 @@ try legacyPreferences.write(to: legacyState.appendingPathComponent("app-preferen
 let legacyConfig = try ShellConfiguration(arguments: ["app", "--data-dir", legacyState.path], bundle: bundle)
 require(legacyConfig.startAtLogin && legacyConfig.recoveryMaxAttempts == 3, "legacy preferences must use safe defaults")
 require(!legacyConfig.startServicesAtLogin, "preferences written before this setting must not start services")
+// The app's service command line must use the flags the bundled worker actually defines.
+// It once passed `--listen-host` to a worker that defines `--host`, and argparse answers an
+// unknown argument by exiting 2 - which the app shows as "the engine exited (code 2)" with no
+// further explanation. Nothing caught it because every test drove the worker directly.
+let serviceArgs = ShellConfiguration.serviceArguments(
+    dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
+    readyFile: config.readyFile, parentPID: 4321, listenHost: "100.64.0.1,192.168.1.5",
+    offline: false)
+require(serviceArgs.contains("--host"), "the service must be told its listen address with --host")
+require(!serviceArgs.contains("--listen-host"),
+        "the worker has no --listen-host; passing it makes the worker exit 2")
+require(serviceArgs[serviceArgs.firstIndex(of: "--host")! + 1] == "100.64.0.1,192.168.1.5",
+        "a multi-address listen value must reach the worker unchanged")
+require(!serviceArgs.contains("--offline"), "offline must not be passed when it is off")
+let offlineArgs = ShellConfiguration.serviceArguments(
+    dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
+    readyFile: config.readyFile, parentPID: 4321, listenHost: "127.0.0.1", offline: true)
+require(offlineArgs.contains("--offline"), "offline must be passed when it is on")
+require(offlineArgs.contains("--parent-pid") && offlineArgs.contains("--data-dir")
+        && offlineArgs.contains("--models-dir") && offlineArgs.contains("--ready-file"),
+        "the worker requires every mandatory flag on every start")
+// No argument may be the empty string: an empty value is accepted by argparse and then fails
+// later, somewhere the app cannot explain.
+require(!offlineArgs.contains(""), "no service argument may be empty")
+
 var noAutomaticRecovery = restoredConfig
 try noAutomaticRecovery.setRecoveryPolicy(maxAttempts: 0, backoffSeconds: [1])
 require(noAutomaticRecovery.recoveryMaxAttempts == 0, "zero recovery attempts must persist as disabled")

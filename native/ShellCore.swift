@@ -118,6 +118,24 @@ struct ShellConfiguration {
     }
     var recoveryMaxAttempts: Int
     var recoveryBackoffSeconds: [TimeInterval]
+    /// The exact command line the bundled service is started with.
+    ///
+    /// This exists because it was once wrong in a way no test caught: the app passed
+    /// `--listen-host` while `packaging/hub_worker.py` defines `--host`, and argparse answers an
+    /// unknown argument by exiting 2 - which the app reports only as "the engine exited (code 2)".
+    /// Every check ran the worker directly with its real flag, so the mismatch lived in the one
+    /// place nothing exercised: the argument list the app builds. The worker's own
+    /// `tests/test_fleet_binding.py` pins its side; this pins ours, and the names must stay equal.
+    static func serviceArguments(dataDirectory: URL, modelsDirectory: URL, readyFile: URL,
+                                 parentPID: Int32, listenHost: String, offline: Bool) -> [String] {
+        var arguments = ["--data-dir", dataDirectory.path,
+                         "--models-dir", modelsDirectory.path,
+                         "--ready-file", readyFile.path,
+                         "--parent-pid", String(parentPID),
+                         "--host", listenHost]
+        if offline { arguments.append("--offline") }
+        return arguments
+    }
     var readyFile: URL { dataDirectory.appendingPathComponent("hub-ready.json") }
     var logFile: URL { dataDirectory.appendingPathComponent("hub-worker.log") }
     var preferencesFile: URL { dataDirectory.appendingPathComponent("app-preferences.json") }

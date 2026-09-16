@@ -110,11 +110,10 @@ final class StudioController: ObservableObject {
             logHandle = log
             let process = Process()
             process.executableURL = executable
-            process.arguments = ["--data-dir", configuration.dataDirectory.path,
-                                 "--models-dir", models.path, "--ready-file", configuration.readyFile.path,
-                                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
-                                 "--listen-host", configuration.listenHost]
-                + (configuration.offline ? ["--offline"] : [])
+            process.arguments = ShellConfiguration.serviceArguments(
+                dataDirectory: configuration.dataDirectory, modelsDirectory: models,
+                readyFile: configuration.readyFile, parentPID: ProcessInfo.processInfo.processIdentifier,
+                listenHost: configuration.listenHost, offline: configuration.offline)
             process.currentDirectoryURL = configuration.dataDirectory
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
             process.standardOutput = log
