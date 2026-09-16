@@ -56,15 +56,27 @@ class HubProcess:
     """One real Hub process bound to a loopback port, started from a chosen state root."""
 
     def __init__(self, root: Path, name: str, token: str, data: Path | None = None,
-                 host: str = "127.0.0.1"):
+                 host: str = "127.0.0.1", joined: list[dict] | None = None):
         self.root = root
         self.token = token
         self.host = host
+        self.joined = joined or []
         self.data = data or (root / name / "state")
         self.data.mkdir(parents=True, exist_ok=True)
         token_file = self.data / ".hub_token"
         token_file.write_text(token + "\n")
         os.chmod(token_file, 0o600)
+        if self.joined:
+            # A node that joined earlier, so the controller builds it into its registry at
+            # startup rather than only knowing about it in memory.
+            fleet = self.data / "fleet_nodes.json"
+            fleet.write_text(json.dumps({
+                row["node_id"]: {"id": row["node_id"], "name": row["name"],
+                                 "address": row["address"], "role": "agent",
+                                 "studios": row["studios"], "joined_at": 1.0,
+                                 "updated_at": 1.0}
+                for row in self.joined}))
+            os.chmod(fleet, 0o600)
         worker_port = free_port()
         self.workers = root / name / "workers.json"
         self.workers.parent.mkdir(parents=True, exist_ok=True)
@@ -336,6 +348,52 @@ class IndependentClientTests(unittest.TestCase):
         host = self.hub.base.split("://", 1)[1].split(":", 1)[0]
         self.assertEqual(host, "127.0.0.1")
         self.assertIn("127.0.0.1", self.hub.base)
+
+
+class ControllerRegistryTests(unittest.TestCase):
+    """A controller must hold a joined node as something it can dispatch to."""
+
+    def test_a_joined_node_appears_as_remote_studios(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="studiohub-controller-") as root:
+            directory = Path(root)
+            hub = HubProcess(directory, "controller", "controller-fixture-token-0123456789",
+                             joined=[{"node_id": "mac-mini-2", "name": "Studio 2",
+                                      "address": "http://192.168.1.21:47873",
+                                      "studios": [{"id": "image", "modality": "image"},
+                                                  {"id": "voice", "modality": "voice"},
+                                                  {"id": "subtitle",
+                                                   "modality": "transcription"}]}])
+            hub.start()
+            try:
+                status, payload, _ = hub.request("/api/hub/workers", token=hub.token)
+                self.assertEqual(status, 200)
+                rows = {row["id"]: row for row in payload["workers"]}
+                # The controller's own worker, plus one entry per studio on the joined node.
+                self.assertIn("voice", rows)
+                self.assertEqual(rows["voice"]["machine"], "local")
+                remote = {key: value for key, value in rows.items() if ":" in key}
+                self.assertEqual(sorted(remote),
+                                 ["mac-mini-2:image", "mac-mini-2:subtitle", "mac-mini-2:voice"])
+                self.assertEqual(remote["mac-mini-2:image"]["modality"], "image")
+                self.assertEqual(remote["mac-mini-2:subtitle"]["modality"], "transcription")
+                # The machine identity is the node, not this Mac - that is what routes a
+                # dispatch to it over the peer path.
+                self.assertEqual(remote["mac-mini-2:voice"]["machine"], "mac-mini-2")
+            finally:
+                hub.stop()
+
+    def test_a_node_with_no_studios_is_not_dispatchable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="studiohub-controller-") as root:
+            directory = Path(root)
+            hub = HubProcess(directory, "controller", "controller-fixture-token-0123456789",
+                             joined=[{"node_id": "empty", "name": "Empty",
+                                      "address": "http://192.168.1.22:47873", "studios": []}])
+            hub.start()
+            try:
+                _, payload, _ = hub.request("/api/hub/workers", token=hub.token)
+                self.assertEqual([row["id"] for row in payload["workers"] if ":" in row["id"]], [])
+            finally:
+                hub.stop()
 
 
 class IdentityScopeTests(unittest.TestCase):
