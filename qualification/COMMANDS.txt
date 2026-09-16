@@ -111,6 +111,24 @@ does not have - it is never needed by the app.
 
 
 ------------------------------------------------------------------
+2c-bis. IMPORT ALL YOUR OLD VOICES IN ONE COMMAND
+------------------------------------------------------------------
+No clicking. Point it at the folder that holds your voices:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/run-voice-import.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
+
+See what it would do first, without writing anything:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/run-voice-import.sh" "/path/to/voices" --dry-run
+
+It reads one folder per voice (a clip, and a transcript beside it if you have one). Voices
+without a transcript are still imported - they show as needing one, and you can add it in the
+app rather than lose the clip.
+
+Then open Voices in the app (or press Refresh) and they are there.
+
+
+------------------------------------------------------------------
 2d. IMPORTING YOUR OLD VOICES
 ------------------------------------------------------------------
 First check they are in a shape the importer reads - one folder per voice,
