@@ -669,7 +669,9 @@ final class NativeWorkspaceStore: ObservableObject {
             let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
                 try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
             guard connectionID == requestConnection else { return }
-            modelPackages = Dictionary(uniqueKeysWithValues: packagesValue.models.map { ($0.modelId, $0) })
+            // Built by merging, not uniqueKeysWithValues: a repeated id in a Hub payload would
+            // trap the app on every refresh and on the two-second poll. Last one wins instead.
+            modelPackages = packagesValue.models.reduce(into: [:]) { $0[$1.modelId] = $1 }
             audioSpeakers = (generationValue.qwen3PresetSpeakers ?? []).map(\.id)
             if audioSpeaker.isEmpty || (!audioSpeakers.isEmpty && !audioSpeakers.contains(audioSpeaker)) {
                 audioSpeaker = audioSpeakers.first ?? "Ryan"
@@ -681,9 +683,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 speakers: audioSpeakers,
                 packages: modelPackages
             )
-            imageConfigurations = Dictionary(uniqueKeysWithValues: catalogValue.models.compactMap { model in
-                model.imageConfiguration.map { (model.repo, $0) }
-            })
+            imageConfigurations = catalogValue.models.reduce(into: [:]) { result, model in
+                if let configuration = model.imageConfiguration { result[model.repo] = configuration }
+            }
             if imageConfigurations[imageModel] == nil,
                let first = models.first(where: { $0.function == .image && $0.supported }) { imageModel = first.repo }
             if imageSettings == nil { imageSettings = imageConfiguration?.defaults }

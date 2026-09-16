@@ -107,16 +107,16 @@ struct ShellConfiguration {
     var startServicesAtLogin: Bool
     /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
     var listenHost: String
-    /// The address the owner app connects to. A wildcard bind also answers on loopback, so
-    /// that case still uses it; a scoped bind is only reachable at the address it bound.
+    /// The address this app's own Hub answers on. Always loopback.
+    ///
+    /// Loopback is bound in every configuration - `bind_hosts` adds it unconditionally - and the
+    /// worker's readiness record names loopback for that reason. This used to return the scoped
+    /// address when the operator picked a LAN or Tailscale address, and the app then rejected its
+    /// own Hub's readiness record ("did not become ready within two minutes") for a Hub that was
+    /// running perfectly: picking a specific address could not start the services at all. Serving
+    /// other Macs does not change where this Mac's own app talks to it.
     var clientHost: String { ShellConfiguration.clientHost(for: listenHost) }
-    static func clientHost(for listenHost: String) -> String {
-        // Loopback is always bound, so the app uses it whenever it is available - which is
-        // every case except a scoped bind that deliberately excludes it.
-        let hosts = listenHost.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        if hosts.contains("0.0.0.0") || hosts.contains("127.0.0.1") { return "127.0.0.1" }
-        return hosts.first ?? "127.0.0.1"
-    }
+    static func clientHost(for listenHost: String) -> String { "127.0.0.1" }
     var recoveryMaxAttempts: Int
     var recoveryBackoffSeconds: [TimeInterval]
     /// The exact command line the bundled service is started with.
@@ -170,7 +170,10 @@ struct ShellConfiguration {
         }
         try Self.requireExternal(dataDirectory, bundle: bundle)
         if let data = readPrivateRegularFile(preferencesFile), let saved = try? JSONDecoder().decode(Preferences.self, from: data) {
-            modelsDirectory = URL(fileURLWithPath: saved.modelsPath).standardizedFileURL.resolvingSymlinksInPath()
+            // An empty path means "no library chosen yet", not a folder called "".
+            modelsDirectory = saved.modelsPath.isEmpty
+                ? nil
+                : URL(fileURLWithPath: saved.modelsPath).standardizedFileURL.resolvingSymlinksInPath()
             offline = saved.offline
             startAtLogin = saved.startAtLogin
             startServicesAtLogin = saved.startServicesAtLogin
@@ -231,9 +234,11 @@ struct ShellConfiguration {
         }
     }
     func save() throws {
-        guard let modelsDirectory else { return }
+        // Saved even before a model library is chosen. This used to return early when there was
+        // none, so turning on "Start services at login" or "Use imported models offline" before
+        // picking a folder appeared to work and quietly reverted on the next launch.
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory.path, offline: offline,
+        let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory?.path ?? "", offline: offline,
                                                         startAtLogin: startAtLogin,
                                                         startServicesAtLogin: startServicesAtLogin,
                                                         listenHost: listenHost,
@@ -267,7 +272,9 @@ struct ShellConfiguration {
 
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
-            modelsPath = try values.decode(String.self, forKey: .modelsPath)
+            // Empty until a library is chosen: preferences are saved as soon as anything else is
+            // set, so an empty path is a normal state rather than a broken file.
+            modelsPath = try values.decodeIfPresent(String.self, forKey: .modelsPath) ?? ""
             offline = try values.decode(Bool.self, forKey: .offline)
             // Older previews did not persist this preference; the first-release default is on.
             startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true

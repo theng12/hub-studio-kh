@@ -156,10 +156,13 @@ for bad in ["", "localhost", "http://100.1.1.1", "100.1.1.1:8080", "100.1.1.0/24
 require(ShellConfiguration.clientHost(for: "0.0.0.0") == "127.0.0.1",
         "a wildcard bind still answers on loopback, so the app keeps using loopback")
 require(ShellConfiguration.clientHost(for: "127.0.0.1") == "127.0.0.1", "loopback client address")
-require(ShellConfiguration.clientHost(for: "100.101.102.103") == "100.101.102.103",
-        "a scoped bind is only reachable at the address it bound")
-// With several addresses bound, loopback is among them, so the app uses it and never has to
-// care which network the operator happened to pick.
+// Loopback is bound in every configuration, and the worker's readiness record always names it.
+// A scoped bind used to make the app expect the bound address and reject the Hub it had just
+// started; these cases pin that it always agrees with the worker now.
+require(ShellConfiguration.clientHost(for: "100.101.102.103") == "127.0.0.1",
+        "a Tailscale-only bind must still be reached on loopback")
+require(ShellConfiguration.clientHost(for: "192.168.1.20") == "127.0.0.1",
+        "a LAN-only bind must still be reached on loopback")
 require(ShellConfiguration.clientHost(for: "127.0.0.1,192.168.1.20") == "127.0.0.1",
         "a multi-address bind still reaches its own Hub on loopback")
 

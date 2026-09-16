@@ -1321,6 +1321,14 @@ struct StudioContent: View {
                         else { hosts.removeAll { $0 == entry.address } }
                         studio.setListenHosts(hosts)
                     }))
+                // Changing where the Hub listens needs a restart, so these are read-only while it
+                // runs. They used to flip and silently revert, which reads as "I just made this
+                // Mac reachable" when nothing happened.
+                .disabled(!studio.canConfigure)
+            }
+            if !studio.canConfigure {
+                Text("Stop the services to change which networks this Mac answers on — a new address only takes effect when the Hub restarts.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Toggle("Any address on any network", isOn: Binding(
                 get: { studio.configuration.listenHosts.contains("0.0.0.0") },
