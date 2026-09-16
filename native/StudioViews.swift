@@ -55,6 +55,7 @@ struct StudioContent: View {
     @State private var connectionNote: String?
     @State private var controllerDraft = ""
     @State private var controllerToken = ""
+    @State private var revealedFleetToken = false
     /// 0 means all time; otherwise the window in hours.
     @State private var statisticsWindow = 0
     @State private var showingStorageEditor = false
@@ -899,8 +900,28 @@ struct StudioContent: View {
                 }.disabled(studio.connectionToken == nil)
                 if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
             }
-            Text("This is the credential this app already uses for its own Hub; a controller presents the same token to reach it. It is never written to the log or to the status line.")
+            Text("Full control of this Mac. Use it on this Mac only; to let another Mac send work here, give it the fleet token instead.")
                 .font(.callout).foregroundStyle(.secondary)
+
+            LabeledContent("Fleet token") {
+                Text(revealedFleetToken ? (studio.fleetToken ?? "Unavailable")
+                                        : (studio.fleetToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
+                    .textSelection(.enabled).multilineTextAlignment(.trailing)
+                    .font(.system(.body, design: .monospaced))
+            }
+            HStack {
+                Button(revealedFleetToken ? "Hide Fleet Token" : "Reveal Fleet Token") { revealedFleetToken.toggle() }
+                    .disabled(studio.fleetToken == nil)
+                Button("Copy Fleet Token") {
+                    if let token = studio.fleetToken {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(token, forType: .string)
+                        connectionNote = "Fleet token copied"
+                    }
+                }.disabled(studio.fleetToken == nil)
+            }
+            Text("Give this to a controller. It can send work to this Mac and read the results, but it cannot change this Mac's settings or delete its output. The Hub token above can do all of that, so keep it here.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1023,12 +1044,12 @@ struct StudioContent: View {
     @ViewBuilder private var joinController: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Join a controller").font(.headline)
-            Text("Enter the controller's address and its Hub token. This Mac tells it where it answers, and the controller then reports whether this Mac is reachable.")
+            Text("Enter the controller's address and the fleet token it shows under Connections → Local API. This Mac tells it where it answers, and the controller then reports whether this Mac is reachable.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 TextField("192.168.1.21:8080 or 100.x.y.z:8080", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                SecureField("Controller Hub token", text: $controllerToken)
+                SecureField("Controller fleet token", text: $controllerToken)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
                 Button(workspace.joiningFleet ? "Joining…" : "Join") {
                     Task { await workspace.joinController(address: controllerDraft, token: controllerToken) }

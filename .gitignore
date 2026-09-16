@@ -15,3 +15,6 @@ __pycache__/
 # Hub runtime state must never be committed
 components/.hub_token
 components/hub.db
+components/.fleet_token
+components/.kh_studio_token
+.kh_studio_token

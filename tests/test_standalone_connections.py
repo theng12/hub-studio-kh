@@ -313,6 +313,20 @@ class IndependentClientTests(unittest.TestCase):
             "/api/hub/memory/release", method="POST", token=fleet)
         self.assertEqual(status, 403)
 
+        # A node joins with the fleet token, exactly as the app's Join field does.
+        status, joined, _ = self.hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "fleet-joined", "name": "Joined with the fleet token",
+             "address": "http://127.0.0.1:9"}, token=fleet)
+        self.assertEqual(status, 201, joined)
+        # But it cannot evict another node: membership is the controller owner's decision.
+        status, refused, _ = self.hub.request("/api/hub/fleet/nodes/fleet-joined",
+                                              method="DELETE", token=fleet)
+        self.assertEqual(status, 403)
+        status, _, _ = self.hub.request("/api/hub/fleet/nodes/fleet-joined",
+                                        method="DELETE", token=self.token)
+        self.assertEqual(status, 200)
+
         # The Hub's own credential keeps the access it always had.
         status, _, _ = self.hub.request("/api/hub/settings", token=self.token)
         self.assertEqual(status, 200)

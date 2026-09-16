@@ -14,6 +14,10 @@ final class StudioController: ObservableObject {
     /// The credential this app already holds for its own Hub, so Connections can reveal it
     /// on request. It is never written to the status line, a log, or a URL.
     @Published private(set) var connectionToken: String?
+    /// The scoped credential a controller is given. It can send work to this Mac and read the
+    /// results, and cannot change its settings or delete its output - which is why it, and not
+    /// the Hub token, is what an operator should hand to another Mac.
+    @Published private(set) var fleetToken: String?
     @Published var starting = false
     @Published var stopping = false
     @Published var canForceStop = false
@@ -137,6 +141,7 @@ final class StudioController: ObservableObject {
                         self.healthySince = Date()
                         self.readyURL = ready.url
                         self.connectionToken = ready.token
+                        self.readFleetToken()
                         self.status = "Local services ready"
                         await self.workspace.connect(baseURL: ready.url,
                                                      dataDirectory: self.configuration.dataDirectory,
@@ -195,6 +200,7 @@ final class StudioController: ObservableObject {
         worker = nil
         readyURL = nil
         connectionToken = nil
+        fleetToken = nil
         starting = false
         stopping = false
         startupTimedOut = false
@@ -261,6 +267,7 @@ final class StudioController: ObservableObject {
         starting = false
         readyURL = nil
         connectionToken = nil
+        fleetToken = nil
         workspace.disconnect()
         status = "Stopping local services…"
         worker.terminate()
@@ -300,6 +307,17 @@ final class StudioController: ObservableObject {
         if alert.runModal() == .alertSecondButtonReturn { stop() }
     }
     func select(_ value: StudioPage) { selection = value }
+
+    /// Read this Mac's fleet credential from its own data directory.
+    ///
+    /// It is not fetched over HTTP: a Hub does not serve its credentials, so the app reads the
+    /// file it already owns, through the same safe reader the readiness record uses.
+    func readFleetToken() {
+        let url = configuration.dataDirectory.appendingPathComponent(".fleet_token")
+        guard let data = readPrivateRegularFile(url) else { fleetToken = nil; return }
+        let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        fleetToken = value.isEmpty ? nil : value
+    }
     /// Set every network this Hub should answer on. Loopback is implied and added by the Hub.
     func setListenHosts(_ hosts: [String]) {
         guard canConfigure else { return }
