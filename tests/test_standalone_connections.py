@@ -469,23 +469,26 @@ class FleetDispatchTests(unittest.TestCase):
             self.assertEqual(worker.submissions[0]["token"], node.token)
 
 
-    @unittest.skip("the controller never sees the node's job finish; see the docstring")
+    @unittest.skip("the controller does not finalise a node's finished job; see the docstring")
     def test_the_controllers_artifact_comes_back_from_the_node(self) -> None:
-        """The work happens on the node; the result has to come back to the controller.
+        """The work runs on the node; the operator must still be able to collect it.
 
-        Dispatch is proven: the node's worker receives the job with the node's credential. What
-        is not yet working is completion. The controller records the item as `running` and never
-        moves it on, so the artifact route answers 404 for a job that finished on the node in
-        under a second.
+        Dispatch is proven and stays green. This is the step after it, and it does not work yet:
+        the controller polls the node's job, the node answers `done`, and the controller leaves
+        its own item `running` - so the artifact route answers 404 for a job that finished on
+        the node in under a second.
 
-        The likely shape, from what the two Hubs do: the controller polls the node through the
-        same proxy, so it should see the same `state: done` the node's own poll would. Either
-        the poll is not happening for a studio on another machine, or the completion it receives
-        is not the shape it finalises on. Worth understanding before it is patched, because the
-        answer decides whether results stay on the node or are pulled back - which is still an
-        open question for the owner.
+        What is ruled out by driving it: the poll does happen, on the right URL, through the
+        node's proxy; the node's completion is now a full receipt (output URL, path, media type,
+        digest, timestamp, and the machine it ran on - the Hub rejects a completion missing any
+        of them, which is correct and was the previous failure). What is left is why a valid
+        `done` does not finalise the item, given the same code path finalises a local job.
+
+        The owner has since said the artifact lives on the node and is pulled only when
+        requested, so the controller proxying it - rather than copying it - is the right shape.
+        This test asserts exactly that, and is skipped until the item finalises.
         """
-        worker = StubImageWorker()
+        worker = StubImageWorker(machine="node-a")
         self.addCleanup(worker.stop)
         temporary = tempfile.TemporaryDirectory(prefix="studiohub-artifact-")
         self.addCleanup(temporary.cleanup)
@@ -530,7 +533,8 @@ class FleetDispatchTests(unittest.TestCase):
                 break
             time.sleep(0.5)
         self.assertIsNotNone(artifact, "the controller never served the artifact the node "
-                                       f"produced; job: {self.governor(controller, batch)}")
+                                       f"produced; job: {self.governor(controller, batch)}; "
+                                       f"the node's studio was asked for: {worker.seen[:14]}")
         self.assertEqual(artifact, FLUX_PNG,
                          "the controller must return the node's bytes unchanged")
 
@@ -621,10 +625,13 @@ class StubImageWorker:
     reports an empty catalog, exactly like a Mac where the model was never verified.
     """
 
-    def __init__(self, *, catalog: bool = True) -> None:
+    def __init__(self, *, catalog: bool = True, machine: str = "local") -> None:
         self.submissions: list[dict] = []
         self.seen: list[str] = []
         self.has_catalog = catalog
+        # The Hub refuses a completion whose machine identity is not the one it dispatched to,
+        # which is what stops a node claiming work that ran somewhere else.
+        self.machine = machine
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -662,12 +669,21 @@ class StubImageWorker:
                     self.end_headers()
                     self.wfile.write(FLUX_PNG)
                 elif "/api/generate/jobs/" in self.path:
-                    self._send(200, {"job": {"id": "job-1", "state": "done",
-                                             "progress": 1.0,
-                                             "bytes": len(FLUX_PNG),
-                                             "sha256": FLUX_SHA,
-                                             "artifact_url":
-                                                 "/api/generate/jobs/job-1/image"}})
+                    # A completion receipt has to be complete: the Hub rejects a job that
+                    # claims done without the output URL, path, media type and a timestamp,
+                    # which is the behaviour that keeps a half-written file from being treated
+                    # as a result.
+                    self._send(200, {"job": {
+                        "id": "job-1", "state": "done", "progress": 1.0,
+                        "machine_id": outer.machine,
+                        "bytes": len(FLUX_PNG), "sha256": FLUX_SHA,
+                        "media_type": "image/png",
+                        "output_url": "/api/generate/jobs/job-1/image",
+                        "artifact_url": "/api/generate/jobs/job-1/image",
+                        "output_path": "/tmp/job-1.png",
+                        "generated_at": time.time(),
+                        "finished_at": time.time(),
+                    }})
                 else:
                     self._send(200, {"job": {"id": "job-1", "state": "running"}})
 
