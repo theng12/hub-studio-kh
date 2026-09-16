@@ -213,18 +213,23 @@ def _open_regular(root, relative):
 # library is copied onto an SSD and then onto each Mac. Measured, not assumed - after a copy,
 # `st_size` and `st_mtime_ns` are identical while `st_ctime_ns`, `st_ino` and `st_dev` are not.
 #
-# `st_ino` and `st_dev` are the cheapest change signal there is and were the wrong choice: they
-# describe one filesystem, so every package in a copied library read as
+# Every timestamp was tried and every one of them broke the same way. On a copy between two
+# APFS volumes - which is how the kit travels - `st_ino` and `st_dev` change outright, and
+# `st_mtime_ns` loses its sub-microsecond digits (measured: 1789464238184185311 becomes
+# 1789464238000000000). The result on the first machine that was not the build machine was
 #
 #     File changed; verify again
 #
-# on the first machine that was not the build machine, which is exactly what happened. A stamp
-# that accuses a file of changing when only its inode moved is a false accusation, and it made a
-# correctly copied 29 GB library look damaged.
+# for all twelve packages of a correctly copied 29 GB library. A receipt that accuses a file of
+# changing when only its metadata moved teaches the operator to ignore it, which is worse than
+# having no receipt at all.
 #
-# Size still catches truncation and a half-finished copy - the failure that actually happens -
-# and `verify_installed`, the explicit Verify action, rehashes every byte and re-records these.
-_STAMP_FIELDS = ('st_size', 'st_mtime_ns')
+# So the cheap path records size and nothing else. Size catches truncation and a half-finished
+# copy - the failure that actually happens - while genuine integrity is a hash: `verify_installed`
+# rehashes every byte, the Hub hashes every artifact it serves, and a library that arrived from
+# another machine is re-verified once on arrival rather than trusted on faith. See
+# `library_identity` in `preflight`.
+_STAMP_FIELDS = ('st_size',)
 
 
 def _stamp(info):
