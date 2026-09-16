@@ -129,36 +129,44 @@ reason stated in the join form, because a controller could never reach them.
 
 ### What each Mac can run
 
-This is a compatibility target, not a qualified result per tier: only a 16 GiB M4 has ever run
-the kit here, and it produced real Image, Subtitle and Voice output.
+Every model runs on any Apple Silicon Mac. There is **no per-model RAM gate**: the published
+figures (FLUX 16 GB, Whisper 8 GB, Qwen Base 8 GB, larger tiers 16–32 GB) are the tiers each
+model is *qualified* at, and a Mac below them shows a warning beside the model instead of being
+refused. That is not a guess — FLUX.2 Klein has produced tens of thousands of images on the
+owner's 8 GB Macs.
 
-| Memory | Image (FLUX.2 Klein 4B) | Subtitle (Whisper) | Voice (Qwen / OmniVoice) |
-| --- | --- | --- | --- |
-| 8 GB | No — not enough unified memory | Yes | Yes, smaller tiers only |
-| 16 GB | Yes | Yes | Yes |
-| 24 GB | Yes | Yes | Yes, including the larger tiers |
-| 32 GB | Yes | Yes | Yes, with the most headroom |
+| Memory | What to expect |
+| --- | --- |
+| 8 GB | Everything runs. Use one Studio at a time; a large Voice tier will swap and be slow. |
+| 16 GB | Everything runs, comfortably for Image and Subtitle. |
+| 24 GB | Everything runs, including the larger Voice tiers. |
+| 32 GB | Everything runs, with the most headroom. |
 
-An 8 GB Mac is still a useful fleet member: give it Subtitle and Voice work and let the larger
-Macs take Image. Each Studio keeps at most one model in memory and the shipped memory mode
-releases an idle model immediately, which is what keeps sibling Studios from stalling each other
-on the smaller machines.
+The only memory gate left is **live**: a job waits if less than ~2 GB is free at that moment,
+and starts as soon as memory is released. That is deliberate. "Your Mac has 8 GB" is a fact the
+operator already knows; "your Mac has 0.4 GB free right now because three Studios are holding
+models" is a fact about this moment, and starting a generation into it is what turns a slow job
+into a killed worker. If a job is waiting on memory, release a Studio from
+**Settings → Model memory** or from the fleet overview, and it proceeds.
 
 ## Models and what they need
 
-| Studio | Model | Requirement |
-| --- | --- | --- |
-| Image | FLUX.2 Klein 4B MLX 4-bit | 16 GB unified memory |
-| Subtitle | Whisper large-v3-turbo, small, base | 8 GB |
-| Voice | Qwen3-TTS 12Hz 0.6B Base | Reference clip **and** its exact transcript |
-| Voice | Qwen3-TTS 12Hz 1.7B Base | Reference clip **and** its exact transcript |
-| Voice | Qwen3-TTS CustomVoice | Preset speakers, no reference |
-| Voice | OmniVoice bfloat16 | Reference clip |
-| Voice | VoxCPM2 4-bit / 8-bit / bf16 | Fails with its own memory message below ~24 GB free |
+The only requirements here are inputs. A memory figure, where shown, is the tier the model is
+qualified at — a Mac below it warns and runs anyway.
 
-A clone **fails closed** on a transcript mismatch. A reference clip must contain roughly 5
-seconds or more of usable speech; shorter clips are refused by a guard rather than producing a
-degraded voice.
+| Studio | Model | Required input | Qualified at |
+| --- | --- | --- | --- |
+| Image | FLUX.2 Klein 4B MLX 4-bit | A prompt | 16 GB |
+| Subtitle | Whisper large-v3-turbo, small, base | An audio or video file | 8 GB |
+| Voice | Qwen3-TTS 12Hz 0.6B Base | Reference clip **and** its exact transcript | 8 GB |
+| Voice | Qwen3-TTS 12Hz 1.7B Base | Reference clip **and** its exact transcript | 16 GB |
+| Voice | Qwen3-TTS CustomVoice | A preset speaker, no reference | 8 GB |
+| Voice | OmniVoice bfloat16 | Reference clip | 16 GB |
+| Voice | VoxCPM2 4-bit / 8-bit / bf16 | Reference clip | 24 GB |
+
+A clone **fails closed** on a transcript mismatch — that is an input contract, not a memory
+gate, and it stays. A reference clip must contain roughly 5 seconds or more of usable speech;
+shorter clips are refused by a guard rather than producing a degraded voice.
 
 ## Measuring a machine
 

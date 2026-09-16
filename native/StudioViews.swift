@@ -343,6 +343,14 @@ struct StudioContent: View {
                         }
                         Divider()
                         modelPicker(.image)
+                        if let warning = selectedImageModel?.memoryWarning {
+                            // Advice, not a refusal: this Mac is below the tier FLUX is
+                            // qualified at, and the operator decides whether to run it here.
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                         if let configuration = workspace.imageConfiguration, let values = workspace.imageSettings {
                             imageControls(configuration, values)
                             Button("Restore Generation Defaults") { workspace.restoreImageDefaults() }

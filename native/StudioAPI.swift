@@ -55,6 +55,9 @@ struct NativeModel: Identifiable, Equatable {
     /// The runtime reports this as "required" for every Base tier: a clone fails closed on a
     /// transcript mismatch, so the app must not submit without one.
     var requiresTranscript: Bool = true
+    /// Set when this Mac is below the tier the model is qualified at. It is advice, not a
+    /// refusal: the model still runs, and the operator is told what they are trading.
+    var memoryWarning: String? = nil
 }
 
 /// One selectable idle-release mode. Thresholds arrive from the Studio that owns them, so
@@ -1694,7 +1697,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 family: item.family ?? "Image", function: .image, cached: item.cache?.state == "cached",
                 supported: supported, supportNote: ready && supported ? "Ready for local image generation." : "Verify the image model files and runtime in Models.",
                 sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
-                supportsWordTimestamps: false, speakers: [])
+                supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning)
         }
         return audioModels + transcriptionModels + imageModels
     }
@@ -2046,6 +2049,8 @@ private struct CatalogModel: Decodable {
     let languages: StringOrStrings?
     let runtimeReady: Bool?
     let memoryEligible: Bool?
+    /// Why this Mac is below the model's qualified tier, when it is.
+    let memoryWarning: String?
     let cache: CacheWire?
     let generationDefaults: NativeImageSettings?
     let generationLimits: NativeImageLimits?

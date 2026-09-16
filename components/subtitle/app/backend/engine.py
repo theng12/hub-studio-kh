@@ -91,11 +91,19 @@ def host_eligibility() -> dict:
         return {'eligible': False, 'reason': 'macOS version could not be measured'}
     if int(version.split('.')[0]) < 14:
         return {'eligible': False, 'reason': 'macOS 14 or later is required'}
+    # The published floor is the tier Whisper is qualified at, not a wall. A Mac below it still
+    # transcribes; it is told what it is trading rather than refused, and the live free-memory
+    # check is what protects the machine at the moment a model loads.
+    state = {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
+             'minimum_unified_memory_bytes': MINIMUM_UNIFIED_MEMORY_BYTES,
+             'memory_warning': None,
+             'qualified_minimum_memory_bytes': MINIMUM_UNIFIED_MEMORY_BYTES}
     if memory < MINIMUM_UNIFIED_MEMORY_BYTES:
-        return {'eligible': False,
-                'reason': 'Whisper transcription requires 8 GB unified memory'}
-    return {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
-            'minimum_unified_memory_bytes': MINIMUM_UNIFIED_MEMORY_BYTES}
+        state['memory_warning'] = (
+            f'This Mac has {memory / 1024**3:.0f} GB of unified memory. Whisper is qualified on '
+            '8 GB, so transcription here is below the qualified tier and may be slow if other '
+            'Studios are holding models.')
+    return state
 
 
 def voice_export_module(voice_app_dir: str | Path | None = None):

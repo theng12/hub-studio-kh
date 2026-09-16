@@ -2281,13 +2281,19 @@ class GenerationManager:
             print("[gen] memory guard unavailable; continuing without live RAM probe", flush=True)
             return
 
+        # The model's published floor is the tier it is qualified at, not a wall. Running
+        # below it is the operator's call - they may have 30,000 generations that say
+        # otherwise - so it is reported and the job proceeds. What still stops a job is the
+        # live check below: not enough memory free *right now* is a fact about this moment,
+        # and starting anyway is what turns a slow generation into a killed worker.
         minimum_total = float(getattr(model_entry, "min_unified_memory_gb", 0) or 0)
         total = float(snapshot["total_gb"])
-        if total < minimum_total:
-            raise MemoryGuardError(
-                f"Memory guard paused this job: {model_entry.repo} requires at least "
-                f"{minimum_total:g} GB unified memory, but this Mac reports {total:.1f} GB. "
-                "Choose a smaller model or route the job to a larger Mac."
+        if minimum_total and total < minimum_total:
+            print(
+                f"[gen] below the qualified tier: {model_entry.repo} is qualified at "
+                f"{minimum_total:g} GB unified memory and this Mac reports {total:.1f} GB; "
+                "continuing because the operator asked for it",
+                flush=True,
             )
 
         cached = (

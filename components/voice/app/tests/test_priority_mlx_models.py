@@ -297,9 +297,15 @@ def test_memory_preflight_refuses_when_live_headroom_is_too_low(monkeypatch) -> 
         manager._memory_preflight(SimpleNamespace(repo="repo", family="voxcpm-mlx", size_gb=2.3))
 
 
-def test_qwen_17b_requires_a_16gb_machine_even_when_free_memory_looks_sufficient(
+def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     monkeypatch,
 ) -> None:
+    """A published RAM floor is a tier, not a wall.
+
+    The owner runs a model on machines below its qualified tier deliberately, with
+    the evidence to back it. The floor is reported and the job proceeds; what still
+    stops it is the live free-memory check, which is a fact about this moment.
+    """
     manager = object.__new__(generation.GenerationManager)
     manager._mlx_audio_model = None
     manager._mlx_audio_model_repo = None
@@ -313,7 +319,16 @@ def test_qwen_17b_requires_a_16gb_machine_even_when_free_memory_looks_sufficient
         lambda: {"total_gb": 8.0, "available_gb": 6.0, "used_gb": 2.0, "percent": 25.0},
     )
 
-    with pytest.raises(generation.MemoryGuardError, match="16 GB unified memory"):
+    # Below the tier, with room to work: allowed.
+    manager._memory_preflight(model)
+
+    # Below the tier and with no room to work: the live guard still stops it.
+    monkeypatch.setattr(
+        generation,
+        "_memory_snapshot",
+        lambda: {"total_gb": 8.0, "available_gb": 0.4, "used_gb": 7.6, "percent": 95.0},
+    )
+    with pytest.raises(generation.MemoryGuardError, match="Memory guard paused"):
         manager._memory_preflight(model)
 
 

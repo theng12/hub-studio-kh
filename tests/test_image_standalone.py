@@ -260,6 +260,61 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(restarted.get(job_id)['error_code'], 'JOB_PERSISTENCE_UNCERTAIN')
         self.assertTrue(path.exists())
 
+    def test_a_small_mac_is_warned_about_not_refused(self):
+        """A model's published RAM floor is a tier, not a wall.
+
+        FLUX.2 Klein is qualified at 16 GB and has run tens of thousands of images
+        on the owner's 8 GB Macs. The worker must not refuse those machines: it
+        reports the tier, and the Hub's live free-memory guard is what protects the
+        Mac at the moment a model loads.
+        """
+        from components.image.app.backend import main as image_main
+
+        def sysctl(_command, **_kwargs):
+            return str(8 * 1024 ** 3)
+
+        with patch.object(image_main.subprocess, 'check_output', sysctl):
+            host = image_main._host_eligibility()
+        self.assertTrue(host['eligible'], host)
+        self.assertIsNone(host['reason'] if 'reason' in host else None)
+        self.assertIn('8 GB of unified memory', host['memory_warning'])
+        self.assertIn('qualified on 16 GB', host['memory_warning'])
+        # The catalog reports the same thing, so the app can show it beside the model.
+        with patch.object(image_main.subprocess, 'check_output', sysctl):
+            model = self.client.get('/api/catalog', headers=self.headers).json()['models'][0]
+        self.assertTrue(model['memory_eligible'])
+        self.assertEqual(model['qualified_minimum_memory_gb'], 16)
+        self.assertIn('qualified on 16 GB', model['memory_warning'])
+        self.assertIsNone(model['readiness']['reason'], model['readiness'])
+        self.assertTrue(model['readiness']['ready'], model['readiness'])
+
+    def test_a_mac_at_the_qualified_tier_gets_no_warning(self):
+        from components.image.app.backend import main as image_main
+
+        def sysctl(_command, **_kwargs):
+            return str(16 * 1024 ** 3)
+
+        with patch.object(image_main.subprocess, 'check_output', sysctl):
+            host = image_main._host_eligibility()
+        self.assertTrue(host['eligible'])
+        self.assertIsNone(host['memory_warning'])
+
+    def test_a_mac_that_cannot_run_at_all_is_still_refused(self):
+        """Capability is not memory: this is what the refusals are for."""
+        from components.image.app.backend import main as image_main
+
+        with patch.object(image_main.platform, 'system', lambda: 'Linux'):
+            self.assertFalse(image_main._host_eligibility()['eligible'])
+
+        def old_macos(_command, **_kwargs):
+            return str(16 * 1024 ** 3)
+
+        with patch.object(image_main.subprocess, 'check_output', old_macos), \
+             patch.object(image_main.platform, 'mac_ver', lambda: '13.6'):
+            host = image_main._host_eligibility()
+        self.assertFalse(host['eligible'])
+        self.assertIn('macOS 14', host['reason'])
+
     def test_memory_policy_publishes_the_fleet_contract(self):
         """Image holds no model between jobs, but the Hub still inventories it.
 

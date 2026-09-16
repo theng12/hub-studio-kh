@@ -15,6 +15,14 @@ from .generation import (DEFAULTS, MODEL_ID, MODEL_REVISION, SIZE_PRESETS,
                          GenerationManager, final_matches)
 
 
+# FLUX.2 Klein 4B has completed thousands of generations on the owner's 8 GB
+# Apple-silicon Macs, so the 16 GB figure the catalog records is a qualification
+# tier rather than a requirement. The floor is therefore a warning: this worker
+# refuses only what cannot work at all, and the Hub's admission governor decides
+# whether this host has room right now.
+QUALIFIED_MINIMUM_MEMORY_BYTES = 16_000_000_000
+
+
 def _host_eligibility() -> dict:
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         return {'eligible': False, 'reason': 'Apple Silicon macOS is required'}
@@ -28,10 +36,16 @@ def _host_eligibility() -> dict:
         return {'eligible': False, 'reason': 'macOS version could not be measured'}
     if int(version.split('.')[0]) < 14:
         return {'eligible': False, 'reason': 'macOS 14 or later is required'}
-    if memory < 16_000_000_000:
-        return {'eligible': False, 'reason': 'This FLUX operation requires 16 GB unified memory'}
-    return {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
-            'qualification': '16 GB 1K txt2img historical source receipt; this host still needs packaged proof'}
+    state = {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
+             'qualified_minimum_memory_bytes': QUALIFIED_MINIMUM_MEMORY_BYTES,
+             'memory_warning': None,
+             'qualification': '16 GB 1K txt2img historical source receipt; this host still needs packaged proof'}
+    if memory < QUALIFIED_MINIMUM_MEMORY_BYTES:
+        state['memory_warning'] = (
+            f'This Mac has {memory / 1024**3:.0f} GB of unified memory. FLUX is qualified on 16 GB '
+            'and has run on 8 GB in production, but Image work here is below the qualified tier '
+            'and may be slow or fail if other Studios are holding models.')
+    return state
 
 
 def create_app(manager: GenerationManager, token: str) -> FastAPI:
@@ -77,7 +91,14 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'model_revision': MODEL_REVISION, 'qualified_revision': MODEL_REVISION,
             'qualified_revision_match': True, 'runtime_revision': manager.runtime_sha256,
             'runtime_compatible': True, 'runtime_ready': True,
-            'memory_eligible': state['host']['eligible'], 'min_total_memory_gb': 16,
+            # `min_total_memory_gb` is the tier FLUX is qualified at, not a dispatch floor:
+            # the Hub's admission governor owns the live decision, and it carries the
+            # fleet-qualified 8 GB default for this model. `memory_warning` is what tells the
+            # operator their Mac is below the qualified tier while the work still runs.
+            'memory_eligible': state['host']['eligible'],
+            'min_total_memory_gb': QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
+            'qualified_minimum_memory_gb': QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
+            'memory_warning': state['host'].get('memory_warning'),
             'cache': {'state': 'cached' if files['state'] == 'files_verified' else files['state']},
             'readiness': {'ready': ready, 'files': files, 'host': state['host'],
                           'reason': None if ready else files.get('reason') or state['host'].get('reason')},

@@ -258,6 +258,34 @@ class CatalogContractTests(SubtitleFixture):
             self.assertEqual(entry['hub_operation'], 'audio.transcription')
             self.assertEqual(entry['runtime_revision'], 'b' * 64)
 
+    def test_a_small_mac_is_warned_about_not_refused(self) -> None:
+        """Whisper's 8 GB floor is a tier, not a wall, exactly as FLUX's 16 GB is."""
+        from unittest.mock import patch
+
+        def small_mac(_command, **_kwargs):
+            return str(6 * 1024 ** 3)
+
+        with patch.object(engine_module.subprocess, 'check_output', small_mac):
+            host = engine_module.host_eligibility()
+        self.assertTrue(host['eligible'], host)
+        self.assertIn('6 GB of unified memory', host['memory_warning'])
+        self.assertIn('qualified on 8 GB', host['memory_warning'])
+        self.assertEqual(host['minimum_unified_memory_bytes'], engine_module.MINIMUM_UNIFIED_MEMORY_BYTES)
+
+        # At or above the tier there is nothing to warn about. The probe caches the host's
+        # memory for the process lifetime, so the cache is cleared between the two Macs.
+        def qualified(_command, **_kwargs):
+            return str(8 * 1024 ** 3)
+
+        engine_module._MEMORY_CACHE.clear()
+        self.addCleanup(engine_module._MEMORY_CACHE.clear)
+        with patch.object(engine_module.subprocess, 'check_output', qualified):
+            self.assertIsNone(engine_module.host_eligibility()['memory_warning'])
+
+        # A refused machine is still refused: capability is not memory.
+        with patch.object(engine_module.platform, 'system', lambda: 'Linux'):
+            self.assertFalse(engine_module.host_eligibility()['eligible'])
+
     def test_npz_only_packages_are_reported_not_runnable(self) -> None:
         """Base/Small ship weights.npz, which this mlx-audio loader cannot read."""
         manager = self.build_manager()

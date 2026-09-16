@@ -24,26 +24,42 @@ def test_transcription_is_subject_to_memory_admission(reset):
 def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
     policy = memory_admission.describe(FLUX_REPO, _flux_entry())
 
+    # The catalog says 16 GB and the fleet default says 8 GB; both are tiers the
+    # operator can read, and neither refuses a smaller Mac.
     assert policy["catalog_min_total_memory_gb"] == 16
     assert policy["default_min_total_memory_gb"] == 8
-    assert policy["effective_min_total_memory_gb"] == 8
+    assert policy["effective_min_total_memory_gb"] == 0.0
     assert policy["effective_min_free_memory_gb"] == 2
     assert policy["source"] == "fleet_default"
     assert policy["overridden"] is False
     requirements = broker._admission_requirements(FLUX_REPO, _flux_entry())
-    assert requirements == {"min_total": 8, "min_free": 2}
+    assert requirements == {"min_total": 0.0, "min_free": 2}
     assert broker._memory_gate(
         requirements, {"total_gb": 8.59, "available_gb": 2.4}
     )[0] == "run"
+    # A Mac far below every published tier is still dispatched to, because the
+    # machine's size is the operator's business and not a refusal.
+    assert broker._memory_gate(
+        requirements, {"total_gb": 8.0, "available_gb": 3.0}
+    )[0] == "run"
 
 
-def test_unknown_model_keeps_catalog_default(reset):
+def test_no_model_is_refused_for_the_size_of_the_machine(reset):
     entry = {"repo": "org/other-model", "min_unified_memory_gb": 24}
     policy = memory_admission.describe(entry["repo"], entry)
 
-    assert policy["effective_min_total_memory_gb"] == 24
+    # 24 GB is what the model is qualified at, not what it demands: a 16 GB Mac
+    # may run it, and the free-memory guard is what stops a job that cannot start.
+    assert policy["catalog_min_total_memory_gb"] == 24
+    assert policy["effective_min_total_memory_gb"] == 0.0
     assert policy["effective_min_free_memory_gb"] == 2
     assert policy["source"] == "catalog"
+    assert broker._memory_gate(
+        {"min_total": 0.0, "min_free": 2}, {"total_gb": 16, "available_gb": 4}
+    )[0] == "run"
+    assert broker._memory_gate(
+        {"min_total": 0.0, "min_free": 2}, {"total_gb": 16, "available_gb": 1}
+    )[0] == "wait"
 
 
 def test_operator_override_persists_and_reset_restores_default(reset):
@@ -69,7 +85,8 @@ def test_operator_override_persists_and_reset_restores_default(reset):
 
     reset_policy = memory_admission.reset_override(FLUX_REPO, entry)
     assert reset_policy["source"] == "fleet_default"
-    assert reset_policy["effective_min_total_memory_gb"] == 8
+    # Back to "no floor in force": only an explicit override can put one back.
+    assert reset_policy["effective_min_total_memory_gb"] == 0.0
     assert not memory_admission.SETTINGS_FILE.exists()
 
 
@@ -80,11 +97,11 @@ def test_qwen_base_uses_owner_approved_8gb_floor_with_live_headroom_guard(reset)
     policy = memory_admission.describe(repo, entry)
 
     assert policy["catalog_min_total_memory_gb"] == 8
-    assert policy["effective_min_total_memory_gb"] == 8
+    assert policy["effective_min_total_memory_gb"] == 0.0
     assert policy["effective_min_free_memory_gb"] == 3.2
     assert policy["source"] == "fleet_default"
     assert policy["default_reason"] == "Hub production qualification"
     requirements = broker._admission_requirements(repo, entry)
-    assert requirements == {"min_total": 8, "min_free": 3.2}
+    assert requirements == {"min_total": 0.0, "min_free": 3.2}
     assert broker._memory_gate(requirements, {"total_gb": 8, "available_gb": 4})[0] == "run"
     assert broker._memory_gate(requirements, {"total_gb": 8, "available_gb": 2.5})[0] == "wait"

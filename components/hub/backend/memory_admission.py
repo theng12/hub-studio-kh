@@ -1,9 +1,18 @@
 """Persisted, operator-visible RAM admission policy for local model dispatch.
 
-Studio catalogs provide conservative technical defaults. Studio Hub may carry
-fleet-qualified defaults based on measured production use, and the owner may
-override either floor from the Models UI. The effective policy is site-local;
-it never changes a worker catalog or GenStudio's global ownership decisions.
+A model's published RAM floor is a qualification tier, not a wall. The owner runs
+FLUX.2 Klein on 8 GB Apple-silicon Macs and has produced tens of thousands of
+images there, so no model is excluded from a machine by its total memory: the
+tier is reported to the operator and the job proceeds.
+
+What remains a hard gate is the *live* free-memory requirement. "This Mac has
+8 GB of RAM" is a fact that does not change, but "this Mac has 0.4 GB free right
+now because three Studios are holding models" is a fact about this moment, and
+starting a generation into it is what turns a slow job into a killed worker. The
+free floor stays, and it is what the Models screen tunes.
+
+The effective policy is site-local; it never changes a worker catalog or
+GenStudio's global ownership decisions.
 """
 
 from __future__ import annotations
@@ -102,7 +111,12 @@ def _write(values: dict[str, dict]) -> None:
 
 
 def describe(model: str, catalog_entry: dict) -> dict:
-    """Return catalog, fleet-default, and effective site-local RAM floors."""
+    """Return catalog, fleet-default, and effective site-local RAM floors.
+
+    The total-memory floor is reported for the operator but is deliberately never
+    in force: ``effective_min_total_memory_gb`` is 0 whenever no operator
+    override names one, so no dispatch is refused for the size of the machine.
+    """
     key = _normalized(model or catalog_entry.get("repo"))
     catalog_total = _number(catalog_entry.get("min_unified_memory_gb"))
     catalog_free = _number(catalog_entry.get("min_free_memory_gb"))
@@ -114,6 +128,7 @@ def describe(model: str, catalog_entry: dict) -> dict:
         or (qualified_free is not None and qualified_free != catalog_free)
     )
 
+    # Kept for visibility in the Models screen and in receipts; never enforced.
     default_total = (
         fleet_default["min_total_memory_gb"] if fleet_default
         else qualified_total
@@ -123,8 +138,10 @@ def describe(model: str, catalog_entry: dict) -> dict:
         else max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
     )
     override = _read().get(key)
+    # Only an explicit operator override can put a floor back, which is the point of the
+    # override: the machinery never decides that a Mac is too small for a model it owns.
     effective_total = (
-        override["min_total_memory_gb"] if override else default_total
+        override["min_total_memory_gb"] if override else 0.0
     )
     effective_free = (
         override["min_free_memory_gb"] if override else default_free
