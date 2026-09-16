@@ -17,9 +17,24 @@ Python, no pip, no FFmpeg, and no internet. macOS 14.0 or later; Apple Silicon o
 
 ## 1. Copy it onto the Mac
 
-Copy **both** `Studio Hub 0.4.0.app` and `model-library/` onto the Mac. Anywhere is fine —
-`/Applications` and a second drive both work. Keep `model-library/` **outside** the app
-bundle; the app refuses a library inside itself.
+Two things to place, and one rule about them.
+
+**The app** goes in `/Applications`, like any other app:
+
+```sh
+cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
+```
+
+**The model library** goes somewhere permanent — 28 GB of it. It can stay right where it is on
+this SSD, or be copied to an internal drive. It does **not** need to be near the app, and it
+must be **outside** the app bundle: the app refuses a library inside itself.
+
+If you leave it on the SSD, remember the app needs that drive **mounted** when it runs. On the
+Mac Studio the SSD is likely to stay plugged in, so this is usually a non-issue; if the app is
+ever started without it, it says so plainly — *"The selected model library is unavailable.
+Connect its drive or choose another folder."* — rather than failing quietly.
+
+Either way, you point the app at the library once (step 4) and it remembers.
 
 ## 2. Open it
 
@@ -33,7 +48,8 @@ or a downloaded archive — paste this into Terminal once, then open it again:
 xattr -cr "/Applications/Studio Hub 0.4.0.app"
 ```
 
-Change the path if you put the app somewhere else — running it straight from the SSD, use
+That is the command for the app in `/Applications`. If you ever run it straight off the SSD
+instead, the path is
 `xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app"`.
 
 **About the errors it prints.** That command will scroll past a wall of `Permission denied` and
