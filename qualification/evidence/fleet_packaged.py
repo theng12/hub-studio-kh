@@ -285,6 +285,57 @@ def main() -> int:
         evidence["bad_pin"] = {"status": refused_status,
                                "detail": refused.get("detail") if isinstance(refused, dict) else refused}
 
+        # The voice library, against the real Voice worker rather than a stub: the same calls
+        # the Voices page makes, in order. This is the round trip that matters most, because
+        # the app is only a window onto a store the worker owns.
+        voice_clip = tone(seconds=1.0)
+        status, created = request(f"{controller.url}/studio/voice/api/voices", method="POST",
+                                  token=controller.token,
+                                  fields={"name": "Packaged Probe", "language": "en",
+                                          "gender": "n", "license": "self-owned",
+                                          "notes": "fleet probe",
+                                          "transcript": "one two three four five",
+                                          "permission_acknowledged": "true"},
+                                  files={"audio": ("probe.wav", voice_clip, "audio/wav")})
+        evidence["voice_add"] = {"status": status,
+                                 "detail": created if status not in (200, 201) else None}
+        voice_id = None
+        if isinstance(created, dict) and isinstance(created.get("voice"), dict):
+            voice_id = created["voice"].get("id")
+            evidence["voice_add"]["name"] = created["voice"].get("name")
+            evidence["voice_add"]["has_transcript"] = created["voice"].get("has_transcript")
+        if voice_id:
+            status, listing = request(f"{controller.url}/studio/voice/api/voices",
+                                      token=controller.token)
+            rows = {row.get("id"): row for row in (listing.get("voices") or [])}
+            evidence["voice_list"] = {"status": status, "count": len(rows),
+                                      "found": voice_id in rows}
+            # Play: the clip must come back as the bytes that went in.
+            status, body = request(
+                f"{controller.url}/studio/voice/api/voices/{voice_id}/audio",
+                token=controller.token)
+            evidence["voice_play"] = {
+                "status": status,
+                "bytes": len(body) if isinstance(body, bytes) else 0,
+                "matches_upload": body == voice_clip if isinstance(body, bytes) else False}
+            # Edit changes the transcript, which is the reason to have the route at all.
+            status, edited = request(
+                f"{controller.url}/studio/voice/api/voices/{voice_id}", method="PATCH",
+                token=controller.token,
+                payload={"name": "Packaged Probe", "language": "en", "gender": "n",
+                         "license": "self-owned", "notes": "edited",
+                         "transcript": "one two three four five six"})
+            evidence["voice_edit"] = {
+                "status": status,
+                "transcript": (edited.get("voice") or {}).get("transcript")
+                if isinstance(edited, dict) else None}
+            status, removed = request(
+                f"{controller.url}/studio/voice/api/voices/{voice_id}", method="DELETE",
+                token=controller.token)
+            evidence["voice_remove"] = {"status": status,
+                                        "deleted": removed.get("deleted")
+                                        if isinstance(removed, dict) else None}
+
         # What the operator would see in the app's fleet screen: one row per Mac, from the
         # packaged Hub, after the work has actually run.
         status, overview = request(f"{controller.url}/api/hub/fleet/overview",
@@ -321,6 +372,25 @@ def main() -> int:
                 problems.append(f"a job pinned to node-a ran on {ran_on!r} instead")
             if not pinned.get("artifact_bytes"):
                 problems.append("the pinned job returned no artifact through the controller")
+        voice = evidence.get("voice_add") or {}
+        if voice.get("status") not in (200, 201):
+            problems.append(f"the packaged Hub refused to save a voice: {voice}")
+        else:
+            if not voice.get("has_transcript"):
+                problems.append("a saved voice did not record its transcript")
+            listing = evidence.get("voice_list") or {}
+            if not listing.get("found"):
+                problems.append(f"a saved voice was not in the list: {listing}")
+            played = evidence.get("voice_play") or {}
+            if played.get("status") != 200 or not played.get("matches_upload"):
+                problems.append(f"the saved clip did not come back unchanged: {played}")
+            edited = evidence.get("voice_edit") or {}
+            if edited.get("status") != 200 or edited.get(
+                    "transcript") != "one two three four five six":
+                problems.append(f"editing a saved voice did not take: {edited}")
+            if (evidence.get("voice_remove") or {}).get("status") != 200:
+                problems.append(f"a saved voice could not be removed: "
+                                f"{evidence.get('voice_remove')}")
         if evidence["bad_pin"]["status"] != 400:
             problems.append(f"a pin naming a Mac that is not here was not refused: "
                             f"{evidence['bad_pin']}")
