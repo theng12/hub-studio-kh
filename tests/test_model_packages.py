@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import os
 from pathlib import Path
 import tempfile
@@ -107,6 +108,31 @@ class ModelPackageTests(unittest.TestCase):
         report = packages.preflight(self.manifest, self.library)
         self.assertEqual(report['state'], 'invalid')
         self.assertIn('weights.safetensors', str(report))
+
+    def test_a_verified_library_stays_verified_after_being_copied(self):
+        """A copied library must not read as damaged.
+
+        The receipt used to record `st_ino` and `st_dev`, which describe one filesystem. The kit
+        ships a verified library onto an SSD and from there onto each Mac, so every package in a
+        copied library answered "File changed; verify again" on the machine that was not the
+        build machine - which is exactly what the owner hit, and it made a correct 29 GB copy
+        look broken.
+        """
+        installed = packages.import_folder(self.manifest, self.source, self.library)
+        self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'files_verified')
+
+        copy_root = self.root / 'copied-library'
+        shutil.copytree(self.library, copy_root, symlinks=True)
+        copy_root.chmod(0o700)
+        (copy_root / '.studiohub').chmod(0o700)
+        self.assertEqual(packages.preflight(self.manifest, copy_root)['state'], 'files_verified',
+                         'a copy of a verified library must verify without a rehash')
+
+        # And the file's real content is still what decides: a rewrite is still caught.
+        (copy_root / installed.parent.name / installed.name / 'weights.safetensors').write_bytes(b'x' * 13)
+        report = packages.preflight(self.manifest, copy_root)
+        self.assertEqual(report['state'], 'invalid',
+                         'a genuinely changed file must still be refused')
 
     def test_preflight_rejects_unreadable_file_and_directory_symlink(self):
         installed = packages.import_folder(self.manifest, self.source, self.library)

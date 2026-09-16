@@ -207,8 +207,28 @@ def _open_regular(root, relative):
             os.close(descriptor)
 
 
+# What one file's receipt records about the copy on disk.
+#
+# These two survive a copy between filesystems, which is the case that matters: a verified
+# library is copied onto an SSD and then onto each Mac. Measured, not assumed - after a copy,
+# `st_size` and `st_mtime_ns` are identical while `st_ctime_ns`, `st_ino` and `st_dev` are not.
+#
+# `st_ino` and `st_dev` are the cheapest change signal there is and were the wrong choice: they
+# describe one filesystem, so every package in a copied library read as
+#
+#     File changed; verify again
+#
+# on the first machine that was not the build machine, which is exactly what happened. A stamp
+# that accuses a file of changing when only its inode moved is a false accusation, and it made a
+# correctly copied 29 GB library look damaged.
+#
+# Size still catches truncation and a half-finished copy - the failure that actually happens -
+# and `verify_installed`, the explicit Verify action, rehashes every byte and re-records these.
+_STAMP_FIELDS = ('st_size', 'st_mtime_ns')
+
+
 def _stamp(info):
-    return {key: getattr(info, key) for key in ('st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_ino', 'st_dev')}
+    return {key: getattr(info, key) for key in _STAMP_FIELDS}
 
 
 def _file_path(folder, entry):
