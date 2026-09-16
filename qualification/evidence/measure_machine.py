@@ -274,17 +274,24 @@ def main() -> int:
                 "dispatch_state": verified.get("dispatch_state"),
                 "reason": verified.get("reason"),
                 "detail": verified.get("detail") if status != 200 else None}
-            # A refused import is a 200 with a non-ready state and a reason, never an error
-            # status. Recording the real refusal proves the app must read the state rather
-            # than trust the fact that the call returned.
-            bad_status, refused = http(
-                base, f"/api/hub/model-packages/{candidate['package_id']}/import", token,
-                method="POST", payload={"source_folder": "/nonexistent/studiohub-probe"})
-            receipt["import_refusal"] = {
-                "status": bad_status, "state": refused.get("state"),
-                "dispatch_state": refused.get("dispatch_state"),
-                "reason": refused.get("reason"),
-                "detail": refused.get("detail")}
+            # The app must handle two refusal shapes, and this records the ones the real
+            # Hub produces. An import that cannot be used comes back as an error status with
+            # a detail (observed here for both a missing path and an incomplete folder),
+            # while a verification of a changed file comes back as 200 with a non-ready
+            # state and a reason. Only reading the state catches the second, which is why
+            # treating any 2xx as success reported "Verified" for a corrupt library.
+            empty = root / "incomplete-model-folder"
+            empty.mkdir(parents=True, exist_ok=True)
+            for label, folder in (("missing_path", "/nonexistent/studiohub-probe"),
+                                  ("incomplete_folder", str(empty))):
+                bad_status, refused = http(
+                    base, f"/api/hub/model-packages/{candidate['package_id']}/import", token,
+                    method="POST", payload={"source_folder": folder})
+                receipt.setdefault("import_refusal", {})[label] = {
+                    "status": bad_status, "state": refused.get("state"),
+                    "dispatch_state": refused.get("dispatch_state"),
+                    "reason": refused.get("reason"),
+                    "detail": refused.get("detail")}
             break
 
         kinds = [kind.strip() for kind in arguments.kinds.split(",") if kind.strip()]
