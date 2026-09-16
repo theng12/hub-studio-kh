@@ -23,6 +23,8 @@ final class FixtureProtocol: URLProtocol {
     static var uncertainImage = false
     static var imageAckPaths: [String] = []
     static var imageAckRejects = false
+    static var transcriptionAckPaths: [String] = []
+    static var transcriptionAckRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
@@ -50,6 +52,8 @@ final class FixtureProtocol: URLProtocol {
     static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
     static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
+    static func transcriptionAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return transcriptionAckPaths }
+    static func setTranscriptionAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; transcriptionAckRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
     static func memoryBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastMemoryBody }
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
@@ -216,6 +220,12 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"done","artifact_url":"/api/hub/transcription/jobs/stt-batch/items/0/artifact","metadata":{"text":"hello world","language":"en","duration":1.25,"model":"mlx-community/whisper-large-v3-turbo","vtt":"WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nhello world\n"}}]}"#.utf8))
         case ("GET", "/api/hub/transcription/jobs/stt-batch/items/0/artifact"):
             result = (200, "application/x-subrip", Data("1\n00:00:00,000 --> 00:00:01,250\nhello world\n".utf8))
+        case ("POST", "/api/hub/transcription/jobs/stt-batch/items/0/ack"):
+            Self.lock.lock(); Self.transcriptionAckPaths.append(path)
+            let rejectsTranscript = Self.transcriptionAckRejects; Self.lock.unlock()
+            result = rejectsTranscript
+                ? (502, "application/json", Data(#"{"detail":"subtitle worker did not acknowledge receipt"}"#.utf8))
+                : (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job/items/0/artifact"):
             result = (200, "audio/wav", Data([0x52, 0x49, 0x46, 0x46]))
         case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
@@ -484,6 +494,37 @@ struct NativeAPITests {
         require(multipart.contains("name=\"item_ids\"") && multipart.contains("name=\"episode\""), "stable Hub transcription identity")
         let subtitleData = try store.transcriptData(format: .srt)
         require(String(decoding: subtitleData, as: UTF8.self).contains("hello world"), "SRT export data")
+
+        // A completed transcript is only delivered once the Hub's own artifact has been
+        // verified against what the screen shows, and delivery is acknowledged only after
+        // the file is on disk. Exporting bytes without the receipt is the defect this pins.
+        require(store.transcriptionResult?.batchID == "stt-batch", "the transcript must stay linked to its Hub job")
+        let transcriptDestination = temporary.appendingPathComponent("exported-transcript.srt")
+        try await store.saveTranscript(format: .srt, to: transcriptDestination)
+        let exportedTranscript = try Data(contentsOf: transcriptDestination)
+        require(exportedTranscript == subtitleData, "exported transcript bytes")
+        require(FixtureProtocol.transcriptionAcks() == ["/api/hub/transcription/jobs/stt-batch/items/0/ack"],
+                "a verified transcript save must acknowledge delivery exactly once")
+        let unwritableTranscript = temporary.appendingPathComponent("missing-directory/never.srt")
+        do {
+            try await store.saveTranscript(format: .srt, to: unwritableTranscript)
+            fatalError("a transcript save into a missing directory must fail")
+        } catch {
+            require(FixtureProtocol.transcriptionAcks().count == 1,
+                    "a failed transcript save must never acknowledge delivery")
+        }
+        FixtureProtocol.setTranscriptionAckRejects(true)
+        let rejectedTranscript = temporary.appendingPathComponent("rejected-transcript.srt")
+        do {
+            try await store.saveTranscript(format: .srt, to: rejectedTranscript)
+            fatalError("a rejected transcript acknowledgement must be reported")
+        } catch {
+            require(error.localizedDescription.contains("was not acknowledged"),
+                    "a rejected transcript acknowledgement needs an actionable message")
+        }
+        require(FileManager.default.fileExists(atPath: rejectedTranscript.path),
+                "the verified transcript must remain on disk when acknowledgement fails")
+        FixtureProtocol.setTranscriptionAckRejects(false)
         let audioData = try await store.audioData(for: store.audioJobs.first!)
         require(audioData == Data([0x52, 0x49, 0x46, 0x46]), "audio export data")
 

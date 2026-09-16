@@ -93,6 +93,67 @@ def _load_rows(where: str = "", params: tuple = ()) -> list[dict]:
     return [json.loads(row[0]) for row in rows]
 
 
+async def acknowledge_item(monitor, batch_id: str, item_index: int) -> dict:
+    """Verified-delivery receipt for one Subtitle artifact.
+
+    The Image studio has had this since ST-03; Subtitle had no Hub-level acknowledgement
+    at all, so a transcript could be exported and the Hub would never record delivery —
+    which also kept the output indexed as unacknowledged for cleanup.
+
+    The authenticated caller asserts it has verified delivery, so merely downloading an
+    artifact never reaches this route. Mirrors the Image path: the worker's own idempotent
+    receipt is the authority, and a failed local write stays retryable.
+    """
+    from .. import output_storage
+    from urllib.parse import quote
+
+    batch = get_batch(batch_id)
+    item = next((row for row in (batch or {}).get("items") or []
+                 if row.get("index") == item_index), None)
+    if item is None:
+        raise HTTPException(404, "unknown transcription item")
+    if item.get("state") != "done":
+        raise HTTPException(409, "only completed output can be acknowledged")
+    if item.get("receipt_acked_at"):
+        # The receipt is durable; a previous output-index write may have failed.
+        output_storage.mark_receipt_acked(batch_id=batch_id, item_index=item_index)
+        return {"ok": True}
+    studio = next((row for row in monitor.registry if row["id"] == item.get("studio")), None)
+    job_id = item.get("studio_task_id")
+    if studio is None or not isinstance(job_id, str) or not job_id:
+        raise HTTPException(404, "worker job is not available")
+    url, headers = studio_request(
+        studio, f'/api/generate/transcribe/jobs/{quote(job_id, safe="")}/ack')
+    release_transfer = output_storage.acquire_transfer(batch_id=batch_id, item_index=item_index)
+    try:
+        try:
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                response = await client.post(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                try:
+                    receipt = response.json()
+                except ValueError as exc:
+                    raise HTTPException(502, "Subtitle worker returned an invalid receipt") from exc
+                if not isinstance(receipt, dict) or receipt.get("ok") is not True:
+                    raise HTTPException(502, "Subtitle worker rejected receipt acknowledgement")
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "Subtitle worker did not acknowledge receipt") from exc
+        item["receipt_acked_at"] = time.time()
+        try:
+            _save(batch)
+        except Exception:
+            # A failed local save must remain retryable even though the worker
+            # already accepted the idempotent receipt.
+            item.pop("receipt_acked_at", None)
+            raise
+        # A failed index update is conservative: the worker and batch receipt stay
+        # durable but shared cleanup still treats the output as unacknowledged.
+        output_storage.mark_receipt_acked(batch_id=batch_id, item_index=item_index)
+        return {"ok": True}
+    finally:
+        release_transfer()
+
+
 def get_batch(batch_id: str) -> dict | None:
     if batch_id in batches:
         return batches[batch_id]

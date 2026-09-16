@@ -656,6 +656,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return FileResponse(path, media_type="application/x-subrip",
                             filename=f"{item['item_id']}.srt")
 
+    @app.post("/api/hub/transcription/jobs/{batch_id}/items/{item_index}/ack")
+    async def acknowledge_transcription(batch_id: str, item_index: int) -> dict[str, Any]:
+        """Verified-delivery receipt for one Subtitle artifact, mirroring the Image ack."""
+        return await transcription_jobs.acknowledge_item(monitor, batch_id, item_index)
+
     @app.delete("/api/hub/transcription/jobs/{batch_id}")
     async def cancel_transcription_job(batch_id: str) -> dict[str, Any]:
         batch = await transcription_jobs.cancel_batch(batch_id)

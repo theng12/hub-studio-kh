@@ -343,6 +343,11 @@ with TestClient(app) as client:
                        json={'mode': 'balanced', 'studio_ids': []}, headers=auth)
     out['empty_status'] = empty.status_code
     out['empty_detail'] = empty.json().get('detail')
+    # The Subtitle delivery receipt route must be served by the same app; the handler's own
+    # message distinguishes a real route from FastAPI's generic "Not Found".
+    ack = client.post('/api/hub/transcription/jobs/no-such-batch/items/0/ack', headers=auth)
+    out['ack_status'] = ack.status_code
+    out['ack_detail'] = ack.json().get('detail')
     released = client.post('/api/hub/memory/release', json={}, headers=auth)
     out['release_status'] = released.status_code
     out['release'] = released.json()
@@ -424,6 +429,9 @@ print(json.dumps(out))
         self.assertIn('mode must be one of', out['bad_detail'])
         self.assertEqual(out['empty_status'], 400)
         self.assertIn('at least one', out['empty_detail'])
+        self.assertEqual(out['ack_status'], 404)
+        self.assertEqual(out['ack_detail'], 'unknown transcription item',
+                         'the Subtitle delivery receipt route must be served')
 
         self.assertEqual(out['release_status'], 200)
         self.assertTrue(out['release']['ok'])

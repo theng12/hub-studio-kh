@@ -215,6 +215,9 @@ struct NativeTranscript: Codable, Equatable {
     let duration: Double
     let model: String?
     let sourceFilename: String?
+    /// The Hub batch this transcript came from. Delivery can only be acknowledged for a
+    /// transcript that is still linked to the job the Hub is protecting.
+    var batchID: String? = nil
 }
 
 enum NativeTranscriptFormat {
@@ -793,7 +796,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     transcriptionResult = NativeTranscript(text: metadata?.text ?? "", srt: srt,
                         vtt: metadata?.vtt ?? "", language: metadata?.language ?? "",
                         duration: metadata?.duration ?? 0, model: metadata?.model ?? detail.model,
-                        sourceFilename: URL(fileURLWithPath: pending.filePath).lastPathComponent)
+                        sourceFilename: URL(fileURLWithPath: pending.filePath).lastPathComponent,
+                        batchID: batchID)
                     pendingTranscription = nil
                     try savePendingTranscription()
                     try saveState()
@@ -964,6 +968,49 @@ final class NativeWorkspaceStore: ObservableObject {
         let value: String
         switch format { case .text: value = result.text; case .srt: value = result.srt; case .vtt: value = result.vtt }
         return Data(value.utf8)
+    }
+
+    /// Save one transcript and confirm delivery, in that order.
+    ///
+    /// The Image studio has done this since ST-03; Subtitle exported bytes and never told
+    /// the Hub, so a delivered transcript stayed indexed as unacknowledged. The Hub publishes
+    /// exactly one artifact per item — the SRT — and that is what the delivery receipt is
+    /// about, so it is fetched and required to match what the app is showing before anything
+    /// is written or acknowledged.
+    func saveTranscript(format: NativeTranscriptFormat, to destination: URL) async throws {
+        let requestConnection = connectionID
+        guard let result = transcriptionResult else {
+            throw NativeAPIError.message("There is no completed transcript to export.")
+        }
+        guard let batchID = result.batchID else {
+            throw NativeAPIError.message("This transcript is no longer linked to its Hub job, so its delivery cannot be confirmed. Run the transcription again to export it.")
+        }
+        let artifact = try await performData(makeRequest(
+            ["api", "hub", "transcription", "jobs", batchID, "items", "0", "artifact"]))
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The Hub connection changed before transcript retrieval completed.")
+        }
+        let hubSRT = String(decoding: artifact, as: UTF8.self)
+        guard !hubSRT.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              hubSRT == result.srt else {
+            throw NativeAPIError.message("Subtitle verification failed. The Hub's artifact does not match the transcript shown; refresh the job and retrieve it again.")
+        }
+        let data = try transcriptData(format: format)
+        try data.write(to: destination, options: .atomic)
+        guard try Data(contentsOf: destination) == data else {
+            throw NativeAPIError.message("Saved transcript verification failed. Choose another destination and save again.")
+        }
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The transcript was saved and verified, but the local service connection changed before delivery was acknowledged. Save again to confirm delivery.")
+        }
+        do {
+            let receipt: HubAckReceipt = try await sendEmpty(
+                ["api", "hub", "transcription", "jobs", batchID, "items", "0", "ack"],
+                method: "POST")
+            if !receipt.ok { throw NativeAPIError.message("rejected") }
+        } catch {
+            throw NativeAPIError.message("The transcript was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
+        }
     }
 
     func saveHFToken(_ token: String) async -> Bool {

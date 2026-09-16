@@ -28,8 +28,8 @@ are current; the longer narrative under it is historical and is kept for provena
 - **WORKING END TO END (verified in the packaged app): Image, Subtitle, Qwen cloning and
   OmniVoice.** Each produced real output through the real app: a FLUX image, Whisper transcripts
   on all three sizes, and cloned WAVs from a local reference clip. What is *not* yet done is the
-  formal side — ST-03's manual GUI Save click-through, ST-04's cancellation/restart receipts, the
-  Subtitle export acknowledgement, and independent review of every card from ST-03 onward.
+  formal side — ST-03's manual GUI Save click-through, ST-04's cancellation/restart receipts, and
+  independent review of every card from ST-03 onward.
 - **ST-04 merged** (`71611bb` + follow-up): the unified voice-reference staging contract (local
   upload + GenStudio push), Qwen Base clone requirements, the native clone UI, and **real
   offline receipts for both tiers** — QWEN06 and QWEN17, TER/CER 0.0 on reference and output,
@@ -140,9 +140,10 @@ are current; the longer narrative under it is historical and is kept for provena
    seven real defects in ST-03. Every one of those cards is still unreviewed. The two most
    productive questions so far have been "does the fixture agree with the real server?" and "does
    the production path ever actually write the row the query reads?" — both found real defects.
-3. **ST-08's remaining native work**, in the priority the owner will feel it: the Subtitle export
-   path still writes bytes without the verified-destination acknowledgement that ST-03 added for
-   Image (`saveImage`), so a transcript can be "saved" without the Hub recording delivery.
+3. **ST-08's remaining native work** is now only the manual GUI click-throughs (Image Save,
+   Subtitle export) and ST-08.OS. The Subtitle export acknowledgement landed in `5315c2a`: the Hub
+   gained a transcription ack route and the app verifies the Hub's own artifact before writing and
+   acknowledging.
 4. **ST-10.4 / ST-10.6 / ST-10.DATA** need a second real machine and a counterpart, so they stay
    partial. If a second Mac becomes available, per-location aggregation and node deduplication are
    the first things to exercise.

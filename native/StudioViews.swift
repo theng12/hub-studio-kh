@@ -874,12 +874,18 @@ struct StudioContent: View {
         Task { do { try await workspace.audioData(for: job).write(to: url, options: .atomic) } catch { fileActionError = error.localizedDescription } }
     }
     private func exportTranscript() {
-        guard let result = workspace.transcriptionResult else { return }
+        guard workspace.transcriptionResult != nil else { return }
         let ext = transcriptFormat == "Text" ? "txt" : transcriptFormat.lowercased()
         let panel = NSSavePanel(); panel.nameFieldStringValue = "transcript.\(ext)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = transcriptFormat == "SRT" ? result.srt : transcriptFormat == "VTT" ? result.vtt : result.text
-        do { try text.write(to: url, atomically: true, encoding: .utf8) } catch { fileActionError = error.localizedDescription }
+        let format: NativeTranscriptFormat = transcriptFormat == "SRT" ? .srt
+            : transcriptFormat == "VTT" ? .vtt : .text
+        // A transcript is only saved once the Hub's own artifact has been verified against
+        // what the screen shows, and delivery is acknowledged only after the file is written.
+        Task {
+            do { try await workspace.saveTranscript(format: format, to: url) }
+            catch { fileActionError = error.localizedDescription }
+        }
     }
     private func confirmRemove(_ model: NativeModel) {
         let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Remove \(model.label) from this library. Existing generated files are kept. Models in use or required by another installed model cannot be removed."
