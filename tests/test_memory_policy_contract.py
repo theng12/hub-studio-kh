@@ -231,6 +231,71 @@ class FleetReleaseTests(PackagedMachine):
             asyncio.run(control.release([]))
 
 
+class HandoffTests(PackagedMachine):
+    """What happens when a job arrives on a Mac whose memory another Studio is holding.
+
+    This is the scheduler side of the contract the fleet release pass implements, and it is
+    the behaviour an operator notices on an 8 GB Mac: an Image generation finishes, a Voice
+    job arrives, and the Voice job must not simply wait for someone to notice.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Imported here for the same DATA_DIR reason `memory_control()` is.
+        from components.hub.backend import broker, chat_jobs, transcription_jobs
+        self.broker = broker
+        self.chat_jobs = chat_jobs
+        self.transcription_jobs = transcription_jobs
+        self.addCleanup(self.chat_jobs.busy_studios.clear)
+        self.addCleanup(self.transcription_jobs.busy_studios.clear)
+        self.addCleanup(self.broker._handoff_state.clear)
+
+    def handoff(self, specs, target_id):
+        control, stubs = build_fleet(*specs)
+        monitor = control.monitor
+        # `release_idle_siblings` builds its own controller from the monitor, so the stub
+        # fleet's client has to travel with it.
+        monitor._client = control.client
+        with patch.object(self.broker, '_monitor', lambda: monitor), \
+             patch.object(self.broker, '_busy', set()):
+            result = asyncio.run(self.broker.release_idle_siblings(None, monitor.registry[
+                next(index for index, row in enumerate(monitor.registry)
+                     if row['id'] == target_id)]))
+        return result, stubs
+
+    def test_an_idle_sibling_releases_its_model_for_the_incoming_job(self) -> None:
+        """The FLUX model Image is holding must not make the Voice job wait for a human."""
+        result, stubs = self.handoff(
+            (('image', 'image', 51101), ('voice', 'voice', 51102)), 'voice')
+
+        self.assertEqual(result['attempted'], 1)
+        self.assertEqual(result['released'], 1)
+        self.assertEqual(result['busy'], [])
+        self.assertEqual(result['failed'], [])
+        # The sibling was actually asked, not merely counted.
+        self.assertGreaterEqual(stubs['image'].releases, 1)
+
+    def test_a_sibling_that_is_generating_is_never_preempted(self) -> None:
+        """Releasing a model out from under running work would kill the job, not the model."""
+        self.transcription_jobs.busy_studios.add('subtitle')
+        result, stubs = self.handoff(
+            (('subtitle', 'transcription', 51103), ('voice', 'voice', 51102)), 'voice')
+
+        self.assertEqual(result['released'], 0)
+        self.assertEqual(result['busy'], ['subtitle'])
+        self.assertEqual(stubs['subtitle'].releases, 0,
+                         'a busy Studio must not even be asked to release')
+
+    def test_a_second_handoff_on_the_same_machine_is_deferred(self) -> None:
+        """Three scheduler lanes must not all clear the same Mac in the same instant."""
+        specs = (('image', 'image', 51101), ('voice', 'voice', 51102))
+        first, _ = self.handoff(specs, 'voice')
+        self.assertFalse(first.get('deferred'))
+        second, stubs = self.handoff(specs, 'voice')
+        self.assertTrue(second.get('deferred'))
+        self.assertLessEqual(stubs['image'].releases, 1)
+
+
 class FleetSetModeTests(PackagedMachine):
     def test_set_mode_reaches_every_changeable_studio(self) -> None:
         control, stubs = build_fleet(('voice', 'voice', 51102),
