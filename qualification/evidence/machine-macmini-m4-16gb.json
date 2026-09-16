@@ -1,7 +1,7 @@
 {
- "app": "Studio Hub 0.4.0 Memory Proof.app",
- "captured_at": 1789518924.0857139,
- "captured_at_iso": "2026-09-16T00:35:24Z",
+ "app": "Studio Hub 0.4.0.app",
+ "captured_at": 1789519491.823315,
+ "captured_at_iso": "2026-09-16T00:44:51Z",
  "host": {
   "machine": "arm64",
   "macos": "26.6.2",
@@ -15,16 +15,44 @@
   "workers": 3
  },
  "hub_stats": {
-  "available_machines": [],
+  "available_machines": [
+   "local"
+  ],
   "available_modalities": [
    "image",
    "voice",
    "transcription"
   ],
-  "by_machine": {},
-  "by_modality": {},
-  "by_model": {},
-  "by_source": {},
+  "by_machine": {
+   "local": {
+    "avg_s": 16.99,
+    "count": 1,
+    "modalities": {
+     "image": 0,
+     "transcription": 1,
+     "voice": 0
+    }
+   }
+  },
+  "by_modality": {
+   "transcription": {
+    "avg_s": 16.99,
+    "count": 1,
+    "machines": {
+     "local": 1
+    }
+   }
+  },
+  "by_model": {
+   "mlx-community/whisper-large-v3-turbo": {
+    "avg_s": 16.99,
+    "count": 1,
+    "modality": "transcription"
+   }
+  },
+  "by_source": {
+   "job": 1
+  },
   "filters": {
    "hours": null,
    "machine": null,
@@ -34,89 +62,150 @@
   "fleet_activity": {
    "machines": [
     {
-     "completed": 0,
+     "completed": 1,
      "failed": 0,
-     "job_id": null,
-     "last_activity_at": null,
-     "latest": null,
+     "job_id": "stt-fb2ddba7863b-0",
+     "last_activity_at": 1789519531.409636,
+     "latest": {
+      "activity_received_at": 1789519531.409639,
+      "error_code": null,
+      "finished_at": 1789519531.409636,
+      "hub_owned": 1,
+      "job_id": "stt-fb2ddba7863b-0",
+      "machine": "local",
+      "model": "mlx-community/whisper-large-v3-turbo",
+      "observed_at": 1789519531.409639,
+      "operation": "transcription",
+      "origin": "hub",
+      "origin_device": null,
+      "progress": 1.0,
+      "reported_at": 1789519531.409639,
+      "runtime_s": 16.99,
+      "source": "job",
+      "started_at": 1789519514.349447,
+      "state": "done",
+      "studio": "subtitle"
+     },
      "limitation": "Direct activity partially unavailable",
      "machine": "local",
      "median_runtime_s": null,
-     "model": null,
-     "operation": null,
-     "origin": "unknown",
+     "model": "mlx-community/whisper-large-v3-turbo",
+     "operation": "transcription",
+     "origin": "hub",
      "origin_device": null,
      "progress": null,
      "relative_performance": null,
-     "source": null,
-     "state": "unknown",
-     "state_duration_s": 0.7,
-     "state_since": 1789518953.867469,
-     "studio": null,
+     "source": "job",
+     "state": "just_finished",
+     "state_duration_s": 1.1,
+     "state_since": 1789519531.409636,
+     "studio": "subtitle",
      "timeline": [
       {
-       "activity_received_at": 1789518948.8232949,
+       "activity_received_at": 1789519531.409639,
+       "error_code": null,
+       "finished_at": 1789519531.409636,
+       "hub_owned": 1,
+       "job_id": "stt-fb2ddba7863b-0",
+       "machine": "local",
+       "model": "mlx-community/whisper-large-v3-turbo",
+       "observed_at": 1789519531.409639,
+       "operation": "transcription",
+       "origin": "hub",
+       "origin_device": null,
+       "progress": 1.0,
+       "reported_at": 1789519531.409639,
+       "runtime_s": 16.99,
+       "source": "job",
+       "started_at": 1789519514.349447,
+       "state": "done",
+       "studio": "subtitle"
+      },
+      {
+       "activity_received_at": 1789519528.641185,
        "error_code": null,
        "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-aa34c84a73e9-0",
+       "job_id": "stt-fb2ddba7863b-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789518934.432839,
+       "observed_at": 1789519514.349547,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": "Studio Hub KH \u00b7 Local site",
        "progress": null,
-       "reported_at": 1789518948.8232949,
+       "reported_at": 1789519528.641185,
        "runtime_s": null,
        "source": "job",
-       "started_at": 1789518934.432832,
+       "started_at": 1789519514.349447,
        "state": "running",
        "studio": "subtitle"
       }
      ],
      "utilization": {
       "evidence": "partial",
-      "ratio": 0.5744
+      "ratio": 0.5684
      }
     }
    ],
-   "observed_at": 1789518954.586299,
+   "observed_at": 1789519532.5010781,
    "pulse": {
-    "just_finished": 0,
+    "just_finished": 1,
     "long_idle": 0,
     "needs_attention": 0,
     "offline": 0,
     "ready": 0,
-    "unknown": 1,
+    "unknown": 0,
     "working": 0
    },
    "schema": "studiohub.fleet_activity.v1",
    "window": {
-    "now": 1789518954.586299,
-    "since_s": 1786926954.586299
+    "now": 1789519532.5010781,
+    "since_s": 1786927532.5010781
    }
   },
-  "matrix": [],
-  "model_rows": [],
+  "matrix": [
+   {
+    "avg_s": 16.99,
+    "count": 1,
+    "machine": "local",
+    "max_s": 16.99,
+    "min_s": 16.99,
+    "modality": "transcription"
+   }
+  ],
+  "model_rows": [
+   {
+    "avg_s": 16.99,
+    "count": 1,
+    "modality": "transcription",
+    "model": "mlx-community/whisper-large-v3-turbo"
+   }
+  ],
   "timeline": {
    "bucket_s": 86400,
-   "buckets": [],
-   "series": {}
+   "buckets": [
+    1789516800
+   ],
+   "series": {
+    "transcription": [
+     1
+    ]
+   }
   },
-  "total": 0
+  "total": 1
  },
- "hub_url": "http://127.0.0.1:49624",
+ "hub_url": "http://127.0.0.1:50638",
  "label": "Mac mini M4 16GB",
  "runs": [
   {
-   "batch_id": "aa34c84a73e9",
+   "batch_id": "fb2ddba7863b",
    "input_bytes": 288044,
    "input_sha256": "2f606380c9c413d38f6edb8e5542d5a0a2977273e77956b174e4f27aa587f17c",
    "items": [
     {
      "bytes": null,
-     "duration_seconds": 18.73,
+     "duration_seconds": 16.99,
      "error": null,
      "peak_process_rss_bytes": null,
      "sha256": null,
@@ -129,7 +218,7 @@
    "package_id": "whisper-turbo",
    "status": "done",
    "submit_status": 200,
-   "wall_seconds": 26.232
+   "wall_seconds": 24.279
   }
  ],
  "skipped": [],

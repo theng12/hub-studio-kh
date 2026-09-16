@@ -2,9 +2,10 @@
 
 ## ▶ TAKE OVER HERE
 
-**Current holder:** DeepSeek Harness session, 2026-09-15 — took the wheel from the
-earlier Codex session that ran out of credits. Read this block, then the table below,
-then the one task card you are claiming.
+**Current holder:** DeepSeek Harness session, last active 2026-09-16. Earlier sessions
+(Codex, then this one) are recorded below. Read this block, then the table below, then the
+one task card you are claiming. The bullets between here and "Everything below this line"
+are current; the longer narrative under it is historical and is kept for provenance.
 
 - **Integration line:** branch `implementation/voice-runtime` (the only integration branch;
   run `git log -1` for the current tip). Every task branch is merged into it.
@@ -19,18 +20,16 @@ then the one task card you are claiming.
   required and must converge on ONE Hub reference-asset contract: a reference clip chosen
   locally in the app, and a clone pushed from GenStudio through the controller. See design
   §2 and checkpoints ST-04.CLONE / ST-10.CLONE. This is the primary Voice mechanism.
-- **Generation-history requirement (owner, 2026-09-15, stated after planning):** every
-  generation page (Image / Voice / Subtitle) needs its own easy-to-view history, **plus one
-  unified history presented with tabs**. Image and Voice already show a short recent list;
-  Subtitle has no history view and the Jobs page is a flat two-section list rather than tabbed.
-  See design §2 and checkpoint ST-08.HISTORY.
+- **Generation-history requirement (owner, 2026-09-15, stated after planning): SATISFIED.**
+  Every generation page (Image / Voice / Subtitle) shows its own history, and the unified Jobs
+  page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
-- **WORKING END TO END (verified in the packaged app): Image, Subtitle and Voice cloning.** Each
-  produced real output through the real app: a FLUX image, a Whisper transcript, and a cloned WAV
-  from a local reference clip. What is *not* yet done is the formal side of these cards — ST-03's
-  single manual GUI Save click-through, ST-04's cancellation/restart receipts and review, ST-06's
-  SRT export through the native screen — plus every card after them.
+- **WORKING END TO END (verified in the packaged app): Image, Subtitle, Qwen cloning and
+  OmniVoice.** Each produced real output through the real app: a FLUX image, Whisper transcripts
+  on all three sizes, and cloned WAVs from a local reference clip. What is *not* yet done is the
+  formal side — ST-03's manual GUI Save click-through, ST-04's cancellation/restart receipts, the
+  Subtitle export acknowledgement, and independent review of every card from ST-03 onward.
 - **ST-04 merged** (`71611bb` + follow-up): the unified voice-reference staging contract (local
   upload + GenStudio push), Qwen Base clone requirements, the native clone UI, and **real
   offline receipts for both tiers** — QWEN06 and QWEN17, TER/CER 0.0 on reference and output,
@@ -44,9 +43,10 @@ then the one task card you are claiming.
 - **Coordinator decision recorded:** public Subtitle jobs are served by the `subtitle` worker;
   Voice keeps its Whisper quality check internal to the parent Voice job and does not advertise
   `modality == "transcription"` to the packaged public scheduler.
-- **Whisper Base/Small are catalog-only.** `mlx-audio` loads only `*.safetensors` while those
-  pinned revisions ship `weights.npz`; the app refuses them with an explicit reason instead of
-  loading the wrong thing. Scoped as its own checkpoint.
+- **Whisper Base and Small work now** (`da1a8f4`). They were catalog-only because those pinned
+  revisions ship `weights.npz` while `mlx-audio` globs `*.safetensors`; the shared view converts
+  npz → safetensors once, app-side, leaving the verified library bytes untouched. Both were
+  verified transcribing through the packaged app.
 - **Native Subtitle screen landed** (`f2df056`): the studio reads its availability from the
   Subtitle worker, shows its own durable history ("Recent subtitles") from the Hub's
   transcription jobs, and appears as the **Subtitle tab** in the unified history. The
@@ -78,90 +78,76 @@ then the one task card you are claiming.
   The fix is to answer from the verified package library, falling back to the HF cache, counting
   only **verified** packages as cached. Image already resolves the package layout, which is why
   it works.
-- **Voice library bridge is IN and verified as far as it goes.** `cache.py` now resolves models
-  through the packaged manifests plus `<library>/.studiohub/installed.json` (exact revision, only
-  an indexed/verified package counts), `cache_state`/`status_snapshot`/`model_dir` use it,
-  `generation.py` falls back to the package revision folder for the mlx-audio snapshot, and
-  `voice_worker.py` passes `STUDIOHUB_MODEL_MANIFESTS` (the worker ran with a minimal env).
-  **Confirmed through the packaged app: the Hub gate passes, the job dispatches to `voice`, the
-  model loads from the app library, and the reference clip is accepted and duration-validated
-  (4.57 s of real work).** Remaining failure is the **internal Whisper quality check**:
-  `QwenQualityError: Whisper Large could not validate the Qwen reference` — i.e. the quality
-  check's own Whisper resolution/caching inside the Voice worker is the next (and likely last)
-  step for a real cloned voice. Note the earlier `Qwen3TTS-0.6B` attempt also showed a
-  too-short-reference guard at <3 s of usable speech, so any future test clip must be ~5 s+.
-- **All three Whisper choices now work** (`da1a8f4`). Base and Small were catalog-only because
-  those pinned packages ship `model/weights.npz` while mlx-audio's Whisper loader globs
-  `*.safetensors`. Now: the shared view converts npz → safetensors once into an app-side view
-  (verified library bytes untouched), the tokenizer is taken from local files — reusing the
-  shared multilingual tokenizer when a package ships no companions — and the Subtitle worker
-  passes `STUDIOHUB_MODEL_MANIFESTS`, which the adopted Voice cache module needs. **Verified
-  through the packaged app: `whisper-base` and `whisper-small` both reach `status=done` on
-  `studio=subtitle` with correct transcripts** (previously they never left `queued`).
-- **Voice cloning now works end to end in the packaged app.** A locally chosen reference clip
-  staged through `POST /api/hub/voice-references` (201, `origin: local`) produced a real cloned
-  WAV: `state: done`, `studio: voice`, **145,964 bytes**, sha256 `8c63dcc7…`, 34.1 s, artifact
-  fetched. Evidence: `qualification/evidence/st04-packaged-clone-e2e.json`.
-- **The chain that had to be fixed to get there** (each found only by running the real app, none
-  caught by the suites): the Hub's `is_cached` gate; the Voice cache resolver understanding only an
-  HF cache; `cache_state`/`status_snapshot`/`model_dir`; the mlx-audio snapshot path; the package's
-  split `model/` + `companions/processor/` layout (a merged read-only view now presents them
-  together); the Whisper tokenizer fallback asking the hub **by name offline** instead of using the
-  local companion files; and `snapshot_revision` lacking package evidence. Commits `bc0119b` …
-  `6f8fa8b`; Voice suite **664 passed**, root suite **192 OK**.
-- **Three of four studios are now proven working end to end: Image, Subtitle and Voice.**
-- **ST-05 heavy voices: OmniVoice works; VoxCPM2 is a host-memory result.** Probed through the
-  packaged app with the fixed resolver: **`OmniVoice-bfloat16` produced real audio** (197,804
-  bytes, sha256 `c5683385…`, 21.9 s) while `VoxCPM2-4bit` and `-bf16` failed with the model's own
-  explicit message that the host lacked free unified memory (17.2 GB total, 4.6–6.1 GB free with
-  three engines resident). All four packages verify and dispatch, so this is **hardware, not code** —
-  the owner's M4-24 and M2 Max-32 machines should be used for the VoxCPM2 receipts, with
-  `-8bit` re-probed rather than inferred. Evidence:
-  `qualification/evidence/st05-heavy-voices-e2e.json`. Still outstanding: VoxCPM2 receipts on
-  suitable hardware, VoxCPM2/OmniVoice exposure in the Audio UI (which currently targets Qwen),
-  and review.
-- **Next:** ST-08's remaining native work (VoxCPM2/OmniVoice in the Audio form, the Subtitle
-  export/ack path, settings), then ST-10 fleet and ST-11 hardware.
-- **Native clone support is implemented** (`1a010e5`): the Audio form now accepts Qwen Base as a
-  clone model with a reference-clip picker, a required reference transcript and a Prepare Voice
-  action that posts to the same Hub reference route GenStudio pushes use, and submits
-  `voice_reference_asset_id`. It is built and compiles; the end-to-end proof waits on the ST-04
-  Hub route landing, and the native API fixture still needs a voice-references case.
-- **NEXT:** ST-05 VoxCPM2/OmniVoice — must be the same owner as ST-04 because they share
-  the Voice registry — then ST-08 native workflows/settings.
-- **LATER:** ST-10 fleet/GenStudio connection, then ST-11 qualification on real hardware.
-- **Coordinator decision:** ST-04/05/06 were unlocked before ST-03 formally reached DONE
-  because the packaged-worker pattern they depend on is already proven by the working Image
-  slice. This is a deliberate, recorded exception to "whole-task dependencies require DONE";
-  ST-03's independent review is what closes that card out.
-- **The rule that will bite you:** run tests with `.build/voice-runtime/bin/python3`.
-  The system `python3` is 3.9.6 and fails.
+- **Four engines produce real output through the packaged app: Image (FLUX.2 Klein), Subtitle
+  (Whisper turbo / small / base), Qwen voice cloning, and OmniVoice.** Everything below this line
+  that describes those as blocked is historical; the current position is this block.
+- **One memory-policy contract now covers every Studio.** Voice already published
+  `GET/PUT /api/memory-policy` + `POST /api/memory/release`; the packaged Subtitle worker was
+  answering on `/api/memory/policy` instead, and `transcription` was missing from the Hub's target
+  modalities, so a Whisper model could stay resident across a handoff on an 8 GB Mac. Subtitle now
+  answers the fleet paths and publishes the same field vocabulary, Image publishes the same
+  contract with an honest no-idle-policy answer, and the Hub exposes
+  `GET/PUT /api/hub/memory/policy` for the app. `9d83e6a`.
+- **Settings has a Model memory section.** Per Studio: the saved mode, the Studio's own
+  machine-aware default (under 16 GiB releases immediately), the model it is holding right now,
+  and a machine-wide Release button. Verified against the staged bundle with all three workers up
+  — `qualification/evidence/st10-memory-policy-packaged.json`.
+- **Connections is real.** It shows the address the Hub bound, role, station and controller IDs,
+  the Hub version and migration stage, and the Hub token masked with owner-only Reveal/Copy. It
+  used to say "Controller connection is not available in this build." `d114c40`.
+- **A defect the fixtures had agreed with:** the app was calling `/api/hub/version`, which does not
+  exist — the Hub serves `/api/version`. The native fixture had been written to match the mistake,
+  so only driving a real Hub process caught it. **When you add a native fixture route, confirm it
+  against the real Hub.**
+- **Completed Subtitle jobs were invisible to the Hub's statistics.** A subtitle job produces no
+  asset row, so `ledger.stats` counts it from `activity_events`; the dispatcher recorded only the
+  `running` transition. Every completed subtitle was missing from `total`, `by_machine`,
+  `by_model`, `matrix` and the timeline while the live view showed it. Fixed in `7e42a07`, with a
+  test that drives the real item path — the existing statistics fixture planted its own `done`
+  event, so it could never have noticed that nothing wrote one.
+- **ST-11's software checkpoints are done.** Release candidate `dist/Studio Hub 0.4.0.app` staged
+  from a clean tree at `7e42a07`; `packaging/release_kit.py` generates the kit manifest and fails
+  if the library is missing an advertised package; `qualification/evidence/measure_machine.py`
+  runs one generation per model on a machine and writes its receipt;
+  `qualification/focused-release.md` is the operator guide and `qualification/st11.md` records the
+  gates. **Every remaining ST-11 checkpoint needs physical hardware this session does not have**
+  — see the condition table in `st11.md`.
+- **Still not done, and not inferred:** VoxCPM2 has never produced output on any host (its own
+  memory message on this 16 GiB Mac); 8-bit has never been run; no macOS floor is established on
+  an original M1; no second Mac has run the kit; ST-04/05/06/10/11 have not had independent
+  review.
+- **The rule that will bite you:** run tests with `.build/voice-runtime/bin/python3` (3.12.14).
+  The system `python3` is 3.9.6 and fails. The adopted Voice suite must run from
+  `components/voice/`, not `components/voice/app/` — its `pytest.ini` excludes four upstream tests
+  whose artifacts are deliberately not shipped.
 - **Model verification is `ctime`-sensitive.** `components/model_packages._stamp()` includes
-  `st_ctime_ns`, so anything that hard-links a library file (the ST-04 proof harness builds an
-  offline cache that way) makes the app report `File changed; verify again` even though the bytes
-  are unchanged — confirmed on `whisper-turbo`. Remedy is a **Verify** pass in Models; future
-  proof harnesses should copy rather than hard-link the shipped library.
-- **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still
+  `st_ctime_ns`, so anything that hard-links a library file makes the app report
+  `File changed; verify again` even though the bytes are unchanged. Remedy is a **Verify** pass in
+  Models; proof harnesses should copy rather than hard-link.
+- **Never delete `.worktrees/`**, never assume a "pending" line in a receipt is still true, and put
+  every result in a committed file — not in a chat message.
   true, and put every result in a committed file — not in a chat message.
 
 ## ▶ FIRST TASKS FOR THE NEXT SESSION (specific, verified starting points)
 
-1. **Expose the heavy voices in the Audio screen.** Cause confirmed:
-   `native/StudioAPI.swift:785` gates audio models on
-   `let isQwen = item.family == "qwen3-tts"`, and `formCompatible`/`isClone` follow from it, so
-   the catalogue's `voxcpm-mlx` (VoxCPM2 4-bit/8-bit/bf16) and `omnivoice` families never reach
-   the form even though both **work end to end through the Hub** (OmniVoice proven; VoxCPM2
-   memory-bound). Broaden the gate to those families, mark them clone models
-   (`requiresReference`), and keep Qwen CustomVoice as the preset-speaker path. The reference-clip
-   and transcript UI added in `1a010e5` is family-agnostic and needs no change.
-2. **Re-probe VoxCPM2 on a 24/32 GB Mac with the other engines idle** and record receipts —
-   including 8-bit, which was never run. This is an owner-hardware task, not a code change.
-3. **Subtitle export + acknowledgement.** `native/StudioViews.swift` `saveAudio`/transcript export
-   still writes bytes without the verified-destination acknowledgement that ST-03 added for Image
-   (`saveImage`); apply the same pattern before acknowledging delivery.
-4. **Independent review** of the ST-04/ST-05/ST-06 changes, reusing the pattern that found seven
-   real defects in ST-03.
-5. Then **ST-10 fleet** and **ST-11 hardware**, per the owner's "finish the whole app" scope.
+1. **Run the kit on the owner's machines.** `dist/Studio Hub 0.4.0.app` plus `model-library/`,
+   right-click → Open, choose the library, then
+   `qualification/evidence/measure_machine.py --label '<machine>'` on each Mac. That clears
+   ST-11.3, the RAM/disk half of ST-11.4, and produces the per-machine speed comparison the owner
+   asked for. **VoxCPM2 has never run on any host** — a 24/32 GB Mac with the other engines idle is
+   the only way to know, and 8-bit has never been attempted at all.
+2. **Independent review** of ST-04, ST-05, ST-06, ST-10 and ST-11, reusing the pattern that found
+   seven real defects in ST-03. Every one of those cards is still unreviewed. The two most
+   productive questions so far have been "does the fixture agree with the real server?" and "does
+   the production path ever actually write the row the query reads?" — both found real defects.
+3. **ST-08's remaining native work**, in the priority the owner will feel it: the Subtitle export
+   path still writes bytes without the verified-destination acknowledgement that ST-03 added for
+   Image (`saveImage`), so a transcript can be "saved" without the Hub recording delivery.
+4. **ST-10.4 / ST-10.6 / ST-10.DATA** need a second real machine and a counterpart, so they stay
+   partial. If a second Mac becomes available, per-location aggregation and node deduplication are
+   the first things to exercise.
+5. **ST-11.OS** needs an original M1 at the oldest candidate Sonoma release. Until then the only
+   OS-floor evidence is Image's own refusal below macOS 14.0.
 
 **Verify every one of these by running the packaged app, not only the suites.** Seven integration
 defects in the Voice/Subtitle chain passed a fully green 192-test suite and were only visible when
@@ -171,15 +157,17 @@ a real job ran (`st04-packaged-clone-e2e.json`, `st06-packaged-e2e.json`). `bash
 are the quick gates; staging with `packaging/stage_voice.py --runtime .build/voice-runtime
 --native-shell .build/StudioHub --image-runtime .build/st03-image-runtime-worker` is the real one.
 
-*Plain-English position:* four engines are now proven working through the real packaged app —
-image generation (FLUX), subtitles (Whisper), Qwen voice cloning, and OmniVoice. The only engine
-not yet producing output on this 16 GiB machine is VoxCPM2, and it fails with its own explicit
-memory message rather than a defect, so it needs one of the owner's 24/32 GB Macs. Everything the
-hardest part required — a standalone app that finds its models, loads them offline, and runs them
-— is done and verified. What remains is exposing the heavy voices and the Subtitle export in the
-app's screens, the fleet connection, and real-hardware sign-off. Past the riskiest part.
+*Plain-English position:* the app is finished enough to copy onto a Mac and use. Four engines
+produce real output through it — FLUX images, Whisper subtitles, Qwen voice cloning and OmniVoice
+— and the shipped kit is generated, hash-recorded and checked against the library. The app now
+shows what each Studio is holding in memory and lets you choose when it lets go, shows the address
+and credential a controller needs, and reports per-machine speed for every studio including
+subtitle. What is left is not code: VoxCPM2 has never produced output on any host (it needs a
+24/32 GB Mac), no second machine has run the kit, no original M1 has established the macOS floor,
+and none of ST-04/05/06/10/11 has had independent review. Every one of those is named as a
+condition with the exact step that clears it, in `qualification/st11.md`.
 
-Updated: 2026-09-15 (record reconciliation). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
+Updated: 2026-09-16 (memory contract, connections, statistics fix, ST-11 kit). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
 integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was
 merged into `implementation/voice-runtime` and a **real packaged 1K generation is
@@ -199,10 +187,10 @@ evidence does not complete these cards.
 | [ST-05](ST-05.md) | C · VoxCPM2 / OmniVoice | ST-03 | IN_PROGRESS | coordinator; **OmniVoice works end-to-end**; VoxCPM2 is host-memory-bound (re-probe on 24/32 GB) + UI exposure + review |
 | [ST-06](ST-06.md) | C · Independent Subtitle | ST-03 | IN_PROGRESS | coordinator; **real transcript in the packaged app** (`418da53`); needs native SRT export/ack + review |
 | [ST-07](ST-07.md) | C · Per-device cleanup | ST-02 | DONE | st07_storage (Terra/high), root integrated |
-| [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | WAITING | Unassigned |
+| [ST-08](ST-08.md) | D · Native workflows/settings | ST-03, ST-07 | IN_PROGRESS | coordinator; clone UI, heavy voices and the Model memory + Connections screens are in; Subtitle export/ack remains |
 | [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | DONE | st09_startup (Luna/high), root integrated `7aa7775` |
-| [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | WAITING | Unassigned |
-| [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | WAITING | Unassigned |
+| [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | IN_PROGRESS | coordinator; Connections, the independent-client proof, credential rotation and the clone contract are in; 10.4/10.6/DATA partial, no second machine, needs review |
+| [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | IN_PROGRESS | coordinator; 11.1/11.2/11.7 done, kit + measurement tooling proven, hardware checkpoints open, needs review |
 
 ## Status rules
 

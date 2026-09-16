@@ -95,7 +95,7 @@ The app has no signing, notarization, login-registration or physical Sonoma test
 
 ## Running this build on a test machine
 
-The current build is `dist/Studio Hub 0.4.0 Subtitle Proof.app`. It is unsigned, so:
+The current build is `dist/Studio Hub 0.4.0.app`. It is unsigned, so:
 
 1. **Copy the app and the model library to the target Mac.** Copy `model-library/` as well — the
    app is offline and never downloads models by itself.

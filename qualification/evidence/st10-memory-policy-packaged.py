@@ -19,7 +19,7 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / "dist" / "Studio Hub 0.4.0 Memory Proof.app"
+APP = ROOT / "dist" / "Studio Hub 0.4.0.app"
 RESOURCES = APP / "Contents" / "Resources"
 LIBRARY = ROOT / "model-library"
 EVIDENCE = ROOT / "qualification" / "evidence" / "st10-memory-policy-packaged.json"
