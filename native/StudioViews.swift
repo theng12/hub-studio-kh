@@ -695,7 +695,17 @@ struct StudioContent: View {
                                     Button("Import Folder…") { chooseModelFolder(for: model) }
                                         .disabled(!connected || workspace.updatingModels || !model.supported)
                                 }
-                                if studio.configuration.offline { Text("Offline mode is on. Change it in Settings before downloading. Importing a folder works offline.").font(.caption).foregroundStyle(.secondary) }
+                                // Say which gate is shut, by name, because a greyed-out button
+                                // with no reason is indistinguishable from a missing feature.
+                                if studio.configuration.offline {
+                                    Text("Downloading is off because Offline mode is on (Settings → Model library → \"Use imported models offline\"). Turn that off to download from Hugging Face, or use Import Folder… to add a copy you already have — that works offline.")
+                                        .font(.caption).foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else if !model.supported {
+                                    Text("This model's runtime entry in the catalog does not match what this form can drive, so it cannot be downloaded here yet.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                             // Only a note about this model is shown here; a library-wide
                             // summary would otherwise be repeated under every model as if it
