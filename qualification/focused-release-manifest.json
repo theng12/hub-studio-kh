@@ -1,15 +1,15 @@
 {
  "app": {
-  "bytes": 2905555761,
+  "bytes": 2905562044,
   "name": "Studio Hub 0.4.0.app",
-  "recorded_tree_sha256": "07a750b17af5b0f32296f6ea8d2cfc655ce42e0423657b0e35e1a5853d9ec6b0",
-  "resource_payload_sha256": "0ac525001536c84703b17acb7b182a8580ce347563ed929404637b60bb1fef4e",
-  "tree_sha256_recomputed": "1b46b3076962b64f41a309ad3a7cff08a0742d88b8b442adba9128683ed3c21e"
+  "recorded_tree_sha256": "5d215875ce50b20f079f5cd0eda7783c90deb55a8c59ac08c6865afaa8ce49b8",
+  "resource_payload_sha256": "b5db427c3875b3cc96dfd5521fd3d753004c11acebd010338eaf95335636e747",
+  "tree_sha256_recomputed": "5e90c74f211ec2b5d2a65180aa572ac25f65eabf52e1bed1807337a7c623f55b"
  },
  "components": {
   "hub": {
    "runtime": "voice",
-   "source_sha256": "5dd9ee7a741d19e714d99f0049ea88947df3627035086f8ee69ab3c183b3910c",
+   "source_sha256": "942dea67c156165318ab6c07d9e4004ad0fa2e44bd07ec0d48a96203cf7329ee",
    "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
    "upstream_version": "2.22.0"
   },
@@ -37,9 +37,9 @@
   "notarized": false,
   "signed": false
  },
- "generated_at": 1789519469.826761,
- "generated_at_iso": "2026-09-16T00:44:29Z",
- "implementation_commit": "7e42a07d5cdbfaee85ccb2e6727d108f18a8dcee",
+ "generated_at": 1789520178.2973619,
+ "generated_at_iso": "2026-09-16T00:56:18Z",
+ "implementation_commit": "92c1b4df9a7536738517c1e30f75801e53a9322c",
  "library": {
   "index": ".studiohub/installed.json",
   "installed_bytes": 24494855896,

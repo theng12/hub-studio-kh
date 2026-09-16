@@ -142,12 +142,21 @@ private state; everything else requires the credential.
 
 ### Measuring generation speed per machine
 
-Every job already records what you need, tagged with the machine: elapsed seconds, output bytes and
-SHA-256, peak process RSS, and the exact model revision and runtime identity. The Hub aggregates
-them at `GET /api/hub/stats` (`by_machine`, `by_modality`, `by_model`, `model_rows`, a time
-`timeline`, and `fleet_activity` per machine including `completed`, `failed` and
-`median_runtime_s`). Run one generation per model per machine and the comparison is recorded — no
-separate benchmark needed.
+Every job already records what you need, tagged with the machine. The Hub aggregates it at
+`GET /api/hub/stats`: `by_machine`, `by_modality`, `by_model`, `model_rows`, a time `timeline`,
+and `fleet_activity` per machine including `completed`, `failed` and `median_runtime_s`.
+
+What each studio contributes to those aggregates:
+
+| Studio | Runtime | Output bytes / SHA-256 | Peak process RSS |
+| --- | --- | --- | --- |
+| Image | yes | yes | yes |
+| Voice | yes | yes | yes |
+| Subtitle | yes | the SRT artifact is on disk and verified on delivery; the aggregate carries runtime only | not measured |
+
+Run one generation per model per machine and the comparison is recorded — no separate benchmark
+needed. `qualification/evidence/measure_machine.py` does exactly that and writes one receipt per
+machine.
 
 ## Historical Voice proof
 

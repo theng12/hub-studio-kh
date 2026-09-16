@@ -1,6 +1,6 @@
 {
  "app": "dist/Studio Hub 0.4.0.app",
- "hub_url": "http://127.0.0.1:50743",
+ "hub_url": "http://127.0.0.1:51916",
  "ok": true,
  "problems": [],
  "ready_keys": [
@@ -34,7 +34,7 @@
     "studios": [
      {
       "detail": null,
-      "health": "up",
+      "health": "unknown",
       "id": "image",
       "machine": "local",
       "machine_label": "local",
@@ -42,7 +42,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.728925,
+       "counters_since": 1789520216.9823391,
        "default_mode": "immediate",
        "fixed": true,
        "idle_seconds": 0,
@@ -69,11 +69,11 @@
       "state": "ready",
       "supported": true,
       "title": "Image Studio",
-      "url": "http://127.0.0.1:50749"
+      "url": "http://127.0.0.1:51919"
      },
      {
       "detail": null,
-      "health": "up",
+      "health": "unknown",
       "id": "subtitle",
       "machine": "local",
       "machine_label": "local",
@@ -81,7 +81,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.673707,
+       "counters_since": 1789520216.9504042,
        "default_mode": "balanced",
        "idle_seconds": 600,
        "last_error": null,
@@ -127,11 +127,11 @@
       "state": "ready",
       "supported": true,
       "title": "Subtitle Studio",
-      "url": "http://127.0.0.1:50748"
+      "url": "http://127.0.0.1:51918"
      },
      {
       "detail": null,
-      "health": "up",
+      "health": "unknown",
       "id": "voice",
       "machine": "local",
       "machine_label": "local",
@@ -139,7 +139,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519542.450792,
+       "counters_since": 1789520215.701685,
        "default_mode": "immediate",
        "idle_seconds": 0,
        "last_error": null,
@@ -173,10 +173,10 @@
         }
        ],
        "process": {
-        "pid": 52037,
-        "started_at": 1789519542.450792,
-        "started_at_iso": "2026-09-16T07:45:42",
-        "uptime_seconds": 4.18
+        "pid": 54963,
+        "started_at": 1789520215.701685,
+        "started_at_iso": "2026-09-16T07:56:55",
+        "uptime_seconds": 3.621
        },
        "process_title": "Voice Studio Mac",
        "process_title_applied": true,
@@ -185,7 +185,7 @@
       "state": "ready",
       "supported": true,
       "title": "Voice Studio",
-      "url": "http://127.0.0.1:50747"
+      "url": "http://127.0.0.1:51917"
      }
     ],
     "summary": {
@@ -216,7 +216,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.673707,
+       "counters_since": 1789520216.9504042,
        "default_mode": "balanced",
        "idle_seconds": 120,
        "last_error": null,
@@ -261,7 +261,7 @@
       },
       "result": "updated",
       "title": "Subtitle Studio",
-      "url": "http://127.0.0.1:50748"
+      "url": "http://127.0.0.1:51918"
      },
      {
       "detail": null,
@@ -274,7 +274,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519542.450792,
+       "counters_since": 1789520215.701685,
        "default_mode": "immediate",
        "idle_seconds": 120,
        "last_error": null,
@@ -308,10 +308,10 @@
         }
        ],
        "process": {
-        "pid": 52037,
-        "started_at": 1789519542.450792,
-        "started_at_iso": "2026-09-16T07:45:42",
-        "uptime_seconds": 4.198
+        "pid": 54963,
+        "started_at": 1789520215.701685,
+        "started_at_iso": "2026-09-16T07:56:55",
+        "uptime_seconds": 4.162
        },
        "process_title": "Voice Studio Mac",
        "process_title_applied": true,
@@ -319,7 +319,7 @@
       },
       "result": "updated",
       "title": "Voice Studio",
-      "url": "http://127.0.0.1:50747"
+      "url": "http://127.0.0.1:51917"
      },
      {
       "detail": null,
@@ -332,7 +332,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.728925,
+       "counters_since": 1789520216.9823391,
        "default_mode": "immediate",
        "fixed": true,
        "idle_seconds": 0,
@@ -360,7 +360,7 @@
       "state": "ready",
       "supported": true,
       "title": "Image Studio",
-      "url": "http://127.0.0.1:50749"
+      "url": "http://127.0.0.1:51919"
      }
     ],
     "selected": 3,
@@ -400,7 +400,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.728925,
+       "counters_since": 1789520216.9823391,
        "default_mode": "immediate",
        "error": null,
        "fixed": true,
@@ -430,7 +430,7 @@
       },
       "result": "released",
       "title": "Image Studio",
-      "url": "http://127.0.0.1:50749"
+      "url": "http://127.0.0.1:51919"
      },
      {
       "detail": null,
@@ -443,12 +443,12 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.673707,
+       "counters_since": 1789520216.9504042,
        "default_mode": "balanced",
        "error": null,
        "idle_seconds": 120,
        "last_error": null,
-       "last_release_at": 1789519546.661742,
+       "last_release_at": 1789520219.876208,
        "last_release_details": {
         "models": [],
         "reason": "manual",
@@ -496,7 +496,7 @@
       },
       "result": "released",
       "title": "Subtitle Studio",
-      "url": "http://127.0.0.1:50748"
+      "url": "http://127.0.0.1:51918"
      },
      {
       "detail": null,
@@ -509,11 +509,11 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519542.450792,
+       "counters_since": 1789520215.701685,
        "default_mode": "immediate",
        "idle_seconds": 120,
        "last_error": null,
-       "last_release_at": 1789519549.812622,
+       "last_release_at": 1789520223.116361,
        "last_release_details": {
         "actions": [
          "cleared Python, PyTorch, MLX and Metal allocator caches",
@@ -551,10 +551,10 @@
         }
        ],
        "process": {
-        "pid": 52037,
-        "started_at": 1789519542.450792,
-        "started_at_iso": "2026-09-16T07:45:42",
-        "uptime_seconds": 7.363
+        "pid": 54963,
+        "started_at": 1789520215.701685,
+        "started_at_iso": "2026-09-16T07:56:55",
+        "uptime_seconds": 7.415
        },
        "process_title": "Voice Studio Mac",
        "process_title_applied": true,
@@ -562,7 +562,7 @@
       },
       "result": "released",
       "title": "Voice Studio",
-      "url": "http://127.0.0.1:50747"
+      "url": "http://127.0.0.1:51917"
      }
     ],
     "selected": 3,
@@ -589,11 +589,11 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.673707,
+       "counters_since": 1789520216.9504042,
        "default_mode": "balanced",
        "idle_seconds": 0,
        "last_error": null,
-       "last_release_at": 1789519546.661742,
+       "last_release_at": 1789520219.876208,
        "last_release_details": {
         "models": [],
         "reason": "manual",
@@ -638,7 +638,7 @@
       },
       "result": "updated",
       "title": "Subtitle Studio",
-      "url": "http://127.0.0.1:50748"
+      "url": "http://127.0.0.1:51918"
      },
      {
       "detail": null,
@@ -651,11 +651,11 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519542.450792,
+       "counters_since": 1789520215.701685,
        "default_mode": "immediate",
        "idle_seconds": 0,
        "last_error": null,
-       "last_release_at": 1789519549.812622,
+       "last_release_at": 1789520223.116361,
        "last_release_details": {
         "actions": [
          "cleared Python, PyTorch, MLX and Metal allocator caches",
@@ -693,10 +693,10 @@
         }
        ],
        "process": {
-        "pid": 52037,
-        "started_at": 1789519542.450792,
-        "started_at_iso": "2026-09-16T07:45:42",
-        "uptime_seconds": 7.374
+        "pid": 54963,
+        "started_at": 1789520215.701685,
+        "started_at_iso": "2026-09-16T07:56:55",
+        "uptime_seconds": 7.427
        },
        "process_title": "Voice Studio Mac",
        "process_title_applied": true,
@@ -704,7 +704,7 @@
       },
       "result": "updated",
       "title": "Voice Studio",
-      "url": "http://127.0.0.1:50747"
+      "url": "http://127.0.0.1:51917"
      },
      {
       "detail": null,
@@ -717,7 +717,7 @@
       "policy": {
        "active_work": false,
        "busy": false,
-       "counters_since": 1789519543.728925,
+       "counters_since": 1789520216.9823391,
        "default_mode": "immediate",
        "fixed": true,
        "idle_seconds": 0,
@@ -745,7 +745,7 @@
       "state": "ready",
       "supported": true,
       "title": "Image Studio",
-      "url": "http://127.0.0.1:50749"
+      "url": "http://127.0.0.1:51919"
      }
     ],
     "selected": 3,
