@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,11 +144,16 @@ class Server:
                     time.sleep(0.02)
                 self.assertIsNone(process.poll(), process.stderr.read() if process.poll() is not None else '')
                 payload = json.loads(ready.read_text())
-                self.assertEqual(payload, {
-                    'url': 'http://127.0.0.1:54321',
-                    'pid': process.pid,
-                    'version': '0.2.0',
-                })
+                # The worker now binds its own sockets, so the port is the one the OS actually
+                # assigned rather than a number a stubbed bind_socket handed back. What matters
+                # is unchanged: readiness is published at a real loopback address, for this
+                # process, and removed on shutdown.
+                url = urllib.parse.urlsplit(payload['url'])
+                self.assertEqual(url.hostname, '127.0.0.1')
+                self.assertIsNotNone(url.port)
+                self.assertTrue(1 <= url.port <= 65535, payload)
+                self.assertEqual(payload['pid'], process.pid)
+                self.assertEqual(payload['version'], '0.2.0')
                 self.assertEqual(ready.stat().st_mode & 0o777, 0o600)
             finally:
                 process.terminate()

@@ -104,7 +104,11 @@ struct ShellConfiguration {
     /// that case still uses it; a scoped bind is only reachable at the address it bound.
     var clientHost: String { ShellConfiguration.clientHost(for: listenHost) }
     static func clientHost(for listenHost: String) -> String {
-        ["0.0.0.0", "::"].contains(listenHost) ? "127.0.0.1" : listenHost
+        // Loopback is always bound, so the app uses it whenever it is available - which is
+        // every case except a scoped bind that deliberately excludes it.
+        let hosts = listenHost.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        if hosts.contains("0.0.0.0") || hosts.contains("127.0.0.1") { return "127.0.0.1" }
+        return hosts.first ?? "127.0.0.1"
     }
     var recoveryMaxAttempts: Int
     var recoveryBackoffSeconds: [TimeInterval]
@@ -160,16 +164,30 @@ struct ShellConfiguration {
             if explicitModels != nil { try Self.requireDirectory(modelsDirectory) }
         }
     }
-    /// A bind address must be a single IPv4 address (or the wildcard). Refusing anything else
-    /// keeps a typo from silently widening what can reach this Mac.
+    /// The addresses the Hub should listen on: loopback (always added by the Hub itself) plus
+    /// whichever of this Mac's addresses the operator picked. A comma-separated list is how a
+    /// Mac serves its LAN and its tailnet at once.
+    var listenHosts: [String] {
+        listenHost.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Every entry must be an IPv4 address or the wildcard. Refusing anything else keeps a
+    /// typo from silently widening what can reach this Mac.
     static func requireBindableHost(_ host: String) throws {
-        if ["127.0.0.1", "0.0.0.0"].contains(host) { return }
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4, parts.allSatisfy({ part in
-            guard let value = Int(part), String(value) == part || part == "0" else { return false }
-            return (0...255).contains(value)
-        }) else {
-            throw ShellFailure(message: "The listen address must be an IPv4 address such as 127.0.0.1.")
+        let entries = host.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !entries.isEmpty else {
+            throw ShellFailure(message: "Choose at least one address, or this Mac only.")
+        }
+        for entry in entries {
+            if ["127.0.0.1", "0.0.0.0"].contains(entry) { continue }
+            let parts = entry.split(separator: ".", omittingEmptySubsequences: false)
+            guard parts.count == 4, parts.allSatisfy({ part in
+                guard let value = Int(part), String(value) == part || part == "0" else { return false }
+                return (0...255).contains(value)
+            }) else {
+                throw ShellFailure(message: "The listen address must be an IPv4 address such as 127.0.0.1.")
+            }
         }
     }
     static func requireExternal(_ url: URL, bundle: URL) throws {

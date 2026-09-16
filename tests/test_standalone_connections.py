@@ -22,6 +22,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,8 @@ from components.hub.standalone import app
 from voice_worker import run_server
 
 run_server(app, 0, Path(os.environ["STUDIOHUB_READY_FILE"]),
-           "0.4.0", None, None, token=os.environ["STUDIOHUB_FIXTURE_TOKEN"])
+           "0.4.0", None, None, token=os.environ["STUDIOHUB_FIXTURE_TOKEN"],
+           host=os.environ.get("STUDIOHUB_FIXTURE_HOST", "127.0.0.1"))
 '''
 
 
@@ -53,9 +55,11 @@ def free_port() -> int:
 class HubProcess:
     """One real Hub process bound to a loopback port, started from a chosen state root."""
 
-    def __init__(self, root: Path, name: str, token: str, data: Path | None = None):
+    def __init__(self, root: Path, name: str, token: str, data: Path | None = None,
+                 host: str = "127.0.0.1"):
         self.root = root
         self.token = token
+        self.host = host
         self.data = data or (root / name / "state")
         self.data.mkdir(parents=True, exist_ok=True)
         token_file = self.data / ".hub_token"
@@ -87,6 +91,7 @@ class HubProcess:
                        "STUDIOHUB_PROJECT_ROOT": str(PROJECT_ROOT),
                        "STUDIOHUB_READY_FILE": str(self.ready),
                        "STUDIOHUB_FIXTURE_TOKEN": self.token,
+                       "STUDIOHUB_FIXTURE_HOST": self.host,
                        "STUDIOHUB_DATA_DIR": str(self.data),
                        "STUDIOHUB_WORKERS_FILE": str(self.workers),
                        "STUDIOHUB_PACKAGED": "1",
@@ -287,6 +292,53 @@ class IdentityScopeTests(unittest.TestCase):
         self.assertEqual(before["settings"]["controller_id"], after["settings"]["controller_id"])
         self.assertEqual(history_before, history_after,
                          "rotating a credential must not disturb accepted work")
+
+
+def reachable_second_address() -> str | None:
+    """A real non-loopback IPv4 address on this Mac, if it has one."""
+    import socket as socket_module
+    probe = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_DGRAM)
+    try:
+        # No packets are sent; this only asks the routing table which local address it would use.
+        probe.connect(("8.8.8.8", 53))
+        address = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    return address if address and not address.startswith("127.") else None
+
+
+class MultiAddressTests(unittest.TestCase):
+    """A Mac must be able to serve its LAN and its Tailscale address at the same time.
+
+    Binding one address was a false choice: the operator would have to pick between a local
+    network and the tailnet. Both can be served at once, and loopback is always among them so
+    the app on that Mac can always reach its own Hub.
+    """
+
+    def test_the_hub_answers_on_every_address_it_was_given(self) -> None:
+        second = reachable_second_address()
+        if second is None:
+            self.skipTest("this Mac has no non-loopback IPv4 address to bind")
+        with tempfile.TemporaryDirectory(prefix="studiohub-multibind-") as root:
+            directory = Path(root)
+            hub = HubProcess(directory, "multi", "multi-address-fixture-token-1234",
+                             host=f"127.0.0.1,{second}")
+            hub.start()
+            try:
+                # The ready record must still point at loopback, which is the address the app
+                # on this Mac uses regardless of what else was bound.
+                self.assertIn("127.0.0.1", hub.base)
+                status, version, _ = hub.request("/api/version", token=hub.token)
+                self.assertEqual(status, 200)
+                # And the second address answers too, with the same credential.
+                response = urllib.request.urlopen(
+                    urllib.request.Request(f"http://{second}:{urllib.parse.urlsplit(hub.base).port}/api/version",
+                                           headers={"X-Hub-Token": hub.token}), timeout=15)
+                self.assertEqual(response.status, 200)
+            finally:
+                hub.stop()
 
 
 if __name__ == "__main__":

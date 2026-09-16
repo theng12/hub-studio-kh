@@ -178,14 +178,25 @@ def main() -> None:
                args.parent_pid, worker_pgid)
 
 
-def ready_host(bind_host: str) -> str:
-    """The address the owner app uses to reach its own Hub.
+LOOPBACK = '127.0.0.1'
 
-    A wildcard bind also answers on loopback, so loopback stays the client address there and
-    the app never has to know the machine's external address. A specific bind is reached at
-    the address it bound.
+
+def bind_hosts(value: object) -> list[str]:
+    """The addresses to listen on: always loopback, plus whatever was asked for.
+
+    Loopback is never dropped. The owner app talks to its own Hub over it, so losing it would
+    mean a Mac whose own services it cannot reach - and no fleet feature is worth that. A
+    wildcard request supersedes the rest because it already covers them.
     """
-    return '127.0.0.1' if bind_host in ('0.0.0.0', '::') else bind_host
+    raw = str(value or '').strip()
+    requested = [entry.strip() for entry in raw.split(',') if entry.strip()]
+    if any(entry in ('0.0.0.0', '::') for entry in requested):
+        return ['0.0.0.0']
+    hosts = [LOOPBACK]
+    for entry in requested:
+        if entry != LOOPBACK and entry not in hosts:
+            hosts.append(entry)
+    return hosts
 
 
 def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
@@ -209,42 +220,60 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
     try:
         if ready_file is not None:
             ready_file.unlink(missing_ok=True)
+        import socket as socket_module
         import uvicorn
         options = {'factory': True} if factory else {}
-        config = uvicorn.Config(app, host=host, port=port, log_level='info', **options)
-        # Bind once and keep the socket, so reported ephemeral ports are exact and
-        # another process cannot take the port between selection and server startup.
-        with config.bind_socket() as sock:
-            port = sock.getsockname()[1]
-            os.environ['STUDIOHUB_BIND_HOST'] = host
-            os.environ['STUDIOHUB_BIND_PORT'] = str(port)
-            client_host = ready_host(host)
+        hosts = bind_hosts(host)
+        config = uvicorn.Config(app, host=hosts[0], port=port, log_level='info', **options)
+        # Bind every socket up front and keep them, so the reported port is exact and nothing
+        # else can take it between selection and startup. Binding all of them before serving
+        # also means a failure to bind one address stops the start rather than leaving a Hub
+        # that is quietly reachable on fewer networks than the operator asked for.
+        socks = []
+        for entry in hosts:
+            sock = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
+            sock.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
+            sock.bind((entry, port))
+            sock.listen(2048)
+            sock.set_inheritable(True)
+            socks.append(sock)
+            if port == 0:
+                port = sock.getsockname()[1]
+        os.environ['STUDIOHUB_BIND_HOST'] = ','.join(hosts)
+        os.environ['STUDIOHUB_BIND_PORT'] = str(port)
+        # The owner app always reaches its own Hub on loopback, which is always bound.
+        client_host = LOOPBACK
 
-            class ReadyServer(uvicorn.Server):
-                async def startup(self, sockets=None):
-                    await super().startup(sockets=sockets)
+        class ReadyServer(uvicorn.Server):
+            async def startup(self, sockets=None):
+                await super().startup(sockets=sockets)
+                with readiness_lock:
+                    if (ready_file is not None and not self.should_exit
+                            and not parent_lost.is_set()):
+                        write_ready_file(ready_file,
+                            f'http://{client_host}:{port}', version, token=token)
+
+            async def shutdown(self, sockets=None):
+                try:
+                    await super().shutdown(sockets=sockets)
+                finally:
+                    # Uvicorn re-raises SIGTERM after shutdown, before outer
+                    # Python finally blocks. Dispose owned children here.
+                    if shutdown_callback is not None:
+                        shutdown_callback()
                     with readiness_lock:
-                        if (ready_file is not None and not self.should_exit
-                                and not parent_lost.is_set()):
-                            write_ready_file(ready_file,
-                                f'http://{client_host}:{port}', version, token=token)
+                        if ready_file is not None:
+                            ready_file.unlink(missing_ok=True)
+                    if parent_monitor is not None and not parent_lost.is_set():
+                        monitor_stop.set()
 
-                async def shutdown(self, sockets=None):
-                    try:
-                        await super().shutdown(sockets=sockets)
-                    finally:
-                        # Uvicorn re-raises SIGTERM after shutdown, before outer
-                        # Python finally blocks. Dispose owned children here.
-                        if shutdown_callback is not None:
-                            shutdown_callback()
-                        with readiness_lock:
-                            if ready_file is not None:
-                                ready_file.unlink(missing_ok=True)
-                        if parent_monitor is not None and not parent_lost.is_set():
-                            monitor_stop.set()
-
-            ReadyServer(config).run(sockets=[sock])
+        ReadyServer(config).run(sockets=socks)
     finally:
+        for sock in locals().get('socks', []) or []:
+            try:
+                sock.close()
+            except OSError:
+                pass
         if ready_file is not None:
             ready_file.unlink(missing_ok=True)
         if parent_monitor is not None:

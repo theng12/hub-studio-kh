@@ -18,7 +18,7 @@ for extra in (PROJECT_ROOT, PROJECT_ROOT / "packaging"):
         sys.path.insert(0, str(extra))
 
 from hub_worker import _bind_host
-from voice_worker import ready_host, run_server
+from voice_worker import LOOPBACK, bind_hosts, run_server
 
 
 class BindHostTests(unittest.TestCase):
@@ -33,6 +33,9 @@ class BindHostTests(unittest.TestCase):
         # A Tailscale address is the intended way to scope a Hub to one private network.
         self.assertEqual(_bind_host("100.101.102.103"), "100.101.102.103")
         self.assertEqual(_bind_host("192.168.1.20"), "192.168.1.20")
+        self.assertEqual(_bind_host("192.168.1.20,100.101.102.103"),
+                         "192.168.1.20,100.101.102.103")
+        self.assertEqual(_bind_host("192.168.1.20,0.0.0.0"), "0.0.0.0")
 
     def test_anything_that_is_not_an_address_is_refused(self) -> None:
         for value in ("localhost", "http://100.1.1.1", "100.1.1.1:8080", "100.1.1.0/24",
@@ -45,12 +48,25 @@ class BindHostTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     _bind_host(value)
 
-    def test_the_client_address_follows_the_bind(self) -> None:
-        # A wildcard bind still answers on loopback, so the app keeps using it.
-        self.assertEqual(ready_host("0.0.0.0"), "127.0.0.1")
-        self.assertEqual(ready_host("127.0.0.1"), "127.0.0.1")
-        # A scoped bind is only reachable at the address it bound.
-        self.assertEqual(ready_host("100.101.102.103"), "100.101.102.103")
+    def test_a_mac_can_serve_its_lan_and_its_tailscale_address_at_once(self) -> None:
+        hosts = bind_hosts("192.168.1.20,100.101.102.103")
+        # Loopback is never dropped: the owner app talks to its own Hub over it, so a Mac
+        # that lost it would be unable to reach its own services.
+        self.assertEqual(hosts, ["127.0.0.1", "192.168.1.20", "100.101.102.103"])
+
+    def test_loopback_is_always_bound_and_never_duplicated(self) -> None:
+        self.assertEqual(bind_hosts(""), ["127.0.0.1"])
+        self.assertEqual(bind_hosts("127.0.0.1"), ["127.0.0.1"])
+        self.assertEqual(bind_hosts("127.0.0.1,127.0.0.1"), ["127.0.0.1"])
+        self.assertEqual(bind_hosts(" 192.168.1.20 , 192.168.1.20 "), ["127.0.0.1", "192.168.1.20"])
+
+    def test_a_wildcard_request_supersedes_the_rest(self) -> None:
+        # 0.0.0.0 already answers on every address, so listing others beside it is noise.
+        self.assertEqual(bind_hosts("0.0.0.0"), ["0.0.0.0"])
+        self.assertEqual(bind_hosts("192.168.1.20,0.0.0.0"), ["0.0.0.0"])
+
+    def test_the_app_always_reaches_its_own_hub_on_loopback(self) -> None:
+        self.assertEqual(LOOPBACK, "127.0.0.1")
 
 
 if __name__ == "__main__":

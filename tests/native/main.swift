@@ -98,11 +98,23 @@ require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeInterval
 // ── fleet binding ──────────────────────────────────────────────────────────
 // Binding beyond loopback is the act that stops the Hub being private, so the address is
 // validated rather than trusted, and the app is told to connect to the address that answers.
-for good in ["127.0.0.1", "0.0.0.0", "192.168.1.20", "100.101.102.103"] {
+for good in ["127.0.0.1", "0.0.0.0", "192.168.1.20", "100.101.102.103",
+             "127.0.0.1,192.168.1.20", "192.168.1.20,100.101.102.103",
+             " 192.168.1.20 , 100.101.102.103 "] {
     try ShellConfiguration.requireBindableHost(good)
 }
+// An empty entry is ignored, exactly as the Hub ignores it, so a stray comma is not a refusal.
+try ShellConfiguration.requireBindableHost("192.168.1.20,")
+try ShellConfiguration.requireBindableHost("192.168.1.20,,100.101.102.103")
+// But one genuinely bad entry rejects the whole list rather than being quietly skipped.
+for badList in ["192.168.1.20,localhost", "192.168.1.20,999.1.1.1", "192.168.1.20,100.1.1",
+                "192.168.1.20,http://192.168.1.21", ",", ""] {
+    do { try ShellConfiguration.requireBindableHost(badList); fatalError("invalid listen list accepted: \(badList)") } catch {}
+}
+// Surrounding whitespace is trimmed, because a comma-separated list is written with spaces.
+try ShellConfiguration.requireBindableHost(" 127.0.0.1 ")
 for bad in ["", "localhost", "http://100.1.1.1", "100.1.1.1:8080", "100.1.1.0/24",
-            "::1", "256.1.1.1", "100.1.1", "100.1.1.1.1", "not an address", " 127.0.0.1"] {
+            "::1", "256.1.1.1", "100.1.1", "100.1.1.1.1", "not an address"] {
     do { try ShellConfiguration.requireBindableHost(bad); fatalError("invalid listen address accepted: \(bad)") } catch {}
 }
 require(ShellConfiguration.clientHost(for: "0.0.0.0") == "127.0.0.1",
@@ -110,6 +122,10 @@ require(ShellConfiguration.clientHost(for: "0.0.0.0") == "127.0.0.1",
 require(ShellConfiguration.clientHost(for: "127.0.0.1") == "127.0.0.1", "loopback client address")
 require(ShellConfiguration.clientHost(for: "100.101.102.103") == "100.101.102.103",
         "a scoped bind is only reachable at the address it bound")
+// With several addresses bound, loopback is among them, so the app uses it and never has to
+// care which network the operator happened to pick.
+require(ShellConfiguration.clientHost(for: "127.0.0.1,192.168.1.20") == "127.0.0.1",
+        "a multi-address bind still reaches its own Hub on loopback")
 
 // Tailscale hands out addresses from the carrier-grade NAT range and is the network this is
 // meant to be reached over, so it is named rather than left as a bare number.

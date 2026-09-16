@@ -77,18 +77,20 @@ def _bind_host(value: object) -> str:
     decision and a typo should not silently widen it.
     """
     import ipaddress
-    host = str(value or '').strip()
-    if not host:
+    entries = [entry.strip() for entry in str(value or '').split(',') if entry.strip()]
+    if not entries:
         return '127.0.0.1'
-    if host in ('0.0.0.0', '::'):
-        return host
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError as exc:
-        raise ValueError(f'--host must be an IP address, not {host!r}') from exc
-    if address.version != 4:
-        raise ValueError('--host must be an IPv4 address')
-    return host
+    for host in entries:
+        if host in ('0.0.0.0', '::'):
+            return '0.0.0.0'
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError as exc:
+            raise ValueError(f'--host must be IP addresses, not {host!r}') from exc
+        if address.version != 4:
+            raise ValueError('--host must be IPv4 addresses')
+    # Loopback is prepended by the server; return the requested scope unchanged.
+    return ','.join(entries)
 
 
 def main():
@@ -99,7 +101,8 @@ def main():
     parser.add_argument('--parent-pid', type=int)
     parser.add_argument('--port', type=int, default=0)
     # Loopback unless asked otherwise: this is the switch that decides whether the Hub is a
-    # private local service or something another Mac can reach.
+    # private local service or something another Mac can reach. A comma-separated list lets a
+    # Mac serve its LAN and its Tailscale address at once; loopback is always included.
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--check', action='store_true')
