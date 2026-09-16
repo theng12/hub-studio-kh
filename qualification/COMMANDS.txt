@@ -1,0 +1,120 @@
+STUDIO HUB KH — COMMANDS
+========================
+
+Copy one line at a time into Terminal (Applications -> Utilities -> Terminal).
+They are in the order you would need them. Nothing here deletes anything.
+
+
+------------------------------------------------------------------
+0. FIRST: check the app can start
+------------------------------------------------------------------
+On the Mac that has the app installed:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh"
+
+It prints RESULT: PASS, or RESULT: FAIL and the reason. Run this before opening
+the app. If it fails, copy the whole output back.
+
+
+------------------------------------------------------------------
+1. Copy the app into Applications (this Mac, from the SSD)
+------------------------------------------------------------------
+
+    cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
+
+
+------------------------------------------------------------------
+2. If macOS refuses to open the app
+------------------------------------------------------------------
+Right-click the app -> Open -> Open first. If it still refuses:
+
+    xattr -cr "/Applications/Studio Hub 0.4.0.app"
+
+(That prints a wall of "Permission denied" and "No such xattr" lines from the
+read-only runtimes inside the app. That is expected and harmless - the files
+macOS actually quarantines are cleared before it reaches those. Judge it by
+whether the app opens, not by the errors.)
+
+Quieter version, same effect:
+
+    find "/Applications/Studio Hub 0.4.0.app" -path "*/Resources/runtimes" -prune -o -print0 | xargs -0 xattr -d com.apple.quarantine 2>/dev/null; echo done
+
+
+------------------------------------------------------------------
+3. Open the folder that holds the log
+------------------------------------------------------------------
+
+    open "$HOME/Library/Application Support/StudioHub Standalone"
+
+The log file inside it is      hub-worker.log
+The app's own button is        menu bar icon -> Open Engine Log
+(If the log does not exist, the service has never started - which is itself the
+answer.)
+
+
+------------------------------------------------------------------
+4. Read the log without opening anything
+------------------------------------------------------------------
+
+    tail -100 "$HOME/Library/Application Support/StudioHub Standalone/hub-worker.log"
+
+
+------------------------------------------------------------------
+5. Full diagnosis, when you want one file to send back
+------------------------------------------------------------------
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-check.sh"
+
+
+------------------------------------------------------------------
+6. Watch the service start by hand, to see the real error
+------------------------------------------------------------------
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-start.sh"
+
+
+------------------------------------------------------------------
+7. What build is this app?
+------------------------------------------------------------------
+
+    python3 -c "import json;d=json.load(open('/Applications/Studio Hub 0.4.0.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
+
+Expected right now:
+
+    0.4.0 5388203380003291e260c471b0a3e5f981349eef development_build: False
+
+
+------------------------------------------------------------------
+8. Does the model library still verify? (slow - reads 29 GB)
+------------------------------------------------------------------
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh" | grep -E "identity|RESULT"
+
+
+------------------------------------------------------------------
+9. Check the drive holding the library is mounted
+------------------------------------------------------------------
+
+    ls /Volumes
+
+If the library is on the SSD, "KH-STUDIO-ATLAS" must appear while the app runs.
+
+
+------------------------------------------------------------------
+Double-clickable files in this folder
+------------------------------------------------------------------
+
+  verify-this-app.command   same as step 0
+  OPEN-THE-LOG.command      finds and opens the log
+
+
+------------------------------------------------------------------
+What to send back if something fails
+------------------------------------------------------------------
+
+  1. The output of step 0 (verify-launch.sh)
+  2. The output of step 5 (studiohub-check.sh)
+  3. What the app itself says in its error banner
+
+Every one of those is text you can copy.
+

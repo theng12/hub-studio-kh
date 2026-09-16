@@ -16,8 +16,22 @@
 # Override the paths if yours differ:
 #   APP="/Applications/Studio Hub 0.4.0.app" LIB="/Volumes/Models/model-library" sh verify-launch.sh
 
-APP="${APP:-/Applications/Studio Hub 0.4.0.app}"
-LIB="${LIB:-/Volumes/KH-STUDIO-ATLAS/Studio Hub App/model-library}"
+# Defaults that work with no environment at all, which is what happens when this is
+# double-clicked in Finder rather than run from a terminal.
+KIT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ -z "${APP:-}" ]; then
+  if [ -d "/Applications/Studio Hub 0.4.0.app" ]; then
+    APP="/Applications/Studio Hub 0.4.0.app"
+  else
+    APP="$KIT/Studio Hub 0.4.0.app"
+  fi
+fi
+if [ -z "${LIB:-}" ]; then
+  for candidate in "$KIT/model-library" "$HOME/model-library" "/Volumes/Models/model-library"; do
+    [ -d "$candidate" ] && { LIB="$candidate"; break; }
+  done
+fi
+LIB="${LIB:-}"
 
 SVC="$APP/Contents/MacOS/StudioHubService"
 PY="$APP/Contents/Resources/runtimes/voice/bin/python3"
@@ -31,7 +45,7 @@ fail() { echo "RESULT: FAIL — $1"; exit 1; }
 [ -d "$APP" ] || fail "no app at $APP"
 [ -x "$SVC" ] || fail "the bundled service is missing or not executable (replace this app with a complete copy)"
 [ -x "$PY" ]  || fail "the bundled Python runtime is missing or not executable (replace this app with a complete copy)"
-[ -d "$LIB" ] || fail "the model library is not at $LIB — set LIB= to wherever you put it"
+[ -n "$LIB" ] && [ -d "$LIB" ] || fail "no model library found — set LIB= to wherever you put it (looked beside this script, in your home folder, and in /Volumes/Models)"
 echo "identity: $("$PY" -c "import json;d=json.load(open('$APP/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])")"
 
 # Note: this deliberately does not try to read the app's flags out of the binary. It did at
