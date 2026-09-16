@@ -1,13 +1,13 @@
 {
  "app": "Studio Hub 0.4.0.app",
- "captured_at": 1789532023.7210398,
- "captured_at_iso": "2026-09-16T04:13:43Z",
+ "captured_at": 1789532414.512137,
+ "captured_at_iso": "2026-09-16T04:20:14Z",
  "host": {
   "machine": "arm64",
   "macos": "26.6.2",
   "memory": "17179869184",
   "platform": "macOS-26.6.2-arm64-arm-64bit",
-  "swap": "total = 4096.00M  used = 3223.88M  free = 872.12M  (encrypted)"
+  "swap": "total = 4096.00M  used = 3373.31M  free = 722.69M  (encrypted)"
  },
  "hub_health": {
   "ok": true,
@@ -25,7 +25,7 @@
   ],
   "by_machine": {
    "local": {
-    "avg_s": 17.23,
+    "avg_s": 16.69,
     "count": 1,
     "modalities": {
      "image": 0,
@@ -36,7 +36,7 @@
   },
   "by_modality": {
    "transcription": {
-    "avg_s": 17.23,
+    "avg_s": 16.69,
     "count": 1,
     "machines": {
      "local": 1
@@ -45,7 +45,7 @@
   },
   "by_model": {
    "mlx-community/whisper-large-v3-turbo": {
-    "avg_s": 17.23,
+    "avg_s": 16.69,
     "count": 1,
     "modality": "transcription"
    }
@@ -64,25 +64,25 @@
     {
      "completed": 1,
      "failed": 0,
-     "job_id": "stt-508c1a738d4e-0",
-     "last_activity_at": 1789532066.581008,
+     "job_id": "stt-16ad9a85baf2-0",
+     "last_activity_at": 1789532456.2733922,
      "latest": {
-      "activity_received_at": 1789532066.5810099,
+      "activity_received_at": 1789532456.273406,
       "error_code": null,
-      "finished_at": 1789532066.581008,
+      "finished_at": 1789532456.2733922,
       "hub_owned": 1,
-      "job_id": "stt-508c1a738d4e-0",
+      "job_id": "stt-16ad9a85baf2-0",
       "machine": "local",
       "model": "mlx-community/whisper-large-v3-turbo",
-      "observed_at": 1789532066.5810099,
+      "observed_at": 1789532456.273406,
       "operation": "transcription",
       "origin": "hub",
       "origin_device": null,
       "progress": 1.0,
-      "reported_at": 1789532066.5810099,
-      "runtime_s": 17.23,
+      "reported_at": 1789532456.273406,
+      "runtime_s": 16.69,
       "source": "job",
-      "started_at": 1789532049.2734778,
+      "started_at": 1789532439.498718,
       "state": "done",
       "studio": "subtitle"
      },
@@ -98,57 +98,57 @@
      "source": "job",
      "state": "just_finished",
      "state_duration_s": 0.8,
-     "state_since": 1789532066.581008,
+     "state_since": 1789532456.839464,
      "studio": "subtitle",
      "timeline": [
       {
-       "activity_received_at": 1789532066.5810099,
+       "activity_received_at": 1789532456.273406,
        "error_code": null,
-       "finished_at": 1789532066.581008,
+       "finished_at": 1789532456.2733922,
        "hub_owned": 1,
-       "job_id": "stt-508c1a738d4e-0",
+       "job_id": "stt-16ad9a85baf2-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789532066.5810099,
+       "observed_at": 1789532456.273406,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": null,
        "progress": 1.0,
-       "reported_at": 1789532066.5810099,
-       "runtime_s": 17.23,
+       "reported_at": 1789532456.273406,
+       "runtime_s": 16.69,
        "source": "job",
-       "started_at": 1789532049.2734778,
+       "started_at": 1789532439.498718,
        "state": "done",
        "studio": "subtitle"
       },
       {
-       "activity_received_at": 1789532066.4048798,
+       "activity_received_at": 1789532451.792296,
        "error_code": null,
        "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-508c1a738d4e-0",
+       "job_id": "stt-16ad9a85baf2-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789532049.273481,
+       "observed_at": 1789532439.498723,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": "Studio Hub KH \u00b7 Local site",
        "progress": null,
-       "reported_at": 1789532066.4048798,
+       "reported_at": 1789532451.792296,
        "runtime_s": null,
        "source": "job",
-       "started_at": 1789532049.2734778,
+       "started_at": 1789532439.498718,
        "state": "running",
        "studio": "subtitle"
       }
      ],
      "utilization": {
       "evidence": "partial",
-      "ratio": 0.6039
+      "ratio": 0.5718
      }
     }
    ],
-   "observed_at": 1789532067.4061818,
+   "observed_at": 1789532457.62153,
    "pulse": {
     "just_finished": 1,
     "long_idle": 0,
@@ -160,23 +160,23 @@
    },
    "schema": "studiohub.fleet_activity.v1",
    "window": {
-    "now": 1789532067.4061818,
-    "since_s": 1786940067.4061818
+    "now": 1789532457.62153,
+    "since_s": 1786940457.62153
    }
   },
   "matrix": [
    {
-    "avg_s": 17.23,
+    "avg_s": 16.69,
     "count": 1,
     "machine": "local",
-    "max_s": 17.23,
-    "min_s": 17.23,
+    "max_s": 16.69,
+    "min_s": 16.69,
     "modality": "transcription"
    }
   ],
   "model_rows": [
    {
-    "avg_s": 17.23,
+    "avg_s": 16.69,
     "count": 1,
     "modality": "transcription",
     "model": "mlx-community/whisper-large-v3-turbo"
@@ -195,7 +195,7 @@
   },
   "total": 1
  },
- "hub_url": "http://127.0.0.1:56252",
+ "hub_url": "http://127.0.0.1:57037",
  "import_refusal": {
   "incomplete_folder": {
    "detail": "Missing or unreadable model file: model/text_encoder/0.safetensors",
@@ -218,10 +218,10 @@
   "node": {
    "address": "http://192.168.255.254:8080",
    "id": "fleet-probe",
-   "joined_at": 1789532041.082656,
+   "joined_at": 1789532431.477659,
    "name": "Probe node",
    "role": "agent",
-   "updated_at": 1789532041.082656
+   "updated_at": 1789532431.477659
   },
   "status": 201
  },
@@ -251,18 +251,18 @@
   "status": 200
  },
  "role_change": {
-  "role": null,
+  "role": "controller",
   "status": 200
  },
  "runs": [
   {
-   "batch_id": "508c1a738d4e",
+   "batch_id": "16ad9a85baf2",
    "input_bytes": 288044,
    "input_sha256": "2f606380c9c413d38f6edb8e5542d5a0a2977273e77956b174e4f27aa587f17c",
    "items": [
     {
      "bytes": null,
-     "duration_seconds": 17.23,
+     "duration_seconds": 16.69,
      "error": null,
      "maximum_swap_used_gb": null,
      "memory_failure": null,
@@ -278,7 +278,7 @@
    "package_id": "whisper-turbo",
    "status": "done",
    "submit_status": 200,
-   "wall_seconds": 18.156
+   "wall_seconds": 18.146
   }
  ],
  "skipped": [],
@@ -301,8 +301,8 @@
   "machines": [
    {
     "enabled": true,
-    "expired_before": 1786940044.11703,
-    "free_bytes": 415060316160,
+    "expired_before": 1786940434.512774,
+    "free_bytes": 415046639616,
     "machine": "local",
     "max_bytes": 50000000000,
     "minimum_free_bytes": 1000000000,
