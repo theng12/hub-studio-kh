@@ -29,6 +29,7 @@ final class FixtureProtocol: URLProtocol {
     static var statisticsQueries: [String] = []
     static var storageCalls: [String] = []
     static var roleChanges: [String] = []
+    static var fleetCalls: [String] = []
     static var currentRole = "standalone"
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
@@ -68,6 +69,7 @@ final class FixtureProtocol: URLProtocol {
     static func statisticsPaths() -> [String] { lock.lock(); defer { lock.unlock() }; return statisticsQueries }
     static func storageRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return storageCalls }
     static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
+    static func fleetRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return fleetCalls }
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
@@ -189,6 +191,12 @@ final class FixtureProtocol: URLProtocol {
             result = accepted
                 ? (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{},\"readiness\":{\"ready\":true,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{}}".utf8))
                 : (400, "application/json", Data(#"{"detail":"role must be one of ['agent', 'controller', 'standalone']"}"#.utf8))
+        case ("GET", "/api/hub/fleet/nodes"):
+            Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
+        case ("DELETE", "/api/hub/fleet/nodes/studio-3"):
+            Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/controller"):
             Self.lock.lock(); let roleNow = Self.currentRole; Self.lock.unlock()
             result = (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
@@ -386,6 +394,31 @@ struct NativeAPITests {
         await store.setRole("standalone")
         require(store.controllerIdentity?.settings.role == "standalone", "the role must be settable back")
         store.error = nil
+
+        // The fleet: a controller lists who joined, with the state each node is actually in.
+        await store.refreshFleetNodes()
+        require(FixtureProtocol.fleetRequests().contains("list"), "the joined nodes must be read from the Hub")
+        require(store.fleetNodes?.summary.total == 2, "every joined node must be listed")
+        require(store.fleetNodes?.nodes.first?.state == "reachable", "a reachable node must say so")
+        require(store.fleetNodes?.nodes.last?.isReachable == false,
+                "a node that was joined but has since gone must not read as available")
+        await store.leaveNode(store.fleetNodes!.nodes.last!)
+        require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
+                "removing a node must reach the Hub: \(FixtureProtocol.fleetRequests())")
+
+        // The address typed for a controller is checked before any credential is sent to it.
+        for good in ["192.168.1.21:8080", "http://192.168.1.21:8080", "100.101.102.103:8080",
+                     "127.0.0.1:9", "10.0.0.4:9000", "172.16.5.5:8080", "169.254.1.1:8080"] {
+            _ = try NativeWorkspaceStore.privateHTTPAddress(good)
+        }
+        for bad in ["93.184.216.34:80", "http://93.184.216.34:80", "controller.local:8080",
+                    "192.168.1.21", "https://192.168.1.21:8080", "192.168.1.21:8080/jobs",
+                    "192.168.1.21:8080?x=1", "user:pass@192.168.1.21:8080", "8.8.8.8:53"] {
+            do {
+                _ = try NativeWorkspaceStore.privateHTTPAddress(bad)
+                fatalError("a non-private controller address was accepted: \(bad)")
+            } catch {}
+        }
 
         // Local storage: the limits come from the Hub, and the bytes cleanup may not touch
         // are shown beside them - including on a machine that is over its limit.

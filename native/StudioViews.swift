@@ -53,6 +53,8 @@ struct StudioContent: View {
     @State private var loadingImage = false
     @State private var revealedToken = false
     @State private var connectionNote: String?
+    @State private var controllerDraft = ""
+    @State private var controllerToken = ""
     /// 0 means all time; otherwise the window in hours.
     @State private var statisticsWindow = 0
     @State private var showingStorageEditor = false
@@ -967,6 +969,76 @@ struct StudioContent: View {
             listenWarning
 
             if let note = studio.fleetNote {
+                Text(note).font(.callout).foregroundStyle(.secondary)
+            }
+
+            Divider()
+            joinedNodes
+            Divider()
+            joinController
+        }
+        .task(id: connected) { if connected { await workspace.refreshFleetNodes() } }
+    }
+
+    /// What a controller has been joined by, with the state each node is actually in.
+    @ViewBuilder private var joinedNodes: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Joined nodes").font(.headline)
+                Spacer()
+                Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.disabled(!connected)
+            }
+            if let fleet = workspace.fleetNodes {
+                if fleet.nodes.isEmpty {
+                    Text("No Mac has joined this one yet.").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("\(fleet.summary.reachable) of \(fleet.summary.total) reachable now.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(fleet.nodes) { node in
+                        HStack(spacing: 10) {
+                            Image(systemName: node.isReachable ? "checkmark.circle.fill" : "exclamationmark.triangle")
+                                .foregroundStyle(node.isReachable ? Color.green : Color.orange)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(node.name).fontWeight(.medium)
+                                Text(node.address).font(.caption).foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                if let detail = node.detail, !node.isReachable {
+                                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button("Remove") { Task { await workspace.leaveNode(node) } }
+                                .disabled(!connected)
+                        }.padding(.vertical, 4)
+                    }
+                }
+            } else {
+                Text(connected ? "Joined nodes are unavailable in this build." : "Start local services to see joined nodes.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Join another Mac that is running as a controller.
+    @ViewBuilder private var joinController: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Join a controller").font(.headline)
+            Text("Enter the controller's address and its Hub token. This Mac tells it where it answers, and the controller then reports whether this Mac is reachable.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                TextField("192.168.1.21:8080 or 100.x.y.z:8080", text: $controllerDraft)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                SecureField("Controller Hub token", text: $controllerToken)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+                Button(workspace.joiningFleet ? "Joining…" : "Join") {
+                    Task { await workspace.joinController(address: controllerDraft, token: controllerToken) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!connected || workspace.joiningFleet
+                          || controllerDraft.isEmpty || controllerToken.isEmpty)
+                if workspace.joiningFleet { ProgressView().controlSize(.small) }
+            }
+            if let note = workspace.fleetNote {
                 Text(note).font(.callout).foregroundStyle(.secondary)
             }
         }

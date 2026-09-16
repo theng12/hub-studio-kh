@@ -218,6 +218,31 @@ struct NativeMachineUsage: Decodable, Equatable, Identifiable {
     var id: String { machine }
 }
 
+/// One Mac that has joined this controller, with the state it is actually in.
+struct NativeFleetNode: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let address: String
+    let state: String
+    let detail: String?
+    let version: String?
+    let joinedAt: Double?
+    var isReachable: Bool { state == "reachable" }
+}
+
+struct NativeFleetInventory: Decodable, Equatable {
+    let role: String
+    let nodes: [NativeFleetNode]
+    let summary: NativeFleetSummary
+}
+
+struct NativeFleetSummary: Decodable, Equatable {
+    let total: Int
+    let reachable: Int
+    let unreachable: Int
+    let error: Int
+}
+
 /// The Hub's own generation analytics, read straight from the job ledger.
 ///
 /// Every number here is recorded by the job that produced it — runtime, model, machine and
@@ -392,6 +417,11 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var controllerIdentity: NativeControllerIdentity?
     @Published private(set) var hubVersion: NativeVersion?
     @Published private(set) var roleNote: String?
+    @Published private(set) var fleetNodes: NativeFleetInventory?
+    /// The controller this Mac was last told to join, so the field is not empty afterwards.
+    @Published var controllerAddress = ""
+    @Published private(set) var fleetNote: String?
+    @Published private(set) var joiningFleet = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
     private let session: URLSession
@@ -1200,6 +1230,122 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change this Mac's role") } }
     }
 
+    /// Read the nodes that have joined this Mac, and their live state.
+    func refreshFleetNodes() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let value: NativeFleetInventory = try await get(["api", "hub", "fleet", "nodes"])
+            guard connectionID == requestConnection else { return }
+            fleetNodes = value
+        } catch {
+            guard connectionID == requestConnection else { return }
+            // An older Hub without the route must not break the screen.
+            fleetNodes = nil
+        }
+    }
+
+    /// Join this Mac to a controller at an address the operator typed.
+    ///
+    /// The request leaves this Mac for another one, so it does not go through the helper that
+    /// targets our own Hub — and the address is validated here as well as on the controller,
+    /// because a token must never be sent to a host that was not checked first.
+    func joinController(address: String, token: String) async {
+        guard let requestConnection = connectionID else { return }
+        fleetNote = nil
+        do {
+            let target = try Self.privateHTTPAddress(address)
+            let secret = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !secret.isEmpty else { throw NativeAPIError.message("Enter the controller's Hub token.") }
+            let nodeID = (controllerIdentity?.settings.controllerId ?? "studiohub-node")
+                .lowercased()
+            let name = controllerIdentity?.settings.machineName ?? "Studio Hub"
+            var request = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes"))
+            request.httpMethod = "POST"
+            request.timeoutInterval = 30
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue(secret, forHTTPHeaderField: "X-Hub-Token")
+            guard let ownAddress = Self.studioAddress(for: target,
+                                                      port: baseURL?.port) else {
+                throw NativeAPIError.message("This Mac has no network address to offer. Choose a listen address in Settings first.")
+            }
+            request.httpBody = try JSONEncoder().encode(JoinRequest(
+                nodeId: nodeID, name: name, address: ownAddress))
+            joiningFleet = true
+            defer { if connectionID == requestConnection { joiningFleet = false } }
+            let (_, response) = try await session.data(for: request)
+            guard connectionID == requestConnection else { return }
+            guard let http = response as? HTTPURLResponse else {
+                throw NativeAPIError.message("The controller returned no response.")
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw NativeAPIError.message(http.statusCode == 401
+                    ? "The controller refused this Mac's join: check its Hub token."
+                    : "The controller refused the join (\(http.statusCode)).")
+            }
+            controllerAddress = "\(target.host ?? ""):\(target.port ?? 0)"
+            fleetNote = "Joined the controller at \(controllerAddress)."
+            error = nil
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Join the controller") } }
+    }
+
+    func leaveNode(_ node: NativeFleetNode) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let _: EmptyResponse = try await sendEmpty(
+                ["api", "hub", "fleet", "nodes", node.id], method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            fleetNote = "Removed \(node.name) from this controller."
+            await refreshFleetNodes()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Remove the node") } }
+    }
+
+    /// The address to offer a controller: one it can reach this Mac at.
+    ///
+    /// A controller on the tailnet is given this Mac's Tailscale address and one on the LAN is
+    /// given the LAN address, so the address offered is one that actually routes back.
+    static func studioAddress(for controller: URL, port: Int?) -> String? {
+        guard let port else { return nil }
+        let candidates = LocalAddresses.current()
+        guard !candidates.isEmpty else { return nil }
+        let controllerIsTailscale = (controller.host ?? "").hasPrefix("100.")
+        let preferred = candidates.first { $0.isTailscale == controllerIsTailscale }
+        guard let chosen = preferred ?? candidates.first else { return nil }
+        return "http://\(chosen.address):\(port)"
+    }
+
+    /// Accept only a plain http address on a private, loopback or Tailscale IPv4 literal.
+    ///
+    /// The controller enforces the same rule on what it stores. Doing it here as well is what
+    /// keeps this Mac from being talked into sending its credential somewhere unchecked.
+    static func privateHTTPAddress(_ text: String) throws -> URL {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard let components = URLComponents(string: candidate),
+              components.scheme == "http", let host = components.host,
+              let port = components.port, (1...65535).contains(port),
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/" else {
+            throw NativeAPIError.message("Enter an address like 192.168.1.21:8080.")
+        }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false).compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }),
+              let url = URL(string: "http://\(host):\(port)") else {
+            throw NativeAPIError.message("Enter a numeric address, not a name. For example 192.168.1.21:8080.")
+        }
+        let first = parts[0], second = parts[1]
+        let isPrivate = first == 10 || first == 127
+            || (first == 192 && second == 168)
+            || (first == 172 && (16...31).contains(second))
+            || (first == 100 && (64...127).contains(second))
+            || (first == 169 && second == 254)
+        guard isPrivate else {
+            throw NativeAPIError.message("That is not a private or Tailscale address. Enter your controller's LAN or Tailscale address.")
+        }
+        return url
+    }
+
     /// Read the Hub's own role and identity, plus the version it reports.
     func refreshConnection() async {
         guard let requestConnection = connectionID else { return }
@@ -1727,6 +1873,11 @@ private struct HubModelPackage: Decodable {
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
 private struct RoleChange: Encodable { let role: String }
+private struct JoinRequest: Encodable {
+    let nodeId: String
+    let name: String
+    let address: String
+}
 private struct StorageLimitsBody: Encodable {
     let maxBytes: Int64
     let retentionDays: Int
