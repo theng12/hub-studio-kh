@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -367,6 +368,26 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def fleet_nodes() -> dict[str, Any]:
         from .backend import fleet_nodes as fleet
         return await fleet.inventory()
+
+    @app.post("/api/hub/fleet/adopt")
+    def fleet_adopt(body: dict[str, Any]) -> dict[str, Any]:
+        """Take on a fleet's credential, which is what joining one means.
+
+        A controller will not send work to a machine whose peer snapshot it cannot trust, and
+        trust starts with the credential: every Hub mints its own, so a node that joined with a
+        controller's token still answers 401 to that controller until it adopts the same one.
+
+        This is deliberately **not** in the fleet credential's allowlist. Adopting is how a Mac
+        joins a fleet, so it must be the Mac owner's decision - requiring the Hub token, which
+        never leaves this machine, keeps a fleet-token holder from moving a node between fleets
+        or locking it out of its own.
+        """
+        from .backend import peers
+        value = str(body.get("token") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", value):
+            raise HTTPException(400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
+        peers.set_fleet_token(value)
+        return {"ok": True, "adopted": True}
 
     @app.post("/api/hub/fleet/nodes", status_code=201)
     async def fleet_join(body: dict[str, Any]) -> dict[str, Any]:

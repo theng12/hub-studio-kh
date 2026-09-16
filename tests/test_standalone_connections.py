@@ -366,20 +366,25 @@ class FleetDispatchTests(unittest.TestCase):
     controller has to come out the other side at the stub.
     """
 
-    @unittest.skip("blocked on sharing the fleet credential: see the test docstring")
+    @unittest.skip("blocked on the controller's scheduling view; see the docstring")
     def test_a_job_submitted_to_the_controller_runs_on_the_node(self) -> None:
-        """Blocked, and the reason is worth stating.
+        """Almost there, and the remaining step is precise.
 
-        Everything up to the last hop works: the job is accepted, the node is in the registry,
-        the monitor can reach it, and the dispatcher runs. It stops because a controller will
-        not dispatch to a machine whose peer snapshot it cannot trust, and it cannot trust it
-        because every Hub mints its own fleet token - so the controller presents a credential
-        the node does not recognise, the node answers 401, and the node is skipped **without a
-        governor note**. Silent, exactly like the two other fleet defects found this session.
+        Five things were missing before this and each failed **silently**: the node did not
+        serve the surface a controller dispatches to, was not in the controller's registry,
+        served no peer resource snapshot, did not share the fleet credential, and - the last
+        one found - the controller's dispatcher reached the node's catalogue and reported
+        "'fixture/flux' not in node-a:image's catalog" while the aggregate catalogue plainly
+        listed it as cached.
 
-        Joining a fleet therefore has to mean adopting the fleet's credential. That is a
-        deliberate decision about membership, not a bug to patch quietly, so it is recorded
-        here rather than guessed at.
+        What is known: the node is polled for /api/health and /api/catalog on the right
+        interval, its peer snapshot is trusted (dispatch_ready passed), and the aggregate view
+        has the model. What is not yet established is why monitor.scheduling_catalog - which
+        fails closed unless the studio's status is "up" and its catalogue observation carries
+        no error - returns nothing for a studio it is demonstrably polling.
+
+        Kept as a test rather than a note because everything it exercises is real, and it will
+        say so the moment the last condition is understood.
         """
         # Cleanups unwind last-in-first-out, so the temporary directory is registered first and
         # removed last - after both Hubs have stopped writing into it.
@@ -414,6 +419,21 @@ class FleetDispatchTests(unittest.TestCase):
         controller.start()
         self.addCleanup(controller.stop)
 
+        # Joining a fleet means adopting its credential: until the node shares it, the
+        # controller presents a token the node does not recognise and is answered 401.
+        status, controller_fleet, _ = controller.request("/api/hub/fleet/nodes",
+                                                         token=controller.token)
+        fleet_value = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": fleet_value}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+        # A fleet credential must not be able to do this to another Mac: membership is the
+        # owner's decision, so it takes the owner's credential.
+        status, refused, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": "another-fleet-token-0123456789"},
+                                            token=fleet_value)
+        self.assertEqual(status, 403, refused)
+
         if True:
             status, submitted, _ = controller.post_json(
                 "/api/hub/jobs",
@@ -432,7 +452,8 @@ class FleetDispatchTests(unittest.TestCase):
             self.assertTrue(worker.submissions,
                             "the controller never dispatched to the joined node; "
                             f"governor said: {self.governor(controller, batch)}; "
-                            f"the controller's own studio got {len(controller_worker.submissions)}")
+                            f"the controller's own studio got {len(controller_worker.submissions)}; "
+                            f"catalog: {self.catalog(controller)}; node studio saw: {worker.seen[:8]}")
             # And it must not have run it locally as well.
             self.assertEqual(controller_worker.submissions, [],
                              "a job must run in one place, not two")
@@ -441,6 +462,15 @@ class FleetDispatchTests(unittest.TestCase):
             # The node's worker must be given the node's own credential to accept, never the
             # controller's.
             self.assertEqual(worker.submissions[0]["token"], node.token)
+
+    @staticmethod
+    def catalog(controller) -> str:
+        status, payload, _ = controller.request("/api/hub/catalog", token=controller.token)
+        if status != 200:
+            return f"(catalog unreadable: {status})"
+        rows = [(row.get("hub_studio") or row.get("studio"), row.get("repo"), row.get("cache"))
+                for row in (payload.get("models") or [])]
+        return repr(rows)
 
     @staticmethod
     def governor(controller, batch: str) -> str:
@@ -495,6 +525,7 @@ class StubImageWorker:
 
     def __init__(self, *, catalog: bool = True) -> None:
         self.submissions: list[dict] = []
+        self.seen: list[str] = []
         self.has_catalog = catalog
         outer = self
 
@@ -511,6 +542,7 @@ class StubImageWorker:
                 self.wfile.write(body)
 
             def do_GET(self):
+                outer.seen.append(self.path)
                 if self.path.endswith("/api/health"):
                     # A studio the monitor cannot see as healthy is never dispatched to, so the
                     # stub has to answer health the way a real studio does.
