@@ -2,12 +2,22 @@
 
 Run this on each Mac once the app is installed. It launches the bundle's own Hub (which
 brings up its own Voice, Image and Subtitle workers), submits one job per model over the real
-Hub API, waits for it to finish, and writes a receipt with that machine's elapsed time,
-output identity, peak process RSS and swap state.
+Hub API, waits for it to finish, and writes a receipt with that machine's elapsed time, output
+identity, peak worker memory and swap state.
 
 Nothing here is a benchmark harness bolted on the side: every number comes from the job
 records the Hub already keeps, so the receipt can be compared with `GET /api/hub/stats` on
 the same machine.
+
+What the Hub actually publishes differs by studio, and this reads the real fields rather than
+assuming one shape:
+
+* output identity comes from `terminal_result` (`bytes`, `sha256`), with the item's own
+  top-level fields as a fallback;
+* peak worker memory is `resource_usage.worker.peak_rss_gb` — the Hub's sanitized telemetry
+  contract, never a top-level item field;
+* the Subtitle worker reports no memory telemetry at all, so its run records runtime and the
+  input digest only. That is a limitation, not a measured zero.
 
 Voice cloning needs a real reference clip and its exact transcript, because a clone fails
 closed on a transcript mismatch. Supply them with --reference and --transcript; without them
@@ -94,6 +104,39 @@ def swap_state() -> dict:
         except (OSError, subprocess.SubprocessError):
             out[key] = None
     return out
+
+
+def job_metrics(item: dict) -> dict:
+    """The work-identity fields the Hub really publishes for one finished item.
+
+    ``terminal_result`` is the canonical place for a completed item's output identity, kept
+    as the primary source with the item's own top-level fields as a fallback. Peak worker
+    memory lives in the sanitized ``resource_usage`` telemetry and never at the top level, so
+    reading ``peak_process_rss_bytes`` off the item always produced null: a receipt that
+    claimed to carry memory pressure carried none of it.
+    """
+    terminal = item.get("terminal_result")
+    terminal = terminal if isinstance(terminal, dict) else {}
+    usage = item.get("resource_usage")
+    usage = usage if isinstance(usage, dict) else {}
+    worker = usage.get("worker") if isinstance(usage.get("worker"), dict) else {}
+    mlx = usage.get("mlx") if isinstance(usage.get("mlx"), dict) else {}
+    host = usage.get("host") if isinstance(usage.get("host"), dict) else {}
+    outcome = usage.get("outcome") if isinstance(usage.get("outcome"), dict) else {}
+    return {
+        "state": item.get("state"),
+        "studio": item.get("studio"),
+        "error": item.get("error"),
+        "duration_seconds": item.get("duration_seconds") or terminal.get("duration_s"),
+        "bytes": terminal.get("bytes", item.get("bytes")),
+        "sha256": terminal.get("sha256", item.get("sha256")),
+        # The Hub's own names, so a null here means the worker reported nothing rather than
+        # this reader looking in the wrong place.
+        "peak_worker_rss_gb": worker.get("peak_rss_gb"),
+        "peak_mlx_active_gb": mlx.get("peak_active_gb"),
+        "maximum_swap_used_gb": host.get("maximum_swap_used_gb"),
+        "memory_failure": outcome.get("memory_failure"),
+    }
 
 
 def verified_packages(base: str, token: str) -> dict[str, list[dict]]:
@@ -222,10 +265,7 @@ def main() -> int:
                     final = wait_for(base, token, batch, transcription=True)
                     run["batch_id"] = batch
                     run["status"] = final.get("status")
-                    run["items"] = [{key: item.get(key) for key in
-                                     ("state", "studio", "error", "duration_seconds",
-                                      "bytes", "sha256", "peak_process_rss_bytes")}
-                                    for item in (final.get("items") or [])]
+                    run["items"] = [job_metrics(item) for item in (final.get("items") or [])]
                 else:
                     run["status"] = "refused"
                     run["detail"] = submitted
@@ -249,10 +289,7 @@ def main() -> int:
                     batch = submitted.get("batch_id")
                     final = wait_for(base, token, batch, transcription=False)
                     run["batch_id"] = batch
-                    run["items"] = [{key: item.get(key) for key in
-                                     ("state", "studio", "error", "duration_seconds",
-                                      "bytes", "sha256", "peak_process_rss_bytes")}
-                                    for item in (final.get("items") or [])]
+                    run["items"] = [job_metrics(item) for item in (final.get("items") or [])]
                 else:
                     run["detail"] = submitted
                 run["wall_seconds"] = round(time.time() - started, 3)
@@ -294,10 +331,7 @@ def main() -> int:
                         batch = submitted.get("batch_id")
                         final = wait_for(base, token, batch, transcription=False)
                         run["batch_id"] = batch
-                        run["items"] = [{key: item.get(key) for key in
-                                         ("state", "studio", "error", "duration_seconds",
-                                          "bytes", "sha256", "peak_process_rss_bytes")}
-                                        for item in (final.get("items") or [])]
+                        run["items"] = [job_metrics(item) for item in (final.get("items") or [])]
                     else:
                         run["detail"] = submitted
                     run["wall_seconds"] = round(time.time() - started, 3)

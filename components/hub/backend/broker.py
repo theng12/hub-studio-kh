@@ -301,10 +301,12 @@ async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict
     operation = (await FleetMemoryControl(_monitor(), client).release(releasable)
                  if releasable else {"results": []})
     results = operation["results"]
+    # One definition of "still holding a model", shared with the app-facing release so a
+    # single Studio response cannot read as a success to the app and a failure to the
+    # scheduler. `_change_one` already marks such a row `result: "still_loaded"`.
     still_loaded = {
-        row["id"] for row in results if row.get("ok")
-        and any((row.get("policy") or {}).get(field) for field in (
-            "loaded_model", "loaded_models", "loaded_pipeline"))
+        row["id"] for row in results
+        if row.get("ok") and FleetMemoryControl._still_resident(row.get("policy"))
     }
     result = {
         "attempted": len(siblings),

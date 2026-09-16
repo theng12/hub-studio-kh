@@ -929,10 +929,19 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     private static func releaseSummary(_ result: NativeMemoryChange) -> String {
-        if result.succeeded == 0 { return "No Studio had a model to release." }
+        let held = result.results.filter { $0.result == "still_loaded" }
+        if result.succeeded == 0 && held.isEmpty { return "No Studio had a model to release." }
         let busy = result.results.filter { $0.result == "busy" }.map(\.id)
-        let failed = result.results.filter { $0.ok != true && $0.result != "busy" }.map(\.id)
+        let failed = result.results.filter {
+            $0.ok != true && $0.result != "busy" && $0.result != "still_loaded"
+        }.map(\.id)
         var parts = ["Released model memory in \(result.succeeded) of \(result.selected) studios."]
+        // A Studio that answered success while still holding its model is the one case the
+        // operator must not read as "freed": it is exactly the memory this control exists for.
+        if !held.isEmpty {
+            parts.append("Still holding a model after reporting success: "
+                         + held.map(\.id).joined(separator: ", ") + ".")
+        }
         if !busy.isEmpty { parts.append("Busy, so left alone: \(busy.joined(separator: ", ")).") }
         if !failed.isEmpty { parts.append("Could not reach: \(failed.joined(separator: ", ")).") }
         return parts.joined(separator: " ")

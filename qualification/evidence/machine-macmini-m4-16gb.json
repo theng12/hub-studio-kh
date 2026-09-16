@@ -1,13 +1,13 @@
 {
  "app": "Studio Hub 0.4.0.app",
- "captured_at": 1789520224.359529,
- "captured_at_iso": "2026-09-16T00:57:04Z",
+ "captured_at": 1789521748.740295,
+ "captured_at_iso": "2026-09-16T01:22:28Z",
  "host": {
   "machine": "arm64",
   "macos": "26.6.2",
   "memory": "17179869184",
   "platform": "macOS-26.6.2-arm64-arm-64bit",
-  "swap": "total = 5120.00M  used = 3406.06M  free = 1713.94M  (encrypted)"
+  "swap": "total = 4096.00M  used = 2728.44M  free = 1367.56M  (encrypted)"
  },
  "hub_health": {
   "ok": true,
@@ -25,7 +25,7 @@
   ],
   "by_machine": {
    "local": {
-    "avg_s": 16.62,
+    "avg_s": 18.6,
     "count": 1,
     "modalities": {
      "image": 0,
@@ -36,7 +36,7 @@
   },
   "by_modality": {
    "transcription": {
-    "avg_s": 16.62,
+    "avg_s": 18.6,
     "count": 1,
     "machines": {
      "local": 1
@@ -45,7 +45,7 @@
   },
   "by_model": {
    "mlx-community/whisper-large-v3-turbo": {
-    "avg_s": 16.62,
+    "avg_s": 18.6,
     "count": 1,
     "modality": "transcription"
    }
@@ -64,25 +64,25 @@
     {
      "completed": 1,
      "failed": 0,
-     "job_id": "stt-63076dfca823-0",
-     "last_activity_at": 1789520252.0234601,
+     "job_id": "stt-f0b9087e6471-0",
+     "last_activity_at": 1789521779.001921,
      "latest": {
-      "activity_received_at": 1789520252.023463,
+      "activity_received_at": 1789521779.001923,
       "error_code": null,
-      "finished_at": 1789520252.0234601,
+      "finished_at": 1789521779.001921,
       "hub_owned": 1,
-      "job_id": "stt-63076dfca823-0",
+      "job_id": "stt-f0b9087e6471-0",
       "machine": "local",
       "model": "mlx-community/whisper-large-v3-turbo",
-      "observed_at": 1789520252.023463,
+      "observed_at": 1789521779.001923,
       "operation": "transcription",
       "origin": "hub",
       "origin_device": null,
       "progress": 1.0,
-      "reported_at": 1789520252.023463,
-      "runtime_s": 16.62,
+      "reported_at": 1789521779.001923,
+      "runtime_s": 18.6,
       "source": "job",
-      "started_at": 1789520235.295847,
+      "started_at": 1789521760.308291,
       "state": "done",
       "studio": "subtitle"
      },
@@ -97,58 +97,58 @@
      "relative_performance": null,
      "source": "job",
      "state": "just_finished",
-     "state_duration_s": 1.4,
-     "state_since": 1789520252.0234601,
+     "state_duration_s": 0.7,
+     "state_since": 1789521779.67362,
      "studio": "subtitle",
      "timeline": [
       {
-       "activity_received_at": 1789520252.023463,
+       "activity_received_at": 1789521779.001923,
        "error_code": null,
-       "finished_at": 1789520252.0234601,
+       "finished_at": 1789521779.001921,
        "hub_owned": 1,
-       "job_id": "stt-63076dfca823-0",
+       "job_id": "stt-f0b9087e6471-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789520252.023463,
+       "observed_at": 1789521779.001923,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": null,
        "progress": 1.0,
-       "reported_at": 1789520252.023463,
-       "runtime_s": 16.62,
+       "reported_at": 1789521779.001923,
+       "runtime_s": 18.6,
        "source": "job",
-       "started_at": 1789520235.295847,
+       "started_at": 1789521760.308291,
        "state": "done",
        "studio": "subtitle"
       },
       {
-       "activity_received_at": 1789520249.506512,
+       "activity_received_at": 1789521774.626955,
        "error_code": null,
        "finished_at": null,
        "hub_owned": 1,
-       "job_id": "stt-63076dfca823-0",
+       "job_id": "stt-f0b9087e6471-0",
        "machine": "local",
        "model": "mlx-community/whisper-large-v3-turbo",
-       "observed_at": 1789520235.295855,
+       "observed_at": 1789521760.308295,
        "operation": "transcription",
        "origin": "hub",
        "origin_device": "Studio Hub KH \u00b7 Local site",
        "progress": null,
-       "reported_at": 1789520249.506512,
+       "reported_at": 1789521774.626955,
        "runtime_s": null,
        "source": "job",
-       "started_at": 1789520235.295847,
+       "started_at": 1789521760.308291,
        "state": "running",
        "studio": "subtitle"
       }
      ],
      "utilization": {
       "evidence": "partial",
-      "ratio": 0.575
+      "ratio": 0.576
      }
     }
    ],
-   "observed_at": 1789520253.4071512,
+   "observed_at": 1789521780.411527,
    "pulse": {
     "just_finished": 1,
     "long_idle": 0,
@@ -160,23 +160,23 @@
    },
    "schema": "studiohub.fleet_activity.v1",
    "window": {
-    "now": 1789520253.4071512,
-    "since_s": 1786928253.4071512
+    "now": 1789521780.411527,
+    "since_s": 1786929780.411527
    }
   },
   "matrix": [
    {
-    "avg_s": 16.62,
+    "avg_s": 18.6,
     "count": 1,
     "machine": "local",
-    "max_s": 16.62,
-    "min_s": 16.62,
+    "max_s": 18.6,
+    "min_s": 18.6,
     "modality": "transcription"
    }
   ],
   "model_rows": [
    {
-    "avg_s": 16.62,
+    "avg_s": 18.6,
     "count": 1,
     "modality": "transcription",
     "model": "mlx-community/whisper-large-v3-turbo"
@@ -195,19 +195,22 @@
   },
   "total": 1
  },
- "hub_url": "http://127.0.0.1:51941",
+ "hub_url": "http://127.0.0.1:55671",
  "label": "Mac mini M4 16GB",
  "runs": [
   {
-   "batch_id": "63076dfca823",
+   "batch_id": "f0b9087e6471",
    "input_bytes": 288044,
    "input_sha256": "2f606380c9c413d38f6edb8e5542d5a0a2977273e77956b174e4f27aa587f17c",
    "items": [
     {
      "bytes": null,
-     "duration_seconds": 16.62,
+     "duration_seconds": 18.6,
      "error": null,
-     "peak_process_rss_bytes": null,
+     "maximum_swap_used_gb": null,
+     "memory_failure": null,
+     "peak_mlx_active_gb": null,
+     "peak_worker_rss_gb": null,
      "sha256": null,
      "state": "done",
      "studio": "subtitle"
@@ -218,7 +221,7 @@
    "package_id": "whisper-turbo",
    "status": "done",
    "submit_status": 200,
-   "wall_seconds": 24.212
+   "wall_seconds": 26.173
   }
  ],
  "skipped": [],

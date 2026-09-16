@@ -203,10 +203,17 @@ class FleetReleaseTests(PackagedMachine):
             return response
 
         control.client.request = stubborn_request
-        result = asyncio.run(control.release())['results'][0]
-        still_loaded = any((result.get('policy') or {}).get(field) for field in
-                           ('loaded_model', 'loaded_models', 'loaded_pipeline'))
-        self.assertTrue(still_loaded, 'a resident model must be visible in the release reply')
+        operation = asyncio.run(control.release())
+        result = operation['results'][0]
+        # The controller itself must refuse to call this a release. The app reads `ok` and
+        # `succeeded`, so a 200 with the model still listed has to arrive as a failure - and
+        # the fleet handoff must agree, which is why both paths share one check.
+        self.assertFalse(result['ok'], 'a Studio still holding its model was reported as released')
+        self.assertEqual(result['result'], 'still_loaded')
+        self.assertFalse(operation['ok'])
+        self.assertEqual(operation['succeeded'], 0)
+        self.assertEqual(operation['failed'], 1)
+        self.assertIn('whisper-turbo', result['detail'])
 
     def test_active_work_is_reported_busy_rather_than_freed(self) -> None:
         control, stubs = build_fleet(('subtitle', 'transcription', 51103))

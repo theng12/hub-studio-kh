@@ -134,6 +134,17 @@ class FleetMemoryControl:
             },
         }
 
+    # The fields a Studio uses to report that it is still holding something. A release that
+    # returns 200 while one of these is non-empty freed nothing, and the app must not be told
+    # otherwise: the same check already decides the fleet handoff's `released` count, so a
+    # single response could otherwise be a success to the app and a failure to the scheduler.
+    RESIDENT_FIELDS = ("loaded_model", "loaded_models", "loaded_pipeline")
+
+    @classmethod
+    def _still_resident(cls, policy: Any) -> bool:
+        return bool(isinstance(policy, dict)
+                    and any(policy.get(field) for field in cls.RESIDENT_FIELDS))
+
     async def _change_one(self, studio: dict[str, Any], method: str, path: str,
                           payload: dict[str, Any] | None, success: str) -> dict[str, Any]:
         row = self._base_row(studio)
@@ -155,8 +166,13 @@ class FleetMemoryControl:
             policy = response.json()
         except ValueError:
             policy = {}
-        return {**row, "ok": True, "result": success, "detail": None,
-                "policy": policy if isinstance(policy, dict) else {}}
+        policy = policy if isinstance(policy, dict) else {}
+        if success == "released" and self._still_resident(policy):
+            return {**row, "ok": False, "result": "still_loaded", "policy": policy,
+                    "detail": "The Studio reported success but is still holding "
+                              + ", ".join(str(model) for model in
+                                          policy.get("loaded_models") or [])}
+        return {**row, "ok": True, "result": success, "detail": None, "policy": policy}
 
     @staticmethod
     def _operation(results: list[dict[str, Any]], action: str) -> dict[str, Any]:

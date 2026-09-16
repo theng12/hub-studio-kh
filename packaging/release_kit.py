@@ -24,15 +24,21 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def tree_sha256(root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(b"\0")
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1 << 20), b""):
-                digest.update(block)
-        digest.update(b"\0")
-    return digest.hexdigest()
+    """The same digest the staging tool recorded, so the two can actually be compared.
+
+    This used to hash only regular files and their contents, while `stage_voice.tree_digest`
+    also folds in file modes and symlink targets. The two never matched on an intact bundle,
+    which made the integrity field worthless: a tampered app and a pristine one both looked
+    like a mismatch.
+    """
+    import sys
+
+    packaging = str(PROJECT_ROOT / "packaging")
+    if packaging not in sys.path:
+        sys.path.insert(0, packaging)
+    from stage_voice import tree_digest
+
+    return tree_digest(root)
 
 
 def folder_bytes(root: Path) -> tuple[int, int]:
@@ -139,6 +145,15 @@ def main() -> int:
         parser.error(f"{app} is not a staged Studio Hub app")
     manifest = build(app, arguments.library.expanduser().resolve())
     manifest["app"]["tree_sha256_recomputed"] = tree_sha256(app)
+    recorded = manifest["app"]["recorded_tree_sha256"]
+    recomputed = manifest["app"]["tree_sha256_recomputed"]
+    if not recorded:
+        manifest["problems"].append(
+            "the staged app has no .app.tree-sha256 beside it, so its integrity cannot be checked")
+    elif recorded != recomputed:
+        manifest["problems"].append(
+            f"the app does not match the hash recorded at staging time "
+            f"(recorded {recorded}, recomputed {recomputed})")
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
     print(json.dumps({key: manifest[key] for key in
