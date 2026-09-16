@@ -7,6 +7,7 @@ built on.
 - **App:** `Studio Hub 0.4.0.app` — version 0.4.0, build `f146bc0e`, `development_build: false`
 - **Models:** `model-library/` — 12 verified packages, ~29 GB
 - **Receipts:** `focused-release-manifest.json`, `Studio Hub 0.4.0.app.tree-sha256`
+**Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)
 
 The app carries its own Python and every generation dependency. It needs no Homebrew, no
@@ -33,7 +34,7 @@ xattr -cr "/Applications/Studio Hub 0.4.0.app"
 ```
 
 Change the path if you put the app somewhere else — running it straight from the SSD, use
-`xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/dist/Studio Hub 0.4.0.app"`.
+`xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app"`.
 
 **About the errors it prints.** That command will scroll past a wall of `Permission denied` and
 `No such xattr` lines against files under `Contents/Resources/runtimes`. That is expected and it
@@ -90,7 +91,7 @@ Expect exactly:
 ```
 
 Change the path if you put the app somewhere else — running it straight from the SSD, that is
-`/Volumes/KH-STUDIO-ATLAS/Studio Hub App/dist/Studio Hub 0.4.0.app/...`. If it prints that line,
+`/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app/...`. If it prints that line,
 you are running the exact build the tests passed against.
 
 ## The proof, in this order
