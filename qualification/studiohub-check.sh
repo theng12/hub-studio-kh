@@ -69,6 +69,60 @@ else
 fi
 
 echo
+echo "===== 6b. WHAT THE APP SEES — models and packages ====="
+if [ -f "$DATA/app-preferences.json" ]; then
+  M=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('modelsPath',''))" "$DATA/app-preferences.json" 2>/dev/null)
+else
+  M=""
+fi
+if [ -n "$M" ] && [ -d "$M" ]; then
+  echo "  library: $M"
+  echo "  packages present in the library:"
+  for d in "$M"/*/; do
+    name=$(basename "$d")
+    rev=$(ls "$d" 2>/dev/null | head -1)
+    printf "    %-34s %s\n" "$name" "${rev:0:12}"
+  done
+  echo
+  echo "  the app's own index of installed packages:"
+  if [ -f "$M/.studiohub/installed.json" ]; then
+    python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+print('    ', len(d), 'entries:', ', '.join(sorted(d)))
+" "$M/.studiohub/installed.json" 2>&1 | sed 's/^/  /'
+  else
+    echo "    MISSING: $M/.studiohub/installed.json — without it every package reads as not installed"
+  fi
+  echo
+  echo "  what each package verifies as (this is what the Models screen shows):"
+  "$RES/runtimes/voice/bin/python3" -c '
+import json, sys
+from pathlib import Path
+res, lib = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(res))
+try:
+    from components import model_packages
+except Exception as exc:
+    print("    cannot load the packaged model code:", exc); raise SystemExit
+manifests = {}
+for path in sorted((res / "model-manifests").glob("*.json")):
+    m = json.loads(path.read_text())
+    manifests[m["package_id"]] = m
+print("    manifests found in the app:", len(manifests))
+for pid, m in sorted(manifests.items()):
+    try:
+        r = model_packages.preflight(m, lib, catalog=manifests)
+        state = r.get("state")
+    except Exception as exc:
+        state = "ERROR %s: %s" % (type(exc).__name__, exc)
+    print("    %-34s %s" % (pid, state))
+' "$RES" "$M"
+else
+  echo "  no readable library path saved yet — open the app and choose the folder first"
+fi
+
+echo
 echo "===== 7. THE LOG — this is the important part ====="
 if [ -f "$DATA/hub-worker.log" ]; then
   echo "  size: $(wc -c < "$DATA/hub-worker.log") bytes"

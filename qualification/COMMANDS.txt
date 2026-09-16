@@ -41,6 +41,29 @@ Quieter version, same effect:
 
 
 ------------------------------------------------------------------
+2b. WHY ARE IMAGE OR SUBTITLE MODELS MISSING?
+------------------------------------------------------------------
+The app shows a model only when its package is installed AND it is in the
+catalog the matching Studio reports. This prints both, per model:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-check.sh"
+
+In that output, look at section 6b. Send me the whole file if you can. What it
+tells us:
+
+  * "manifests found in the app: N" - if this is not 12, the app is missing
+    model definitions and needs replacing.
+  * Each line is what the Models screen shows for that model. Anything not
+    reading "files_verified" is why it does not appear, and the word after it
+    is the reason.
+
+Also useful, the two lists side by side:
+
+    ls "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/model-library"
+    ls "/Applications/Studio Hub 0.4.0.app/Contents/Resources/model-manifests"
+
+
+------------------------------------------------------------------
 3. Open the folder that holds the log
 ------------------------------------------------------------------
 
