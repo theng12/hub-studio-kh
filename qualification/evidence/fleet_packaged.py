@@ -85,6 +85,51 @@ def tone(seconds: float = 5.0, rate: int = 16000) -> bytes:
     return buffer.getvalue()
 
 
+def run_subtitle_job(controller: "Hub", item_id: str, episode: str, routing: str | None) -> dict:
+    """Submit one Subtitle job the way the app does, and wait for it to settle.
+
+    ``routing`` is the app's pin: absent means the Hub chooses the Mac, and ``machine:<id>``
+    names one. It travels as a form field because that is how the app sends a Subtitle job.
+    """
+    fields = {"model": "mlx-community/whisper-large-v3-turbo",
+              "item_ids": item_id, "episode": episode}
+    if routing:
+        fields["routing"] = routing
+    status, submitted = request(
+        f"{controller.url}/api/hub/transcription/jobs", method="POST",
+        token=controller.token,
+        fields=fields, files={"files": ("fleet.wav", tone(), "audio/wav")})
+    result = {"routing": routing, "submit_status": status,
+              "detail": submitted if status != 200 else None}
+    if status != 200:
+        return result
+    batch = submitted["batch_id"]
+    result["batch_id"] = batch
+    deadline = time.time() + 420
+    final: dict = {}
+    while time.time() < deadline:
+        read_status, final = request(f"{controller.url}/api/hub/transcription/jobs/{batch}",
+                                     token=controller.token)
+        states = {item.get("state") for item in (final.get("items") or [])}
+        if states and states <= {"done", "error", "cancelled"}:
+            break
+        time.sleep(2)
+    result["status"] = final.get("status")
+    result["governor_note"] = final.get("governor_note")
+    result["items"] = [{key: item.get(key) for key in
+                        ("state", "studio", "error", "duration_seconds")}
+                       for item in (final.get("items") or [])]
+    result["artifact_status"], body = request(
+        f"{controller.url}/api/hub/transcription/jobs/{batch}/items/0/artifact",
+        token=controller.token)
+    result["artifact_bytes"] = len(body) if isinstance(body, bytes) else 0
+    result["artifact_sha256"] = (hashlib.sha256(body).hexdigest()
+                                 if isinstance(body, bytes) else None)
+    result["artifact_preview"] = (body.decode("utf-8", "replace")
+                                  if isinstance(body, bytes) else json.dumps(body))[:200]
+    return result
+
+
 class Hub:
     def __init__(self, name: str, data: Path, joined: list[dict] | None = None):
         self.name = name
@@ -206,44 +251,38 @@ def main() -> int:
         if not online:
             raise RuntimeError("the controller never saw the node's Subtitle studio come up")
 
-        audio = tone()
-        status, submitted = request(
+        # The automatic path first: nothing is named, so this is the Hub choosing a Mac.
+        automatic = run_subtitle_job(controller, "fleet-packaged-1", "fleet", None)
+        evidence["submit"] = {"status": automatic["submit_status"],
+                              "detail": automatic.get("detail"),
+                              "batch_id": automatic.get("batch_id")}
+        if automatic["submit_status"] != 200:
+            raise RuntimeError(f"the controller refused the job: {automatic.get('detail')}")
+        evidence["job"] = {"status": automatic.get("status"),
+                           "governor_note": automatic.get("governor_note"),
+                           "items": automatic.get("items")}
+        # The artifact has to come back through the controller even though it was produced on
+        # the node, which is the owner's rule: the result lives there and is pulled on request.
+        evidence["artifact"] = {"status": automatic.get("artifact_status"),
+                                "bytes": automatic.get("artifact_bytes"),
+                                "sha256": automatic.get("artifact_sha256"),
+                                "preview": automatic.get("artifact_preview")}
+
+        # The manual override: an operator who names a Mac gets that Mac, per modality and for
+        # real. Subtitle is the interesting one because it has its own dispatcher, and this is
+        # the only place the pin is exercised against the shipped bundle.
+        evidence["pinned_job"] = run_subtitle_job(controller, "fleet-packaged-2", "fleet-pin",
+                                                 "machine:node-a")
+        # And a name that no Mac has is refused at the door instead of queueing forever.
+        refused_status, refused = request(
             f"{controller.url}/api/hub/transcription/jobs", method="POST",
             token=controller.token,
             fields={"model": "mlx-community/whisper-large-v3-turbo",
-                    "item_ids": "fleet-packaged-1", "episode": "fleet"},
-            files={"files": ("fleet.wav", audio, "audio/wav")})
-        evidence["submit"] = {"status": status,
-                              "detail": submitted if status != 200 else None,
-                              "batch_id": submitted.get("batch_id") if status == 200 else None}
-        if status != 200:
-            raise RuntimeError(f"the controller refused the job: {submitted}")
-        batch = submitted["batch_id"]
-
-        deadline = time.time() + 420
-        final = {}
-        while time.time() < deadline:
-            status, final = request(f"{controller.url}/api/hub/transcription/jobs/{batch}",
-                                    token=controller.token)
-            states = {item.get("state") for item in (final.get("items") or [])}
-            if states and states <= {"done", "error", "cancelled"}:
-                break
-            time.sleep(2)
-        evidence["job"] = {"status": final.get("status"),
-                           "governor_note": final.get("governor_note"),
-                           "items": [{key: item.get(key) for key in
-                                      ("state", "studio", "error", "duration_seconds")}
-                                     for item in (final.get("items") or [])]}
-
-        # The artifact has to come back through the controller even though it was produced on
-        # the node, which is the owner's rule: the result lives there and is pulled on request.
-        status, body = request(
-            f"{controller.url}/api/hub/transcription/jobs/{batch}/items/0/artifact",
-            token=controller.token)
-        text = body.decode("utf-8", "replace") if isinstance(body, bytes) else json.dumps(body)
-        evidence["artifact"] = {"status": status, "bytes": len(body) if isinstance(body, bytes) else 0,
-                                "sha256": hashlib.sha256(body).hexdigest() if isinstance(body, bytes) else None,
-                                "preview": text[:200]}
+                    "item_ids": "fleet-packaged-3", "episode": "fleet-badpin",
+                    "routing": "machine:not-a-mac"},
+            files={"files": ("fleet.wav", tone(), "audio/wav")})
+        evidence["bad_pin"] = {"status": refused_status,
+                               "detail": refused.get("detail") if isinstance(refused, dict) else refused}
 
         # What the operator would see in the app's fleet screen: one row per Mac, from the
         # packaged Hub, after the work has actually run.
@@ -270,6 +309,20 @@ def main() -> int:
             problems.append(f"the job did not finish: {evidence['job']}")
         if evidence["artifact"]["status"] != 200:
             problems.append("the artifact did not come back through the controller")
+        pinned = evidence["pinned_job"]
+        if pinned["submit_status"] != 200:
+            problems.append(f"the controller refused a pinned job: {pinned.get('detail')}")
+        elif pinned.get("status") != "done":
+            problems.append(f"the pinned job did not finish: {pinned}")
+        else:
+            ran_on = (pinned.get("items") or [{}])[0].get("studio")
+            if ran_on != "node-a:subtitle":
+                problems.append(f"a job pinned to node-a ran on {ran_on!r} instead")
+            if not pinned.get("artifact_bytes"):
+                problems.append("the pinned job returned no artifact through the controller")
+        if evidence["bad_pin"]["status"] != 400:
+            problems.append(f"a pin naming a Mac that is not here was not refused: "
+                            f"{evidence['bad_pin']}")
         if evidence["overview"]["status"] != 200:
             problems.append("the fleet overview was not served by the packaged Hub")
         else:
@@ -287,7 +340,9 @@ def main() -> int:
             if node_row.get("version") != evidence["overview"]["local"].get("version"):
                 problems.append("the node does not report the build the controller is running: "
                                 f"{node_row.get('version')!r}")
-            if node_row.get("jobs") != 1 or node_row.get("average_seconds") is None:
+            # The row must count the work that has actually run there. The overview is read
+            # after both jobs, so anything that reports one of them is not reporting the node.
+            if (node_row.get("jobs") or 0) < 2 or node_row.get("average_seconds") is None:
                 problems.append("the node's measured work is missing from its row: "
                                 f"{node_row}")
         evidence["problems"] = problems

@@ -3,18 +3,22 @@
   "adopted": true,
   "status": 200
  },
- "app": "dist/Studio Hub 0.4.0.app.new",
+ "app": "dist/Studio Hub 0.4.0.app",
  "artifact": {
   "bytes": 43,
   "preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
   "sha256": "4e88d0e6c7627f90847bc4217a99e05a8e1ce3a77557fcd4eee38fa2858a20bd",
   "status": 200
  },
+ "bad_pin": {
+  "detail": "no machine named 'not-a-mac' is in this fleet; known: local, node-a",
+  "status": 400
+ },
  "job": {
   "governor_note": null,
   "items": [
    {
-    "duration_seconds": 20.26,
+    "duration_seconds": 17.53,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -38,7 +42,7 @@
  "overview": {
   "local": {
    "chip": "Apple M4",
-   "disk_free_gb": 400.46,
+   "disk_free_gb": 403.22,
    "memory_gb": 17.18,
    "reachable": true,
    "version": "0.4.0"
@@ -48,13 +52,13 @@
    "node-a"
   ],
   "node": {
-   "average_seconds": 20.26,
+   "average_seconds": 10.14,
    "chip": "Apple M4",
-   "disk_free_gb": 400.48,
-   "jobs": 1,
+   "disk_free_gb": 403.22,
+   "jobs": 2,
    "modalities": {
     "image": 0,
-    "transcription": 1,
+    "transcription": 2,
     "voice": 0
    },
    "reachable": true,
@@ -67,10 +71,30 @@
    "unreachable": 0
   }
  },
+ "pinned_job": {
+  "artifact_bytes": 43,
+  "artifact_preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
+  "artifact_sha256": "4e88d0e6c7627f90847bc4217a99e05a8e1ce3a77557fcd4eee38fa2858a20bd",
+  "artifact_status": 200,
+  "batch_id": "610623956001",
+  "detail": null,
+  "governor_note": null,
+  "items": [
+   {
+    "duration_seconds": 2.74,
+    "error": null,
+    "state": "done",
+    "studio": "node-a:subtitle"
+   }
+  ],
+  "routing": "machine:node-a",
+  "status": "done",
+  "submit_status": 200
+ },
  "problems": [],
  "steps": [],
  "submit": {
-  "batch_id": "b7d20492d034",
+  "batch_id": "4464a96159c6",
   "detail": null,
   "status": 200
  },

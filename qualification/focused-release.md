@@ -55,15 +55,17 @@ controller's job history is disposable.
 the Hub and its Studios, so a node is ready for work without anyone opening the app.
 
 Run the fleet path against the staged bundle — two packaged Hubs, a join, a real Subtitle job,
-and the artifact pulled back through the controller:
+a second job pinned to the node with `machine:node-a`, a pin naming a Mac that is not there, and
+the artifact pulled back through the controller:
 
 ```sh
 .build/voice-runtime/bin/python3 qualification/evidence/fleet_packaged.py
 ```
 
-It writes `qualification/evidence/fleet-packaged.json` and exits non-zero if the job does not run
-on the node, if the artifact does not come back through the controller, or if the fleet overview
-does not report both Macs with the node's measured work.
+It writes `qualification/evidence/fleet-packaged.json` and exits non-zero when the job does not
+run on the node, when the pin is not honoured or is not refused, when the artifact does not come
+back through the controller, or when the fleet overview does not report both Macs with the node's
+measured work.
 
 ## Install
 
