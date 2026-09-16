@@ -154,6 +154,25 @@ Folder…** and choose the same folder. A voice with a clip but no transcript is
 clone matches audio to words, so without them the result would sound wrong. Everything
 imported is recorded as *Owned by me*, with the consent box ticked.
 
+## Downloading a model
+
+Model downloads need the internet, so **Offline mode must be off**:
+**Settings → Model library → "Use imported models offline"**. While it is on, every **Download
+Model** button is greyed out on purpose and the screen now says so. Importing a folder you
+already have keeps working with it on.
+
+Every model the app ships a definition for carries its own Hugging Face links, so **Download
+Model** fetches it at the pinned revision and verifies every file.
+
+## Running anything I send you
+
+1. Open **Terminal** (Applications → Utilities → Terminal).
+2. Copy a line out of `COMMANDS.txt` on this SSD.
+3. Paste it into Terminal and press Return.
+
+That is all "run this" means. `COMMANDS.txt` has every command in order, and its top section
+explains this too.
+
 ## The proof, in this order
 
 Simplest first. If one of these fails, stop there — the next one needs it.

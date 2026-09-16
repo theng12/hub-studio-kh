@@ -1,9 +1,31 @@
 STUDIO HUB KH — COMMANDS
 ========================
 
-Copy one line at a time into Terminal (Applications -> Utilities -> Terminal).
-They are in the order you would need them. Nothing here deletes anything.
+HOW TO RUN ANY OF THESE
+-----------------------
+1. Open Terminal: Applications -> Utilities -> Terminal. A window opens with a
+   "%" prompt.
+2. Copy a line from this file (select it, Command-C).
+3. Paste it into the Terminal window (Command-V) and press Return.
+4. Text scrolls out. To send it to me: Command-A to select all, Command-C to
+   copy, then paste into the chat.
 
+That is all "run this" ever means. The file sits on the SSD; Terminal is what
+runs it. Nothing appears "in" the SSD.
+
+Some scripts print headings like:
+
+    ===== A. WHICH BUILD IS INSTALLED? =====
+
+Those letters are only labels for parts of the output, so we can talk about one
+part without quoting everything. They are not special terms.
+
+TURNING OFF OFFLINE MODE (this is what blocks downloads)
+--------------------------------------------------------
+In the app: Settings -> Model library -> "Use imported models offline" -> OFF.
+While it is on, every Download Model button is disabled on purpose, because
+downloading needs the internet and offline mode says not to use it.
+Importing a folder you already have still works with it on.
 
 ------------------------------------------------------------------
 0. FIRST: check the app can start
