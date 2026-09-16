@@ -95,6 +95,32 @@ print('    ', len(d), 'entries:', ', '.join(sorted(d)))
     echo "    MISSING: $M/.studiohub/installed.json — without it every package reads as not installed"
   fi
   echo
+  echo "  EXPECTED vs PRESENT size per package (a partial copy shows up here):"
+  "$RES/runtimes/voice/bin/python3" -c '
+import json, sys
+from pathlib import Path
+res, lib = Path(sys.argv[1]), Path(sys.argv[2])
+manifests = {}
+for path in sorted((res / "model-manifests").glob("*.json")):
+    m = json.loads(path.read_text())
+    manifests[m["package_id"]] = m
+for pid, m in sorted(manifests.items()):
+    expected = sum(int(f.get("size") or 0) for f in m.get("files", []))
+    folder = lib / pid
+    present = 0
+    revision = m["revision"]
+    target = folder / revision
+    base = target if target.is_dir() else folder
+    if base.is_dir():
+        for path in base.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                present += path.stat().st_size
+    flag = "OK" if expected and present >= expected * 0.98 else "INCOMPLETE"
+    print("    %-34s %6.2f GB expected  %6.2f GB present  %s"
+          % (pid, expected / 1e9, present / 1e9, flag))
+' "$RES" "$M"
+
+  echo
   echo "  what each package verifies as (this is what the Models screen shows):"
   "$RES/runtimes/voice/bin/python3" -c '
 import json, sys

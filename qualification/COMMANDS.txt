@@ -53,9 +53,13 @@ tells us:
 
   * "manifests found in the app: N" - if this is not 12, the app is missing
     model definitions and needs replacing.
-  * Each line is what the Models screen shows for that model. Anything not
-    reading "files_verified" is why it does not appear, and the word after it
-    is the reason.
+  * The size table: each line shows GB the app expects and GB actually present.
+    Anything marked INCOMPLETE was copied only partly - that is the most common
+    reason a model is missing, because Finder does not always finish a large
+    folder and does not tell you.
+  * Each line of the verify list is what the Models screen shows for that model.
+    Anything not reading "files_verified" is why it does not appear, and the
+    word after it is the reason.
 
 Also useful, the two lists side by side:
 
