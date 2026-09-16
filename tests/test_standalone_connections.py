@@ -395,6 +395,56 @@ class IndependentClientTests(unittest.TestCase):
         status, _, _ = self.hub.request("/api/hub/settings", token=self.token)
         self.assertEqual(status, 200)
 
+    def test_a_mac_that_joins_another_controller_answers_only_its_new_one(self) -> None:
+        """Re-pointing a Mac at a new controller must not leave the old one with a key.
+
+        A controller is replaced by promoting a node and pointing the others at it. A node
+        adopts the new controller's credential as part of joining, so the credential the dead
+        controller holds stops working - which is what makes the replacement complete rather
+        than a second controller that can still drive this Mac.
+        """
+        with tempfile.TemporaryDirectory(prefix="studiohub-repoint-") as root:
+            directory = Path(root)
+            node = HubProcess(directory, "node", "node-repoint-token-0123456789ab")
+            node.start()
+            try:
+                old = HubProcess(directory, "old-controller",
+                                 "old-controller-token-0123456789")
+                old.start()
+                try:
+                    new = HubProcess(directory, "new-controller",
+                                     "new-controller-token-0123456789")
+                    new.start()
+                    try:
+                        old_fleet = (old.data / ".fleet_token").read_text().strip()
+                        new_fleet = (new.data / ".fleet_token").read_text().strip()
+                        self.assertNotEqual(old_fleet, new_fleet)
+
+                        # The node has not adopted either yet, so neither controller can drive it.
+                        for foreign in (old_fleet, new_fleet):
+                            status, _, _ = node.request("/api/hub/capabilities", token=foreign)
+                            self.assertEqual(status, 401, "an unadopted credential must not work")
+
+                        # Joining the new controller is what hands it the key, and it uses the
+                        # node's own Hub token - which is the owner's decision on this Mac.
+                        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                                            {"token": new_fleet}, token=node.token)
+                        self.assertEqual(status, 200, adopted)
+                        status, _, _ = node.request("/api/hub/capabilities", token=new_fleet)
+                        self.assertEqual(status, 200, "the new controller must be able to work here")
+                        status, refused, _ = node.request("/api/hub/capabilities", token=old_fleet)
+                        self.assertEqual(status, 401,
+                                         "the replaced controller's credential must stop working")
+                        # And the node's own owner still has full control.
+                        status, _, _ = node.request("/api/hub/settings", token=node.token)
+                        self.assertEqual(status, 200)
+                    finally:
+                        new.stop()
+                finally:
+                    old.stop()
+            finally:
+                node.stop()
+
     def test_the_hub_address_is_loopback_only(self) -> None:
         """There is no cloud-domain assumption to make; the app talks to a private address."""
         host = self.hub.base.split("://", 1)[1].split(":", 1)[0]

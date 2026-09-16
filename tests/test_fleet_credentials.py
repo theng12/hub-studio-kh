@@ -52,6 +52,9 @@ class FleetPermissionTests(unittest.TestCase):
             # Introducing itself, and seeing its siblings.
             ("POST", "/api/hub/fleet/nodes"),
             ("GET", "/api/hub/fleet/nodes"),
+            # The fleet view, for an operator running the app on a Mac that is not the
+            # controller. It reads health, disk and measured speed; it changes nothing.
+            ("GET", "/api/hub/fleet/overview"),
         ):
             with self.subTest(method=method, path=path):
                 self.assertTrue(fleet_path_allowed(method, path),
