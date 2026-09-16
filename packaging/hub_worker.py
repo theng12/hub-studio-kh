@@ -68,6 +68,29 @@ def await_child(process, ready_file, timeout=120, *, label="Studio"):
     raise RuntimeError(f'Private {label} worker startup timed out; inspect the service log')
 
 
+def _bind_host(value: object) -> str:
+    """Accept only an address this Hub may actually bind.
+
+    Loopback and the wildcard are the two safe answers; a specific address lets an operator
+    scope the Hub to one interface, such as a Tailscale address. Anything else - a hostname,
+    a URL, a range - is refused rather than guessed at, because binding is a security
+    decision and a typo should not silently widen it.
+    """
+    import ipaddress
+    host = str(value or '').strip()
+    if not host:
+        return '127.0.0.1'
+    if host in ('0.0.0.0', '::'):
+        return host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError(f'--host must be an IP address, not {host!r}') from exc
+    if address.version != 4:
+        raise ValueError('--host must be an IPv4 address')
+    return host
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', type=Path, required=True)
@@ -75,6 +98,9 @@ def main():
     parser.add_argument('--ready-file', type=Path, required=True)
     parser.add_argument('--parent-pid', type=int)
     parser.add_argument('--port', type=int, default=0)
+    # Loopback unless asked otherwise: this is the switch that decides whether the Hub is a
+    # private local service or something another Mac can reach.
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
@@ -212,7 +238,7 @@ def main():
             children.append({'id': worker_id, 'modality': modality, 'process': child, 'ready': child_ready,
                              'runtime_id': runtime_id, 'outputs': outputs})
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
-                   token=token, factory=True, shutdown_callback=cleanup)
+                   token=token, factory=True, shutdown_callback=cleanup, host=_bind_host(args.host))
     finally:
         cleanup()
 

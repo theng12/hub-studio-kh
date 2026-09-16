@@ -178,8 +178,24 @@ def main() -> None:
                args.parent_pid, worker_pgid)
 
 
-def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False, shutdown_callback=None):
-    """Shared owned-process lifecycle for the private Voice worker and local Hub."""
+def ready_host(bind_host: str) -> str:
+    """The address the owner app uses to reach its own Hub.
+
+    A wildcard bind also answers on loopback, so loopback stays the client address there and
+    the app never has to know the machine's external address. A specific bind is reached at
+    the address it bound.
+    """
+    return '127.0.0.1' if bind_host in ('0.0.0.0', '::') else bind_host
+
+
+def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
+               shutdown_callback=None, host='127.0.0.1'):
+    """Shared owned-process lifecycle for the private Voice worker and local Hub.
+
+    ``host`` defaults to loopback: the Hub is reachable from this Mac only unless the operator
+    explicitly asks for more. Binding beyond loopback is what makes a Mac a fleet node, and it
+    is also the point at which the Hub stops being private, so it is never inferred.
+    """
     monitor_stop = threading.Event()
     parent_lost = threading.Event()
     readiness_lock = threading.Lock()
@@ -195,13 +211,14 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
             ready_file.unlink(missing_ok=True)
         import uvicorn
         options = {'factory': True} if factory else {}
-        config = uvicorn.Config(app, host='127.0.0.1', port=port, log_level='info', **options)
+        config = uvicorn.Config(app, host=host, port=port, log_level='info', **options)
         # Bind once and keep the socket, so reported ephemeral ports are exact and
         # another process cannot take the port between selection and server startup.
         with config.bind_socket() as sock:
             port = sock.getsockname()[1]
-            os.environ['STUDIOHUB_BIND_HOST'] = '127.0.0.1'
+            os.environ['STUDIOHUB_BIND_HOST'] = host
             os.environ['STUDIOHUB_BIND_PORT'] = str(port)
+            client_host = ready_host(host)
 
             class ReadyServer(uvicorn.Server):
                 async def startup(self, sockets=None):
@@ -210,7 +227,7 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
                         if (ready_file is not None and not self.should_exit
                                 and not parent_lost.is_set()):
                             write_ready_file(ready_file,
-                                f'http://127.0.0.1:{port}', version, token=token)
+                                f'http://{client_host}:{port}', version, token=token)
 
                 async def shutdown(self, sockets=None):
                     try:
