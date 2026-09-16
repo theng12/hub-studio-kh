@@ -2803,6 +2803,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if isinstance(recovered, dict):
             e = _classify_worker_failure(b, item, studio, recovered, t_start)
         message = str(e) or type(e).__name__
+        # A Studio on another Mac cannot be reconciled the way a local one can: the result, if
+        # there is one, is on a machine that has stopped answering, and nothing here can reach
+        # it. The owner's rule for the fleet is therefore to regenerate rather than to wait, so
+        # a remote attempt that cannot be reconciled falls through to the bounded infrastructure
+        # retry below, which already avoids the machine and limits the attempts. Local work
+        # keeps reconciliation, because there the earlier result may genuinely still be there.
+        remote_studio = not peers.is_local_studio(studio)
         if b.get("modality") == "image":
             code = str(getattr(e, "error_code", None) or item.get("error_code") or "")
             if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
@@ -2814,14 +2821,20 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 return
             if (item.get("studio_job_id") and recovered is False
                     and not getattr(e, "worker_terminal", False)):
-                _mark_image_uncertain(
-                    item, studio,
-                    "The accepted Image job could not be reconciled; "
-                    "it was not retried automatically.",
-                )
-                return
+                if remote_studio:
+                    item.pop("studio_job_id", None)
+                    item.pop("studio", None)
+                else:
+                    _mark_image_uncertain(
+                        item, studio,
+                        "The accepted Image job could not be reconciled; "
+                        "it was not retried automatically.",
+                    )
+                    return
             if (image_post_attempted and not image_post_rejected
-                    and not item.get("studio_job_id")):
+                    and not item.get("studio_job_id") and not remote_studio):
+                # Local only, for the same reason as above: on another Mac the receipt is gone
+                # with the machine, so there is nothing to reconcile and the job is regenerated.
                 _mark_image_uncertain(
                     item, studio,
                     "Image submission may have been accepted but its worker "
@@ -2830,12 +2843,16 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 return
         if (b.get("modality") == "voice" and item.get("studio_job_id")
                 and _is_transport_failure(e, message)):
-            _mark_voice_uncertain(
-                item,
-                "The accepted Voice Studio job could not be reconciled; "
-                "it was not retried automatically.",
-            )
-            return
+            if remote_studio:
+                item.pop("studio_job_id", None)
+                item.pop("studio", None)
+            else:
+                _mark_voice_uncertain(
+                    item,
+                    "The accepted Voice Studio job could not be reconciled; "
+                    "it was not retried automatically.",
+                )
+                return
         retryable = getattr(e, "retryable", True)
         item["last_progress_at"] = time.time()
         now = time.time()

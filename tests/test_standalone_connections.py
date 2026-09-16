@@ -1074,6 +1074,81 @@ class FleetVoiceDispatchTests(unittest.TestCase):
                 f"items={payload.get('items')!r}")
 
 
+class FleetNodeDeathTests(unittest.TestCase):
+    """A node that stops answering must not leave a job waiting on it."""
+
+    def test_a_node_that_dies_mid_job_requeues_it_rather_than_waiting(self) -> None:
+        worker = StubImageWorker(machine="node-a", hold=True)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-death-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        # The controller has no model of its own, so the node is the only place this can run.
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        fleet = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+
+        status, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-death-1",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not worker.submissions:
+            time.sleep(0.5)
+        self.assertTrue(worker.submissions, "the job never reached the node")
+
+        # The node stops answering with the job still running - the case the owner described:
+        # the Mac is gone, and whatever it was doing died with it.
+        worker.stop()
+
+        # The item must come back to the queue rather than sit waiting on a machine that is
+        # never coming back, and it must not need a person to unstick it.
+        deadline = time.time() + 120
+        state = ""
+        while time.time() < deadline:
+            state = self.death_state(controller, batch)
+            if "'queued'" in state or "uncertain" in state:
+                break
+            time.sleep(2)
+        self.assertNotIn("uncertain", state,
+                         "a dead node must be regenerated, not reconciled: " + state)
+        self.assertIn("'queued'", state,
+                      "a dead node must put the job back in the queue: " + state)
+
+    @staticmethod
+    def death_state(controller, batch: str) -> str:
+        status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(unreadable: {status})"
+        items = payload.get("items") or []
+        return (f"note={payload.get('governor_note')!r} "
+                f"states={[i.get('state') for i in items]!r} "
+                f"errors={[i.get('error') for i in items]!r}")
+
+
 class FleetPinTests(unittest.TestCase):
     """Automatic by default, but the operator can name the Mac when it matters."""
 
