@@ -229,11 +229,26 @@ def _open_regular(root, relative):
 # rehashes every byte, the Hub hashes every artifact it serves, and a library that arrived from
 # another machine is re-verified once on arrival rather than trusted on faith. See
 # `library_identity` in `preflight`.
-_STAMP_FIELDS = ('st_size',)
+_STAMP_FIELDS = ('st_size', 'mtime_s', 'ctime_s')
 
 
 def _stamp(info):
-    return {key: getattr(info, key) for key in _STAMP_FIELDS}
+    """What the receipt records about one file, in whole seconds.
+
+    Whole seconds on purpose. Nanosecond timestamps do not survive the copy the kit ships:
+    measured between two APFS volumes, `st_mtime_ns` came back with its last three digits
+    (1789464238184185311 -> 1789464238000000000), and `st_ino`/`st_dev` change outright. A
+    receipt keyed on any of that accused every file of changing on the first machine that was
+    not the build machine.
+
+    Seconds are coarse enough to survive the copy and fine enough to catch a file rewritten in
+    place later - and `st_size` catches truncation, which is the failure that actually happens
+    to a copied library. Byte-level integrity stays a hash: `verify_installed` rehashes
+    everything, and the Hub hashes every artifact it serves.
+    """
+    return {'st_size': getattr(info, 'st_size'),
+            'mtime_s': getattr(info, 'st_mtime_ns') // 1_000_000_000,
+            'ctime_s': getattr(info, 'st_ctime_ns') // 1_000_000_000}
 
 
 def _file_path(folder, entry):

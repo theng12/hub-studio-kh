@@ -402,7 +402,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1380, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Studio Hub"
-        window.contentMinSize = NSSize(width: 1040, height: 680)
+        // Matches the SwiftUI floor. It used to be 1040 while the content asked for more than
+        // that in fixed columns, and a Split View can go below any minimum anyway - so the
+        // layout had to learn to compress rather than rely on this number.
+        window.contentMinSize = NSSize(width: 720, height: 520)
         window.setFrameAutosaveName("StudioHubMain")
         let content = NSHostingView(rootView: StudioWindow(studio: controller))
         content.sizingOptions = []

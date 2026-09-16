@@ -327,6 +327,28 @@ struct NativeJob: Identifiable, Equatable {
     var bytes: Int64? = nil
     var sha256: String? = nil
     var imageSettings: NativeImageSettings? = nil
+    /// Runtime facts the Hub recorded for this result, shown beside it so an operator can see
+    /// what they actually got without opening the file.
+    var durationSeconds: Double? = nil
+    var requestedWidth: Int? = nil
+    var requestedHeight: Int? = nil
+
+    /// "12.5 s · 1.4 MB · 1024×1024" — only the parts that are known.
+    var assetFacts: String {
+        var parts: [String] = []
+        if let durationSeconds, durationSeconds > 0 {
+            parts.append(durationSeconds >= 60
+                ? String(format: "%.1f min", durationSeconds / 60)
+                : String(format: "%.1f s", durationSeconds))
+        }
+        if let bytes, bytes > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+        }
+        if let requestedWidth, let requestedHeight {
+            parts.append("\(requestedWidth)×\(requestedHeight)")
+        }
+        return parts.joined(separator: " · ")
+    }
 }
 
 struct NativeDownload: Identifiable, Equatable {
@@ -1082,6 +1104,46 @@ final class NativeWorkspaceStore: ObservableObject {
             throw NativeAPIError.message("The connection changed while the clip was loading.")
         }
         return data
+    }
+
+    /// Transcribe one clip here and now, so a transcript never has to be typed by hand.
+    ///
+    /// This is the Subtitle worker's synchronous route: one upload in, the words out. It exists
+    /// because the operator has the clip in front of them — adding a voice, or about to clone
+    /// from a reference — and being told to go and transcribe it elsewhere is how a transcript
+    /// ends up skipped, which then produces a wrong-sounding clone.
+    func transcribeClip(at file: URL, language: String = "") async throws -> String {
+        guard let requestConnection = connectionID, let directory = dataDirectory else {
+            throw NativeAPIError.message("Start the local services before transcribing.")
+        }
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            throw NativeAPIError.message("That clip is no longer on disk. Choose it again.")
+        }
+        let boundary = "StudioHub-\(UUID().uuidString)"
+        var fields = ["model": Self.whisperTurbo, "word_timestamps": "false"]
+        let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { fields["language"] = trimmed }
+        let upload = try await Task.detached(priority: .userInitiated) {
+            try Self.makeMultipartFile(boundary: boundary, file: file, fields: fields,
+                                       dataDirectory: directory, fileField: "file")
+        }.value
+        defer { try? FileManager.default.removeItem(at: upload) }
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The connection changed before transcription started.")
+        }
+        var request = try makeRequest(["studio", "subtitle", "api", "transcribe"], method: "POST")
+        // A long recording takes as long as it takes; this is one synchronous request.
+        request.timeoutInterval = 60 * 60
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let wire: HubSyncTranscript = try await performUpload(request, fromFile: upload)
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The connection changed while transcribing.")
+        }
+        let text = (wire.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            throw NativeAPIError.message("The transcriber found no words in that clip. Try a clip with clear speech.")
+        }
+        return text
     }
 
     /// Point the next generation at a saved voice instead of a loose file.
@@ -2067,7 +2129,9 @@ final class NativeWorkspaceStore: ObservableObject {
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
-            imageSettings: item?.params?.imageSettings)
+            imageSettings: item?.params?.imageSettings,
+            durationSeconds: item?.audioDurationS,
+            requestedWidth: item?.params?.width, requestedHeight: item?.params?.height)
     }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
@@ -2467,6 +2531,9 @@ private struct HubJobItem: Decodable {
     let bytes: Int64?
     let sha256: String?
     let params: HubJobParams?
+    /// How long the produced audio runs. The Hub records it when it adopts a finished voice
+    /// job, and the app showed none of it - a generated clip had no stated length.
+    let audioDurationS: Double?
 }
 private struct HubJobParams: Decodable {
     let width: Int?
@@ -2548,6 +2615,12 @@ private struct PendingTranscription: Codable {
 }
 private struct HubTranscriptionSubmit: Decodable { let batchId: String }
 private struct VoiceListResponse: Decodable { let voices: [NativeVoice] }
+/// The Subtitle worker's synchronous answer: the words, and when they were said.
+private struct HubSyncTranscript: Decodable {
+    let text: String?
+    let language: String?
+    let duration: Double?
+}
 private struct VoiceResponse: Decodable { let voice: NativeVoice }
 private struct VoiceDeleteResponse: Decodable { let deleted: Bool? }
 private struct VoiceEdit: Encodable {

@@ -26,6 +26,7 @@ final class FixtureProtocol: URLProtocol {
     static var voiceDeleteCalls = 0
     static var voiceAddCalls = 0
     static var voiceEditCalls = 0
+    static var syncTranscribeCalls = 0
     static var voiceAdded: [[String: Any]] = []
     static var audioAckPaths: [String] = []
     static var audioAckRejects = false
@@ -288,6 +289,11 @@ final class FixtureProtocol: URLProtocol {
         case ("DELETE", "/studio/voice/api/voices/voice-2"):
             Self.lock.lock(); Self.voiceDeleteCalls += 1; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"deleted":true}"#.utf8))
+        case ("POST", "/studio/subtitle/api/transcribe"):
+            // The synchronous route the app uses to transcribe a clip on the spot. It answers
+            // with the words, which is what the "Transcribe Clip" button fills in.
+            Self.lock.lock(); Self.syncTranscribeCalls += 1; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"text":"The exact words in the clip","language":"en","duration":12.5,"model":"mlx-community/whisper-large-v3-turbo"}"#.utf8))
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
@@ -351,7 +357,8 @@ final class FixtureProtocol: URLProtocol {
                 "items": [["index": 0, "state": "done", "progress": 1.0, "prompt": "Hello locally",
                            "artifact_url": "/api/hub/jobs/new-job/items/0/artifact",
                            "bytes": Self.wav.count, "sha256": Self.audioDigest(),
-                           "media_type": "audio/wav", "audio_duration_s": 0.000125]]]
+                           "media_type": "audio/wav",
+                           "audio_duration_s": 12.5]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: audioBody))
         case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
             Self.lock.lock(); let corrupt = Self.corruptAudio; Self.lock.unlock()
@@ -607,6 +614,21 @@ struct NativeAPITests {
                 "a voice with no transcript must not be offered for cloning")
         require(store.voiceError?.contains("no transcript") == true,
                 "a voice that cannot clone must say why: \(store.voiceError ?? "nil")")
+
+        // Transcribing a clip on the spot: the words come back so neither the voice editor nor
+        // the audio reference field has to ask the operator to type them.
+        let transcribable = temporary.appendingPathComponent("spoken.wav")
+        try FixtureProtocol.wav.write(to: transcribable)
+        let words = try await store.transcribeClip(at: transcribable, language: "en")
+        require(words == "The exact words in the clip", "the transcript must come back: \(words)")
+        require(FixtureProtocol.syncTranscribeCalls == 1, "exactly one synchronous transcription")
+        do {
+            _ = try await store.transcribeClip(at: temporary.appendingPathComponent("missing.wav"))
+            fatalError("transcribing a clip that is not there must be refused")
+        } catch {
+            require(error.localizedDescription.contains("no longer on disk"),
+                    "a missing clip needs an actionable message: \(error.localizedDescription)")
+        }
 
         // Removing a saved voice reaches the worker.
         _ = await store.deleteVoice(unfinished)
@@ -881,6 +903,12 @@ struct NativeAPITests {
         try await store.saveAudio(audio, to: audioDestination)
         let savedAudio = try Data(contentsOf: audioDestination)
         require(savedAudio == FixtureProtocol.wav, "saved voice clip bytes")
+        // A generated asset states what it is: the app used to show only the model and state.
+        let facts = audio.assetFacts
+        require(facts.contains("12.5 s"), "a clip's length must be shown: \(facts)")
+        require(facts.contains("KB") || facts.contains("bytes"),
+                "the file size must be shown: \(facts)")
+
         require(FixtureProtocol.audioAcks() == ["/api/hub/jobs/new-job/items/0/ack"],
                 "a verified voice clip save must acknowledge delivery exactly once")
         let unwritableAudio = temporary.appendingPathComponent("missing-directory/never.wav")

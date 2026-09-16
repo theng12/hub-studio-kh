@@ -103,6 +103,9 @@ struct StudioContent: View {
     @State private var showingVoiceEditor = false
     /// The voice the operator asked to remove, held until they confirm.
     @State private var pendingVoiceDeletion: NativeVoice?
+    /// Set while a clip is being transcribed here and now, for either the voice editor or the
+    /// audio reference field, so the button shows it is working and cannot be pressed twice.
+    @State private var transcribingClip = false
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -145,7 +148,10 @@ struct StudioContent: View {
                     Spacer(minLength: 0)
                 }.padding(16)
             }
-            .frame(width: 210)
+            // Not a fixed width: a fixed column cannot give anything back, so when the window is
+            // squeezed (Split View, most obviously) the layout overflowed and macOS clipped it -
+            // the sidebar and the page's first column appeared to be cropped away.
+            .frame(minWidth: 150, idealWidth: 210, maxWidth: 260)
             Divider()
             VStack(spacing: 0) {
                 if let error = studio.failure ?? workspace.error ?? fileActionError {
@@ -169,9 +175,16 @@ struct StudioContent: View {
                 case .settings: settings
                 default: unavailableWorkspace
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor))
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            // The page itself may still be wider than a very narrow window; scrolling beats
+            // clipping, because everything stays reachable.
+            .clipped()
         }
-        .frame(minWidth: 1040, minHeight: 680)
+        // A floor that matches the window's own minimum, not the sum of every column: the
+        // columns are allowed to compress below their ideal so nothing has to be cropped.
+        .frame(minWidth: 720, minHeight: 520)
     }
 
     private func heading(_ title: String, _ description: String) -> some View {
@@ -472,6 +485,10 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     Text("\(modelName(job.model)) · \(stateLabel(job.state))").font(.caption).foregroundStyle(.secondary)
+                    if job.state == "done", !job.assetFacts.isEmpty {
+                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Result details: \(job.assetFacts)")
+                    }
                 }
                 Spacer()
                 if job.state == "done" {
@@ -527,7 +544,15 @@ struct StudioContent: View {
                                 Text("A short, clean recording of the voice you want to reuse.").font(.caption).foregroundStyle(.secondary)
                             }
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Reference transcript").font(.callout)
+                                HStack {
+                                    Text("Reference transcript").font(.callout)
+                                    Spacer()
+                                    Button(transcribingClip ? "Transcribing…" : "Transcribe Clip") {
+                                        Task { await transcribeIntoAudioReference() }
+                                    }
+                                    .disabled(transcribingClip || workspace.audioReferencePath == nil)
+                                    if transcribingClip { ProgressView().controlSize(.small) }
+                                }
                                 TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
                                     .textFieldStyle(.roundedBorder)
                                 Text(selectedAudioModel?.requiresTranscript == false
@@ -779,6 +804,12 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
                     Text("\(modelName(job.model)) · \(stateLabel(job.state))").font(.caption).foregroundStyle(.secondary)
+                    // What was actually produced: length, size and the size requested. An asset
+                    // with no stated facts is hard to tell apart from one that came back wrong.
+                    if job.state == "done", !job.assetFacts.isEmpty {
+                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Result details: \(job.assetFacts)")
+                    }
                 }
                 Spacer()
                 if job.state == "done" {
@@ -936,7 +967,20 @@ struct StudioContent: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Transcript").font(.callout)
+                    HStack {
+                        Text("Transcript").font(.callout)
+                        Spacer()
+                        // The operator has the clip right here; making them go and transcribe it
+                        // somewhere else is how a transcript gets skipped, and a clone without
+                        // one sounds wrong.
+                        if voiceDraft.voice == nil {
+                            Button(transcribingClip ? "Transcribing…" : "Transcribe Clip") {
+                                Task { await transcribeIntoVoiceDraft() }
+                            }
+                            .disabled(transcribingClip || voiceDraft.clipPath == nil)
+                            if transcribingClip { ProgressView().controlSize(.small) }
+                        }
+                    }
                     TextEditor(text: $voiceDraft.transcript)
                         .font(.body).frame(height: 70)
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
@@ -972,6 +1016,37 @@ struct StudioContent: View {
                           || voiceDraft.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(24).frame(width: 560, height: 620)
+    }
+
+    /// Transcribe the clip in the voice editor and put the words in its transcript field.
+    ///
+    /// It overwrites what is there, because the point of pressing it is to get the real words;
+    /// the operator can edit the result before saving.
+    private func transcribeIntoVoiceDraft() async {
+        guard let path = voiceDraft.clipPath else { return }
+        transcribingClip = true
+        defer { transcribingClip = false }
+        do {
+            voiceDraft.transcript = try await workspace.transcribeClip(
+                at: URL(fileURLWithPath: path), language: voiceDraft.language)
+            workspace.voiceError = nil
+        } catch {
+            workspace.voiceError = error.localizedDescription
+        }
+    }
+
+    /// The same, for the reference clip on the audio page.
+    private func transcribeIntoAudioReference() async {
+        guard let path = workspace.audioReferencePath else { return }
+        transcribingClip = true
+        defer { transcribingClip = false }
+        do {
+            workspace.audioReferenceTranscript = try await workspace.transcribeClip(
+                at: URL(fileURLWithPath: path), language: workspace.audioLanguage)
+            workspace.error = nil
+        } catch {
+            workspace.error = error.localizedDescription
+        }
     }
 
     private func chooseVoiceClip() {

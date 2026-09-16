@@ -103,7 +103,20 @@ class ModelPackageTests(unittest.TestCase):
         self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'files_verified')
 
     def test_preflight_rejects_changed_bytes_even_when_size_is_unchanged(self):
+        """A same-size rewrite is caught, and the cache has to be older than the rewrite.
+
+        The stamp records whole seconds on purpose - nothing finer survives the copy the kit
+        ships - so a rewrite in the very same second as the verification is indistinguishable
+        from it. Moving the recorded time back models the real case: a package verified, then a
+        file replaced later.
+        """
         installed = packages.import_folder(self.manifest, self.source, self.library)
+        receipt = self.library / '.studiohub' / 'installed.json'
+        index = json.loads(receipt.read_text())
+        recorded = index['test-model']['files']['weights.safetensors']
+        recorded['mtime_s'] -= 5
+        recorded['ctime_s'] -= 5
+        receipt.write_text(json.dumps(index, sort_keys=True))
         (installed / 'weights.safetensors').write_bytes(b'wrong! weights')
         report = packages.preflight(self.manifest, self.library)
         self.assertEqual(report['state'], 'invalid')
@@ -387,6 +400,14 @@ class ModelPackageTests(unittest.TestCase):
 
     def test_full_verify_refreshes_receipt_after_valid_file_touch(self):
         installed = packages.import_folder(self.manifest, self.source, self.library)
+        # The same bytes written again: the cache notices the later write and refuses, and the
+        # explicit Verify is what clears it - which is the point of having both.
+        receipt = self.library / '.studiohub' / 'installed.json'
+        index = json.loads(receipt.read_text())
+        recorded = index['test-model']['files']['weights.safetensors']
+        recorded['mtime_s'] -= 5
+        recorded['ctime_s'] -= 5
+        receipt.write_text(json.dumps(index, sort_keys=True))
         (installed / 'weights.safetensors').write_bytes(self.files['weights.safetensors'])
         self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'invalid')
         report = packages.verify_installed(self.manifest, self.library)
