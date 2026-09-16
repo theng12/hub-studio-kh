@@ -71,7 +71,12 @@ fi
 echo
 echo "===== 6b. WHAT THE APP SEES — models and packages ====="
 if [ -f "$DATA/app-preferences.json" ]; then
-  M=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('modelsPath',''))" "$DATA/app-preferences.json" 2>/dev/null)
+  # The app's own python: macOS 14 has no system python3, and asking for one pops a
+  # developer-tools prompt that has nothing to do with this app.
+  M=$("$RES/runtimes/voice/bin/python3" -c '
+import json,sys
+print(json.load(open(sys.argv[1])).get("modelsPath",""))
+' "$DATA/app-preferences.json" 2>/dev/null)
 else
   M=""
 fi
@@ -86,11 +91,11 @@ if [ -n "$M" ] && [ -d "$M" ]; then
   echo
   echo "  the app's own index of installed packages:"
   if [ -f "$M/.studiohub/installed.json" ]; then
-    python3 -c "
+    "$RES/runtimes/voice/bin/python3" -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-print('    ', len(d), 'entries:', ', '.join(sorted(d)))
-" "$M/.studiohub/installed.json" 2>&1 | sed 's/^/  /'
+print("    ", len(d), "entries:", ", ".join(sorted(d)))
+' "$M/.studiohub/installed.json" 2>&1 | sed 's/^/  /'
   else
     echo "    MISSING: $M/.studiohub/installed.json — without it every package reads as not installed"
   fi

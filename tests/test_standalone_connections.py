@@ -747,7 +747,33 @@ class StubVoiceWorker:
         self.seen: list[str] = []
         self.has_catalog = catalog
         self.machine = machine
+        # A real, stateful voice library: the voice routes are the point of this stub, and an
+        # app that adds a voice must be able to see it afterwards.
+        self.voices: dict[str, dict] = {}
+        self.voice_edits: list[tuple[str, bytes]] = []
+        self.voice_deletes: list[str] = []
+        self.raw_bodies: list[str] = []
+        # The clip bytes this worker stored, keyed by voice id.
+        self.voice_audio: dict[str, bytes] = {}
         outer = self
+
+        def voice_payload() -> dict:
+            return {"voices": [dict(row) for row in outer.voices.values()]}
+
+        def new_voice(name: str, transcript: str) -> dict:
+            identifier = f"voice-{len(outer.voices) + 1}"
+            row = {
+                "id": identifier, "name": name, "language": "en", "gender": "n",
+                "notes": "", "license": "self-owned", "source_url": None,
+                "permission_acknowledged": True, "has_transcript": bool(transcript),
+                "transcript": transcript, "audio_extension": ".wav",
+                "duration_seconds": 1.0, "sample_rate": 16000, "channels": 1,
+                "fleet_managed": False, "audio_sha256": VOICE_SHA,
+                "created_at": time.time(), "audio_url": f"/api/voices/{identifier}/audio",
+                "audio_filename": "reference.wav",
+            }
+            outer.voices[identifier] = row
+            return row
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -776,6 +802,19 @@ class StubVoiceWorker:
                                             "transcript": "required"},
                     }] if outer.has_catalog else []
                     self._send(200, {"models": models})
+                elif self.path == "/api/voices":
+                    self._send(200, voice_payload())
+                elif self.path.startswith("/api/voices/") and self.path.endswith("/audio"):
+                    # The worker returns the clip it was given, so a test that plays a voice
+                    # hears the same bytes that were uploaded.
+                    identifier = self.path.split("/")[3] if len(self.path.split("/")) > 3 else ""
+                    stored = outer.voice_audio.get(identifier, VOICE_WAV)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(stored)))
+                    self.send_header("X-Content-SHA256", VOICE_SHA)
+                    self.end_headers()
+                    self.wfile.write(stored)
                 elif self.path.endswith("/audio"):
                     self.send_response(200)
                     self.send_header("Content-Type", "audio/wav")
@@ -810,8 +849,62 @@ class StubVoiceWorker:
                     })
                     self._send(200, {"job": {"id": "job-v1", "state": "queued",
                                              "worker_id": "voice-fixture"}})
+                elif self.path == "/api/voices":
+                    body = raw.decode("utf-8", "replace")
+                    outer.raw_bodies.append(body)
+                    # The fields arrive as multipart form parts; the transcript is the one
+                    # this test reads back, so it is what gets carried out of the body.
+                    transcript = ""
+                    marker = 'name="transcript"'
+                    if marker in body:
+                        after = body.split(marker, 1)[1]
+                        transcript = after.split("\r\n\r\n", 1)[-1].split("\r\n--", 1)[0].strip()
+                    name = "Imported voice"
+                    marker = 'name="name"'
+                    if marker in body:
+                        after = body.split(marker, 1)[1]
+                        name = after.split("\r\n\r\n", 1)[-1].split("\r\n--", 1)[0].strip()
+                    row = new_voice(name, transcript)
+                    # Store the file part so the audio route has something real to return.
+                    clip = b""
+                    if 'filename="' in body:
+                        head = body.split('filename="', 1)[1]
+                        if "\r\n\r\n" in head:
+                            clip = head.split("\r\n\r\n", 1)[1].split("\r\n--", 1)[0].encode(
+                                "utf-8", "surrogateescape")
+                    outer.voice_audio[row["id"]] = clip or VOICE_WAV
+                    self._send(201, {"voice": row})
                 else:
                     self._send(200, {"ok": True})
+
+            def do_PATCH(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                outer.seen.append(self.path)
+                outer.voice_edits.append((self.path, raw))
+                identifier = self.path.rsplit("/", 1)[-1]
+                if identifier in outer.voices:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                    outer.voices[identifier].update({
+                        key: value for key, value in payload.items()
+                        if key in ("name", "language", "gender", "license", "notes", "transcript")
+                    })
+                    if "transcript" in payload:
+                        outer.voices[identifier]["has_transcript"] = bool(payload["transcript"])
+                    self._send(200, {"voice": outer.voices[identifier]})
+                else:
+                    self._send(404, {"detail": "not found"})
+
+            def do_DELETE(self):
+                outer.seen.append(self.path)
+                identifier = self.path.rsplit("/", 1)[-1]
+                outer.voice_deletes.append(identifier)
+                removed = outer.voices.pop(identifier, None)
+                outer.voice_audio.pop(identifier, None)
+                if removed is None:
+                    self._send(404, {"detail": "not found"})
+                else:
+                    self._send(200, {"deleted": True})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -1687,6 +1780,106 @@ class FleetSubtitlePinTests(unittest.TestCase):
                 self.assertIn("routing must be", str(refused))
             finally:
                 hub.stop()
+
+
+class VoiceLibraryTests(unittest.TestCase):
+    """The voice library as the app uses it: add, list, edit, play, remove.
+
+    The library itself predates this app - it lives in the Voice worker and predates the
+    native shell - and the app is only a window onto it. What these tests pin is the seam:
+    that the Hub proxies the voice routes with the Hub token, that a clip uploaded through
+    the Hub is what the list returns, and that editing changes metadata without touching the
+    stored audio.
+    """
+
+    def setUp(self) -> None:
+        self.worker = StubVoiceWorker()
+        self.addCleanup(self.worker.stop)
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-voices-")
+        self.addCleanup(self.temporary.cleanup)
+        self.hub = HubProcess(
+            Path(self.temporary.name), "controller", "voice-library-token-0123456789",
+            workers=[{"id": "voice", "modality": "voice", "port": self.worker.port}])
+        self.hub.start()
+        self.addCleanup(self.hub.stop)
+
+    def test_the_app_can_add_list_edit_and_remove_a_voice(self) -> None:
+        # 1. Nothing saved yet, and the route answers rather than 404s: an empty library is a
+        #    valid state, not an error the operator has to interpret.
+        status, listing, _ = self.hub.request(
+            "/studio/voice/api/voices", token=self.hub.token)
+        self.assertEqual(status, 200, listing)
+        self.assertEqual(listing.get("voices"), [])
+
+        # 2. Add a voice with its clip and its transcript. The transcript is not optional for
+        #    a clone: without it the engine cannot align the audio to words.
+        audio = b"RIFF" + b"\0" * 2048
+        status, added, _ = self.hub.post_multipart(
+            "/studio/voice/api/voices",
+            {"name": "Narrator", "language": "en", "gender": "f", "license": "self-owned",
+             "notes": "studio booth", "transcript": "The exact words in the clip",
+             "permission_acknowledged": "true"},
+            {"audio": ("narrator.wav", audio, "audio/wav")},
+            token=self.hub.token)
+        self.assertEqual(status, 201, added)
+        voice = added["voice"]
+        self.assertEqual(voice["name"], "Narrator")
+        self.assertEqual(voice["transcript"], "The exact words in the clip")
+        self.assertTrue(voice["has_transcript"])
+        self.assertEqual(voice["license"], "self-owned")
+        # The clip was uploaded, not referenced: the worker received the multipart body with
+        # the file part in it, under the field name the voice route expects.
+        self.assertTrue(self.worker.voices)
+        self.assertIn('name="audio"; filename="narrator.wav"', self.worker.raw_bodies[-1])
+        self.assertIn('name="transcript"', self.worker.raw_bodies[-1])
+
+        # 3. It is in the list the app reads.
+        status, listing, _ = self.hub.request(
+            "/studio/voice/api/voices", token=self.hub.token)
+        self.assertEqual(status, 200)
+        self.assertEqual([row["name"] for row in listing["voices"]], ["Narrator"])
+
+        # 4. Play: the clip comes back through the Hub as bytes for the app to hear. Read with
+        #    the binary reader - the app uses its own binary path here, and parsing a WAV as
+        #    JSON fails on its magic number rather than on anything real.
+        # The worker reports `/api/voices/<id>/audio`; the app reaches it through the Hub's
+        # `/studio/voice` proxy, and so does this test - asking the Hub for the worker path
+        # directly is the mistake that produced a 404 here.
+        status, payload = self.hub.artifact(
+            f"/studio/voice{voice['audio_url']}", token=self.hub.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, audio)
+
+        # 5. Edit changes metadata only. The route is PATCH, which the Hub proxy has to carry.
+        status, edited, _ = self.hub.request(
+            f"/studio/voice/api/voices/{voice['id']}", method="PATCH", token=self.hub.token,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"name": "Narrator Two", "language": "en", "gender": "f",
+                             "license": "self-owned", "notes": "",
+                             "transcript": "Corrected words in the clip"}).encode())
+        self.assertEqual(status, 200, edited)
+        self.assertEqual(edited["voice"]["name"], "Narrator Two")
+        self.assertEqual(edited["voice"]["transcript"], "Corrected words in the clip")
+        self.assertEqual(self.worker.voice_edits[-1][0],
+                         f"/api/voices/{voice['id']}")
+
+        # 6. Remove it.
+        status, removed, _ = self.hub.request(
+            f"/studio/voice/api/voices/{voice['id']}", method="DELETE", token=self.hub.token)
+        self.assertEqual(status, 200, removed)
+        self.assertEqual(self.worker.voice_deletes, [voice["id"]])
+        status, listing, _ = self.hub.request(
+            "/studio/voice/api/voices", token=self.hub.token)
+        self.assertEqual(listing["voices"], [])
+
+    def test_a_fleet_credential_may_read_voices_but_not_create_them(self) -> None:
+        """Reading the library is how a controller shows what a node can clone; writing is
+        the node owner's business, like every other part of that Mac's state."""
+        from components.hub.backend.auth import fleet_path_allowed
+        self.assertTrue(fleet_path_allowed("GET", "/studio/voice/api/voices"))
+        self.assertTrue(fleet_path_allowed("PATCH", "/studio/voice/api/voices/voice-1"))
+        self.assertFalse(fleet_path_allowed("POST", "/studio/voice/api/voices"))
+        self.assertFalse(fleet_path_allowed("DELETE", "/studio/voice/api/voices/voice-1"))
 
 
 class MultiAddressTests(unittest.TestCase):

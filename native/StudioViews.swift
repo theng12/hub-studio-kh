@@ -34,6 +34,41 @@ enum HistoryTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// The fields one voice editor collects, for a voice that exists or one being added.
+struct VoiceDraft: Identifiable {
+    let id = UUID()
+    var voice: NativeVoice?
+    var name = ""
+    var language = "en"
+    var gender = "n"
+    /// Ownership defaults to "owned by me": every voice in this library is the operator's,
+    /// and the consent step is still shown rather than assumed.
+    var license = "self-owned"
+    var notes = ""
+    var transcript = ""
+    var clipPath: String?
+    var acknowledged = true
+
+    init() {}
+    init(voice: NativeVoice) {
+        self.voice = voice
+        name = voice.name
+        language = voice.language
+        gender = voice.gender
+        license = voice.license
+        notes = voice.notes
+        transcript = voice.transcript ?? ""
+        // Editing never replaces the audio, so no clip is carried in.
+        clipPath = nil
+        acknowledged = voice.permissionAcknowledged
+    }
+    func withClip(_ path: String) -> VoiceDraft {
+        var copy = self
+        copy.clipPath = path
+        return copy
+    }
+}
+
 struct StudioContent: View {
     @ObservedObject var studio: StudioController
     @ObservedObject var workspace: NativeWorkspaceStore
@@ -62,6 +97,12 @@ struct StudioContent: View {
     @State private var draftGigabytes = 50.0
     @State private var draftRetentionDays = 30
     @State private var draftCleanup = true
+    /// The voice being added or edited. A plain value plus a flag, so the sheet can bind to
+    /// each field directly.
+    @State private var voiceDraft = VoiceDraft()
+    @State private var showingVoiceEditor = false
+    /// The voice the operator asked to remove, held until they confirm.
+    @State private var pendingVoiceDeletion: NativeVoice?
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -122,6 +163,7 @@ struct StudioContent: View {
                 case .image: imageWorkspace
                 case .transcription: transcriptionWorkspace
                 case .models: modelsWorkspace
+                case .voices: voicesWorkspace
                 case .jobs: jobsWorkspace
                 case .connections: connections
                 case .settings: settings
@@ -751,6 +793,263 @@ struct StudioContent: View {
     }
     private var transcriptionActivity: some View {
         HStack(spacing: 12) { ProgressView().controlSize(.small); VStack(alignment: .leading, spacing: 4) { Text("Transcribing recording").font(.headline); Text("You can use other pages while this finishes.").foregroundStyle(.secondary).font(.callout) }; Spacer() }
+    }
+
+    // MARK: - Voices
+
+    /// The saved reference clips, which is what makes a clone repeatable.
+    ///
+    /// The library lives in the Voice worker and predates this app; the app had a per-job
+    /// reference field and no way to keep, name, edit or reuse a clip. This is that screen.
+    private var voicesWorkspace: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            heading("Voices", "Saved reference clips. Pick one when cloning so the same voice comes back every time.")
+                .padding(28)
+            HStack(spacing: 10) {
+                Button("Add Voice…") { voiceDraft = VoiceDraft(); showingVoiceEditor = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!connected || workspace.savingVoice)
+                Button("Import Folder…") { chooseVoiceImportFolder() }
+                    .disabled(!connected || workspace.savingVoice)
+                Button("Refresh") { Task { await workspace.refreshVoices() } }
+                    .disabled(!connected)
+                if workspace.savingVoice { ProgressView().controlSize(.small) }
+                Spacer()
+            }.padding(.horizontal, 28)
+            if let note = workspace.voiceNote {
+                Text(note).font(.callout).foregroundStyle(.secondary).padding(.horizontal, 28).padding(.top, 8)
+            }
+            if let error = workspace.voiceError {
+                Text(error).font(.callout).foregroundStyle(.red).padding(.horizontal, 28).padding(.top, 8)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider().padding(.top, 14)
+            if !connected {
+                empty("Not connected", "Start local services to see and save voices.", symbol: "person.wave.2")
+            } else if workspace.voices.isEmpty {
+                empty("No saved voices", "Add a reference clip and its transcript, or import a folder you already have. A clone needs both.", symbol: "person.wave.2")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(workspace.voices) { voice in
+                            voiceRow(voice)
+                            Divider()
+                        }
+                    }.padding(.horizontal, 28).padding(.bottom, 28)
+                }
+            }
+        }
+        .task(id: connected) { if connected { await workspace.refreshVoices() } }
+        .sheet(isPresented: $showingVoiceEditor) { voiceEditor }
+    }
+
+    private func voiceRow(_ voice: NativeVoice) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: voice.readyForCloning ? "waveform.circle.fill" : "exclamationmark.circle")
+                .foregroundStyle(voice.readyForCloning ? Color.green : Color.orange)
+                .font(.title3)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(voice.name).fontWeight(.medium)
+                    Text(voice.language).font(.caption).foregroundStyle(.secondary)
+                    Text(voice.genderLabel).font(.caption).foregroundStyle(.secondary)
+                    if voice.fleetManaged {
+                        Text("fleet").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15)).clipShape(Capsule())
+                    }
+                }
+                Text(voice.readyForCloning
+                     ? "Transcript saved · \(voice.durationLabel)"
+                     : "No transcript yet — a clone cannot align the audio without one")
+                    .font(.caption)
+                    .foregroundStyle(voice.readyForCloning ? Color.secondary : Color.orange)
+                if !voice.notes.isEmpty {
+                    Text(voice.notes).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            Spacer()
+            Button("Play") { Task { await playVoice(voice) } }
+            Button("Use") {
+                Task {
+                    if await workspace.useVoice(voice) { studio.select(.audio) }
+                }
+            }
+                .disabled(!voice.readyForCloning)
+                .help("Use this voice for the next clone")
+            Button("Edit…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }
+            Button("Remove") { pendingVoiceDeletion = voice }
+                .disabled(workspace.savingVoice)
+        }.padding(.vertical, 10)
+        .confirmationDialog("Remove \(voice.name)?",
+                            isPresented: Binding(get: { pendingVoiceDeletion?.id == voice.id },
+                                                 set: { if !$0 { pendingVoiceDeletion = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove Voice", role: .destructive) {
+                let target = voice
+                pendingVoiceDeletion = nil
+                Task { _ = await workspace.deleteVoice(target) }
+            }
+            Button("Keep", role: .cancel) { pendingVoiceDeletion = nil }
+        } message: {
+            Text("The saved clip and its transcript are deleted from this Mac. Generated audio is not affected.")
+        }
+    }
+
+    /// One editor for both adding and editing, because they collect the same fields and the
+    /// only real difference is that editing cannot replace the audio.
+    @ViewBuilder private var voiceEditor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(voiceDraft.voice == nil ? "Add a voice" : "Edit \(voiceDraft.voice!.name)")
+                .font(.title2.weight(.semibold))
+            Text("A clone matches the clip to the transcript, so the transcript must be exactly what the clip says. A mismatch produces a wrong-sounding voice, which is why both are required.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Form {
+                TextField("Name", text: $voiceDraft.name)
+                Picker("Language", selection: $voiceDraft.language) {
+                    ForEach(NativeVoice.languageOptions, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Voice type", selection: $voiceDraft.gender) {
+                    Text("Neutral").tag("n"); Text("Male").tag("m"); Text("Female").tag("f")
+                }
+                Picker("Rights", selection: $voiceDraft.license) {
+                    ForEach(NativeVoice.licenseOptions, id: \.id) { Text($0.label).tag($0.id) }
+                }
+                TextField("Notes (optional)", text: $voiceDraft.notes)
+                if voiceDraft.voice == nil {
+                    LabeledContent("Reference clip") {
+                        HStack(spacing: 8) {
+                            Button("Choose Clip…") { chooseVoiceClip() }
+                            Text(voiceDraft.clipPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Transcript").font(.callout)
+                    TextEditor(text: $voiceDraft.transcript)
+                        .font(.body).frame(height: 70)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                    Text("The exact words spoken in the clip, word for word.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("I have the rights to clone this voice", isOn: $voiceDraft.acknowledged)
+            }.formStyle(.grouped)
+            HStack {
+                Button("Cancel") { showingVoiceEditor = false }
+                Spacer()
+                Button(voiceDraft.voice == nil ? "Save Voice" : "Save Changes") {
+                    let editing = voiceDraft.voice
+                    showingVoiceEditor = false
+                    Task {
+                        if let editing {
+                            _ = await workspace.updateVoice(editing, name: voiceDraft.name, language: voiceDraft.language,
+                                                            gender: voiceDraft.gender, license: voiceDraft.license,
+                                                            notes: voiceDraft.notes, transcript: voiceDraft.transcript)
+                        } else if let path = voiceDraft.clipPath {
+                            _ = await workspace.addVoice(name: voiceDraft.name, language: voiceDraft.language,
+                                                         gender: voiceDraft.gender, license: voiceDraft.license,
+                                                         notes: voiceDraft.notes, transcript: voiceDraft.transcript,
+                                                         clip: URL(fileURLWithPath: path),
+                                                         acknowledged: voiceDraft.acknowledged)
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(voiceDraft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || (voiceDraft.voice == nil && voiceDraft.clipPath == nil)
+                          || (voiceDraft.voice == nil && !voiceDraft.acknowledged)
+                          || voiceDraft.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(24).frame(width: 560, height: 620)
+    }
+
+    private func chooseVoiceClip() {
+        let panel = NSOpenPanel(); panel.title = "Choose a reference clip"
+        panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url { voiceDraft.clipPath = url.path }
+    }
+
+    /// Import voices that already exist as clip-plus-text pairs.
+    ///
+    /// Written for the Voice Studio library the owner already has: one folder per voice
+    /// containing a reference clip and, usually, a transcript. Each pair is added through the
+    /// same validated path as a hand-entered voice, so an import cannot put something in the
+    /// library that the library itself would have refused.
+    private func chooseVoiceImportFolder() {
+        let panel = NSOpenPanel(); panel.title = "Choose a folder of voices"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await importVoiceFolder(url) }
+        }
+    }
+
+    private func importVoiceFolder(_ folder: URL) async {
+        let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"]
+        let transcriptExtensions: Set<String> = ["txt", "text", "srt", "vtt", "md"]
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey],
+                                                             options: [.skipsHiddenFiles]) else {
+            workspace.voiceError = "That folder could not be read."
+            return
+        }
+        var clips: [(name: String, clip: URL, transcript: String)] = []
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            var clip: URL?
+            var text = ""
+            let candidates = isDirectory ? (try? manager.contentsOfDirectory(at: entry, includingPropertiesForKeys: nil,
+                                                                             options: [.skipsHiddenFiles])) ?? [] : [entry]
+            for item in candidates {
+                let ext = item.pathExtension.lowercased()
+                if audioExtensions.contains(ext), clip == nil { clip = item }
+                if transcriptExtensions.contains(ext),
+                   let body = try? String(contentsOf: item, encoding: .utf8) {
+                    text = Self.plainTranscript(body)
+                }
+            }
+            guard let clip else { continue }
+            let name = isDirectory ? entry.lastPathComponent
+                : entry.deletingPathExtension().lastPathComponent
+            clips.append((name: name, clip: clip, transcript: text))
+        }
+        guard !clips.isEmpty else {
+            workspace.voiceError = "No reference clips were found in that folder. Each voice needs a clip; a transcript beside it is used when present."
+            return
+        }
+        var added = 0, skipped = 0
+        for item in clips {
+            guard !workspace.voices.contains(where: { $0.name.caseInsensitiveCompare(item.name) == .orderedSame })
+            else { skipped += 1; continue }
+            guard !item.transcript.isEmpty else { skipped += 1; continue }
+            let ok = await workspace.addVoice(name: item.name, language: "en", gender: "n",
+                                              license: "self-owned", notes: "Imported from \(folder.lastPathComponent)",
+                                              transcript: item.transcript, clip: item.clip, acknowledged: true)
+            if ok { added += 1 } else { skipped += 1 }
+        }
+        workspace.voiceNote = "Imported \(added) voice\(added == 1 ? "" : "s")"
+            + (skipped > 0 ? "; skipped \(skipped) (need a transcript, or already saved)." : ".")
+    }
+
+    /// Strip timing lines so an imported .srt or .vtt is usable as a transcript.
+    private static func plainTranscript(_ body: String) -> String {
+        let lines = body.components(separatedBy: .newlines)
+        var kept: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if trimmed == "WEBVTT" { continue }
+            if trimmed.contains("-->") { continue }
+            if Int(trimmed) != nil { continue }
+            kept.append(trimmed)
+        }
+        return kept.joined(separator: " ")
+    }
+
+    private func playVoice(_ voice: NativeVoice) async {
+        do { try player.play(await workspace.voiceData(for: voice)) }
+        catch { workspace.voiceError = error.localizedDescription }
     }
 
     private var settings: some View {

@@ -863,7 +863,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return worker_id, "/" + "/".join(segments[1:])
 
     @app.api_route("/studio/{modality}/{path:path}",
-                   methods=["GET", "POST", "PUT", "DELETE"])
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def studio_proxy(modality: str, path: str, request: Request) -> Response:
         """Forward one fleet request to this Mac's own worker for that studio.
 

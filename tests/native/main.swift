@@ -95,7 +95,10 @@ for token in ["", "short", String(repeating: "a", count: 257), String(repeating:
 }
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
-require(StudioPage.management == [.models, .jobs, .connections, .settings], "central management navigation")
+// Voices sits beside Models: both are libraries the operator maintains, as opposed to the
+// per-workspace pages where work is created.
+require(StudioPage.management == [.models, .voices, .jobs, .connections, .settings],
+        "central management navigation includes the voice library")
 let firstLock = try InstanceLock(directory: state)
 do { _ = try InstanceLock(directory: state); fatalError("duplicate app owns same state") } catch {}
 withExtendedLifetime(firstLock) {}

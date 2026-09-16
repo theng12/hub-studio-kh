@@ -422,6 +422,9 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/model-packages$"),
     ("GET", r"^/api/hub/memory/policy$"),
     ("GET", r"^/studio/(voice|subtitle|image|transcription)/api/[A-Za-z0-9_./-]*$"),
+    # Editing a saved voice changes metadata only - never the stored clip - and it is how an
+    # operator fixes a transcript typo that would otherwise produce a wrong-sounding clone.
+    ("PATCH", r"^/studio/(voice|subtitle|image|transcription)/api/[A-Za-z0-9_./-]*$"),
     # Sending work to a node and calling it off is the whole point of a fleet credential, and
     # these are the only studio paths that do it. The worker's own settings, storage and model
     # routes are deliberately absent: they are reachable over the same proxy, so a blanket

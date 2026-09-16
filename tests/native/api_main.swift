@@ -21,6 +21,9 @@ final class FixtureProtocol: URLProtocol {
     static var uncertainTranscription = false
     static var corruptImage = false
     static var corruptAudio = false
+    static var voiceListCalls = 0
+    static var voiceAudioCalls = 0
+    static var voiceDeleteCalls = 0
     static var audioAckPaths: [String] = []
     static var audioAckRejects = false
     static var uncertainImage = false
@@ -229,6 +232,15 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
+        case ("GET", "/studio/voice/api/voices"):
+            Self.lock.lock(); Self.voiceListCalls += 1; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"voices":[{"id":"voice-1","name":"Narrator","language":"en","gender":"f","notes":"booth","license":"self-owned","source_url":null,"permission_acknowledged":true,"has_transcript":true,"transcript":"The exact words in the clip","audio_extension":".wav","duration_seconds":12.5,"sample_rate":24000,"channels":1,"fleet_managed":false,"audio_sha256":"ab","created_at":1.0,"audio_url":"/api/voices/voice-1/audio","audio_filename":"reference.wav"},{"id":"voice-2","name":"No words yet","language":"en","gender":"n","notes":"","license":"self-owned","source_url":null,"permission_acknowledged":true,"has_transcript":false,"transcript":"","audio_extension":".wav","duration_seconds":4.0,"sample_rate":24000,"channels":1,"fleet_managed":false,"audio_sha256":"cd","created_at":2.0,"audio_url":"/api/voices/voice-2/audio","audio_filename":"reference.wav"}]}"#.utf8))
+        case ("GET", "/studio/voice/api/voices/voice-1/audio"):
+            Self.lock.lock(); Self.voiceAudioCalls += 1; Self.lock.unlock()
+            result = (200, "audio/wav", Self.wav)
+        case ("DELETE", "/studio/voice/api/voices/voice-2"):
+            Self.lock.lock(); Self.voiceDeleteCalls += 1; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"deleted":true}"#.utf8))
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
@@ -509,6 +521,49 @@ struct NativeAPITests {
                 fatalError("a non-private controller address was accepted: \(bad)")
             } catch {}
         }
+
+        // The voice library: the app is a window onto the worker's store, so what it decodes
+        // has to carry the transcript - a clone without one cannot align audio to words.
+        await store.refreshVoices()
+        require(FixtureProtocol.voiceListCalls >= 1, "the voice library must be read from the worker")
+        require(store.voices.count == 2, "every saved voice must be listed")
+        let narrator = store.voices.first { $0.id == "voice-1" }!
+        require(narrator.transcript == "The exact words in the clip", "the transcript must reach the app")
+        require(narrator.readyForCloning, "a voice with a transcript is ready to clone from")
+        require(narrator.durationLabel == "12.5 s", "the clip length must be shown: \(narrator.durationLabel)")
+        require(narrator.license == "self-owned", "the stored licence must be shown")
+        let unfinished = store.voices.first { $0.id == "voice-2" }!
+        require(!unfinished.readyForCloning, "a voice with no transcript is not ready to clone from")
+        require(store.voices.first?.name == "Narrator", "voices must be listed by name")
+
+        // Playing a saved voice fetches the clip through the Hub's studio proxy. The worker
+        // reports `/api/voices/<id>/audio`; asking the Hub for that path directly returns 404,
+        // which is the mistake this pins.
+        let clip = try await store.voiceData(for: narrator)
+        require(clip == FixtureProtocol.wav, "the saved clip must come back as bytes")
+        require(FixtureProtocol.voiceAudioCalls == 1, "exactly one clip fetch")
+
+        // Using a saved voice fills the reference fields, including the transcript that makes
+        // the clone possible.
+        let usedSaved = await store.useVoice(narrator)
+        require(usedSaved, "a voice with a transcript must be usable")
+        require(store.audioReferenceTranscript == "The exact words in the clip",
+                "using a voice must carry its transcript")
+        // The clip is fetched into the app's own folder, because staging reads from disk: a
+        // saved voice lives in the worker's store, not here.
+        require(store.audioReferencePath?.contains("voice-voice-1.wav") == true,
+                "using a voice must stage its clip locally: \(store.audioReferencePath ?? "nil")")
+        require(FileManager.default.fileExists(atPath: store.audioReferencePath ?? ""),
+                "the staged reference must exist on disk")
+        let usedUnfinished = await store.useVoice(unfinished)
+        require(!usedUnfinished,
+                "a voice with no transcript must not be offered for cloning")
+        require(store.voiceError?.contains("no transcript") == true,
+                "a voice that cannot clone must say why: \(store.voiceError ?? "nil")")
+
+        // Removing a saved voice reaches the worker.
+        _ = await store.deleteVoice(unfinished)
+        require(FixtureProtocol.voiceDeleteCalls == 1, "removing a voice must reach the worker")
 
         // Local storage: the limits come from the Hub, and the bytes cleanup may not touch
         // are shown beside them - including on a machine that is over its limit.

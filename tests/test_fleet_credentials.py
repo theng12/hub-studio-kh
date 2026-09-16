@@ -91,6 +91,14 @@ class FleetPermissionTests(unittest.TestCase):
                 self.assertFalse(fleet_path_allowed(method, path),
                                  f"a fleet credential must not reach {method} {path}")
 
+    def test_editing_a_saved_voice_is_allowed_but_creating_one_is_not(self) -> None:
+        """A voice's metadata is the node owner's, but a transcript typo has to be fixable
+        from the controller, so PATCH is narrower than POST/DELETE on the same path."""
+        self.assertTrue(fleet_path_allowed("GET", "/studio/voice/api/voices"))
+        self.assertTrue(fleet_path_allowed("PATCH", "/studio/voice/api/voices/voice-1"))
+        self.assertFalse(fleet_path_allowed("POST", "/studio/voice/api/voices"))
+        self.assertFalse(fleet_path_allowed("DELETE", "/studio/voice/api/voices/voice-1"))
+
     def test_the_method_is_part_of_the_permission(self) -> None:
         # Reading the memory policy is useful for routing; changing it is not the controller's.
         self.assertTrue(fleet_path_allowed("GET", "/api/hub/memory/policy"))
@@ -112,7 +120,7 @@ class FleetPermissionTests(unittest.TestCase):
         # A pattern that is not anchored would match anywhere in the path.
         for method, pattern in FLEET_ALLOWED:
             with self.subTest(pattern=pattern):
-                self.assertIn(method, {"GET", "POST", "DELETE", "PUT"})
+                self.assertIn(method, {"GET", "POST", "DELETE", "PUT", "PATCH"})
                 self.assertTrue(pattern.startswith("^"), pattern)
                 self.assertTrue(pattern.endswith("$"), pattern)
 

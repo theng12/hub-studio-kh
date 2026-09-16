@@ -339,6 +339,57 @@ struct NativeDownload: Identifiable, Equatable {
     let error: String?
 }
 
+/// One saved reference clip in the voice library.
+///
+/// The worker owns this store (`components/voice/app/backend/voices.py`) and it is
+/// engine-agnostic: one clip works with any cloning engine, and the transcript that
+/// accompanies it is what lets a clone align audio to words. The app is a window onto it,
+/// never a second copy of the truth.
+struct NativeVoice: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let language: String
+    let gender: String
+    let notes: String
+    let license: String
+    let sourceUrl: String?
+    let permissionAcknowledged: Bool
+    /// The worker reports only whether a transcript exists on disk; the text itself is
+    /// fetched with the voice so an operator can read and correct it.
+    let hasTranscript: Bool
+    let transcript: String?
+    let audioExtension: String
+    let durationSeconds: Double?
+    let sampleRate: Int?
+    let channels: Int?
+    let fleetManaged: Bool
+    let audioSha256: String?
+    let createdAt: Double?
+    let audioUrl: String?
+
+    var hasWords: Bool { !(transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// A clone cannot align audio without words, so this flag is what decides whether a
+    /// saved voice is usable for the Base tiers rather than a hint in a notes field.
+    var readyForCloning: Bool { hasTranscript }
+    var durationLabel: String {
+        guard let durationSeconds, durationSeconds > 0 else { return "—" }
+        return durationSeconds >= 60
+            ? String(format: "%.1f min", durationSeconds / 60)
+            : String(format: "%.1f s", durationSeconds)
+    }
+    var genderLabel: String {
+        switch gender { case "m": return "Male"; case "f": return "Female"; default: return "Neutral" }
+    }
+    /// The library's licence vocabulary, spelled the way the operator reads it.
+    static let licenseOptions: [(id: String, label: String)] = [
+        ("self-owned", "Owned by me"),
+        ("public-domain", "Public domain"),
+        ("permission", "Used with permission"),
+        ("unknown", "Unknown"),
+    ]
+    static let languageOptions = ["en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"]
+}
+
 struct NativeTranscript: Codable, Equatable {
     let text: String
     let srt: String
@@ -421,6 +472,15 @@ final class NativeWorkspaceStore: ObservableObject {
 
     @Published private(set) var downloads: [NativeDownload] = []
     @Published private(set) var audioSpeakers: [String] = []
+    /// The saved voices on this Mac, read from the Voice worker's library.
+    @Published private(set) var voices: [NativeVoice] = []
+    /// Set while a voice is being added, edited or removed, so a button can show it is working
+    /// and cannot be pressed twice.
+    @Published private(set) var savingVoice = false
+    /// The result of the last voice action, shown beside the list.
+    @Published var voiceNote: String?
+    /// A voice action that failed, shown where the action was taken.
+    @Published var voiceError: String?
     @Published var audioText = "" { didSet { scheduleSave() } }
     @Published var audioModel = qwenCustomVoice { didSet { scheduleSave() } }
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
@@ -875,6 +935,186 @@ final class NativeWorkspaceStore: ObservableObject {
             if !receipt.ok { throw NativeAPIError.message("rejected") }
         } catch {
             throw NativeAPIError.message("The image was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
+        }
+    }
+
+    /// Read the saved voices from this Mac's Voice worker.
+    ///
+    /// A failure here must not break the rest of the workspace: an older worker without the
+    /// voice library leaves the list empty and says so, rather than making the Voice page
+    /// unusable for generation.
+    func refreshVoices() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let value: VoiceListResponse = try await get(["studio", "voice", "api", "voices"])
+            guard connectionID == requestConnection else { return }
+            voices = value.voices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            voiceError = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            voices = []
+            voiceError = "The voice library is unavailable on this build of the local engine."
+        }
+    }
+
+    /// Add one voice from a reference clip on this Mac.
+    ///
+    /// The clip and its transcript are the whole point: the worker stores both, and a clone
+    /// later matches the audio against those words. The licence defaults to self-owned, and
+    /// the consent flag is passed through unchanged - the operator still confirms it.
+    func addVoice(name: String, language: String, gender: String, license: String,
+                  notes: String, transcript: String, clip: URL, acknowledged: Bool) async -> Bool {
+        guard let requestConnection = connectionID, let directory = dataDirectory else { return false }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { voiceError = "Give the voice a name."; return false }
+        guard FileManager.default.fileExists(atPath: clip.path) else {
+            voiceError = "That clip is no longer on disk. Choose it again."; return false
+        }
+        guard acknowledged else {
+            voiceError = "Confirm you have the rights to clone this voice."; return false
+        }
+        savingVoice = true
+        defer { if connectionID == requestConnection { savingVoice = false } }
+        let boundary = "StudioHub-\(UUID().uuidString)"
+        let fields = [
+            "name": trimmedName,
+            "language": language,
+            "gender": gender,
+            "license": license,
+            "notes": notes,
+            "transcript": transcript,
+            "permission_acknowledged": acknowledged ? "true" : "false",
+        ]
+        do {
+            let upload = try await Task.detached(priority: .userInitiated) {
+                try Self.makeMultipartFile(boundary: boundary, file: clip, fields: fields,
+                                           dataDirectory: directory, fileField: "audio")
+            }.value
+            defer { try? FileManager.default.removeItem(at: upload) }
+            guard connectionID == requestConnection else { return false }
+            var request = try makeRequest(["studio", "voice", "api", "voices"], method: "POST")
+            request.timeoutInterval = 300
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            let response: VoiceResponse = try await performUpload(request, fromFile: upload)
+            guard connectionID == requestConnection else { return false }
+            await refreshVoices()
+            voiceNote = "Saved \(response.voice.name)."
+            voiceError = nil
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            voiceError = Self.actionable(error, action: "Save the voice")
+            return false
+        }
+    }
+
+    /// Change a saved voice's details, including its transcript.
+    ///
+    /// The audio file is never touched - the worker updates only the metadata and the
+    /// transcript - so correcting a typo in the words cannot damage the stored clip.
+    func updateVoice(_ voice: NativeVoice, name: String, language: String, gender: String,
+                     license: String, notes: String, transcript: String) async -> Bool {
+        guard let requestConnection = connectionID else { return false }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { voiceError = "Give the voice a name."; return false }
+        savingVoice = true
+        defer { if connectionID == requestConnection { savingVoice = false } }
+        do {
+            let body = VoiceEdit(name: trimmedName, language: language, gender: gender,
+                                 license: license, notes: notes, transcript: transcript)
+            let _: VoiceResponse = try await sendJSON(
+                ["studio", "voice", "api", "voices", voice.id], method: "PATCH", body: body)
+            guard connectionID == requestConnection else { return false }
+            await refreshVoices()
+            voiceNote = "Updated \(trimmedName)."
+            voiceError = nil
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            voiceError = Self.actionable(error, action: "Update the voice")
+            return false
+        }
+    }
+
+    /// Remove a saved voice. The worker refuses while a fleet controller manages it, and that
+    /// refusal is reported rather than swallowed.
+    func deleteVoice(_ voice: NativeVoice) async -> Bool {
+        guard let requestConnection = connectionID else { return false }
+        savingVoice = true
+        defer { if connectionID == requestConnection { savingVoice = false } }
+        do {
+            let _: VoiceDeleteResponse = try await sendEmpty(
+                ["studio", "voice", "api", "voices", voice.id], method: "DELETE")
+            guard connectionID == requestConnection else { return false }
+            await refreshVoices()
+            voiceNote = "Removed \(voice.name)."
+            voiceError = nil
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            voiceError = Self.actionable(error, action: "Remove the voice")
+            return false
+        }
+    }
+
+    /// Fetch one saved voice's reference clip so it can be played in the app.
+    ///
+    /// This is a read of the operator's own file, so it is not hash-checked against a job
+    /// receipt: nothing here is a generation result, and a clip that fails to play should say
+    /// so rather than pretend to be a verified artifact.
+    func voiceData(for voice: NativeVoice) async throws -> Data {
+        guard let requestConnection = connectionID else {
+            throw NativeAPIError.message("Start the local services before playing a voice.")
+        }
+        guard let url = voice.audioUrl else {
+            throw NativeAPIError.message("This voice has no reference clip recorded.")
+        }
+        // The worker reports its own path (`/api/voices/<id>/audio`), but the app talks to the
+        // Hub, and the Hub reaches a Studio at `/studio/<modality>/<path>`. Requesting the
+        // worker path directly asks the Hub for a route it does not have - which is exactly the
+        // 404 this produced the first time.
+        let components = url.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+        guard components.first == "api" else {
+            throw NativeAPIError.message("The voice clip address is not a local one.")
+        }
+        let data = try await performData(makeRequest(["studio", "voice"] + components))
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The connection changed while the clip was loading.")
+        }
+        return data
+    }
+
+    /// Point the next generation at a saved voice instead of a loose file.
+    ///
+    /// Staging reads the clip from disk, and a saved voice lives in the worker's store, not in
+    /// the app's own folder - so the clip is fetched once and written here. Setting the
+    /// reference to a path that does not exist would make the next Prepare Voice fail with
+    /// "the clip is no longer at that location", which reads like the operator's mistake.
+    @discardableResult
+    func useVoice(_ voice: NativeVoice) async -> Bool {
+        guard voice.readyForCloning else {
+            voiceNote = nil
+            voiceError = "\(voice.name) has no transcript yet. Add one before cloning, or the clone cannot align the audio."
+            return false
+        }
+        do {
+            let data = try await voiceData(for: voice)
+            guard let directory = dataDirectory else {
+                throw NativeAPIError.message("The app data directory is unavailable.")
+            }
+            let folder = directory.appendingPathComponent("Voices", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            let clip = folder.appendingPathComponent("voice-\(voice.id)\(voice.audioExtension)")
+            try data.write(to: clip, options: .atomic)
+            audioReferencePath = clip.path
+            audioReferenceTranscript = voice.transcript ?? ""
+            voiceNote = "Reference set to \(voice.name). Press Prepare Voice, then generate."
+            voiceError = nil
+            return true
+        } catch {
+            voiceError = error.localizedDescription
+            return false
         }
     }
 
@@ -2198,6 +2438,17 @@ private struct PendingTranscription: Codable {
     }
 }
 private struct HubTranscriptionSubmit: Decodable { let batchId: String }
+private struct VoiceListResponse: Decodable { let voices: [NativeVoice] }
+private struct VoiceResponse: Decodable { let voice: NativeVoice }
+private struct VoiceDeleteResponse: Decodable { let deleted: Bool? }
+private struct VoiceEdit: Encodable {
+    let name: String
+    let language: String
+    let gender: String
+    let license: String
+    let notes: String
+    let transcript: String
+}
 private struct HubTranscriptionList: Decodable { let batches: [HubTranscriptionSummary] }
 private struct HubTranscriptionSummary: Decodable {
     let id: String

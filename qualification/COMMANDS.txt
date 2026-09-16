@@ -68,6 +68,27 @@ Also useful, the two lists side by side:
 
 
 ------------------------------------------------------------------
+2c. IMAGE OR SUBTITLE MODELS MISSING — the direct answer
+------------------------------------------------------------------
+This one uses only the app's own Python, so macOS cannot ask you to install
+anything:
+
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/why-models.sh"
+
+Read it in this order:
+  A. which build is installed - compare it with the line it prints for "newest"
+  B. the library the app is pointed at - does it exist?
+  C. what is actually in that folder, size and file count per model
+  D. each model checked against its record - OK/INCOMPLETE and a state word
+     like files_verified. Anything else is why the model does not appear.
+  E. any worker failure the Hub logged
+
+None of these scripts need Python installed. If macOS ever offers to install
+developer tools, that is a script asking for a system Python 3 that macOS 14
+does not have - it is never needed by the app.
+
+
+------------------------------------------------------------------
 3. Open the folder that holds the log
 ------------------------------------------------------------------
 
