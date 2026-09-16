@@ -126,9 +126,26 @@ class HubProcess:
                 self.process.kill()
         self.log.close()
 
+    def post_json(self, path: str, payload: dict, *, token: str | None = None):
+        body = json.dumps(payload).encode()
+        request = urllib.request.Request(f"{self.base}{path}", data=body, method="POST")
+        request.add_header("Accept", "application/json")
+        request.add_header("Content-Type", "application/json")
+        if token:
+            request.add_header("X-Hub-Token", token)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.status, json.loads(response.read() or b"null"), response
+        except urllib.error.HTTPError as error:
+            raw = error.read()
+            try:
+                return error.code, json.loads(raw or b"null"), error
+            except ValueError:
+                return error.code, {"raw": raw.decode(errors="replace")[:300]}, error
+
     def request(self, path: str, *, token: str | None = None, method: str = "GET",
-                headers: dict | None = None, use_bearer: bool = False):
-        request = urllib.request.Request(f"{self.base}{path}", method=method)
+                headers: dict | None = None, use_bearer: bool = False, body: bytes | None = None):
+        request = urllib.request.Request(f"{self.base}{path}", data=body, method=method)
         request.add_header("Accept", "application/json")
         if token:
             if use_bearer:
@@ -220,6 +237,43 @@ class IndependentClientTests(unittest.TestCase):
         self.assertEqual([row["service_id"] for row in capabilities["workers"]], ["voice"])
         self.assertEqual([row["physical_machine_id"] for row in capabilities["machines"]],
                          ["local"])
+
+    def test_a_node_can_join_a_controller_and_is_reported_honestly(self) -> None:
+        """One app is the controller; another joins it by address."""
+        # Joining is private surface, like everything else that is not health or version.
+        status, _, _ = self.hub.request("/api/hub/fleet/nodes", method="POST",
+                                        headers={"Content-Type": "application/json"},
+                                        body=json.dumps({"node_id": "n", "name": "N",
+                                                         "address": "http://127.0.0.1:9"}).encode())
+        self.assertEqual(status, 401)
+
+        joined = {"node_id": "studio-2", "name": "Studio 2",
+                  "address": "http://127.0.0.1:9"}
+        status, payload, _ = self.hub.post_json("/api/hub/fleet/nodes", joined, token=self.token)
+        self.assertEqual(status, 201, payload)
+        self.assertEqual(payload["node"]["id"], "studio-2")
+
+        status, listing, _ = self.hub.request("/api/hub/fleet/nodes", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual([row["id"] for row in listing["nodes"]], ["studio-2"])
+        # Nothing is listening on that address, and that must read as unreachable rather than
+        # as a node that joined successfully and is therefore available.
+        self.assertEqual(listing["nodes"][0]["state"], "unreachable")
+        self.assertEqual(listing["summary"]["reachable"], 0)
+
+        # A public address is refused: a join must never point this Mac at the internet.
+        status, refused, _ = self.hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "bad", "name": "Bad", "address": "http://93.184.216.34:80"},
+            token=self.token)
+        self.assertEqual(status, 400)
+        self.assertIn("private or Tailscale", refused["detail"])
+
+        status, _, _ = self.hub.request("/api/hub/fleet/nodes/studio-2", method="DELETE",
+                                        token=self.token)
+        self.assertEqual(status, 200)
+        _, listing, _ = self.hub.request("/api/hub/fleet/nodes", token=self.token)
+        self.assertEqual(listing["summary"]["total"], 0)
 
     def test_the_hub_address_is_loopback_only(self) -> None:
         """There is no cloud-domain assumption to make; the app talks to a private address."""

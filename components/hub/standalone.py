@@ -318,6 +318,31 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def subtitle_job(job_id: str) -> dict[str, Any]:
         return await worker_read("subtitle", f"/api/generate/transcribe/jobs/{job_id}")
 
+    # ── joined nodes ───────────────────────────────────────────────────────
+    # One app is the controller and the others join it by address. Every route is behind the
+    # Hub credential like the rest of the private surface: a join is not a public endpoint.
+
+    @app.get("/api/hub/fleet/nodes")
+    async def fleet_nodes() -> dict[str, Any]:
+        from .backend import fleet_nodes as fleet
+        return await fleet.inventory()
+
+    @app.post("/api/hub/fleet/nodes", status_code=201)
+    async def fleet_join(body: dict[str, Any]) -> dict[str, Any]:
+        from .backend import fleet_nodes as fleet
+        try:
+            node = fleet.join(body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"node": node}
+
+    @app.delete("/api/hub/fleet/nodes/{node_id}")
+    async def fleet_leave(node_id: str) -> dict[str, Any]:
+        from .backend import fleet_nodes as fleet
+        if not fleet.leave(node_id):
+            raise HTTPException(404, "unknown node")
+        return {"ok": True}
+
     # ── machine memory policy ──────────────────────────────────────────────
     # One route pair for every Studio's idle-release choice, so the app never has to know
     # which worker is which. FleetMemoryControl reads each Studio through the shared
