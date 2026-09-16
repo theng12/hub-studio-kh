@@ -243,8 +243,8 @@ def main() -> int:
                            "role": (identity.get("settings") or {}).get("role")}
         status, changed = http(base, "/api/hub/controller", token, method="PUT",
                                payload={"role": "controller"})
-        receipt["role_change"] = {"status": status,
-                                  "role": (changed.get("settings") or {}).get("role")}
+        # PUT answers with the flat settings object, unlike the GET.
+        receipt["role_change"] = {"status": status, "role": changed.get("role")}
         joined = {"node_id": "fleet-probe", "name": "Probe node",
                   "address": "http://192.168.255.254:8080"}
         status, created = http(base, "/api/hub/fleet/nodes", token, method="POST", payload=joined)

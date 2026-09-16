@@ -188,8 +188,9 @@ final class FixtureProtocol: URLProtocol {
             if accepted { Self.currentRole = requested }
             let current = Self.currentRole
             Self.lock.unlock()
+            // The Hub answers with the flat settings object, not the envelope the GET uses.
             result = accepted
-                ? (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{},\"readiness\":{\"ready\":true,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{}}".utf8))
+                ? (200, "application/json", Data("{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\"}".utf8))
                 : (400, "application/json", Data(#"{"detail":"role must be one of ['agent', 'controller', 'standalone']"}"#.utf8))
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()

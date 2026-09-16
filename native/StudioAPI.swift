@@ -1217,8 +1217,10 @@ final class NativeWorkspaceStore: ObservableObject {
         guard let requestConnection = connectionID else { return }
         roleNote = nil
         do {
-            // The Hub's controller route is a PUT; the job-envelope helper always POSTs.
-            let _: NativeControllerIdentity = try await sendJSON(
+            // The Hub's controller route is a PUT; the job-envelope helper always POSTs. Its
+            // reply is the flat settings object, not the {settings, readiness} envelope the
+            // GET returns, so the body is not decoded here - the refresh below reads the truth.
+            let _: EmptyResponse = try await sendJSON(
                 ["api", "hub", "controller"], method: "PUT", body: RoleChange(role: role))
             guard connectionID == requestConnection else { return }
             await refreshConnection()
