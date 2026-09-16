@@ -1,0 +1,71 @@
+{
+ "adopt": {
+  "adopted": true,
+  "status": 200
+ },
+ "app": "dist/Studio Hub 0.4.0.app",
+ "artifact": {
+  "bytes": 43,
+  "preview": "1\n00:00:00,000 --> 00:00:05,000\nThank you.\n",
+  "sha256": "4e88d0e6c7627f90847bc4217a99e05a8e1ce3a77557fcd4eee38fa2858a20bd",
+  "status": 200
+ },
+ "job": {
+  "governor_note": null,
+  "items": [
+   {
+    "duration_seconds": 16.61,
+    "error": null,
+    "state": "done",
+    "studio": "node-a:subtitle"
+   }
+  ],
+  "status": "done"
+ },
+ "node_studio_online": true,
+ "node_url_is_loopback": true,
+ "nodes": {
+  "state": "reachable",
+  "status": 200,
+  "summary": {
+   "error": 0,
+   "reachable": 1,
+   "total": 1,
+   "unreachable": 0
+  }
+ },
+ "ok": true,
+ "problems": [],
+ "steps": [],
+ "submit": {
+  "batch_id": "d1f67da59f93",
+  "detail": null,
+  "status": 200
+ },
+ "workers": [
+  [
+   "voice",
+   "local",
+   true,
+   true
+  ],
+  [
+   "image",
+   "local",
+   true,
+   true
+  ],
+  [
+   "subtitle",
+   "local",
+   true,
+   true
+  ],
+  [
+   "node-a:subtitle",
+   "node-a",
+   true,
+   true
+  ]
+ ]
+}
