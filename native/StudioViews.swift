@@ -1052,7 +1052,10 @@ struct StudioContent: View {
                 SecureField("Controller fleet token", text: $controllerToken)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
                 Button(workspace.joiningFleet ? "Joining…" : "Join") {
-                    Task { await workspace.joinController(address: controllerDraft, token: controllerToken) }
+                    Task {
+                        await workspace.joinController(address: controllerDraft, token: controllerToken,
+                                                       boundHosts: studio.configuration.listenHosts)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!connected || workspace.joiningFleet

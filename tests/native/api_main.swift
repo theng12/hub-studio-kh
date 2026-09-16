@@ -30,6 +30,7 @@ final class FixtureProtocol: URLProtocol {
     static var storageCalls: [String] = []
     static var roleChanges: [String] = []
     static var fleetCalls: [String] = []
+    static var joinBody: [String: Any]?
     static var currentRole = "standalone"
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
@@ -70,6 +71,7 @@ final class FixtureProtocol: URLProtocol {
     static func storageRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return storageCalls }
     static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
     static func fleetRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return fleetCalls }
+    static func joinPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return joinBody }
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
@@ -192,6 +194,15 @@ final class FixtureProtocol: URLProtocol {
             result = accepted
                 ? (200, "application/json", Data("{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\"}".utf8))
                 : (400, "application/json", Data(#"{"detail":"role must be one of ['agent', 'controller', 'standalone']"}"#.utf8))
+        case ("GET", "/api/hub/workers"):
+            result = (200, "application/json", Data(#"{"workers":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"},{"id":"subtitle","modality":"transcription"}]}"#.utf8))
+        case ("POST", "/api/hub/fleet/nodes"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.fleetCalls.append("join")
+            Self.joinBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lock.unlock()
+            result = (201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8))
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
@@ -395,6 +406,34 @@ struct NativeAPITests {
         await store.setRole("standalone")
         require(store.controllerIdentity?.settings.role == "standalone", "the role must be settable back")
         store.error = nil
+
+        // Joining has to say what this Mac runs, or the controller registers a node that
+        // nothing can be dispatched to.
+        // A Hub bound to loopback only must refuse to offer an address: a join that succeeds
+        // with an address nothing can reach is worse than a join that says why it cannot.
+        await store.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                   boundHosts: ["127.0.0.1"])
+        require(!FixtureProtocol.fleetRequests().contains("join"),
+                "a loopback-only Hub must not join with an unreachable address")
+        require(store.error?.contains("not reachable at any address") == true,
+                "a refused join must explain why, got: \(store.error ?? "nil")")
+        store.error = nil
+
+        await store.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                   boundHosts: LocalAddresses.current().map(\.address))
+        require(FixtureProtocol.fleetRequests().contains("join"),
+                "Join must reach the controller: \(FixtureProtocol.fleetRequests())")
+        let payload = FixtureProtocol.joinPayload()
+        require((payload?["node_id"] as? String)?.isEmpty == false,
+                "the join must use the Hub's key casing, got: \(String(describing: payload))")
+        require((payload?["address"] as? String)?.hasPrefix("http://") == true,
+                "the node must offer an address, got: \(payload?["address"] ?? "nil")")
+        let studios = payload?["studios"] as? [[String: Any]]
+        require(studios?.count == 3, "the node must report every studio it runs")
+        require(studios?.compactMap { $0["modality"] as? String }.sorted()
+                    == ["image", "transcription", "voice"],
+                "the studios must carry the modalities the fleet routes by")
+        require(store.fleetNote?.contains("Joined") == true, "a join needs a visible result")
 
         // The fleet: a controller lists who joined, with the state each node is actually in.
         await store.refreshFleetNodes()

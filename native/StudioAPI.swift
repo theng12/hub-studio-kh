@@ -1251,7 +1251,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The request leaves this Mac for another one, so it does not go through the helper that
     /// targets our own Hub — and the address is validated here as well as on the controller,
     /// because a token must never be sent to a host that was not checked first.
-    func joinController(address: String, token: String) async {
+    func joinController(address: String, token: String, boundHosts: [String] = []) async {
         guard let requestConnection = connectionID else { return }
         fleetNote = nil
         do {
@@ -1267,12 +1267,25 @@ final class NativeWorkspaceStore: ObservableObject {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue(secret, forHTTPHeaderField: "X-Hub-Token")
-            guard let ownAddress = Self.studioAddress(for: target,
-                                                      port: baseURL?.port) else {
-                throw NativeAPIError.message("This Mac has no network address to offer. Choose a listen address in Settings first.")
+            guard let ownAddress = Self.studioAddress(for: target, port: baseURL?.port,
+                                                      boundHosts: boundHosts) else {
+                throw NativeAPIError.message("This Mac is not reachable at any address a controller could use. Choose a network address under Connections → Fleet, restart the services, then join.")
             }
-            request.httpBody = try JSONEncoder().encode(JoinRequest(
-                nodeId: nodeID, name: name, address: ownAddress))
+            // Report what this Mac actually runs, from its own Hub rather than an assumption:
+            // a Mac whose Image worker failed to start must not be handed image work.
+            let workers: HubWorkersResponse = try await get(["api", "hub", "workers"])
+            guard connectionID == requestConnection else { return }
+            let studios = workers.workers.map { JoinStudio(id: $0.id, modality: $0.modality) }
+            guard !studios.isEmpty else {
+                throw NativeAPIError.message("This Mac is not running any studios yet, so there is nothing to offer a controller.")
+            }
+            // The Hub reads snake_case here, like its other administration routes. Sending the
+            // Swift names would have the controller refuse a join for a missing node_id while
+            // the app reported only that it was refused.
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            request.httpBody = try encoder.encode(JoinRequest(
+                nodeId: nodeID, name: name, address: ownAddress, studios: studios))
             joiningFleet = true
             defer { if connectionID == requestConnection { joiningFleet = false } }
             let (_, response) = try await session.data(for: request)
@@ -1306,9 +1319,14 @@ final class NativeWorkspaceStore: ObservableObject {
     ///
     /// A controller on the tailnet is given this Mac's Tailscale address and one on the LAN is
     /// given the LAN address, so the address offered is one that actually routes back.
-    static func studioAddress(for controller: URL, port: Int?) -> String? {
+    static func studioAddress(for controller: URL, port: Int?, boundHosts: [String]) -> String? {
         guard let port else { return nil }
-        let candidates = LocalAddresses.current()
+        // Only an address the Hub is actually listening on. Offering a LAN address while the
+        // Hub is bound to loopback would produce a join that succeeds and a node the controller
+        // can never reach - the exact silent failure this whole feature exists to avoid.
+        let allowed = Set(boundHosts.filter { $0 != "127.0.0.1" && $0 != "0.0.0.0" })
+        let wildcard = boundHosts.contains("0.0.0.0")
+        let candidates = LocalAddresses.current().filter { wildcard || allowed.contains($0.address) }
         guard !candidates.isEmpty else { return nil }
         let controllerIsTailscale = (controller.host ?? "").hasPrefix("100.")
         let preferred = candidates.first { $0.isTailscale == controllerIsTailscale }
@@ -1879,6 +1897,18 @@ private struct JoinRequest: Encodable {
     let nodeId: String
     let name: String
     let address: String
+    /// What this Mac runs. The controller builds its dispatch targets from this, so a join
+    /// without it would register a node that nothing can send work to.
+    let studios: [JoinStudio]
+}
+private struct JoinStudio: Encodable {
+    let id: String
+    let modality: String
+}
+private struct HubWorkersResponse: Decodable { let workers: [HubWorker] }
+private struct HubWorker: Decodable {
+    let id: String
+    let modality: String
 }
 private struct StorageLimitsBody: Encodable {
     let maxBytes: Int64
