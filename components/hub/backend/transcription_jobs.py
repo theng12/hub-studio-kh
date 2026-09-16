@@ -668,6 +668,9 @@ async def dispatch_once(monitor) -> int:
                 item.update(
                     state="running", studio=studio["id"], machine=machine, error=None,
                     studio_task_id=f"stt-{batch['id']}-{item['index']}",
+                    # Stable across retries so the terminal transition updates the same
+                    # activity row the running transition created.
+                    activity_id=f"stt-{batch['id']}-{item['index']}",
                     started_at=time.time(), tries=item["tries"] + 1,
                 )
                 try:
@@ -695,6 +698,38 @@ async def dispatch_once(monitor) -> int:
         if not made_progress:
             break
     return assigned
+
+
+def _record_terminal_activity(item: dict, batch: dict, studio: dict) -> None:
+    """Record the terminal transition so completed subtitles reach the Hub's statistics.
+
+    A subtitle job produces no asset row, so ``ledger.stats`` counts it from
+    ``activity_events``. Only the ``running`` transition was ever written, which meant
+    every completed Subtitle job was missing from the per-machine and per-model
+    aggregates even though the live activity view showed it running.
+
+    Optional evidence: a failure here must never change the job's outcome.
+    """
+    state = item.get("state")
+    if state not in TERMINAL_STATES:
+        return
+    try:
+        ledger.record_activity_event(
+            machine=str(studio.get("machine") or "local"),
+            studio=str(studio.get("id") or "subtitle"),
+            job_id=str(item.get("activity_id") or item.get("studio_task_id")
+                       or f"{batch['id']}:{item['index']}"),
+            state=state, model=batch.get("model"), operation="transcription",
+            source="job", hub_owned=True,
+            progress=1.0 if state == "done" else None,
+            started_at=item.get("started_at"), finished_at=time.time(),
+            runtime_s=item.get("duration_seconds"),
+            error_code=(None if state == "done"
+                        else (str(item.get("error") or "")[:120] or None)),
+        )
+    except Exception:
+        logging.getLogger("studiohub.transcription").exception(
+            "Could not record optional transcription completion activity")
 
 
 async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
@@ -823,6 +858,7 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
         busy_studios.discard(studio["id"])
         broker.release_external_machine(studio.get("machine", "local"), owner)
         _item_tasks.pop((batch["id"], item["index"]), None)
+        _record_terminal_activity(item, batch, studio)
         _save(batch)
         _wakeup.set()
 

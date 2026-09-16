@@ -223,5 +223,110 @@ class HubStatisticsTests(unittest.TestCase):
         self.assertIn('"total": 3', completed.stdout)
 
 
+CHILD_DISPATCH_FIXTURE = r'''
+"""A completed Subtitle job must reach the Hub's statistics by itself.
+
+The route fixture above plants its own `done` activity event, so it proves the ledger
+query works but not that anything writes one. Nothing did: the transcription dispatcher
+recorded only the `running` transition, so every completed Subtitle job was missing from
+`total`, `by_machine`, `by_model` and the timeline while the live activity view still
+showed it. This drives the real dispatcher item path against a stub worker.
+"""
+import asyncio
+import json
+import os
+from pathlib import Path
+import time
+from unittest.mock import patch
+
+from components.hub import output_storage
+from components.hub.backend import broker, ledger, transcription_jobs
+
+
+class Response:
+    status_code = 200
+
+    def json(self):
+        return {"srt": "1\n00:00:00,000 --> 00:00:01,000\nhello\n",
+                "studio_task_id": "stt-batch-1-0", "elapsed_seconds": 3.5,
+                "duration": 1.0}
+
+
+class Client:
+    async def post(self, url, **kwargs):
+        return Response()
+
+
+class Monitor:
+    registry = [{"id": "subtitle", "modality": "transcription", "machine": "node-a",
+                 "host": "127.0.0.1", "port": 51103, "local": True,
+                 "hub_token": "token", "runtime_identity": {"id": "r", "compatible": True},
+                 "managed_output_roots": []}]
+    status = {"subtitle": {"status": "up"}}
+    _client = Client()
+    _transcribe_cache = {}
+
+
+state = Path(os.environ["STUDIOHUB_DATA_DIR"])
+audio = state / "input.wav"
+audio.write_bytes(b"RIFF" + b"\0" * 64)
+# The submit path creates this; the item path only writes into it.
+(transcription_jobs.ROOT / "batch-1" / "output").mkdir(parents=True, exist_ok=True)
+item = {
+    "index": 0, "state": "running", "studio": "subtitle", "machine": "node-a",
+    "input_path": str(audio), "filename": "input.wav", "tries": 1,
+    "studio_task_id": "stt-batch-1-0", "activity_id": "stt-batch-1-0",
+    "started_at": time.time() - 3.5,
+}
+batch = {"id": "batch-1", "model": "mlx-community/whisper-large-v3-turbo",
+         "items": [item], "created_at": time.time() - 10, "operation": "transcription",
+         "idempotency_key": "fixture-batch-1", "word_timestamps": False}
+studio = Monitor.registry[0]
+
+with patch.object(output_storage, "register_finalized_output", lambda **kwargs: None), \
+     patch.object(broker, "mark_external_machine_success", lambda *a, **k: None), \
+     patch.object(broker, "release_external_machine", lambda *a, **k: None), \
+     patch.object(transcription_jobs, "_expire_genstudio_batch", lambda batch: False):
+    asyncio.run(transcription_jobs._run_item(Monitor(), batch, item, studio, "owner"))
+
+assert item["state"] == "done", item
+result = ledger.stats()
+assert result["total"] == 1, result
+assert result["by_modality"]["transcription"]["count"] == 1, result
+assert result["by_machine"]["node-a"]["count"] == 1, result
+assert any(row["model"] == "mlx-community/whisper-large-v3-turbo"
+           and row["modality"] == "transcription" for row in result["model_rows"]), result
+assert result["by_model"]["mlx-community/whisper-large-v3-turbo"]["count"] == 1, result
+assert result["matrix"][0]["avg_s"] == 3.5, result
+print(json.dumps({"total": result["total"], "matrix": result["matrix"]}, sort_keys=True))
+'''
+
+
+class HubTranscriptionStatisticsTests(unittest.TestCase):
+    def test_a_completed_subtitle_job_reaches_the_statistics(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="studiohub-stats-dispatch-") as state_dir:
+            env = os.environ.copy()
+            env["STUDIOHUB_DATA_DIR"] = state_dir
+            env["STUDIOHUB_PACKAGED"] = "1"
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(WORKTREE), env.get("PYTHONPATH", "")]
+            ).rstrip(os.pathsep)
+            completed = subprocess.run(
+                [_runtime(), "-c", textwrap.dedent(CHILD_DISPATCH_FIXTURE)],
+                cwd=WORKTREE,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            "isolated dispatch fixture failed:\nstdout:\n%s\nstderr:\n%s"
+            % (completed.stdout, completed.stderr),
+        )
+        self.assertIn('"total": 1', completed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

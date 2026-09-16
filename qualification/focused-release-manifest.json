@@ -1,0 +1,203 @@
+{
+ "app": {
+  "bytes": 2905399121,
+  "name": "Studio Hub 0.4.0 Memory Proof.app",
+  "recorded_tree_sha256": "89710c832b030be1cb2a99087d6828eecb2bc86739d176060fba627214414861",
+  "resource_payload_sha256": "64b24d577bfa1c781b4d42df53256d11abafa5fc68f598182bc023006883ff51",
+  "tree_sha256_recomputed": "59e6182d89c4f021e951e4e2632035e6942b33a902c722fc88e832a5926fd320"
+ },
+ "components": {
+  "hub": {
+   "runtime": "voice",
+   "source_sha256": "0d508a8acf88175663c99c21bf60bdf846619eb5179c7fa844898657c5cd9e0d",
+   "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+   "upstream_version": "2.22.0"
+  },
+  "image": {
+   "runtime": "image",
+   "runtime_sha256": "c9cd56a6d1cde6b72dee8ba22cf45fcbd640538207038087261cae91ec67f67e",
+   "source_sha256": "130ec6762654f2f79ab60091168303d4b699fce1a4158bd264ba484d8dd2280e",
+   "upstream_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
+   "upstream_version": "1.32.2"
+  },
+  "subtitle": {
+   "runtime": "voice",
+   "runtime_sha256": "a34bae6934a411363662988bf75844d8a4f8792dd4017f5c0578069a8748c1e6",
+   "source_sha256": "b313e80356a748ab309a9042bc876c72eafc448ded8c4dea9f82688b3c432168"
+  },
+  "voice": {
+   "source_sha256": "a906ba265652f2f9628385f9a111422387b8389f852ad9fd7a846c301e293191",
+   "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+   "upstream_version": "2.7.2"
+  }
+ },
+ "distribution": {
+  "gatekeeper_note": "Unsigned. The first launch must use right-click \u2192 Open; a plain double-click is blocked once by macOS.",
+  "method": "copy the app to the Mac and open it with right-click \u2192 Open",
+  "notarized": false,
+  "signed": false
+ },
+ "generated_at": 1789518718.8551779,
+ "generated_at_iso": "2026-09-16T00:31:58Z",
+ "implementation_commit": "9d83e6a989ca43ac96b53af2960563ecf57cc1bf",
+ "library": {
+  "index": ".studiohub/installed.json",
+  "installed_bytes": 24494855896,
+  "installed_bytes_human": "22.8 GiB",
+  "path_as_shipped": "model-library"
+ },
+ "models": [
+  {
+   "digest": {},
+   "engine": "image-mflux",
+   "installed": true,
+   "installed_bytes": 4619724559,
+   "installed_files": 11,
+   "installed_folder": "flux2-klein-4b-mlx-4bit/7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+   "installed_revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
+   "manifest_files": 11,
+   "minimum_macos": "14.0",
+   "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+   "package_id": "flux2-klein-4b-mlx-4bit",
+   "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 2042309830,
+   "installed_files": 10,
+   "installed_folder": "omnivoice-bfloat16/6119f7072580cc30c3cbdf496269216b03ad9742",
+   "installed_revision": "6119f7072580cc30c3cbdf496269216b03ad9742",
+   "manifest_files": 10,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/OmniVoice-bfloat16",
+   "package_id": "omnivoice-bfloat16",
+   "revision": "6119f7072580cc30c3cbdf496269216b03ad9742"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 1991296593,
+   "installed_files": 12,
+   "installed_folder": "qwen3-tts-12hz-0-6b-base-8bit/50f45ef0047cde7e84c2ef04326acb8ada2436a7",
+   "installed_revision": "50f45ef0047cde7e84c2ef04326acb8ada2436a7",
+   "manifest_files": 12,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+   "package_id": "qwen3-tts-12hz-0-6b-base-8bit",
+   "revision": "50f45ef0047cde7e84c2ef04326acb8ada2436a7"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 3104156243,
+   "installed_files": 12,
+   "installed_folder": "qwen3-tts-12hz-1-7b-base-8bit/e7dd0585652209fa0d7783659aad4e8a324de11c",
+   "installed_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
+   "manifest_files": 12,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+   "package_id": "qwen3-tts-12hz-1-7b-base-8bit",
+   "revision": "e7dd0585652209fa0d7783659aad4e8a324de11c"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 2300904017,
+   "installed_files": 5,
+   "installed_folder": "voxcpm2-4bit/dc9e5c187858da5f4a13dc4c247e297339216381",
+   "installed_revision": "dc9e5c187858da5f4a13dc4c247e297339216381",
+   "manifest_files": 5,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/VoxCPM2-4bit",
+   "package_id": "voxcpm2-4bit",
+   "revision": "dc9e5c187858da5f4a13dc4c247e297339216381"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 3225461623,
+   "installed_files": 5,
+   "installed_folder": "voxcpm2-8bit/d52725898a0675703f7f9ddc5a4d1a3cdbb99032",
+   "installed_revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032",
+   "manifest_files": 5,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/VoxCPM2-8bit",
+   "package_id": "voxcpm2-8bit",
+   "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 4959015656,
+   "installed_files": 7,
+   "installed_folder": "voxcpm2-bf16/a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
+   "installed_revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
+   "manifest_files": 7,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/VoxCPM2-bf16",
+   "package_id": "voxcpm2-bf16",
+   "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5"
+  },
+  {
+   "digest": {},
+   "engine": "subtitle-mlx",
+   "installed": true,
+   "installed_bytes": 147906498,
+   "installed_files": 9,
+   "installed_folder": "whisper-base/1e3e249fb8d01c655324bd6841b1deadffd6d04c",
+   "installed_revision": "1e3e249fb8d01c655324bd6841b1deadffd6d04c",
+   "manifest_files": 9,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/whisper-base-mlx",
+   "package_id": "whisper-base",
+   "revision": "1e3e249fb8d01c655324bd6841b1deadffd6d04c"
+  },
+  {
+   "digest": {},
+   "engine": "subtitle-mlx",
+   "installed": true,
+   "installed_bytes": 485489890,
+   "installed_files": 9,
+   "installed_folder": "whisper-small/45f3915923c7a79a5a5b5a7d909d39aeb0e5630e",
+   "installed_revision": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e",
+   "manifest_files": 9,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/whisper-small-mlx",
+   "package_id": "whisper-small",
+   "revision": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e"
+  },
+  {
+   "digest": {},
+   "engine": "subtitle-mlx",
+   "installed": true,
+   "installed_bytes": 1618590987,
+   "installed_files": 9,
+   "installed_folder": "whisper-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+   "installed_revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+   "manifest_files": 9,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/whisper-large-v3-turbo",
+   "package_id": "whisper-turbo",
+   "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
+  }
+ ],
+ "operator_steps": [
+  "Copy the app and the model library folder to the target Mac.",
+  "Right-click the app and choose Open, then confirm.",
+  "Choose the copied model library when the app asks for one.",
+  "Wait for the status line to read 'Local services ready'.",
+  "Run one generation per model to record that machine's speed and memory."
+ ],
+ "problems": [],
+ "qualification": "unqualified-local-proof",
+ "schema": "studiohub.standalone-install-kit",
+ "schema_version": 1,
+ "version": "0.4.0"
+}
