@@ -1,10 +1,10 @@
 {
  "app": {
-  "bytes": 2906690304,
+  "bytes": 2906705798,
   "name": "Studio Hub 0.4.0.app",
-  "recorded_tree_sha256": "7195067a309bbf48f5dcb28d8c32a9c699ea1e286dad1b59bec07c1e2f5f6be9",
-  "resource_payload_sha256": "8c6e16df955a98172d2538b7d759cc92ae8926424f1533dfaf9131c43db25259",
-  "tree_sha256_recomputed": "7195067a309bbf48f5dcb28d8c32a9c699ea1e286dad1b59bec07c1e2f5f6be9"
+  "recorded_tree_sha256": "cf1a8fe7311da4b07fd734d905f08d85e7286c42faf24319c367860937317558",
+  "resource_payload_sha256": "361d5d3d3a591e90f2a4d229b276888c35b2176eab14fbf1abff0ed230984135",
+  "tree_sha256_recomputed": "cf1a8fe7311da4b07fd734d905f08d85e7286c42faf24319c367860937317558"
  },
  "components": {
   "hub": {
@@ -26,7 +26,7 @@
    "source_sha256": "092318b9bc361cf31a095dc0b2da7aab6a9750ba3b3fa5f0b25a34e9a84bd1aa"
   },
   "voice": {
-   "source_sha256": "3a557ec972232f48fa5400f5a7806fe0e04aff72c2d6692f77a5f784b4f1c4d6",
+   "source_sha256": "99d57522ab79ac76c4c7b4aaa165f8de268f922986eeb646d71cc334126f40d5",
    "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
    "upstream_version": "2.7.2"
   }
@@ -37,13 +37,13 @@
   "notarized": false,
   "signed": false
  },
- "generated_at": 1789565824.339044,
- "generated_at_iso": "2026-09-16T13:37:04Z",
- "implementation_commit": "f9feca57df0bd0f940ffa681fd1981b55237eb85",
+ "generated_at": 1789574543.1272588,
+ "generated_at_iso": "2026-09-16T16:02:23Z",
+ "implementation_commit": "f146bc0e80ac2c3e9f7afa55a0b46abc49ac91c1",
  "library": {
   "index": ".studiohub/installed.json",
-  "installed_bytes": 24494855896,
-  "installed_bytes_human": "22.8 GiB",
+  "installed_bytes": 28542256116,
+  "installed_bytes_human": "26.6 GiB",
   "path_as_shipped": "model-library"
  },
  "models": [
@@ -79,6 +79,20 @@
    "digest": {},
    "engine": "voice-mlx",
    "installed": true,
+   "installed_bytes": 1711326079,
+   "installed_files": 12,
+   "installed_folder": "qwen3-tts-12hz-0-6b-base-4bit/0d6bb6fe33f92d47a507e23b9148940e8366ab5b",
+   "installed_revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b",
+   "manifest_files": 12,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+   "package_id": "qwen3-tts-12hz-0-6b-base-4bit",
+   "revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
    "installed_bytes": 1991296593,
    "installed_files": 12,
    "installed_folder": "qwen3-tts-12hz-0-6b-base-8bit/50f45ef0047cde7e84c2ef04326acb8ada2436a7",
@@ -88,6 +102,20 @@
    "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
    "package_id": "qwen3-tts-12hz-0-6b-base-8bit",
    "revision": "50f45ef0047cde7e84c2ef04326acb8ada2436a7"
+  },
+  {
+   "digest": {},
+   "engine": "voice-mlx",
+   "installed": true,
+   "installed_bytes": 2336074141,
+   "installed_files": 12,
+   "installed_folder": "qwen3-tts-12hz-1-7b-base-4bit/37e955a1deb861c088ae5f3a67043185f3d1a60c",
+   "installed_revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c",
+   "manifest_files": 12,
+   "minimum_macos": "14.0",
+   "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+   "package_id": "qwen3-tts-12hz-1-7b-base-4bit",
+   "revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c"
   },
   {
    "digest": {},

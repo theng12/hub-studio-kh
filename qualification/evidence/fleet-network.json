@@ -18,7 +18,7 @@
  },
  "network": {
   "status": 200,
-  "url": "http://192.168.18.232:59840",
+  "url": "http://192.168.18.232:61312",
   "version": "0.4.0"
  },
  "network_resources": {
