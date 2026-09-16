@@ -147,6 +147,17 @@ class HubProcess:
                 self.process.kill()
         self.log.close()
 
+    def artifact(self, path: str, *, token: str) -> tuple[int, bytes]:
+        """Fetch raw bytes. An artifact is not JSON, and parsing it as such fails on its magic
+        number rather than on anything real."""
+        request = urllib.request.Request(f"{self.base}{path}")
+        request.add_header("X-Hub-Token", token)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+
     def post_json(self, path: str, payload: dict, *, token: str | None = None):
         body = json.dumps(payload).encode()
         request = urllib.request.Request(f"{self.base}{path}", data=body, method="POST")
@@ -469,7 +480,6 @@ class FleetDispatchTests(unittest.TestCase):
             self.assertEqual(worker.submissions[0]["token"], node.token)
 
 
-    @unittest.skip("the controller does not finalise a node's finished job; see the docstring")
     def test_the_controllers_artifact_comes_back_from_the_node(self) -> None:
         """The work runs on the node; the operator must still be able to collect it.
 
@@ -526,12 +536,16 @@ class FleetDispatchTests(unittest.TestCase):
         deadline = time.time() + 45
         artifact = None
         while time.time() < deadline:
-            status, _, response = controller.request(
+            status, artifact = controller.artifact(
                 f"/api/hub/jobs/{batch}/items/0/artifact", token=controller.token)
             if status == 200:
-                artifact = response.read()
                 break
+            artifact = None
             time.sleep(0.5)
+        if artifact is None:
+            # The controller's own log is the only place some of these are visible.
+            print("CONTROLLER LOG TAIL:",
+                  (controller.root / "controller.log").read_text(errors="replace")[-1200:])
         self.assertIsNotNone(artifact, "the controller never served the artifact the node "
                                        f"produced; job: {self.governor(controller, batch)}; "
                                        f"the node's studio was asked for: {worker.seen[:14]}")
@@ -675,6 +689,7 @@ class StubImageWorker:
                     # as a result.
                     self._send(200, {"job": {
                         "id": "job-1", "state": "done", "progress": 1.0,
+                        "worker_id": "image-fixture",
                         "machine_id": outer.machine,
                         "bytes": len(FLUX_PNG), "sha256": FLUX_SHA,
                         "media_type": "image/png",
@@ -699,7 +714,10 @@ class StubImageWorker:
                         "path": self.path, "body": raw.decode("utf-8", "replace"),
                         "token": self.headers.get("X-Hub-Token"), "request": parsed,
                     })
-                    self._send(200, {"job": {"id": "job-1", "state": "queued"}})
+                    # A real worker identifies itself at submit and keeps that identity at
+                    # every poll; the Hub refuses a status that changes it.
+                    self._send(200, {"job": {"id": "job-1", "state": "queued",
+                                             "worker_id": "image-fixture"}})
                 else:
                     self._send(200, {"job": {"id": "job-1", "state": "done"}})
 
