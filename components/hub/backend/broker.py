@@ -1006,8 +1006,18 @@ def _submit_batch_locked(envelope: dict) -> dict:
     routing = str(envelope.get("routing") or "pool")
     if routing not in {"pool", "remote"} and not (
         routing.startswith("studio:") and routing.split(":", 1)[1]
+    ) and not (
+        routing.startswith("machine:") and routing.split(":", 1)[1]
     ):
-        return {"error": "routing must be pool, remote, or studio:<id>"}
+        return {"error": "routing must be pool, remote, studio:<id> or machine:<id>"}
+    if routing.startswith("machine:"):
+        # A pin is an instruction, so an unknown machine is refused here rather than left to
+        # queue forever with nothing to say. `local` is this Mac; anything else joined it.
+        target = routing.split(":", 1)[1]
+        known = {s.get("machine", "local") for s in _monitor().registry}
+        if target not in known:
+            return {"error": f"no machine named {target!r} is in this fleet; known: "
+                             + ", ".join(sorted(known))}
     try:
         prepared = execution_identity.prepare(envelope)
     except execution_identity.ExecutionIdentityError as exc:
@@ -1969,6 +1979,10 @@ def _eligible_studios(modality: str, routing: str) -> list[dict]:
         if routing.startswith("studio:") and s["id"] != routing.split(":", 1)[1]:
             continue
         machine = s.get("machine", "local")
+        # A machine pin is the operator's instruction, so it beats the automatic choice: a Mac
+        # that has the model is still skipped when another Mac was named.
+        if routing.startswith("machine:") and machine != routing.split(":", 1)[1]:
+            continue
         # A remote render deliberately keeps the Hub Mac as the control plane.
         # It waits for an external Render Studio rather than quietly consuming
         # the Hub machine's CPU / Media Engine as a fallback.

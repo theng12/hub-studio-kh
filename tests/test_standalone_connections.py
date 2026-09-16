@@ -1074,6 +1074,116 @@ class FleetVoiceDispatchTests(unittest.TestCase):
                 f"items={payload.get('items')!r}")
 
 
+class FleetPinTests(unittest.TestCase):
+    """Automatic by default, but the operator can name the Mac when it matters."""
+
+    def _fleet(self, directory: Path, worker, controller_worker):
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        fleet = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+        return node, controller
+
+    def test_a_machine_pin_beats_the_automatic_choice(self) -> None:
+        # Both Macs have the model, so only the pin can decide where this goes.
+        worker = StubImageWorker(machine="node-a", hold=True)
+        self.addCleanup(worker.stop)
+        controller_worker = StubImageWorker(machine="local", hold=True)
+        self.addCleanup(controller_worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-pin-")
+        self.addCleanup(temporary.cleanup)
+        node, controller = self._fleet(Path(temporary.name), worker, controller_worker)
+
+        status, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-pin-1", "routing": "machine:node-a",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not worker.submissions:
+            time.sleep(0.5)
+        self.assertTrue(worker.submissions,
+                        "a machine pin did not reach the named Mac; "
+                        f"job: {self.pin_state(controller, batch)}")
+        self.assertEqual(controller_worker.submissions, [],
+                         "a machine pin must not run on the Mac that was not named")
+
+    def test_pinning_this_mac_keeps_the_work_here(self) -> None:
+        worker = StubImageWorker(machine="node-a", hold=True)
+        self.addCleanup(worker.stop)
+        controller_worker = StubImageWorker(machine="local", hold=True)
+        self.addCleanup(controller_worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-pin-local-")
+        self.addCleanup(temporary.cleanup)
+        node, controller = self._fleet(Path(temporary.name), worker, controller_worker)
+
+        status, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-pin-2", "routing": "machine:local",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not controller_worker.submissions:
+            time.sleep(0.5)
+        self.assertTrue(controller_worker.submissions,
+                        f"pinning this Mac did not keep the work here; "
+                        f"job: {self.pin_state(controller, batch)}")
+        self.assertEqual(worker.submissions, [], "pinning this Mac must not use a node")
+
+    def test_pinning_a_machine_that_is_not_here_is_refused_with_the_list(self) -> None:
+        worker = StubImageWorker(machine="node-a", hold=True)
+        self.addCleanup(worker.stop)
+        controller_worker = StubImageWorker(machine="local", hold=True)
+        self.addCleanup(controller_worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-pin-bad-")
+        self.addCleanup(temporary.cleanup)
+        node, controller = self._fleet(Path(temporary.name), worker, controller_worker)
+
+        status, refused, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "image", "model": FLUX_MODEL_ID,
+             "clientRequestId": "fleet-pin-3", "routing": "machine:not-a-mac",
+             "items": [{"prompt": "a quiet harbour", "params": {}}]},
+            token=controller.token)
+        # Refused at submission, naming what does exist, rather than queued forever.
+        self.assertEqual(status, 400, refused)
+        detail = json.dumps(refused)
+        self.assertIn("not-a-mac", detail)
+        self.assertIn("node-a", detail)
+
+    @staticmethod
+    def pin_state(controller, batch: str) -> str:
+        status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(unreadable: {status})"
+        return (f"note={payload.get('governor_note')!r} "
+                f"items={payload.get('items')!r}")
+
+
 class FleetCancelTests(unittest.TestCase):
     """Stopping work on another Mac, from the Mac that asked for it."""
 
