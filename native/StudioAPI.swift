@@ -57,6 +57,95 @@ struct NativeModel: Identifiable, Equatable {
     var requiresTranscript: Bool = true
 }
 
+/// One selectable idle-release mode. Thresholds arrive from the Studio that owns them, so
+/// the app never hard-codes what "Balanced" means.
+struct NativeMemoryMode: Decodable, Identifiable, Equatable {
+    let mode: String
+    let label: String
+    let idleSeconds: Int?
+    var id: String { mode }
+    var summary: String {
+        guard let idleSeconds else { return "Keeps the model loaded until you release it." }
+        if idleSeconds == 0 { return "Releases the model as soon as each job finishes." }
+        if idleSeconds < 60 { return "Releases after \(idleSeconds) seconds idle." }
+        return "Releases after \(idleSeconds / 60) idle minutes."
+    }
+}
+
+/// What one Studio reports about the model it is holding right now.
+struct NativeMemoryPolicy: Decodable, Equatable {
+    let mode: String
+    /// The Studio's own resolved default, which is chosen from the machine's memory and is
+    /// not necessarily the Hub's fleet-wide draft default.
+    let defaultMode: String?
+    let idleSeconds: Int?
+    let options: [NativeMemoryMode]?
+    let loadedModels: [[String]]?
+    let activeWork: Bool?
+    let busy: Bool?
+    /// A Studio that releases inside every job has no idle timer to configure.
+    let fixed: Bool?
+    let releasePolicy: String?
+    let machineBytes: Int64?
+
+    var resolvedOptions: [NativeMemoryMode] { options ?? [] }
+    var resident: [String] { (loadedModels ?? []).map { $0.joined(separator: " ") } }
+    var isFixed: Bool { fixed == true }
+}
+
+/// One row of the Hub's per-machine memory inventory.
+struct NativeMemoryStudio: Decodable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let modality: String
+    let machineLabel: String
+    let health: String
+    /// ready · offline · update_required · error
+    let state: String
+    let supported: Bool?
+    let detail: String?
+    let policy: NativeMemoryPolicy?
+
+    var isReady: Bool { state == "ready" }
+}
+
+struct NativeMemorySummary: Decodable, Equatable {
+    let total: Int
+    let ready: Int
+    let offline: Int
+    let updateRequired: Int
+}
+
+struct NativeMemoryInventory: Decodable, Equatable {
+    let defaultMode: String
+    let options: [NativeMemoryMode]
+    let studios: [NativeMemoryStudio]
+    let summary: NativeMemorySummary
+}
+
+struct NativeMemoryChange: Decodable, Equatable {
+    let ok: Bool
+    let action: String
+    let selected: Int
+    let succeeded: Int
+    let failed: Int
+    let mode: String?
+    let results: [NativeMemoryResult]
+}
+
+struct NativeMemoryResult: Decodable, Equatable {
+    let id: String
+    let ok: Bool?
+    /// updated · released · fixed · busy · offline · update_required · error
+    let result: String?
+    let detail: String?
+}
+
+private struct MemoryModeBody: Encodable {
+    let mode: String
+    let studioIds: [String]?
+}
+
 struct NativeJob: Identifiable, Equatable {
     let id: String
     let state: String
@@ -173,6 +262,11 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var error: String?
     @Published private(set) var refreshing = false
     @Published private(set) var isReachable = false
+    /// Per-machine model memory, read on demand rather than on the two-second poll: it fans
+    /// out to every Studio, and nothing on the generation screens depends on it.
+    @Published private(set) var memoryInventory: NativeMemoryInventory?
+    @Published private(set) var memoryNote: String?
+    @Published private(set) var updatingMemory = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
     private let session: URLSession
@@ -221,6 +315,8 @@ final class NativeWorkspaceStore: ObservableObject {
             try loadHubDownloadRuns()
             await refresh()
             guard self.connectionID == requestConnection else { return }
+            await refreshMemoryPolicy()
+            guard self.connectionID == requestConnection else { return }
             pollTask = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(2))
@@ -251,6 +347,9 @@ final class NativeWorkspaceStore: ObservableObject {
         submittingAudio = false
         submittingImage = false
         transcribing = false
+        memoryInventory = nil
+        memoryNote = nil
+        updatingMemory = false
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -710,13 +809,72 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the audio job") } }
     }
 
-    func releaseMemory() async {
+    /// Read the machine's memory policy and what each Studio is holding right now.
+    ///
+    /// The Hub fans this out to every Studio, so it is refreshed when Settings opens and
+    /// after each change rather than on the polling loop.
+    func refreshMemoryPolicy() async {
         guard let requestConnection = connectionID else { return }
         do {
-            let _: EmptyResponse = try await sendEmpty(["api", "hub", "memory", "release"], method: "POST")
+            let inventory: NativeMemoryInventory = try await get(["api", "hub", "memory", "policy"])
             guard connectionID == requestConnection else { return }
+            memoryInventory = inventory
+        } catch {
+            // An older Hub without these routes must not break the rest of Settings; the
+            // section explains the absence instead of failing the screen.
+            guard connectionID == requestConnection else { return }
+            memoryInventory = nil
+            memoryNote = Self.actionable(error, action: "Read model memory settings")
+        }
+    }
+
+    func releaseMemory() async {
+        guard let requestConnection = connectionID else { return }
+        updatingMemory = true
+        defer { if connectionID == requestConnection { updatingMemory = false } }
+        do {
+            let result: NativeMemoryChange = try await sendEmpty(["api", "hub", "memory", "release"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            memoryNote = Self.releaseSummary(result)
             error = nil
+            await refreshMemoryPolicy()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Release model memory") } }
+    }
+
+    /// Apply one idle-release choice to the Studios that support one.
+    func setMemoryMode(_ mode: String, studioIDs: [String]? = nil) async {
+        guard let requestConnection = connectionID else { return }
+        updatingMemory = true
+        defer { if connectionID == requestConnection { updatingMemory = false } }
+        do {
+            let result: NativeMemoryChange = try await sendJSON(
+                ["api", "hub", "memory", "policy"], method: "PUT",
+                body: MemoryModeBody(mode: mode, studioIds: studioIDs))
+            guard connectionID == requestConnection else { return }
+            memoryNote = Self.modeSummary(result)
+            error = nil
+            await refreshMemoryPolicy()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change model memory settings") } }
+    }
+
+    private static func releaseSummary(_ result: NativeMemoryChange) -> String {
+        if result.succeeded == 0 { return "No Studio had a model to release." }
+        let busy = result.results.filter { $0.result == "busy" }.map(\.id)
+        let failed = result.results.filter { $0.ok != true && $0.result != "busy" }.map(\.id)
+        var parts = ["Released model memory in \(result.succeeded) of \(result.selected) studios."]
+        if !busy.isEmpty { parts.append("Busy, so left alone: \(busy.joined(separator: ", ")).") }
+        if !failed.isEmpty { parts.append("Could not reach: \(failed.joined(separator: ", ")).") }
+        return parts.joined(separator: " ")
+    }
+
+    private static func modeSummary(_ result: NativeMemoryChange) -> String {
+        let fixed = result.results.filter { $0.result == "fixed" }.map(\.id)
+        var parts = ["Updated \(result.succeeded) of \(result.selected) studios."]
+        if !fixed.isEmpty {
+            parts.append("\(fixed.joined(separator: ", ")) releases inside every job, so it needs no setting.")
+        }
+        if result.failed > 0 { parts.append("\(result.failed) could not be changed.") }
+        return parts.joined(separator: " ")
     }
 
     func removeModel(_ model: NativeModel) async {

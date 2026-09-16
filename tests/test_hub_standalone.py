@@ -160,25 +160,46 @@ class StandaloneHubConfigTests(unittest.TestCase):
             self.assertEqual(incomplete["dispatch_state"], "ineligible")
 
     def test_packaged_api_requires_existing_hub_token_on_loopback(self) -> None:
+        from contextlib import ExitStack
         from fastapi.testclient import TestClient
+        from components.hub.backend import auth, ledger, monitor as monitor_module, registry
         from components.hub.standalone import create_app
 
-        app = create_app(start_background=False)
-        preview_calls = []
-        def capture_preview(**kwargs):
-            preview_calls.append(kwargs)
-            return {"machine": kwargs["machine"]}
-        with patch("components.hub.output_storage.preview", side_effect=capture_preview):
-            with TestClient(app) as client:
-                denied = client.get("/api/hub/settings")
-                accepted = client.get(
-                    "/api/hub/settings",
-                    headers={"Authorization": "Bearer same-existing-hub-token"},
-                )
-                preview = client.post(
-                    "/api/hub/settings/preview", json={},
-                    headers={"Authorization": "Bearer same-existing-hub-token"},
-                )
+        # The Hub resolves its token, job database and machine metadata from DATA_DIR at
+        # *import* time, so this test must bind them explicitly instead of inheriting
+        # whatever directory a previously imported suite happened to snapshot.
+        with ExitStack() as stack:
+            for module, name, value in (
+                (registry, "DATA_DIR", self.data_dir),
+                (registry, "REGISTRY_FILE", self.data_dir / "studios.json"),
+                (registry, "LABELS_FILE", self.data_dir / "machine_labels.json"),
+                (registry, "FLAGS_FILE", self.data_dir / "machine_flags.json"),
+                (monitor_module, "DATA_DIR", self.data_dir),
+                (auth, "TOKEN_FILE", self.data_dir / ".hub_token"),
+                (auth, "PASSWORD_FILE", self.data_dir / ".hub_password.json"),
+                (auth, "SESSIONS_FILE", self.data_dir / ".hub_sessions.json"),
+                (ledger, "DB_FILE", self.data_dir / "hub.db"),
+                (ledger, "PINOKIO_HOME", self.data_dir),
+            ):
+                stack.enter_context(patch.object(module, name, value))
+            registry._labels_cache = None
+            registry._flags_cache = None
+            app = create_app(start_background=False)
+            preview_calls = []
+            def capture_preview(**kwargs):
+                preview_calls.append(kwargs)
+                return {"machine": kwargs["machine"]}
+            with patch("components.hub.output_storage.preview", side_effect=capture_preview):
+                with TestClient(app) as client:
+                    denied = client.get("/api/hub/settings")
+                    accepted = client.get(
+                        "/api/hub/settings",
+                        headers={"Authorization": "Bearer same-existing-hub-token"},
+                    )
+                    preview = client.post(
+                        "/api/hub/settings/preview", json={},
+                        headers={"Authorization": "Bearer same-existing-hub-token"},
+                    )
 
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)

@@ -94,11 +94,18 @@ class SubtitleFixture(unittest.TestCase):
         self.manifests = [self._package('whisper-turbo', 'weights.safetensors'),
                           self._package('whisper-base', 'weights.npz'),
                           self._package('whisper-small', 'weights.npz')]
+        # A saved memory policy must land in this worker's own state directory. Without the
+        # environment the poller and the settings writer would resolve it relative to the
+        # working directory and drop a memory_policy.json into the checkout.
+        self.old_environ = os.environ.copy()
+        os.environ['STUDIOHUB_SUBTITLE_DATA_DIR'] = str(self.data)
 
     def tearDown(self) -> None:
         manager = getattr(self, 'manager', None)
         if manager is not None:
             manager.close()
+        os.environ.clear()
+        os.environ.update(self.old_environ)
         self.temporary.cleanup()
 
     def _package(self, package_id: str, weight_name: str) -> dict:
@@ -193,6 +200,31 @@ class ExportSourceTests(SubtitleFixture):
         self.assertTrue(artifacts['srt'].startswith('1\n00:00:00,000 --> 00:00:01,500'))
         self.assertTrue(artifacts['vtt'].startswith('WEBVTT'))
         self.assertEqual(artifacts['text'], 'First cue Second cue')
+
+    def test_the_export_helpers_honour_the_directory_they_are_given(self) -> None:
+        """Passing the Voice app path must be enough; the environment is only a fallback.
+
+        These helpers accepted a directory and then read ``STUDIOHUB_VOICE_APP_DIR``
+        instead, so calling one correctly still failed unless an unrelated earlier caller
+        had happened to set the variable.
+        """
+        segments = [{'id': 0, 'start': 0.0, 'end': 1.0, 'text': 'Cue'}]
+        original = os.environ.pop('STUDIOHUB_VOICE_APP_DIR', None)
+        try:
+            import sys
+            sys.path.insert(0, str(VOICE_APP))
+            from backend import transcription as voice
+            self.assertEqual(engine_module.format_artifacts(segments, VOICE_APP)['srt'],
+                             voice.segments_to_srt(segments))
+            self.assertEqual(
+                engine_module.normalize_segments(segments, word_timestamps=False,
+                                                 audio_duration=1.0,
+                                                 voice_app_dir=VOICE_APP)[0], 'Cue')
+            with self.assertRaisesRegex(RuntimeError, 'STUDIOHUB_VOICE_APP_DIR'):
+                engine_module.format_artifacts(segments, None)
+        finally:
+            if original is not None:
+                os.environ['STUDIOHUB_VOICE_APP_DIR'] = original
 
     def test_text_srt_vtt_are_published_together(self) -> None:
         manager = self.build_manager()
@@ -712,13 +744,33 @@ class SubtitleModelIdentifierTests(unittest.TestCase):
         self.assertIn('manifests', source)
 
 
-class SubtitleMemoryPolicyTests(unittest.TestCase):
+class SubtitleMemoryPolicyTests(SubtitleFixture):
     """The Subtitle worker must not hold a Whisper model resident forever.
 
     Voice has an idle-release policy; Subtitle had ``engine.unload()`` with nothing calling
     it, so a model could stay in memory for the process lifetime — the leak that matters most
     on an 8 GB machine.
+
+    The endpoint *names* and the status *fields* are part of the contract with the Hub's
+    fleet controller, not an implementation detail: a Studio that answers on a different path
+    or publishes a different vocabulary is invisible to the machine-wide release pass, or
+    worse, is counted as released while it still holds its model.
     """
+
+    # The names every Studio in the fleet publishes, and the fields the Hub reads back.
+    FLEET_PATHS = {'get': '/api/memory-policy', 'put': '/api/memory-policy',
+                   'release': '/api/memory/release'}
+    FLEET_FIELDS = {'mode', 'default_mode', 'idle_seconds', 'options', 'loaded_models',
+                    'model_idle_seconds', 'active_work', 'busy', 'next_release_at',
+                    'last_release_at', 'last_release_reason', 'last_release_details',
+                    'last_error', 'release_count', 'counters_since'}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.manager = self.build_manager()
+        self.manager.engine.offline = True
+        self.client = TestClient(create_app(self.manager, TOKEN))
+        self.headers = {'X-Hub-Token': TOKEN}
 
     def test_modes_match_the_voice_worker(self) -> None:
         from components.subtitle.app.backend import memory_policy
@@ -763,6 +815,83 @@ class SubtitleMemoryPolicyTests(unittest.TestCase):
         with patch.object(memory_policy, '_active', return_value=True):
             with self.assertRaisesRegex(RuntimeError, 'active'):
                 memory_policy.release_now('idle')
+
+    def test_worker_publishes_the_fleet_paths_and_field_shape(self) -> None:
+        """The Hub reaches every Studio by these exact names; a rename silently breaks it."""
+        policy = self.client.get(self.FLEET_PATHS['get'], headers=self.headers)
+        self.assertEqual(policy.status_code, 200)
+        payload = policy.json()
+        self.assertTrue(self.FLEET_FIELDS <= set(payload),
+                        f'missing fleet fields: {sorted(self.FLEET_FIELDS - set(payload))}')
+        self.assertEqual([row['mode'] for row in payload['options']],
+                         ['performance', 'balanced', 'memory_saver', 'immediate'])
+
+        saved = self.client.put(self.FLEET_PATHS['put'], headers=self.headers,
+                                json={'mode': 'memory_saver'})
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()['mode'], 'memory_saver')
+        self.assertEqual(saved.json()['idle_seconds'], 120)
+
+        rejected = self.client.put(self.FLEET_PATHS['put'], headers=self.headers,
+                                   json={'mode': 'overnight'})
+        self.assertEqual(rejected.status_code, 422)
+
+        # The old `/api/memory/policy` spelling must not linger as a second contract.
+        self.assertEqual(self.client.get('/api/memory/policy', headers=self.headers).status_code,
+                         404)
+
+    def test_release_reports_residency_the_hub_can_read_back(self) -> None:
+        """`loaded_models` must show what is resident, not just that a release was asked for.
+
+        The Hub counts a release as successful only when the response no longer lists a
+        loaded model, so a Studio that reported residency as a private boolean would let a
+        failed unload pass as a release.
+        """
+        package = self.manager.engine.load('whisper-turbo')
+        self.assertIsNotNone(package)
+        resident = self.client.get(self.FLEET_PATHS['get'], headers=self.headers).json()
+        self.assertEqual(resident['loaded_models'], [['whisper-turbo']])
+        self.assertTrue(resident['resident'])
+
+        released = self.client.post(self.FLEET_PATHS['release'], headers=self.headers)
+        self.assertEqual(released.status_code, 200)
+        body = released.json()
+        self.assertTrue(body['released'])
+        self.assertEqual(body['loaded_models'], [])
+        self.assertIsNone(self.manager.engine.loaded_package)
+        self.assertEqual(body['last_release_reason'], 'manual')
+
+        idle = self.client.post(self.FLEET_PATHS['release'], headers=self.headers)
+        self.assertEqual(idle.status_code, 200)
+        self.assertFalse(idle.json()['released'])
+
+    def test_release_refuses_while_transcription_is_running(self) -> None:
+        from unittest.mock import patch
+        from components.subtitle.app.backend import memory_policy
+
+        with patch.object(memory_policy, '_active', return_value=True):
+            response = self.client.post(self.FLEET_PATHS['release'], headers=self.headers)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('active', response.json()['detail'])
+
+    def test_the_idle_timer_starts_from_the_job_records(self) -> None:
+        """Activity is derived from job history so no endpoint can forget to report it."""
+        from components.subtitle.app.backend import memory_policy
+
+        # Bind the manager directly rather than starting the idle thread: the thread holds
+        # this manager forever in module state, which outlives the test's temporary library.
+        original = memory_policy._MANAGER
+        memory_policy._MANAGER = self.manager
+        self.addCleanup(setattr, memory_policy, '_MANAGER', original)
+        self.manager.engine.load('whisper-turbo')
+        self.assertTrue(memory_policy.status()['loaded_models'])
+        job = self.submit(self.manager)
+        finished = self.wait(self.manager, job['id'])
+        self.assertEqual(finished['state'], 'done')
+        newest = memory_policy._latest_job_time()
+        self.assertIsNotNone(newest)
+        self.assertLessEqual(abs(time.time() - newest), 30.0)
+        self.assertEqual(memory_policy._idle_since(), newest)
 
 
 if __name__ == '__main__':

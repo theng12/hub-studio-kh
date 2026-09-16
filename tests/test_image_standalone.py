@@ -260,6 +260,46 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(restarted.get(job_id)['error_code'], 'JOB_PERSISTENCE_UNCERTAIN')
         self.assertTrue(path.exists())
 
+    def test_memory_policy_publishes_the_fleet_contract(self):
+        """Image holds no model between jobs, but the Hub still inventories it.
+
+        The Hub's machine-wide memory inventory and its handoff release pass read every
+        Studio through `GET/PUT /api/memory-policy` + `POST /api/memory/release`. Without
+        these the app reported Image as "update required" and counted it as a failed
+        release, even though Image is the one Studio that always frees its model.
+        """
+        policy = self.client.get('/api/memory-policy', headers=self.headers)
+        self.assertEqual(policy.status_code, 200)
+        body = policy.json()
+        self.assertEqual(body['mode'], 'immediate')
+        self.assertTrue(body['fixed'])
+        self.assertEqual(body['loaded_models'], [])
+        self.assertFalse(body['resident'])
+        self.assertFalse(body['busy'])
+        self.assertEqual([row['mode'] for row in body['options']], ['immediate'])
+
+        # There is no idle timer to configure, so the honest answer is a refusal.
+        rejected = self.client.put('/api/memory-policy', headers=self.headers,
+                                   json={'mode': 'balanced'})
+        self.assertEqual(rejected.status_code, 422)
+        accepted = self.client.put('/api/memory-policy', headers=self.headers,
+                                   json={'mode': 'immediate'})
+        self.assertEqual(accepted.status_code, 200)
+
+    def test_memory_release_never_reports_a_running_generation_as_freed(self):
+        idle = self.client.post('/api/memory/release', headers=self.headers)
+        self.assertEqual(idle.status_code, 200)
+        self.assertFalse(idle.json()['released'])
+        self.assertEqual(idle.json()['loaded_models'], [])
+
+        self.manager.jobs['b' * 32] = {'id': 'b' * 32, 'state': 'running',
+                                       'created_at': time.time()}
+        active = self.client.get('/api/memory-policy', headers=self.headers).json()
+        self.assertEqual(active['loaded_models'], [[MODEL_ID]])
+        self.assertTrue(active['busy'])
+        refused = self.client.post('/api/memory/release', headers=self.headers)
+        self.assertEqual(refused.status_code, 409)
+
     def test_invalid_controls_and_unqualified_modes(self):
         with self.assertRaises(ValueError):
             validate_request(self.request(guidance=float('inf')))

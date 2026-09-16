@@ -656,6 +656,11 @@ struct StudioContent: View {
                         Button("Open Log") { studio.openLog() }
                     }
                 }
+                Section("Model memory") {
+                    Text("Each Studio keeps at most one model in unified memory. This sets how long an idle model stays loaded, which matters most when several Studios share one Mac.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    memoryControls
+                }
                 Section("App data") {
                     LabeledContent("Location") { Text(studio.configuration.dataDirectory.path).textSelection(.enabled).multilineTextAlignment(.trailing) }
                     Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
@@ -663,6 +668,7 @@ struct StudioContent: View {
                 }
             }.formStyle(.grouped)
         }
+        .task { if connected { await workspace.refreshMemoryPolicy() } }
     }
     private var connections: some View {
         ScrollView {
@@ -692,6 +698,87 @@ struct StudioContent: View {
             HStack { Spacer(); Button("View Available Workspaces") { studio.select(.overview) }; Spacer() }
             Spacer()
         }.padding(28)
+    }
+
+    /// Idle-release controls for every Studio on this machine, read from the Hub.
+    ///
+    /// The mode names and thresholds come from the Studios themselves, so this screen never
+    /// invents what "Balanced" means, and the resolved default is per machine: a Mac with
+    /// under 16 GB defaults to releasing immediately.
+    @ViewBuilder private var memoryControls: some View {
+        if let inventory = workspace.memoryInventory {
+            ForEach(inventory.studios) { row in
+                memoryRow(row, options: row.policy?.resolvedOptions ?? inventory.options)
+            }
+        } else {
+            Text(connected
+                 ? "Model memory settings are unavailable in this build."
+                 : "Start local services to read and change model memory settings.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        if let note = workspace.memoryNote {
+            Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        HStack {
+            Button(workspace.updatingMemory ? "Working…" : "Release Model Memory") {
+                Task { await workspace.releaseMemory() }
+            }.disabled(!connected || workspace.updatingMemory)
+            Button("Refresh") { Task { await workspace.refreshMemoryPolicy() } }
+                .disabled(!connected || workspace.updatingMemory)
+            if workspace.updatingMemory { ProgressView().controlSize(.small) }
+        }
+    }
+
+    @ViewBuilder private func memoryRow(_ row: NativeMemoryStudio, options: [NativeMemoryMode]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(row.title).font(.headline)
+                if !row.isReady {
+                    Text(memoryStateLabel(row.state)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text(memoryResidency(row)).font(.caption).foregroundStyle(.secondary)
+            }
+            if row.isReady, let policy = row.policy {
+                if policy.isFixed {
+                    Text(policy.releasePolicy ?? "The model is released when each job finishes.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Picker("Release policy", selection: Binding(
+                        get: { policy.mode },
+                        set: { value in Task { await workspace.setMemoryMode(value, studioIDs: [row.id]) } }
+                    )) {
+                        ForEach(options) { option in
+                            Text(option.mode == policy.defaultMode ? "\(option.label) (default)" : option.label)
+                                .tag(option.mode)
+                        }
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    .disabled(!connected || workspace.updatingMemory)
+                    Text(options.first { $0.mode == policy.mode }?.summary ?? "")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            } else if let detail = row.detail, !detail.isEmpty {
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 2)
+    }
+
+    private func memoryStateLabel(_ state: String) -> String {
+        switch state {
+        case "offline": return "Not running"
+        case "update_required": return "Needs an update"
+        case "error": return "Unavailable"
+        default: return state.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func memoryResidency(_ row: NativeMemoryStudio) -> String {
+        guard let policy = row.policy else { return "" }
+        if let busy = policy.busy, busy { return "Working" }
+        let held = policy.resident
+        guard !held.isEmpty else { return "No model loaded" }
+        return "Holding " + held.map { modelName($0) }.joined(separator: ", ")
     }
 
     private func chooseTranscriptionFile() {

@@ -10,6 +10,7 @@ import subprocess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from . import memory_policy
 from .generation import (DEFAULTS, MODEL_ID, MODEL_REVISION, SIZE_PRESETS,
                          GenerationManager, final_matches)
 
@@ -140,6 +141,30 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         if receipt is None:
             raise HTTPException(404, 'completed Image job not found')
         return receipt
+
+    # ── model memory policy ────────────────────────────────────────────────
+    # The fleet contract every Studio publishes. Image has no idle timer of its own — mflux
+    # is built inside the job and dropped when it ends — but the Hub's machine-wide memory
+    # inventory and handoff pass read all Studios through this shape.
+
+    @app.get('/api/memory-policy')
+    def memory_policy_status() -> dict:
+        return memory_policy.status(manager)
+
+    @app.put('/api/memory-policy')
+    def memory_policy_save(body: dict | None = None) -> dict:
+        mode = str((body or {}).get('mode') or '')
+        if mode != 'immediate':
+            raise HTTPException(422, 'Image releases its model after every job; '
+                                     'there is no idle policy to change')
+        return memory_policy.status(manager)
+
+    @app.post('/api/memory/release')
+    def memory_release() -> dict:
+        try:
+            return memory_policy.release(manager)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     return app
 

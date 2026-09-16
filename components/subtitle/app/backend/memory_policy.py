@@ -7,6 +7,14 @@ for the lifetime of the process — the leak that matters most on an 8 GB machin
 
 This mirrors the Voice policy: one resident model, an idle timer, an operator-chosen mode
 persisted per machine, and a hard rule that **active work is never preempted**.
+
+The status payload deliberately publishes the same field names the Voice worker uses
+(``loaded_models``, ``model_idle_seconds``, ``active_work``, ``busy``, ``next_release_at``,
+``last_release_*``, ``release_count``, ``counters_since``). The Hub's fleet controller
+(:mod:`components.hub.backend.memory_control`) reads every Studio through one shape, and it
+decides whether a release actually freed anything by reading ``loaded_model``/
+``loaded_models``/``loaded_pipeline`` back out of the response. A Studio that publishes a
+different vocabulary is silently counted as released while still holding its model.
 """
 from __future__ import annotations
 
@@ -26,15 +34,32 @@ MODES = {
 }
 CHECK_INTERVAL_SECONDS = 5
 
+# Provenance for every counter below. Each starts at zero on process start, while job
+# history survives on disk, so `release_count: 0` alone cannot distinguish "the idle thread
+# never fired" from "it fired, then the service was restarted". Publishing the process start
+# these counters are measured from lets a remote reader tell the two apart without SSH.
+_PROCESS_STARTED_AT = time.time()
+
 _LOCK = threading.RLock()
 _MANAGER = None
+_STATE_DIR: Path | None = None
 _LAST_ACTIVITY: float | None = None
-_LAST_RELEASE: dict | None = None
+_LAST_RELEASE_AT: float | None = None
+_LAST_RELEASE_REASON: str | None = None
+_LAST_RELEASE_DETAILS: dict | None = None
+_LAST_ERROR: str | None = None
 _RELEASE_COUNT = 0
 _STARTED = False
 
 
 def settings_file() -> Path:
+    """Where the operator's choice is stored.
+
+    The worker's own state directory wins, so the saved mode sits beside the job ledger and
+    artifacts rather than beside whatever directory the process happened to start in.
+    """
+    if _STATE_DIR is not None:
+        return _STATE_DIR / 'memory_policy.json'
     data = (os.environ.get('STUDIOHUB_SUBTITLE_DATA_DIR')
             or os.environ.get('STUDIOHUB_DATA_DIR'))
     return Path(data or '.') / 'memory_policy.json'
@@ -73,6 +98,17 @@ def _resident() -> bool:
                 and getattr(_MANAGER.engine, '_model', None) is not None)
 
 
+def _loaded_models() -> list[list[str]]:
+    """Resident models in the Hub fleet controller's vocabulary.
+
+    ``loaded_models`` is the field the controller reads back after a release to check that
+    the model actually went away. Reporting residency only as a private boolean would let a
+    failed unload look like a successful release.
+    """
+    package = getattr(_MANAGER.engine, 'loaded_package', None) if _MANAGER is not None else None
+    return [[str(package)]] if package else []
+
+
 def _active() -> bool:
     if _MANAGER is None:
         return False
@@ -92,15 +128,42 @@ def note_activity() -> None:
 
 def status() -> dict:
     mode = _mode()
+    idle_seconds = MODES[mode]['idle_seconds']
+    loaded = _loaded_models()
+    active = _active()
+    last = _idle_since()
+    idle = max(0.0, time.time() - last) if loaded and last is not None else None
+    due_at = None
+    if idle_seconds is not None and idle is not None:
+        due_at = time.time() + max(0, idle_seconds - idle)
+    with _LOCK:
+        release_count = _RELEASE_COUNT
+        last_release_at = _LAST_RELEASE_AT
+        last_release_reason = _LAST_RELEASE_REASON
+        last_release_details = _LAST_RELEASE_DETAILS
+        last_error = _LAST_ERROR
     return {
         'mode': mode,
-        'idle_seconds': MODES[mode]['idle_seconds'],
-        'modes': {key: value['label'] for key, value in MODES.items()},
         'default_mode': default_mode(),
+        'idle_seconds': idle_seconds,
+        # Both spellings are published on purpose: `options` is the fleet contract the Hub
+        # and the native Settings screen read, `modes` is the older label map.
+        'options': [{'mode': key, **value} for key, value in MODES.items()],
+        'modes': {key: value['label'] for key, value in MODES.items()},
+        'loaded_models': loaded,
+        'model_idle_seconds': idle,
+        'active_work': active,
+        'busy': active,
+        'next_release_at': due_at,
+        'last_release_at': last_release_at,
+        'last_release_reason': last_release_reason,
+        'last_release_details': last_release_details,
+        'last_error': last_error,
+        'release_count': release_count,
+        'counters_since': _PROCESS_STARTED_AT,
+        # Kept for the Subtitle screen and the pre-existing policy tests.
+        'resident': bool(loaded),
         'machine_bytes': machine_bytes(),
-        'resident': _resident(),
-        'release_count': _RELEASE_COUNT,
-        'last_release': _LAST_RELEASE,
     }
 
 
@@ -116,16 +179,31 @@ def save(mode: str) -> dict:
 
 
 def release_now(reason: str = 'manual') -> dict:
-    global _LAST_RELEASE, _RELEASE_COUNT
+    global _LAST_RELEASE_AT, _LAST_RELEASE_REASON, _LAST_RELEASE_DETAILS
+    global _LAST_ERROR, _RELEASE_COUNT
     with _LOCK:
         if _active():
             raise RuntimeError('subtitle work is active; memory was not released')
+        released_models = [row[0] for row in _loaded_models()]
         released = False
-        if _MANAGER is not None:
-            released = bool(_MANAGER.engine.unload(reason).get('released'))
+        error = None
+        try:
+            if _MANAGER is not None:
+                released = bool(_MANAGER.engine.unload(reason).get('released'))
+        except Exception as exc:
+            # A failed unload must be visible in the payload rather than reported as a
+            # successful release; the residency below still shows what stayed loaded.
+            error = f'{type(exc).__name__}: {exc}'
         _RELEASE_COUNT += 1
-        _LAST_RELEASE = {'at': time.time(), 'reason': reason, 'released': released}
-        return {'released': released, 'reason': reason}
+        _LAST_RELEASE_AT = time.time()
+        _LAST_RELEASE_REASON = reason
+        _LAST_RELEASE_DETAILS = {'released': released, 'reason': reason,
+                                 'models': released_models}
+        _LAST_ERROR = error
+        details = dict(_LAST_RELEASE_DETAILS)
+        count = _RELEASE_COUNT
+    return {**status(), 'released': released, 'reason': reason, 'error': error,
+            'release_count': count, **details}
 
 
 def _latest_job_time() -> float | None:
@@ -169,9 +247,12 @@ def _loop() -> None:
 
 
 def start_background(manager) -> None:
-    global _MANAGER, _STARTED, _LAST_ACTIVITY
+    global _MANAGER, _STARTED, _LAST_ACTIVITY, _STATE_DIR
     with _LOCK:
         _MANAGER = manager
+        state = getattr(manager, 'data', None)
+        if state is not None and _STATE_DIR is None:
+            _STATE_DIR = Path(state)
         if _LAST_ACTIVITY is None:
             _LAST_ACTIVITY = time.time()
         if _STARTED:

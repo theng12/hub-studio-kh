@@ -31,6 +31,11 @@ final class FixtureProtocol: URLProtocol {
     static var catalogPorts: [Int] = []
     static let catalogStarted = DispatchSemaphore(value: 0)
     static let releaseCatalog = DispatchSemaphore(value: 0)
+    static var lastMemoryBody: [String: Any]?
+    static var lastMemoryMethod = ""
+    static var lastMemoryToken = ""
+    static var memoryReleaseCount = 0
+    static var memoryUnavailable = false
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -46,6 +51,10 @@ final class FixtureProtocol: URLProtocol {
     static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
+    static func memoryBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastMemoryBody }
+    static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
+    static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
+    static func setMemoryUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; memoryUnavailable = value }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
@@ -88,6 +97,27 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
             result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+        case ("GET", "/api/hub/memory/policy"):
+            Self.lock.lock(); let memoryDown = Self.memoryUnavailable; Self.lock.unlock()
+            result = memoryDown
+                ? (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
+                : (200, "application/json", Self.memoryFixture)
+        case ("PUT", "/api/hub/memory/policy"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.lastMemoryBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lastMemoryMethod = method
+            Self.lastMemoryToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"action":"set_mode","selected":2,"succeeded":2,"failed":0,"mode":"memory_saver","results":[{"id":"subtitle","ok":true,"result":"updated","detail":null},{"id":"voice","ok":true,"result":"updated","detail":null}]}"#.utf8))
+        case ("POST", "/api/hub/memory/release"):
+            Self.lock.lock()
+            Self.memoryReleaseCount += 1
+            Self.lastMemoryMethod = method
+            Self.lastMemoryToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            Self.lock.unlock()
+            // One Studio frees its model, one is mid-job and must be left alone.
+            result = (200, "application/json", Data(#"{"ok":false,"action":"release","selected":2,"succeeded":1,"failed":1,"mode":null,"results":[{"id":"subtitle","ok":true,"result":"released","detail":null},{"id":"voice","ok":false,"result":"busy","detail":"Voice generation or transcription is active; memory was not released"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
         case ("GET", "/studio/subtitle/api/transcribe/availability"):
@@ -192,7 +222,9 @@ final class FixtureProtocol: URLProtocol {
         finish(result)
     }
 
-    private static let catalogFixture = Data(#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
+    private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
+    private static let catalogFixture = Data(
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -223,6 +255,45 @@ struct NativeAPITests {
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 6, "combined model catalog")
+
+        // Model memory: one Hub route the app reads, with the mode names, thresholds and
+        // resolved per-machine default all reported by the Studios that own them.
+        await store.refreshMemoryPolicy()
+        let memory = store.memoryInventory
+        require(memory?.studios.count == 3, "memory inventory must list every Studio")
+        require(memory?.summary.updateRequired == 0, "no Studio should need an update")
+        let subtitleMemory = memory?.studios.first { $0.id == "subtitle" }
+        require(subtitleMemory?.state == "ready", "the Subtitle worker must answer the memory contract")
+        require(subtitleMemory?.policy?.mode == "immediate", "Subtitle's saved mode")
+        require(subtitleMemory?.policy?.defaultMode == "immediate", "the Studio's own machine-aware default")
+        require(subtitleMemory?.policy?.resident == ["whisper-large-v3-turbo"], "a loaded model must be named, not just a boolean")
+        require(subtitleMemory?.policy?.resolvedOptions.count == 4, "every idle mode must be selectable")
+        let imageMemory = memory?.studios.first { $0.id == "image" }
+        require(imageMemory?.policy?.isFixed == true, "Image releases inside every job and has no idle mode")
+        require(imageMemory?.policy?.resident.isEmpty == true, "Image holds nothing between jobs")
+        require(memory?.studios.first { $0.id == "voice" }?.policy?.busy == true, "a working Studio must be shown as busy")
+
+        await store.setMemoryMode("memory_saver", studioIDs: ["subtitle"])
+        let (memoryMethod, memoryToken) = FixtureProtocol.memoryRequest()
+        require(memoryMethod == "PUT", "changing the mode must use the Hub route")
+        require(memoryToken == "native-test-token", "the memory change must be authenticated")
+        require(FixtureProtocol.memoryBody()?["mode"] as? String == "memory_saver", "the selected mode must reach the Hub")
+        require(FixtureProtocol.memoryBody()?["studio_ids"] as? [String] == ["subtitle"], "a per-Studio change must not rewrite every Studio")
+        require(store.memoryNote?.contains("Updated") == true, "a change needs a result the operator can read")
+
+        await store.releaseMemory()
+        require(FixtureProtocol.releases() == 1, "Release Model Memory must reach the Hub")
+        require(store.memoryNote?.lowercased().contains("busy") == true, "a Studio that could not be freed must be named, not hidden")
+
+        // An older Hub without these routes must leave Settings usable rather than blank.
+        FixtureProtocol.setMemoryUnavailable(true)
+        await store.refreshMemoryPolicy()
+        require(store.memoryInventory == nil, "an unavailable memory policy must not show stale Studio state")
+        require(store.memoryNote?.isEmpty == false, "an unavailable memory policy needs an explanation")
+        FixtureProtocol.setMemoryUnavailable(false)
+        await store.refreshMemoryPolicy()
+        require(store.memoryInventory?.studios.count == 3, "the inventory must recover once the Hub answers again")
+
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
         require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "mlx-community/VoxCPM2-4bit"], "native Audio support guard")

@@ -98,14 +98,17 @@ def host_eligibility() -> dict:
             'minimum_unified_memory_bytes': MINIMUM_UNIFIED_MEMORY_BYTES}
 
 
-def voice_export_module():
+def voice_export_module(voice_app_dir: str | Path | None = None):
     """Import the existing Voice transcription module at its one source path.
 
-    ``STUDIOHUB_VOICE_APP_DIR`` points at the tracked ``components/voice/app``
-    directory. In the packaged bundle the Voice source ships for exactly this
-    shared reuse; the private Subtitle process still owns only its own state.
+    The caller's own directory wins over the environment so a helper is never silently
+    dependent on ambient process state: passing the Voice app path and reading it back out
+    of ``STUDIOHUB_VOICE_APP_DIR`` used to be two different things, and only one of them was
+    honoured. ``STUDIOHUB_VOICE_APP_DIR`` remains the fallback, which is what the packaged
+    Subtitle worker passes at startup.
     """
-    voice_app = os.environ.get('STUDIOHUB_VOICE_APP_DIR', '').strip()
+    explicit = str(voice_app_dir) if voice_app_dir is not None else ''
+    voice_app = explicit.strip() or os.environ.get('STUDIOHUB_VOICE_APP_DIR', '').strip()
     if not voice_app:
         raise RuntimeError('STUDIOHUB_VOICE_APP_DIR is required to reuse the Voice export source')
     root = str(Path(voice_app).expanduser().resolve())
@@ -131,7 +134,7 @@ def one_source_location(voice_app_dir: str | Path) -> dict:
 
 def format_artifacts(segments: list[dict], voice_app_dir: str | Path) -> dict:
     """Text/SRT/VTT produced only by the existing Voice formatters."""
-    module = voice_export_module()
+    module = voice_export_module(voice_app_dir)
     return {
         'text': ' '.join(
             str(segment.get('text') or '').strip()
@@ -145,18 +148,18 @@ def format_artifacts(segments: list[dict], voice_app_dir: str | Path) -> dict:
 def normalize_segments(raw_segments: list[dict], *, word_timestamps: bool,
                        audio_duration: Optional[float],
                        voice_app_dir: str | Path) -> tuple[str, list[dict]]:
-    module = voice_export_module()
+    module = voice_export_module(voice_app_dir)
     return module._normalize_segments(
         raw_segments, word_timestamps=word_timestamps, audio_duration=audio_duration)
 
 
-def audio_duration_seconds(path: Path) -> Optional[float]:
+def audio_duration_seconds(path: Path, voice_app_dir: str | Path | None = None) -> Optional[float]:
     """True media duration, so padded-silence output can be discarded.
 
     Delegates to the existing Voice probe helper rather than adding a second
     media-probing implementation.
     """
-    module = voice_export_module()
+    module = voice_export_module(voice_app_dir)
     return module._audio_duration_seconds(Path(path))
 
 
@@ -504,7 +507,7 @@ class SubtitleEngine:
             model, load_receipt = self.load(package_id)
             if progress is not None:
                 progress(0.2)
-            duration = audio_duration_seconds(path)
+            duration = audio_duration_seconds(path, self.voice_app_dir)
             result = model.generate(
                 str(path),
                 language=(language or '').strip() or None,

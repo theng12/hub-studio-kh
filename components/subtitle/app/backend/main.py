@@ -66,12 +66,15 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
                 'host': host_eligibility()}
 
     # ── model memory policy ────────────────────────────────────────────────
+    # Path names are the fleet contract every Studio publishes, matching the Voice worker's
+    # `GET/PUT /api/memory-policy` and `POST /api/memory/release`. The Hub's
+    # FleetMemoryControl reads all of them through this one shape.
 
-    @app.get('/api/memory/policy')
+    @app.get('/api/memory-policy')
     def memory_policy_status() -> dict:
         return memory_policy.status()
 
-    @app.post('/api/memory/policy')
+    @app.put('/api/memory-policy')
     def memory_policy_save(body: dict | None = None) -> dict:
         try:
             return memory_policy.save(str((body or {}).get('mode') or ''))

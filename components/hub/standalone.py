@@ -318,6 +318,26 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def subtitle_job(job_id: str) -> dict[str, Any]:
         return await worker_read("subtitle", f"/api/generate/transcribe/jobs/{job_id}")
 
+    # ── machine memory policy ──────────────────────────────────────────────
+    # One route pair for every Studio's idle-release choice, so the app never has to know
+    # which worker is which. FleetMemoryControl reads each Studio through the shared
+    # `GET/PUT /api/memory-policy` + `POST /api/memory/release` contract and reports
+    # per-Studio residency back, including how much each Studio is holding right now.
+
+    @app.get("/api/hub/memory/policy")
+    async def memory_policy() -> dict[str, Any]:
+        from .backend.memory_control import FleetMemoryControl
+        return await FleetMemoryControl(monitor).inventory()
+
+    @app.put("/api/hub/memory/policy")
+    async def set_memory_policy(body: dict[str, Any]) -> dict[str, Any]:
+        from .backend.memory_control import FleetMemoryControl
+        try:
+            return await FleetMemoryControl(monitor).set_mode(
+                str(body.get("mode") or ""), body.get("studio_ids"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.post("/api/hub/memory/release")
     async def release_memory(body: dict[str, Any] | None = None) -> dict[str, Any]:
         from .backend.memory_control import FleetMemoryControl

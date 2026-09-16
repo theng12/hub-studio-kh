@@ -11,7 +11,11 @@ from . import peers
 from .registry import label_for
 
 
-SUPPORTED_MODALITIES = {"image", "chat", "video", "music", "voice", "render"}
+# Every Studio that publishes the memory-policy contract. `transcription` is the packaged
+# Subtitle worker's modality; leaving it out kept the Subtitle model out of the Hub's
+# machine-wide release pass entirely, so a Whisper model could stay resident across a
+# handoff to another Studio on an 8 GB Mac.
+SUPPORTED_MODALITIES = {"image", "chat", "video", "music", "voice", "render", "transcription"}
 # Hub validates mode names and renders their labels. Each Studio owns and reports
 # the actual idle threshold, so keeping a second table here would risk drift.
 MODES = {
@@ -170,11 +174,22 @@ class FleetMemoryControl:
         if mode not in MODES:
             raise ValueError("mode must be one of: " + ", ".join(MODES))
         targets = self._selected(studio_ids)
+        # A Studio may declare its policy fixed — Image builds and drops mflux inside every
+        # job, so it has no idle timer to configure. Asking it to change would fail the whole
+        # operation for a Studio whose desired end state is already met, so report it as
+        # already-satisfied instead of sending a request that must be rejected.
+        statuses = await asyncio.gather(*(self._status_one(studio) for studio in targets))
+        settled, changeable = [], []
+        for studio, state in zip(targets, statuses):
+            if state.get("state") == "ready" and (state.get("policy") or {}).get("fixed"):
+                settled.append({**state, "ok": True, "result": "fixed"})
+            else:
+                changeable.append(studio)
         results = await asyncio.gather(*(
             self._change_one(studio, "PUT", "/api/memory-policy", {"mode": mode}, "updated")
-            for studio in targets
+            for studio in changeable
         ))
-        operation = self._operation(results, "set_mode")
+        operation = self._operation([*results, *settled], "set_mode")
         operation["mode"] = mode
         return operation
 
