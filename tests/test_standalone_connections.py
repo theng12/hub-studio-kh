@@ -623,6 +623,7 @@ class FleetDispatchTests(unittest.TestCase):
 
 FLUX_MODEL_ID = "fixture/flux"
 WHISPER_MODEL_ID = "fixture/whisper"
+QWEN_MODEL_ID = "fixture/qwen"
 # A one-pixel PNG, with the digest the stub reports for it, so the controller can verify the
 # artifact it fetches rather than accepting whatever comes back.
 FLUX_PNG = bytes.fromhex(
@@ -672,6 +673,105 @@ def tiny_flux_install(root: Path) -> tuple[Path, Path]:
 
 def tiny_whisper_install(root: Path) -> tuple[Path, Path]:
     return tiny_install(root, "whisper-turbo", WHISPER_MODEL_ID, "fixture-whisper")
+
+
+# A short WAV, with the digest the stub reports for it, so the controller can verify what it
+# fetches rather than accepting whatever comes back.
+VOICE_WAV = (b"RIFF" + (36 + 8).to_bytes(4, "little") + b"WAVEfmt " + (16).to_bytes(4, "little")
+             + (1).to_bytes(2, "little") + (1).to_bytes(2, "little")
+             + (24000).to_bytes(4, "little") + (48000).to_bytes(4, "little")
+             + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+             + b"data" + (8).to_bytes(4, "little") + b"\x00" * 8)
+VOICE_SHA = sha256(VOICE_WAV).hexdigest()
+
+
+class StubVoiceWorker:
+    """A recording stand-in for a node's Voice studio.
+
+    A clone is dispatched to the reference endpoint rather than the preset one, and like an
+    image job it is accepted and then polled.
+    """
+
+    def __init__(self, *, catalog: bool = True, machine: str = "local") -> None:
+        self.submissions: list[dict] = []
+        self.seen: list[str] = []
+        self.has_catalog = catalog
+        self.machine = machine
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code: int, payload: dict) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                outer.seen.append(self.path)
+                if self.path.endswith("/api/health"):
+                    self._send(200, {"ok": True, "generation": {
+                        "available": True, "busy": False, "queued": 0, "running": 0}})
+                elif self.path.endswith("/api/catalog"):
+                    models = [{
+                        "repo": QWEN_MODEL_ID, "model_id": QWEN_MODEL_ID,
+                        "label": "Qwen fixture", "family": "qwen3-tts",
+                        "capabilities": ["tts", "voice-cloning"], "languages": ["en"],
+                        "runtime_ready": True, "cache": {"state": "cached"},
+                        "reference_audio": {"declared": True, "supported": True,
+                                            "transcript": "required"},
+                    }] if outer.has_catalog else []
+                    self._send(200, {"models": models})
+                elif self.path.endswith("/audio"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(VOICE_WAV)))
+                    self.send_header("X-Content-SHA256", VOICE_SHA)
+                    self.end_headers()
+                    self.wfile.write(VOICE_WAV)
+                elif "/api/generate/jobs/" in self.path:
+                    self._send(200, {"job": {
+                        "id": "job-v1", "state": "done", "progress": 1.0,
+                        "worker_id": "voice-fixture", "machine_id": outer.machine,
+                        "bytes": len(VOICE_WAV), "sha256": VOICE_SHA,
+                        "media_type": "audio/wav",
+                        "output_url": "/api/generate/jobs/job-v1/audio",
+                        "artifact_url": "/api/generate/jobs/job-v1/audio",
+                        "output_path": "/tmp/job-v1.wav",
+                        "generated_at": time.time(), "finished_at": time.time(),
+                    }})
+                else:
+                    self._send(200, {})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                outer.seen.append(self.path)
+                if "/api/generate/txt2speech" in self.path:
+                    # A clone posts the request as JSON inside a form field, so the text is
+                    # somewhere in the body rather than being the body.
+                    outer.submissions.append({
+                        "path": self.path, "body": raw.decode("utf-8", "replace"),
+                        "token": self.headers.get("X-Hub-Token"),
+                    })
+                    self._send(200, {"job": {"id": "job-v1", "state": "queued",
+                                             "worker_id": "voice-fixture"}})
+                else:
+                    self._send(200, {"ok": True})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def port(self) -> int:
+        return self.server.server_address[1]
+
+    def stop(self) -> None:
+        self.server.shutdown()
 
 
 class StubSubtitleWorker:
@@ -853,6 +953,98 @@ class StubImageWorker:
 
     def stop(self) -> None:
         self.server.shutdown()
+
+
+class FleetVoiceDispatchTests(unittest.TestCase):
+    """Voice is the third studio, and a clone is what the fleet exists to move around."""
+
+    def test_a_voice_clone_submitted_to_the_controller_runs_on_the_node(self) -> None:
+        worker = StubVoiceWorker(machine="node-a")
+        self.addCleanup(worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-voice-fleet-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "voice", "modality": "voice", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+
+        # A Qwen clone declares a Whisper dependency: the Voice worker runs its own quality
+        # check on the reference clip, so the controller must have that installed too.
+        models_root = directory / "controller-models"
+        # The dependency is declared by package id, so this package must carry that id
+        # rather than a fixture name.
+        tiny_install(models_root, "whisper-turbo", WHISPER_MODEL_ID, "whisper-turbo")
+        manifests, library = tiny_install(
+            models_root, "qwen3-tts-12hz-0-6b-base-8bit", QWEN_MODEL_ID, "fixture-qwen")
+        # The controller's own Voice studio has no model, so the only place this can run is
+        # the node.
+        controller_worker = StubVoiceWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "voice", "modality": "voice", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "voice", "modality": "voice"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        controller_fleet = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": controller_fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+
+        # A clone needs a reference clip, and it goes through the same Hub contract the app's
+        # picker uses - which is what makes a pushed clone and a local one the same thing.
+        status, staged, _ = controller.post_multipart(
+            "/api/hub/voice-references", {"transcript": "exact words", "language": "en"},
+            {"audio": ("reference.wav", VOICE_WAV, "audio/wav")}, token=controller.token)
+        self.assertEqual(status, 201, staged)
+
+        status, submitted, _ = controller.post_json(
+            "/api/hub/jobs",
+            {"modality": "voice", "model": QWEN_MODEL_ID,
+             "clientRequestId": "fleet-voice-1",
+             "voice_reference_asset_id": staged["asset_id"],
+             "items": [{"text": "exact words", "params": {}}]},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted["batch_id"]
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not worker.submissions:
+            time.sleep(0.5)
+        self.assertTrue(worker.submissions,
+                        "the controller never sent the voice job to the node; "
+                        f"job: {self.voice_state(controller, batch)}; "
+                        f"node saw: {worker.seen[:10]}")
+        # The node's own credential, never the controller's.
+        self.assertEqual(worker.submissions[0]["token"], node.token)
+        self.assertIn("txt2speech", worker.submissions[0]["path"])
+
+        deadline = time.time() + 45
+        audio = b""
+        while time.time() < deadline:
+            status, audio = controller.artifact(
+                f"/api/hub/jobs/{batch}/items/0/artifact", token=controller.token)
+            if status == 200:
+                break
+            audio = b""
+            time.sleep(0.5)
+        self.assertEqual(audio, VOICE_WAV,
+                         "the controller must return the node's audio unchanged; "
+                         f"job: {self.voice_state(controller, batch)}")
+
+    @staticmethod
+    def voice_state(controller, batch: str) -> str:
+        status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(unreadable: {status})"
+        return (f"note={payload.get('governor_note')!r} "
+                f"items={payload.get('items')!r}")
 
 
 class FleetSubtitleDispatchTests(unittest.TestCase):
