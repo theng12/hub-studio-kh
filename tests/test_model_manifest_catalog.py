@@ -15,7 +15,9 @@ REVISION = re.compile(r"^[0-9a-f]{40}$")
 EXPECTED = {
     "flux2-klein-4b-mlx-4bit": ("AITRADER/FLUX2-klein-4B-mlx-4bit", "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "image-mflux"),
     "qwen3-tts-12hz-0-6b-base-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "50f45ef0047cde7e84c2ef04326acb8ada2436a7", "voice-mlx"),
+    "qwen3-tts-12hz-0-6b-base-4bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "0d6bb6fe33f92d47a507e23b9148940e8366ab5b", "voice-mlx"),
     "qwen3-tts-12hz-1-7b-base-8bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "e7dd0585652209fa0d7783659aad4e8a324de11c", "voice-mlx"),
+    "qwen3-tts-12hz-1-7b-base-4bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", "37e955a1deb861c088ae5f3a67043185f3d1a60c", "voice-mlx"),
     "voxcpm2-4bit": ("mlx-community/VoxCPM2-4bit", "dc9e5c187858da5f4a13dc4c247e297339216381", "voice-mlx"),
     "voxcpm2-8bit": ("mlx-community/VoxCPM2-8bit", "d52725898a0675703f7f9ddc5a4d1a3cdbb99032", "voice-mlx"),
     "voxcpm2-bf16": ("mlx-community/VoxCPM2-bf16", "a7fb80d9056983135a54ca3f71fcc5a637ccddf5", "voice-mlx"),
@@ -40,7 +42,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.manifests = {path.stem: json.loads(path.read_text()) for path in CATALOG.glob("*.json")}
 
-    def test_catalog_is_the_exact_ten_model_release_menu(self):
+    def test_catalog_is_the_exact_twelve_model_release_menu(self):
         self.assertEqual(set(self.manifests), set(EXPECTED))
         for package_id, (model_id, revision, engine) in EXPECTED.items():
             manifest = self.manifests[package_id]
@@ -55,10 +57,14 @@ class ModelManifestCatalogTests(unittest.TestCase):
         expected_digests = {
             # Updated only by a deliberate recapture of the exact pinned revisions.
             "flux2-klein-4b-mlx-4bit": "d49528a1b5da899519099f3312a7d1a60174c5f6c0858a6ac35daf16d1e0012d",
-            "omnivoice-bfloat16": "0567bb750666851f14fded048fc0649125b4651a794007b8b38a6aa796c833dd",
-            "qwen3-tts-12hz-0-6b-base-8bit": "5837702e8ef19242c6c373a61eeaf2017116bb6fd1d7eaeb96869081218a6382",
+            "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
+            "qwen3-tts-12hz-0-6b-base-4bit": "30cd91171bb5c1e63e5d7fb66aa4de16400fe77f2a0ebf6480e706ce4285a45b",
+            "qwen3-tts-12hz-0-6b-base-8bit": "23404870afb1a3ef651c496de9d0891f20c9f99488a92792bebcfd08ec54233e",
+            "qwen3-tts-12hz-1-7b-base-4bit": "f514eb0f48dda5f3173c08ac954e644e11802aa5525c821cdaff752a9ad722d7",
             "qwen3-tts-12hz-1-7b-base-8bit": "e0307971122e2b2a526bdef5308129f9122130c27f8cfbe7429ccd3ea5f1a5ba",
-            "voxcpm2-4bit": "946239982038c775578737afd544d10bd39dc90cbec38bd97bb6f61407bf2f21",
+            # Recaptured: the 4-bit VoxCPM tier's published floor now records the owner's
+            # 8 GB observation instead of the earlier inventory guidance.
+            "voxcpm2-4bit": "046da2b3f5e720c278eb15ccd6f5d5a70bd47a1bed434dd6e06350a0370ff64a",
             "voxcpm2-8bit": "a5063ff38195bf0bb3ff3d0be72704e71a41e15b2f016477d8bde9c0eceac147",
             "voxcpm2-bf16": "680d3a0b89a89853af24197f3a755e8789385c5ad38e5073830c5ec7604b228f",
             "whisper-base": "1a504fa7c9f76ab223ead7120cd8311c741f269521a300e5e81b0d5f1dc8e2ef",

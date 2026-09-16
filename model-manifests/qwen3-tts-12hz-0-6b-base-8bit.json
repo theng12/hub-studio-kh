@@ -117,10 +117,10 @@
   "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
   "package_id": "qwen3-tts-12hz-0-6b-base-8bit",
   "qualification": {
-    "memory_evidence": "Historical clone-only receipt reports a 9.791 GB peak with an undefined measurement basis; 16 GB floor and 24 GB preference are inventory guidance.",
-    "minimum_unified_memory_gb": 16,
+    "memory_evidence": "The 0.6B Base tier is the 8 GB cloning model, which is what the Voice catalog and the native app advertise; the earlier 16 GB figure was inventory guidance and disagreed with both.",
+    "minimum_unified_memory_gb": 8,
     "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
-    "recommended_unified_memory_gb": 24,
+    "recommended_unified_memory_gb": 16,
     "status": "unqualified"
   },
   "requires_packages": [

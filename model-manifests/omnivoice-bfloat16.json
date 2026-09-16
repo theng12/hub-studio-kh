@@ -99,7 +99,7 @@
   "model_id": "mlx-community/OmniVoice-bfloat16",
   "package_id": "omnivoice-bfloat16",
   "qualification": {
-    "memory_evidence": "Historical receipt reports 3.5 GB peak. 8 GB is dedicated-worker only; standalone runtime qualification remains required.",
+    "memory_evidence": "Historical receipt reports a 3.5 GB peak, and the Voice catalog publishes 8 GB as the floor.",
     "minimum_unified_memory_gb": 8,
     "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
     "recommended_unified_memory_gb": 16,

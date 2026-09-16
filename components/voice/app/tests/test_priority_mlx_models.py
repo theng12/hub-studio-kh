@@ -47,7 +47,11 @@ def test_priority_catalog_is_focused_and_clone_capable() -> None:
     qwen = _repos("qwen3-tts")
     assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit" in qwen
     assert "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit" in qwen
-    assert len(qwen) == 5
+    # Both Base tiers are offered at 8-bit and at 4-bit: the 4-bit pair is the memory
+    # trade for a Mac that shares memory with other Studios, not a replacement.
+    assert "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit" in qwen
+    assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit" in qwen
+    assert len(qwen) == 7
 
     chatterbox = _repos("chatterbox-mlx")
     assert len(chatterbox) == 3
@@ -330,6 +334,26 @@ def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     )
     with pytest.raises(generation.MemoryGuardError, match="Memory guard paused"):
         manager._memory_preflight(model)
+
+
+def test_the_4bit_base_pair_is_a_memory_trade_not_a_quality_claim() -> None:
+    """The 4-bit build is smaller and says so; it must not outrank the 8-bit tier."""
+    four = {entry.repo: entry for entry in catalog.CATALOG
+            if entry.repo.endswith("-Base-4bit")}
+    eight = {entry.repo: entry for entry in catalog.CATALOG
+             if entry.repo.endswith("-Base-8bit")}
+    assert set(four) == {"mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+                         "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"}
+    for repo, entry in four.items():
+        smaller = repo.replace("-Base-4bit", "-Base-8bit")
+        assert entry.size_gb < eight[smaller].size_gb, repo
+        assert entry.min_unified_memory_gb <= eight[smaller].min_unified_memory_gb, repo
+        # Cloning is the point of a Base tier, and the quantization caveat is stated.
+        assert "voice-cloning" in entry.capabilities
+        assert any("4-bit" in text for _, text in entry.use_cases), repo
+    # The 1.7B 4-bit is the bigger checkpoint, so it cannot claim the smaller tier's floor.
+    assert four["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"].min_unified_memory_gb \
+        > four["mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"].min_unified_memory_gb
 
 
 def test_kokoro_catalog_is_single_mlx_multilingual_release() -> None:

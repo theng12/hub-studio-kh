@@ -720,6 +720,36 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("weak",  "Less prosodic nuance than the 1.7B tier — voice character may sound flatter"),
         ),
     ),
+    # 4-bit Base pair: half the weight bytes of the 8-bit builds, so the larger model
+    # stays practical on a small Mac. Quantization is lossy, so these are offered as a
+    # memory trade rather than a default - the 8-bit and bf16 tiers remain the quality
+    # references, and this build's own audio has not been measured here yet.
+    ModelEntry(
+        repo="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        label="Qwen3-TTS 0.6B Base — small (MLX 4-bit)",
+        family="qwen3-tts",
+        size_gb=1.7,
+        gated=False,
+        min_unified_memory_gb=8,
+        recommended_hardware=(
+            "Apple Silicon with 8 GB unified memory. The lightest cloning tier: "
+            "smallest weights and the least memory pressure."
+        ),
+        capabilities=("tts", "voice-cloning", "multilingual"),
+        best_for=(
+            "Voice cloning on a Mac that is also running other Studios. Pair it with a "
+            "reference clip from the Voices library; choose an 8-bit or bf16 tier when "
+            "audio fidelity matters more than headroom."
+        ),
+        sample_rate_hz=24000,
+        languages=("en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"),
+        use_cases=(
+            ("good",  "Smallest Qwen cloning build — 1.7 GB of weights"),
+            ("good",  "Multilingual cloning across the ten upstream-supported languages"),
+            ("weak",  "4-bit quantization: expect slightly less fidelity than the 8-bit build of the same model"),
+            ("avoid", "Reference-quality masters — use the bf16 or 8-bit tier when the ear test matters"),
+        ),
+    ),
     ModelEntry(
         repo="mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",
         label="Qwen3-TTS 0.6B CustomVoice — M1 preset speakers (MLX 8-bit)",
@@ -768,6 +798,32 @@ CATALOG: tuple[ModelEntry, ...] = (
         ),
         section_size_control=SectionSizeControl(
             230, 400, 1, 280, 280, "qwen3-17b-production-v2-audit"
+        ),
+    ),
+    ModelEntry(
+        repo="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+        label="Qwen3-TTS 1.7B Base — quality voice cloning (MLX 4-bit)",
+        family="qwen3-tts",
+        size_gb=2.3,
+        gated=False,
+        min_unified_memory_gb=12,
+        recommended_hardware=(
+            "Apple Silicon with 12 GB or more. The larger cloning checkpoint at "
+            "roughly the weight size of the small 8-bit build."
+        ),
+        capabilities=("tts", "voice-cloning", "multilingual"),
+        best_for=(
+            "The larger Base checkpoint's speaker likeness and phrasing with the "
+            "memory footprint of the smaller 8-bit model — the middle rung between "
+            "the 0.6B builds and the full-quality 1.7B 8-bit."
+        ),
+        sample_rate_hz=24000,
+        languages=("en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"),
+        use_cases=(
+            ("good",  "1.7B cloning quality at 2.3 GB of weights"),
+            ("good",  "A practical middle tier for a 16 GB Mac sharing memory with Image or Subtitle"),
+            ("weak",  "4-bit quantization: expect slightly less fidelity than the 1.7B 8-bit build"),
+            ("avoid", "The very smallest Macs — use the 0.6B Base 4-bit there"),
         ),
     ),
     ModelEntry(

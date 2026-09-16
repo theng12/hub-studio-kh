@@ -395,6 +395,10 @@ final class NativeWorkspaceStore: ObservableObject {
     static let qwenBaseRepos: Set<String> = [
         "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
         "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+        // The 4-bit pair is the same cloning contract at roughly half the weight bytes, so it
+        // takes the same reference clip and transcript rather than being treated as unproven.
+        "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
     ]
     static let whisperTurbo = "mlx-community/whisper-large-v3-turbo"
 

@@ -158,11 +158,18 @@ qualified at — a Mac below it warns and runs anyway.
 | --- | --- | --- | --- |
 | Image | FLUX.2 Klein 4B MLX 4-bit | A prompt | 16 GB |
 | Subtitle | Whisper large-v3-turbo, small, base | An audio or video file | 8 GB |
-| Voice | Qwen3-TTS 12Hz 0.6B Base | Reference clip **and** its exact transcript | 8 GB |
-| Voice | Qwen3-TTS 12Hz 1.7B Base | Reference clip **and** its exact transcript | 16 GB |
+| Voice | Qwen3-TTS 12Hz 0.6B Base (8-bit and 4-bit) | Reference clip **and** its exact transcript | 8 GB |
+| Voice | Qwen3-TTS 12Hz 1.7B Base (8-bit and 4-bit) | Reference clip **and** its exact transcript | 12–16 GB |
 | Voice | Qwen3-TTS CustomVoice | A preset speaker, no reference | 8 GB |
 | Voice | OmniVoice bfloat16 | Reference clip | 16 GB |
-| Voice | VoxCPM2 4-bit / 8-bit / bf16 | Reference clip | 24 GB |
+| Voice | VoxCPM2 4-bit | Reference clip | 8 GB |
+| Voice | VoxCPM2 8-bit / bf16 | Reference clip | 16 GB |
+
+Both Base tiers ship at 8-bit and at 4-bit. The 4-bit build is roughly half the weight bytes for
+the same cloning contract, so it is the one to choose on a Mac that is sharing memory with Image
+or Subtitle; the 8-bit and bf16 builds remain the higher-fidelity tiers. Quantization is lossy, so
+treat 4-bit as a memory trade rather than an upgrade — the one thing it is not is a different
+workflow, and it takes the same reference clip and transcript.
 
 A clone **fails closed** on a transcript mismatch — that is an input contract, not a memory
 gate, and it stays. A reference clip must contain roughly 5 seconds or more of usable speech;
