@@ -13,6 +13,7 @@ runs in a child process with the packaged environment already set — the same r
 from __future__ import annotations
 
 from hashlib import sha256
+import io
 import json
 import os
 from pathlib import Path
@@ -146,6 +147,37 @@ class HubProcess:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.log.close()
+
+    def post_multipart(self, path: str, fields: dict, files: dict, *, token: str):
+        boundary = "----studiohubfixture"
+        body = io.BytesIO()
+        for key, value in fields.items():
+            body.write(f"--{boundary}\r\n".encode())
+            body.write(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
+            body.write(str(value).encode())
+            body.write(b"\r\n")
+        for key, (name, content, media) in files.items():
+            body.write(f"--{boundary}\r\n".encode())
+            body.write(f'Content-Disposition: form-data; name="{key}"; '
+                       f'filename="{name}"\r\n'.encode())
+            body.write(f"Content-Type: {media}\r\n\r\n".encode())
+            body.write(content)
+            body.write(b"\r\n")
+        body.write(f"--{boundary}--\r\n".encode())
+        request = urllib.request.Request(f"{self.base}{path}", data=body.getvalue(),
+                                         method="POST")
+        request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        request.add_header("Accept", "application/json")
+        request.add_header("X-Hub-Token", token)
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return response.status, json.loads(response.read() or b"null"), response
+        except urllib.error.HTTPError as error:
+            raw = error.read()
+            try:
+                return error.code, json.loads(raw or b"null"), error
+            except ValueError:
+                return error.code, {"raw": raw.decode(errors="replace")[:300]}, error
 
     def artifact(self, path: str, *, token: str) -> tuple[int, bytes]:
         """Fetch raw bytes. An artifact is not JSON, and parsing it as such fails on its magic
@@ -590,6 +622,7 @@ class FleetDispatchTests(unittest.TestCase):
 
 
 FLUX_MODEL_ID = "fixture/flux"
+WHISPER_MODEL_ID = "fixture/whisper"
 # A one-pixel PNG, with the digest the stub reports for it, so the controller can verify the
 # artifact it fetches rather than accepting whatever comes back.
 FLUX_PNG = bytes.fromhex(
@@ -599,8 +632,9 @@ FLUX_PNG = bytes.fromhex(
 FLUX_SHA = sha256(FLUX_PNG).hexdigest()
 
 
-def tiny_flux_install(root: Path) -> tuple[Path, Path]:
-    """One verified image package and the manifest catalog that names it.
+def tiny_install(root: Path, manifest_name: str, model_id: str,
+                 package_id: str) -> tuple[Path, Path]:
+    """One verified package and the manifest catalog that names it.
 
     The controller refuses a job for a model outside its packaged catalog, so a real dispatch
     test needs a real - if tiny - installation rather than a fixture that only looks like one.
@@ -609,14 +643,15 @@ def tiny_flux_install(root: Path) -> tuple[Path, Path]:
     from hashlib import sha256
     from components import model_packages
 
-    original = json_module.loads(
-        (PROJECT_ROOT / "model-manifests/flux2-klein-4b-mlx-4bit.json").read_text())
-    original["model_id"] = FLUX_MODEL_ID
-    original["package_id"] = "fixture-flux"
+    original = json_module.loads((PROJECT_ROOT / f"model-manifests/{manifest_name}.json").read_text())
+    original["model_id"] = model_id
+    original["package_id"] = package_id
     source = root / "source"
     for entry in original["files"]:
         value = (entry["path"] + "\n").encode()
-        target = source / entry["source_path"]
+        # A manifest may name where the file came from as well as where it is installed; the
+        # whisper manifests have only the installed path.
+        target = source / (entry.get("source_path") or entry["path"])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(value)
         entry["size"] = len(value)
@@ -627,8 +662,96 @@ def tiny_flux_install(root: Path) -> tuple[Path, Path]:
     model_packages.import_folder(original, source, library)
     manifests = root / "manifests"
     manifests.mkdir(parents=True, exist_ok=True)
-    (manifests / "fixture-flux.json").write_text(json_module.dumps(original))
+    (manifests / f"{package_id}.json").write_text(json_module.dumps(original))
     return manifests, library
+
+
+def tiny_flux_install(root: Path) -> tuple[Path, Path]:
+    return tiny_install(root, "flux2-klein-4b-mlx-4bit", FLUX_MODEL_ID, "fixture-flux")
+
+
+def tiny_whisper_install(root: Path) -> tuple[Path, Path]:
+    return tiny_install(root, "whisper-turbo", WHISPER_MODEL_ID, "fixture-whisper")
+
+
+class StubSubtitleWorker:
+    """A recording stand-in for a node's Subtitle studio.
+
+    Transcription is synchronous over one request, unlike an image job: the controller posts the
+    audio and the answer is the transcript, so there is no poll to follow.
+    """
+
+    def __init__(self, *, catalog: bool = True, machine: str = "local") -> None:
+        self.transcriptions: list[dict] = []
+        self.seen: list[str] = []
+        self.has_catalog = catalog
+        self.machine = machine
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code: int, payload: dict) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                outer.seen.append(self.path)
+                if self.path.endswith("/api/health"):
+                    self._send(200, {"ok": True, "transcription": {
+                        "available": True, "busy": False, "queued": 0, "running": 0}})
+                elif self.path.endswith("/api/catalog"):
+                    models = [{
+                        "repo": WHISPER_MODEL_ID, "model_id": WHISPER_MODEL_ID,
+                        "label": "Whisper fixture", "engine": "subtitle-mlx",
+                        "languages": "Multilingual", "supports_word_timestamps": True,
+                        "cached": True, "cache": {"state": "cached"},
+                    }] if outer.has_catalog else []
+                    self._send(200, {"models": models, "default_model": WHISPER_MODEL_ID})
+                elif self.path.endswith("/api/transcribe/availability"):
+                    # A studio without the model must not advertise it here either: this is the
+                    # endpoint the transcription dispatcher reads to choose a studio, so a stub
+                    # that hid the model from its catalogue but offered it here would send work
+                    # to a machine that cannot run it.
+                    models = [{"repo": WHISPER_MODEL_ID, "label": "Whisper fixture",
+                               "engine": "subtitle-mlx", "cached": True}] if outer.has_catalog else []
+                    self._send(200, {"available": True, "default_model": WHISPER_MODEL_ID,
+                                     "models": models})
+                else:
+                    self._send(200, {})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                outer.seen.append(self.path)
+                if self.path.endswith("/api/transcribe"):
+                    outer.transcriptions.append({
+                        "path": self.path, "bytes": len(raw),
+                        "token": self.headers.get("X-Hub-Token"),
+                    })
+                    self._send(200, {
+                        "srt": "1\n00:00:00,000 --> 00:00:01,250\nthe quick brown fox\n",
+                        "text": "the quick brown fox", "language": "en", "duration": 1.25,
+                        "model": WHISPER_MODEL_ID,
+                        "studio_task_id": "stt-1", "elapsed_seconds": 1.0,
+                    })
+                else:
+                    self._send(200, {"ok": True})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def port(self) -> int:
+        return self.server.server_address[1]
+
+    def stop(self) -> None:
+        self.server.shutdown()
 
 
 class StubImageWorker:
@@ -730,6 +853,89 @@ class StubImageWorker:
 
     def stop(self) -> None:
         self.server.shutdown()
+
+
+class FleetSubtitleDispatchTests(unittest.TestCase):
+    """Subtitle is a different dispatcher from Image, so it needs its own proof."""
+
+    def test_a_subtitle_job_submitted_to_the_controller_runs_on_the_node(self) -> None:
+        worker = StubSubtitleWorker(machine="node-a")
+        self.addCleanup(worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-subtitle-fleet-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "subtitle", "modality": "transcription",
+                                    "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+
+        # The controller needs the model installed too: its packaged catalog is the boundary it
+        # accepts submissions against, and this is how the fleet is actually set up.
+        manifests, library = tiny_whisper_install(directory / "controller-models")
+        # Its own Subtitle studio has no model, so the only place this work can run is the node.
+        controller_worker = StubSubtitleWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "subtitle", "modality": "transcription",
+                      "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "subtitle", "modality": "transcription"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        controller_fleet = (controller.data / ".fleet_token").read_text().strip()
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": controller_fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+
+        audio = b"RIFF" + b"\0" * 4096
+        status, submitted, _ = controller.post_multipart(
+            "/api/hub/transcription/jobs",
+            {"model": WHISPER_MODEL_ID, "item_ids": "fleet-subtitle-1", "episode": "fleet"},
+            {"files": ("clip.wav", audio, "audio/wav")},
+            token=controller.token)
+        self.assertEqual(status, 200, submitted)
+        batch = submitted.get("batch_id")
+        self.assertIsNotNone(batch, submitted)
+
+        deadline = time.time() + 60
+        while time.time() < deadline and not worker.transcriptions:
+            time.sleep(0.5)
+        self.assertTrue(worker.transcriptions,
+                        "the controller never sent the subtitle job to the node; "
+                        f"job: {self.subtitle_state(controller, batch)}; "
+                        f"node saw: {worker.seen[:10]}")
+        # Again the node's own credential, never the controller's.
+        self.assertEqual(worker.transcriptions[0]["token"], node.token)
+
+        # And the transcript comes back to the operator through the controller.
+        deadline = time.time() + 45
+        transcript = ""
+        while time.time() < deadline:
+            status, body = controller.artifact(
+                f"/api/hub/transcription/jobs/{batch}/items/0/artifact",
+                token=controller.token)
+            if status == 200:
+                transcript = body.decode("utf-8", "replace")
+                break
+            time.sleep(0.5)
+        self.assertIn("the quick brown fox", transcript,
+                      "the controller never served the transcript; "
+                      f"job: {self.subtitle_state(controller, batch)}")
+
+    @staticmethod
+    def subtitle_state(controller, batch: str) -> str:
+        status, payload, _ = controller.request(
+            f"/api/hub/transcription/jobs/{batch}", token=controller.token)
+        if status != 200:
+            return f"(unreadable: {status})"
+        return (f"status={payload.get('status')!r} note={payload.get('governor_note')!r} "
+                f"items={payload.get('items')!r}")
 
 
 class ControllerRegistryTests(unittest.TestCase):

@@ -614,13 +614,21 @@ class StudioMonitor:
                 self.status[sid]["activity_support"] = previous["activity_support"]
             if health.get("ok"):
                 await self._poll_activity(studio)
+            meta = self._catalog_meta.setdefault(sid, {})
             if effective_status == "up" and (
                     sid not in self._catalog_cache) and (
-                    not self._catalog_meta.get(sid, {}).get("catalog_last_success_at")):
+                    not meta.get("catalog_last_success_at")):
                 # A studio that has just come up has never had its catalog read, so the
                 # scheduler cannot see anything it offers. Waiting for the next periodic
                 # refresh leaves a blind spot a minute wide on every join and every restart.
                 asyncio.create_task(self._refresh_studio_catalog(studio, force=True))
+            if effective_status == "up" and reports_transcription(studio) and (
+                    sid not in self._transcribe_cache) and (
+                    not meta.get("transcription_last_success_at")):
+                # Whisper lives outside the TTS catalog, and the transcription dispatcher reads
+                # its own view. The same blind spot applied to it: a Subtitle node was up,
+                # polled, and invisible to the scheduler deciding where its work should go.
+                asyncio.create_task(self.get_transcription(studio, force=True))
             self._note_transition(studio, prev_status, effective_status)
         except Exception as exc:
             prev = self.status.get(sid, {})
