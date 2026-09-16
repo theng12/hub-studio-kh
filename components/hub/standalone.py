@@ -126,6 +126,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     broker.configure_admission_guard(lambda batch: _submission_readiness(batch, monitor))
     cloud_guard.configure_monitor(monitor)
     token = auth.load_token()
+    # A Hub owns its fleet credential from the moment it runs, so an operator can read it
+    # without having to provoke a request first. It is a separate scope from the Hub token on
+    # purpose: this is what a controller is given.
+    from .backend import peers as _peers
+    _peers.fleet_token()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

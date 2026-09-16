@@ -61,10 +61,10 @@ def fleet_token() -> str | None:
         t = FLEET_TOKEN_FILE.read_text().strip()
         if t:
             return t
-    # Packaged Hub workers receive the owner Hub token in their private
-    # descriptors.  Local monitoring must not create an unused fleet token.
-    if os.environ.get("STUDIOHUB_PACKAGED") == "1":
-        return None
+    # A packaged Hub is a fleet member like any other, so it owns a fleet credential of its
+    # own. This used to return None on the reasoning that nothing would use one. A controller
+    # now does, and giving it this instead of the node's Hub token is the entire point: the
+    # Hub token can delete that Mac's output and change its settings, and this cannot.
     token = secrets.token_urlsafe(24)
     set_fleet_token(token)
     return token

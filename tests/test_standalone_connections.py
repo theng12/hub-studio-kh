@@ -275,6 +275,48 @@ class IndependentClientTests(unittest.TestCase):
         _, listing, _ = self.hub.request("/api/hub/fleet/nodes", token=self.token)
         self.assertEqual(listing["summary"]["total"], 0)
 
+    def test_a_fleet_credential_can_work_but_not_own_the_mac(self) -> None:
+        """The credential a controller is given must be narrower than the Hub's own."""
+        fleet_file = self.hub.data / ".fleet_token"
+        fleet = fleet_file.read_text().strip()
+        self.assertTrue(len(fleet) >= 24, "the packaged Hub must own a fleet credential")
+        # It is an owner-only secret, like every other credential here.
+        self.assertEqual(fleet_file.stat().st_mode & 0o077, 0)
+        self.assertNotEqual(fleet, self.token, "the fleet credential is its own scope")
+
+        # It can do the work a controller exists for.
+        status, payload, _ = self.hub.request("/api/hub/capabilities", token=fleet)
+        self.assertEqual(status, 200)
+        status, listing, _ = self.hub.request("/api/hub/jobs", token=fleet)
+        self.assertEqual(status, 200)
+
+        # It cannot change this Mac's settings or delete its things.
+        status, refused, _ = self.hub.post_json(
+            "/api/hub/settings/preview", {"max_bytes": 1}, token=fleet)
+        self.assertEqual(status, 403)
+        self.assertIn("fleet credential", refused["detail"])
+
+        status, _, _ = self.hub.request(
+            "/api/hub/settings", method="PUT", token=fleet,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"max_bytes": 1}).encode())
+        self.assertEqual(status, 403)
+        status, _, _ = self.hub.request(
+            "/api/hub/controller", method="PUT", token=fleet,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"role": "controller"}).encode())
+        self.assertEqual(status, 403)
+        status, _, _ = self.hub.request(
+            "/api/hub/model-packages/whisper-turbo/verify", method="POST", token=fleet)
+        self.assertEqual(status, 403)
+        status, _, _ = self.hub.request(
+            "/api/hub/memory/release", method="POST", token=fleet)
+        self.assertEqual(status, 403)
+
+        # The Hub's own credential keeps the access it always had.
+        status, _, _ = self.hub.request("/api/hub/settings", token=self.token)
+        self.assertEqual(status, 200)
+
     def test_the_hub_address_is_loopback_only(self) -> None:
         """There is no cloud-domain assumption to make; the app talks to a private address."""
         host = self.hub.base.split("://", 1)[1].split(":", 1)[0]

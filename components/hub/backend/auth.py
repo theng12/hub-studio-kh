@@ -401,6 +401,57 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
     return bool(fleet and secrets.compare_digest(offered, fleet))
 
 
+# What a fleet credential may do on a Mac it does not own.
+#
+# This is an allowlist, not a denylist: a new route added later is refused to a fleet caller
+# until someone decides it belongs here, rather than being granted by default. The Hub token
+# keeps unrestricted access and is never checked against this.
+#
+# In short: send work, watch it, collect it, cancel it - and read what is needed to decide
+# where work should go. Never change this Mac's settings, never delete its output, never
+# manage its models or its membership of the fleet.
+FLEET_ALLOWED = (
+    ("GET", r"^/api/health$"),
+    ("GET", r"^/api/version$"),
+    ("GET", r"^/api/hub/workers$"),
+    ("GET", r"^/api/hub/capabilities$"),
+    ("GET", r"^/api/hub/catalog$"),
+    ("GET", r"^/api/hub/models$"),
+    ("GET", r"^/api/hub/stats$"),
+    ("GET", r"^/api/hub/model-packages$"),
+    ("GET", r"^/api/hub/memory/policy$"),
+    ("GET", r"^/studio/(voice|subtitle|image)/api/[A-Za-z0-9_./-]*$"),
+    # Jobs: submit, watch, collect, acknowledge, reconcile, cancel.
+    ("POST", r"^/api/hub/jobs$"),
+    ("GET", r"^/api/hub/jobs$"),
+    ("GET", r"^/api/hub/jobs/[^/]+$"),
+    ("DELETE", r"^/api/hub/jobs/[^/]+$"),
+    ("GET", r"^/api/hub/jobs/[^/]+/items/[0-9]+/artifact$"),
+    ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/ack$"),
+    ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/reconcile$"),
+    ("POST", r"^/api/hub/transcription/jobs$"),
+    ("GET", r"^/api/hub/transcription/jobs$"),
+    ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),
+    ("DELETE", r"^/api/hub/transcription/jobs/[^/]+$"),
+    ("GET", r"^/api/hub/transcription/jobs/[^/]+/items/[0-9]+/artifact$"),
+    ("POST", r"^/api/hub/transcription/jobs/[^/]+/items/[0-9]+/ack$"),
+    # A clone reference travels with the job that uses it.
+    ("POST", r"^/api/hub/voice-references$"),
+    ("GET", r"^/api/hub/voice-references/[^/]+$"),
+    # A fleet member may introduce itself to a controller and see its siblings, but removing
+    # a node is the controller owner's decision.
+    ("POST", r"^/api/hub/fleet/nodes$"),
+    ("GET", r"^/api/hub/fleet/nodes$"),
+)
+_FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
+
+
+def fleet_path_allowed(method: str, path: str) -> bool:
+    """Whether a fleet credential may use this route. Unknown routes are refused."""
+    return any(method == allowed and pattern.match(path)
+               for allowed, pattern in _FLEET_ALLOWED)
+
+
 def make_middleware(token: str):
     from . import peers
 
@@ -444,9 +495,18 @@ def make_middleware(token: str):
                     response.set_cookie("kh_studio_token", fleet, httponly=True,
                                         samesite="strict")
                 return response
-            # Fleet token: lets peer Hubs on the tailnet authenticate as a fleet.
+            # Fleet token: lets a controller drive this Mac without holding the credential
+            # that owns it. Deliberately narrower than the Hub token - it can send work and
+            # read what it needs to decide where work goes, and nothing else.
             fleet = peers.fleet_token()
             if fleet and secrets.compare_digest(offered, fleet):
+                if not fleet_path_allowed(request.method, request.url.path):
+                    return JSONResponse(
+                        {"detail": "The fleet credential may send work to this Mac and read "
+                                   "its results, but it cannot change this Mac's settings or "
+                                   "delete its output."},
+                        status_code=403,
+                    )
                 response = await call_next(request)
                 response.set_cookie(COOKIE_NAME, offered, httponly=True,
                                     samesite="strict")
