@@ -94,7 +94,34 @@ Hub plus the Voice, Image and Subtitle workers. Then open **Settings → Model m
 confirm each of the three Studios reports a state. A Studio reading *Needs an update* or
 *Not running* is a real problem, not a cosmetic one.
 
-## 6. Optional: prove the copy is intact
+## 6. Prove the copy starts — do this one
+
+Before anything else, run this from the kit folder:
+
+```sh
+sh verify-launch.sh
+```
+
+It starts the app's **own** bundled service with the app's **own** arguments, waits for it to
+become ready, asks it for its health, and stops it again. It prints `RESULT: PASS` or
+`RESULT: FAIL` plus the reason.
+
+This exists because a copy that looks complete can still be unable to start: the first release
+of this app launched its service with a flag the service did not accept, so it exited with code
+2 every time and the app could only say *"the engine exited (code 2)"*. Nothing caught it
+because every automated test drove the service directly, with the flags it really has. This
+script checks the outcome instead of the intention.
+
+If it fails, it prints the service's own message — which is the thing the app never shows you.
+Send that message back and it will be obvious what is wrong.
+
+To point it at a different app or library:
+
+```sh
+APP="/Applications/Studio Hub 0.4.0.app" LIB="/Volumes/SomeDrive/model-library" sh verify-launch.sh
+```
+
+## 7. Optional: prove the copy is intact
 
 ```sh
 python3 -c "import json;d=json.load(open('/Applications/Studio Hub 0.4.0.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
