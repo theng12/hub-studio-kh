@@ -428,8 +428,13 @@ class StudioMonitor:
         meta = self._catalog_meta.setdefault(sid, {})
         meta["last_attempt_at"] = now
         if self.status.get(sid, {}).get("status") != "up":
+            # The catalog was never asked for, so it did not fail. Recording a catalog error
+            # here used to poison the scheduling view for a studio that was merely slow to
+            # answer its first health poll - which is every node for the first minutes after it
+            # joins a running controller. The job then sat queued with "not in <studio>'s
+            # catalog" while the studio was demonstrably up and polling.
             meta["last_error"] = "worker_unreachable"
-            meta["catalog_last_error"] = "worker_unreachable"
+            meta.pop("catalog_last_error", None)
             return {"studio_id": sid, "refreshed": False,
                     "reason": "worker_unreachable"}
         source = "catalog"
@@ -609,6 +614,13 @@ class StudioMonitor:
                 self.status[sid]["activity_support"] = previous["activity_support"]
             if health.get("ok"):
                 await self._poll_activity(studio)
+            if effective_status == "up" and (
+                    sid not in self._catalog_cache) and (
+                    not self._catalog_meta.get(sid, {}).get("catalog_last_success_at")):
+                # A studio that has just come up has never had its catalog read, so the
+                # scheduler cannot see anything it offers. Waiting for the next periodic
+                # refresh leaves a blind spot a minute wide on every join and every restart.
+                asyncio.create_task(self._refresh_studio_catalog(studio, force=True))
             self._note_transition(studio, prev_status, effective_status)
         except Exception as exc:
             prev = self.status.get(sid, {})

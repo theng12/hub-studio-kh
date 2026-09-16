@@ -422,6 +422,14 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/model-packages$"),
     ("GET", r"^/api/hub/memory/policy$"),
     ("GET", r"^/studio/(voice|subtitle|image)/api/[A-Za-z0-9_./-]*$"),
+    # Sending work to a node and calling it off is the whole point of a fleet credential, and
+    # these are the only studio paths that do it. The worker's own settings, storage and model
+    # routes are deliberately absent: they are reachable over the same proxy, so a blanket
+    # allowance for the studio surface would have handed a controller exactly the control this
+    # scope exists to withhold.
+    ("POST", r"^/studio/(voice|subtitle|image)/api/generate/[A-Za-z0-9_./-]*$"),
+    ("POST", r"^/studio/(voice|subtitle|image)/api/transcribe$"),
+    ("DELETE", r"^/studio/(voice|subtitle|image)/api/generate/[A-Za-z0-9_./-]*$"),
     # Jobs: submit, watch, collect, acknowledge, reconcile, cancel.
     ("POST", r"^/api/hub/jobs$"),
     ("GET", r"^/api/hub/jobs$"),

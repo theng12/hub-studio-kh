@@ -366,7 +366,6 @@ class FleetDispatchTests(unittest.TestCase):
     controller has to come out the other side at the stub.
     """
 
-    @unittest.skip("blocked on the controller's scheduling view; see the docstring")
     def test_a_job_submitted_to_the_controller_runs_on_the_node(self) -> None:
         """Almost there, and the remaining step is precise.
 
@@ -449,6 +448,11 @@ class FleetDispatchTests(unittest.TestCase):
             deadline = time.time() + 45
             while time.time() < deadline and not worker.submissions:
                 time.sleep(0.5)
+            # The controller's own log is the only place some of these failures are visible:
+            # several of them produced no governor note at all.
+            if not worker.submissions:
+                text = (controller.root / "controller.log").read_text(errors="replace")
+                print("CONTROLLER LOG TAIL:", text[-1500:])
             self.assertTrue(worker.submissions,
                             "the controller never dispatched to the joined node; "
                             f"governor said: {self.governor(controller, batch)}; "
@@ -464,20 +468,40 @@ class FleetDispatchTests(unittest.TestCase):
             self.assertEqual(worker.submissions[0]["token"], node.token)
 
     @staticmethod
+    def tail(controller) -> str:
+        import re as re_module
+        text = (controller.root / "controller.log").read_text(errors="replace")
+        lines = [line for line in text.splitlines() if "sched-debug" in line]
+        # A distinct set of reasons, so the message stays readable.
+        return " | ".join(sorted(set(re_module.sub(r"obs=.*", "", line)
+                                      for line in lines))[:4])
+
+    @staticmethod
     def catalog(controller) -> str:
         status, payload, _ = controller.request("/api/hub/catalog", token=controller.token)
-        if status != 200:
-            return f"(catalog unreadable: {status})"
-        rows = [(row.get("hub_studio") or row.get("studio"), row.get("repo"), row.get("cache"))
-                for row in (payload.get("models") or [])]
-        return repr(rows)
+        rows = []
+        if status == 200:
+            rows = [(row.get("hub_studio") or row.get("studio"), row.get("repo"),
+                     row.get("cache")) for row in (payload.get("models") or [])]
+        # The controller's own view of each studio: whether the monitor considers it up, which
+        # is the first thing the scheduling view checks.
+        status, caps, _ = controller.request("/api/hub/capabilities", token=controller.token)
+        workers = []
+        if status == 200:
+            workers = [(row.get("service_id"), row.get("physical_machine_id"),
+                        row.get("online"), row.get("ready")) for row in caps.get("workers", [])]
+        return f"models={rows!r} workers={workers!r}"
 
     @staticmethod
     def governor(controller, batch: str) -> str:
         status, payload, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
         if status != 200:
             return f"(job unreadable: {status})"
-        return str(payload.get("governor_note"))
+        items = [{key: item.get(key) for key in
+                  ("state", "studio", "error", "tries", "duration_s")}
+                 for item in (payload.get("items") or [])]
+        return (f"note={payload.get('governor_note')!r} state={payload.get('state')!r} "
+                f"items={items!r}")
 
 
 FLUX_MODEL_ID = "fixture/flux"
