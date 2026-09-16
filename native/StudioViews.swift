@@ -53,6 +53,8 @@ struct StudioContent: View {
     @State private var loadingImage = false
     @State private var revealedToken = false
     @State private var connectionNote: String?
+    /// 0 means all time; otherwise the window in hours.
+    @State private var statisticsWindow = 0
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -206,8 +208,90 @@ struct StudioContent: View {
                     Spacer()
                     Button("Manage Models") { studio.select(.models) }
                 }
+                Divider()
+                measuredSection
             }.padding(28)
         }
+        .task { if connected { await workspace.refreshStatistics(hours: statisticsWindow) } }
+    }
+
+    /// What this Mac has actually measured, straight from the Hub's job ledger.
+    ///
+    /// The owner asked for per-machine generation speed, and the Hub already records it on
+    /// every job; this is that data rather than a separate benchmark. A model with no timed
+    /// run shows no average, never a zero.
+    private var measuredSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("Measured on this Mac")
+                Spacer()
+                Picker("Window", selection: Binding(
+                    get: { statisticsWindow },
+                    set: { value in
+                        statisticsWindow = value
+                        Task { await workspace.refreshStatistics(hours: value == 0 ? nil : value) }
+                    })) {
+                    Text("All time").tag(0)
+                    Text("Last 7 days").tag(168)
+                    Text("Last 24 hours").tag(24)
+                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
+            }
+            if let stats = workspace.statistics {
+                if stats.total == 0 {
+                    Text("No completed generations recorded in this window yet. Run one from any workspace and it appears here.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("\(stats.total) completed \(stats.total == 1 ? "generation" : "generations") recorded by this Hub.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(stats.trackedModels.prefix(8)) { row in
+                        HStack(spacing: 12) {
+                            Image(systemName: functionSymbol(row.modality)).foregroundStyle(.secondary).frame(width: 22)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(workspace.models.first { $0.repo == row.model }?.label ?? row.model)
+                                    .fontWeight(.medium)
+                                Text("\(row.modality?.capitalized ?? "Unknown") · \(row.count) \(row.count == 1 ? "run" : "runs")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(seconds(row.avgS)).font(.system(.body, design: .monospaced))
+                        }.padding(.vertical, 4)
+                    }
+                    if stats.trackedModels.count > 8 {
+                        Text("Showing the 8 slowest of \(stats.trackedModels.count) measured models.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(machineBreakdown(stats), id: \.0) { machine, group in
+                        HStack {
+                            Text(machine == "local" ? "This Mac" : machine).font(.callout)
+                            Spacer()
+                            Text("\(group.count) jobs · \(seconds(group.avgS)) average")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text(connected ? "Generation statistics are unavailable in this build." : "Start local services to see measured generation times.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func machineBreakdown(_ stats: NativeStatistics) -> [(String, NativeStatsGroup)] {
+        stats.byMachine.sorted { $0.value.count > $1.value.count }
+    }
+
+    private func functionSymbol(_ modality: String?) -> String {
+        switch modality {
+        case "image": return "photo"
+        case "transcription": return "waveform"
+        case "speech", "voice": return "mic"
+        default: return "clock"
+        }
+    }
+
+    private func seconds(_ value: Double?) -> String {
+        guard let value else { return "not measured" }
+        return value >= 60 ? String(format: "%.1f min", value / 60) : String(format: "%.1f s", value)
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
         guard page == .audio || page == .transcription || page == .image else { return "Engine not installed" }

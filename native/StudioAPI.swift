@@ -183,6 +183,39 @@ struct NativeVersion: Decodable, Equatable {
     let source: String
 }
 
+/// The Hub's own generation analytics, read straight from the job ledger.
+///
+/// Every number here is recorded by the job that produced it — runtime, model, machine and
+/// source — so the app shows measured history rather than a local estimate. Absent values stay
+/// absent: a model with no timed run reports no average instead of a zero.
+struct NativeStatistics: Decodable, Equatable {
+    let total: Int
+    let byMachine: [String: NativeStatsGroup]
+    let byModality: [String: NativeStatsGroup]
+    let modelRows: [NativeModelStats]
+    let bySource: [String: Int]?
+    let availableMachines: [String]?
+    let availableModalities: [String]?
+
+    var trackedModels: [NativeModelStats] {
+        modelRows.filter { $0.avgS != nil }.sorted { ($0.avgS ?? 0) > ($1.avgS ?? 0) }
+    }
+}
+
+struct NativeStatsGroup: Decodable, Equatable {
+    let count: Int
+    let avgS: Double?
+    let modalities: [String: Int]?
+}
+
+struct NativeModelStats: Decodable, Equatable, Identifiable {
+    let model: String
+    let count: Int
+    let avgS: Double?
+    let modality: String?
+    var id: String { "\(modality ?? "")|\(model)" }
+}
+
 struct NativeJob: Identifiable, Equatable {
     let id: String
     let state: String
@@ -305,6 +338,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Per-machine model memory, read on demand rather than on the two-second poll: it fans
     /// out to every Studio, and nothing on the generation screens depends on it.
     @Published private(set) var memoryInventory: NativeMemoryInventory?
+    /// Measured generation history from the Hub, refreshed on demand.
+    @Published private(set) var statistics: NativeStatistics?
+    @Published private(set) var statisticsHours: Int?
     /// Result of the last import or verify, so the Models screen can say what happened.
     @Published private(set) var modelNote: String?
     @Published private(set) var updatingModels = false
@@ -398,6 +434,8 @@ final class NativeWorkspaceStore: ObservableObject {
         updatingMemory = false
         controllerIdentity = nil
         hubVersion = nil
+        statistics = nil
+        statisticsHours = nil
         modelNote = nil
         updatingModels = false
     }
@@ -947,6 +985,33 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             memoryInventory = nil
             memoryNote = Self.actionable(error, action: "Read model memory settings")
+        }
+    }
+
+    /// Read the Hub's generation statistics, optionally limited to the last N hours.
+    func refreshStatistics(hours: Int? = nil) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            // `hours` is a query parameter, not a path segment, so it cannot go through the
+            // path-appending helper.
+            var request = try makeRequest(["api", "hub", "stats"])
+            if let hours, var components = URLComponents(url: request.url!,
+                                                         resolvingAgainstBaseURL: false) {
+                components.queryItems = [URLQueryItem(name: "hours", value: String(hours))]
+                guard let url = components.url else {
+                    throw NativeAPIError.message("The statistics request could not be built.")
+                }
+                request.url = url
+            }
+            let value: NativeStatistics = try await perform(request)
+            guard connectionID == requestConnection else { return }
+            statistics = value
+            statisticsHours = hours
+        } catch {
+            guard connectionID == requestConnection else { return }
+            // Statistics are extra context; an older Hub without the route must not break
+            // the Overview screen.
+            statistics = nil
         }
     }
 

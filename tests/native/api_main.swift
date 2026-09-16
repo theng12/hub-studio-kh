@@ -26,6 +26,7 @@ final class FixtureProtocol: URLProtocol {
     static var transcriptionAckPaths: [String] = []
     static var transcriptionAckRejects = false
     static var modelRoutes: [String] = []
+    static var statisticsQueries: [String] = []
     static var modelImportBody: [String: Any]?
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
@@ -58,6 +59,7 @@ final class FixtureProtocol: URLProtocol {
     static func transcriptionAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return transcriptionAckPaths }
     static func setTranscriptionAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; transcriptionAckRejects = value }
     static func modelCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return modelRoutes }
+    static func statisticsPaths() -> [String] { lock.lock(); defer { lock.unlock() }; return statisticsQueries }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
     static func setModelVerifyRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; modelVerifyRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
@@ -134,6 +136,11 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
             result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+        case ("GET", "/api/hub/stats"):
+            Self.lock.lock()
+            Self.statisticsQueries.append(request.url?.query ?? "")
+            Self.lock.unlock()
+            result = (200, "application/json", Self.statisticsFixture)
         case ("GET", "/api/hub/controller"):
             result = (200, "application/json", Data(#"{"settings":{"version":2,"role":"standalone","site_id":"studiohub-local","site_name":"This Mac","controller_id":"controller-local","database_mode":"off","machine_name":"Studio Mini","database_configured":false,"sqlite_authoritative":true,"global_authority":"genstudio","migration_stage":"local"},"runtime":{"state":"idle"},"readiness":{"ready":true,"role":"standalone","site_id":"studiohub-local","controller_id":"controller-local","migration_stage":"local","sqlite_authoritative":true,"global_job_claiming":false,"global_authority":"genstudio","reason":null,"telemetry_warning":null},"capacity":{"machines":1,"queue_depth":0}}"#.utf8))
         case ("GET", "/api/version"):
@@ -269,6 +276,10 @@ final class FixtureProtocol: URLProtocol {
         finish(result)
     }
 
+    /// Shaped like the Hub's real reply, including a model with no timed run so the app's
+    /// "not measured" path is exercised rather than assumed.
+    private static let statisticsFixture = Data(#"{"total":3,"by_machine":{"local":{"count":3,"avg_s":45.5,"modalities":{"image":1,"transcription":2}}},"by_modality":{"image":{"count":1,"avg_s":94.47},"transcription":{"count":2,"avg_s":21.02}},"by_model":{"fixture/flux":{"count":1,"avg_s":94.47,"modality":"image"},"mlx-community/whisper-large-v3-turbo":{"count":2,"avg_s":21.02,"modality":"transcription"}},"model_rows":[{"model":"fixture/flux","count":1,"avg_s":94.47,"modality":"image"},{"model":"mlx-community/whisper-large-v3-turbo","count":2,"avg_s":21.02,"modality":"transcription"},{"model":"mlx-community/whisper-base-mlx","count":1,"avg_s":null,"modality":"transcription"}],"matrix":[],"by_source":{"job":3},"available_machines":["local"],"available_modalities":["image","voice","transcription"]}"#.utf8)
+
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
     private static let catalogFixture = Data(
 #"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
@@ -302,6 +313,24 @@ struct NativeAPITests {
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
         require(store.models.count == 6, "combined model catalog")
+
+        // Measured history: the Overview shows what the Hub actually recorded, including a
+        // model with no timed run reported as unmeasured rather than as zero.
+        await store.refreshStatistics()
+        require(FixtureProtocol.statisticsPaths() == [""],
+                "an all-time read must not invent a window")
+        require(store.statistics?.total == 3, "the Hub's own job count must be shown")
+        require(store.statistics?.trackedModels.count == 2,
+                "a model with no timed run must not appear as a measured average")
+        require(store.statistics?.modelRows.count == 3, "every recorded model must be kept")
+        require(store.statistics?.byMachine["local"]?.count == 3, "the per-machine breakdown")
+        require(store.statistics?.trackedModels.first?.model == "fixture/flux",
+                "the slowest measured model must lead")
+
+        await store.refreshStatistics(hours: 168)
+        require(FixtureProtocol.statisticsPaths().last == "hours=168",
+                "a windowed read must send the window as a query parameter")
+        require(store.statisticsHours == 168, "the chosen window must be remembered")
 
         // Models: a folder copied onto this Mac becomes a verified library entry without a
         // second download, and any installed package can be re-verified. Verification is
