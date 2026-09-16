@@ -236,6 +236,34 @@ def main() -> int:
             for worker, rows in sorted(packages.items())
         }
 
+        # The fleet: a Mac's role is the Hub's own setting, and another Mac can join it by
+        # address. Both are driven here the way the app drives them.
+        status, identity = http(base, "/api/hub/controller", token)
+        receipt["role"] = {"status": status,
+                           "role": (identity.get("settings") or {}).get("role")}
+        status, changed = http(base, "/api/hub/controller", token, method="PUT",
+                               payload={"role": "controller"})
+        receipt["role_change"] = {"status": status,
+                                  "role": (changed.get("settings") or {}).get("role")}
+        joined = {"node_id": "fleet-probe", "name": "Probe node",
+                  "address": "http://192.168.255.254:8080"}
+        status, created = http(base, "/api/hub/fleet/nodes", token, method="POST", payload=joined)
+        receipt["node_join"] = {"status": status, "node": created.get("node"),
+                                "detail": created.get("detail") if status != 201 else None}
+        status, listing = http(base, "/api/hub/fleet/nodes", token)
+        rows = listing.get("nodes") or []
+        receipt["node_list"] = {"status": status, "summary": listing.get("summary"),
+                                "nodes": [{key: row.get(key) for key in
+                                           ("id", "state", "address", "detail")} for row in rows]}
+        # A public address must be refused, or a join becomes a way to point this Mac at the
+        # internet on someone else's behalf.
+        status, refused = http(base, "/api/hub/fleet/nodes", token, method="POST",
+                               payload={"node_id": "public", "name": "Public",
+                                        "address": "http://93.184.216.34:80"})
+        receipt["node_join_refused"] = {"status": status, "detail": refused.get("detail")}
+        http(base, "/api/hub/fleet/nodes/fleet-probe", token, method="DELETE")
+        http(base, "/api/hub/controller", token, method="PUT", payload={"role": "standalone"})
+
         # Accepting a machine includes accepting its storage policy: record the limits in
         # force and what this Mac is already holding, so the receipt shows why cleanup has or
         # has not freed space.
