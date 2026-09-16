@@ -381,7 +381,10 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var statistics: NativeStatistics?
     @Published private(set) var statisticsHours: Int?
     /// Result of the last import or verify, so the Models screen can say what happened.
+    /// `modelNoteRepo` scopes a per-model result to that model; a nil repo means the note is
+    /// about the library as a whole.
     @Published private(set) var modelNote: String?
+    @Published private(set) var modelNoteRepo: String?
     @Published private(set) var updatingModels = false
     @Published private(set) var memoryNote: String?
     @Published private(set) var updatingMemory = false
@@ -480,6 +483,7 @@ final class NativeWorkspaceStore: ObservableObject {
         storageNote = nil
         savingStorage = false
         modelNote = nil
+        modelNoteRepo = nil
         updatingModels = false
     }
 
@@ -947,14 +951,29 @@ final class NativeWorkspaceStore: ObservableObject {
             defer { if connectionID == requestConnection { updatingModels = false } }
             // The Hub's import route reads `source_folder`, so this goes through the
             // snake_case encoder rather than the camelCase one used for job envelopes.
-            let _: HubModelState = try await sendJSON(
+            let result: HubModelState = try await sendJSON(
                 ["api", "hub", "model-packages", package.packageId, "import"],
                 method: "POST", body: HubModelImport(sourceFolder: folder.path))
             guard connectionID == requestConnection else { return }
+            // A rejected import is a 2xx with a non-ready state, not an error status, so the
+            // answer has to be read rather than assumed from the fact that the call returned.
+            try Self.requireVerified(result, model: model)
             modelNote = "Imported \(model.label) from \(folder.lastPathComponent)."
+            modelNoteRepo = model.repo
             error = nil
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Import the model folder") } }
+    }
+
+    /// The Hub reports a refused verification or import as a 2xx with a non-ready state and
+    /// its own reason — `invalid` for changed files, `dependency_missing` for a partial copy.
+    /// Treating any 2xx as success would show "Verified" for exactly the broken library this
+    /// control exists to find.
+    private static func requireVerified(_ result: HubModelState, model: NativeModel) throws {
+        guard result.state == "files_verified" else {
+            throw NativeAPIError.message(
+                "\(model.label) is not ready: \(result.reason ?? result.state).")
+        }
     }
 
     /// Re-check one installed package's files against its pinned manifest.
@@ -970,10 +989,12 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             updatingModels = true
             defer { if connectionID == requestConnection { updatingModels = false } }
-            let _: HubModelState = try await sendEmpty(
+            let result: HubModelState = try await sendEmpty(
                 ["api", "hub", "model-packages", package.packageId, "verify"], method: "POST")
             guard connectionID == requestConnection else { return }
+            try Self.requireVerified(result, model: model)
             modelNote = "Verified \(model.label)."
+            modelNoteRepo = model.repo
             error = nil
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Verify the model files") } }
@@ -991,14 +1012,19 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             guard let package = modelPackages[model.repo] else { failed.append(model.label); continue }
             do {
-                let _: HubModelState = try await sendEmpty(
+                let result: HubModelState = try await sendEmpty(
                     ["api", "hub", "model-packages", package.packageId, "verify"], method: "POST")
+                try Self.requireVerified(result, model: model)
             } catch { failed.append(model.label) }
         }
         guard connectionID == requestConnection else { return }
         modelNote = failed.isEmpty
             ? "Verified all \(installed.count) installed models."
             : "Verified \(installed.count - failed.count) of \(installed.count). Could not verify: \(failed.joined(separator: ", "))."
+        // A successful sweep must clear a stale banner, and the summary is about the library
+        // rather than about whichever model happens to be selected.
+        modelNoteRepo = nil
+        if failed.isEmpty { error = nil }
         await refresh()
     }
 
@@ -1060,6 +1086,7 @@ final class NativeWorkspaceStore: ObservableObject {
     func saveStorageLimits(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool) async {
         guard let requestConnection = connectionID else { return }
         savingStorage = true
+        storageNote = nil
         defer { if connectionID == requestConnection { savingStorage = false } }
         do {
             let settings: NativeDeviceSettings = try await sendJSON(
@@ -1078,6 +1105,7 @@ final class NativeWorkspaceStore: ObservableObject {
     func restoreStorageDefaults() async {
         guard let requestConnection = connectionID else { return }
         savingStorage = true
+        storageNote = nil
         defer { if connectionID == requestConnection { savingStorage = false } }
         do {
             let settings: NativeDeviceSettings = try await sendEmpty(

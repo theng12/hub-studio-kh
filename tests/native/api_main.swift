@@ -130,7 +130,10 @@ final class FixtureProtocol: URLProtocol {
                 }
                 Self.lock.unlock()
                 if rejects && action == "verify" {
-                    finish((409, "application/json", Data(#"{"detail":"File changed; verify again: model/model.safetensors"}"#.utf8)))
+                    // Exactly what the Hub sends: 200 with a non-ready state and its reason.
+                    finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"invalid\",\"dispatch_state\":\"ineligible\",\"reason\":\"File changed; verify again: model/model.safetensors\"}".utf8)))
+                } else if rejects && action == "import" {
+                    finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"dependency_missing\",\"dispatch_state\":\"ineligible\",\"reason\":\"companion processor files are missing\"}".utf8)))
                 } else {
                     finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"files_verified\",\"dispatch_state\":\"eligible\",\"reason\":null}".utf8)))
                 }
@@ -420,15 +423,26 @@ struct NativeAPITests {
                 "the chosen folder must reach the Hub unchanged")
         require(store.modelNote?.contains("Imported") == true, "an import needs a visible result")
 
+        // A refused verification arrives as 200 with state "invalid". Reporting success from
+        // the fact that the call returned would show "Verified" for exactly the broken library
+        // this control exists to find.
         FixtureProtocol.setModelVerifyRejects(true)
-        do {
-            await store.verifyModel(copied)
-            // A refused verification surfaces through the shared error banner, not a fake note.
-            require(store.error?.contains("File changed") == true,
-                    "a refused verification must explain that a file changed")
-        }
+        await store.verifyModel(copied)
+        require(store.error?.contains("File changed") == true,
+                "a refused verification must explain that a file changed, got: \(store.error ?? "nil")")
+        require(store.modelNote?.contains("Verified") != true,
+                "a refused verification must not leave a success note")
+        // Import reports through the shared error banner too: a non-ready state is a refusal.
+        await store.importModel(copied, from: URL(fileURLWithPath: "/Volumes/Backup/incomplete"))
+        require(store.error?.contains("companion processor files are missing") == true,
+                "a refused import must carry the Hub's reason, got: \(store.error ?? "nil")")
         FixtureProtocol.setModelVerifyRejects(false)
         store.error = nil
+
+        // Results must be scoped: a per-model note belongs to its model, and the library
+        // summary to the list, never repeated under whichever model is selected.
+        await store.verifyModel(copied)
+        require(store.modelNoteRepo == copied.repo, "a per-model result must record its model")
 
         // Verify All must reach every installed package that has an approved Hub package,
         // exactly once. A catalog entry with no package cannot be verified and must not be
@@ -444,6 +458,7 @@ struct NativeAPITests {
         // The summary must say so rather than claim everything was checked.
         require(store.modelNote == "Verified 4 of 6. Could not verify: Other TTS, Moonshine.",
                 "Verify All must report what it could not verify, got: \(store.modelNote ?? "nil")")
+        require(store.modelNoteRepo == nil, "a library-wide summary must not be scoped to a model")
 
         // Model memory: one Hub route the app reads, with the mode names, thresholds and
         // resolved per-machine default all reported by the Studios that own them.

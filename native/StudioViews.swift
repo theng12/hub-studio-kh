@@ -216,7 +216,11 @@ struct StudioContent: View {
                 measuredSection
             }.padding(28)
         }
-        .task { if connected { await workspace.refreshStatistics(hours: statisticsWindow) } }
+        // `connected` becomes true only after the Hub reports ready, so the task has to be
+        // keyed on it: a plain `.task` runs once at launch and would never see a connection.
+        .task(id: connected) {
+            if connected { await workspace.refreshStatistics(hours: statisticsWindow) }
+        }
     }
 
     /// What this Mac has actually measured, straight from the Hub's job ledger.
@@ -635,14 +639,26 @@ struct StudioContent: View {
                                     Button("Download Model") { Task { await workspace.startDownload(model) } }.buttonStyle(.borderedProminent).disabled(!connected || studio.configuration.offline || !model.supported)
                                     // A folder copied onto this Mac becomes a verified library
                                     // entry without a second download and without a terminal.
-                                    Button("Import Folder…") { chooseModelFolder(for: model) }.disabled(!connected || workspace.updatingModels)
+                                    Button("Import Folder…") { chooseModelFolder(for: model) }
+                                        .disabled(!connected || workspace.updatingModels || !model.supported)
                                 }
                                 if studio.configuration.offline { Text("Offline mode is on. Change it in Settings before downloading. Importing a folder works offline.").font(.caption).foregroundStyle(.secondary) }
                             }
-                            if let note = workspace.modelNote { Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                            // Only a note about this model is shown here; a library-wide
+                            // summary would otherwise be repeated under every model as if it
+                            // were that model's result.
+                            if let note = workspace.modelNote,
+                               workspace.modelNoteRepo == nil || workspace.modelNoteRepo == model.repo {
+                                if workspace.modelNoteRepo == model.repo {
+                                    Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
                         }.padding(20)
                     } else { empty("Model details", "Select a model to inspect its status and available actions.", symbol: "externaldrive") }
                 }.frame(minWidth: 260, idealWidth: 320, maxWidth: 380)
+            }
+            if let note = workspace.modelNote, workspace.modelNoteRepo == nil {
+                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if workspace.refreshing && workspace.models.isEmpty { ProgressView("Reading model library…").controlSize(.small) }
             else if filteredModels.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(.callout).foregroundStyle(.secondary) }
@@ -769,7 +785,7 @@ struct StudioContent: View {
                     memoryControls
                 }
                 Section("Local storage") {
-                    Text("Finished work is cleaned up on this Mac only. Anything still being written, not yet acknowledged, or in use is protected and is never deleted.")
+                    Text("This counts generated output, not the model library. Finished work is cleaned up on this Mac only; anything still being written, not yet acknowledged, or in use is protected and is never deleted.")
                         .font(.callout).foregroundStyle(.secondary)
                     storageControls
                 }
@@ -792,7 +808,7 @@ struct StudioContent: View {
             Text("These apply to this Mac only. Protected work is never deleted, so lowering the limit can leave this Mac above it.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
-                Stepper(value: $draftGigabytes, in: 1...2000, step: 5) {
+                Stepper(value: $draftGigabytes, in: 1...2000, step: 1) {
                     Text("Keep at most \(String(format: "%.0f", draftGigabytes)) GB")
                 }
                 Stepper(value: $draftRetentionDays, in: 1...365, step: 1) {
@@ -1008,7 +1024,7 @@ struct StudioContent: View {
                         Spacer()
                         Text(NativeWorkspaceStore.gigabytes(usage.usedBytes)).font(.system(.body, design: .monospaced))
                     }
-                    Text("Protected and never deleted: \(NativeWorkspaceStore.gigabytes(usage.protectedBytes))"
+                    Text("Generated output: \(NativeWorkspaceStore.gigabytes(usage.usedBytes)), of which \(NativeWorkspaceStore.gigabytes(usage.protectedBytes)) is protected and never deleted"
                          + (usage.freeBytes.map { " · \(NativeWorkspaceStore.gigabytes($0)) free on disk" } ?? ""))
                         .font(.caption).foregroundStyle(.secondary)
                     if usage.overLimit {

@@ -267,11 +267,24 @@ def main() -> int:
             status, verified = http(
                 base, f"/api/hub/model-packages/{candidate['package_id']}/verify",
                 token, method="POST")
-            receipt["verify"] = {"package_id": candidate["package_id"],
-                                 "worker": worker, "status": status,
-                                 "state": verified.get("state"),
-                                 "dispatch_state": verified.get("dispatch_state"),
-                                 "detail": verified.get("detail") if status != 200 else None}
+            # One package is sampled, not the whole library, so the key says so.
+            receipt["verify_sample"] = {
+                "package_id": candidate["package_id"], "worker": worker, "status": status,
+                "state": verified.get("state"),
+                "dispatch_state": verified.get("dispatch_state"),
+                "reason": verified.get("reason"),
+                "detail": verified.get("detail") if status != 200 else None}
+            # A refused import is a 200 with a non-ready state and a reason, never an error
+            # status. Recording the real refusal proves the app must read the state rather
+            # than trust the fact that the call returned.
+            bad_status, refused = http(
+                base, f"/api/hub/model-packages/{candidate['package_id']}/import", token,
+                method="POST", payload={"source_folder": "/nonexistent/studiohub-probe"})
+            receipt["import_refusal"] = {
+                "status": bad_status, "state": refused.get("state"),
+                "dispatch_state": refused.get("dispatch_state"),
+                "reason": refused.get("reason"),
+                "detail": refused.get("detail")}
             break
 
         kinds = [kind.strip() for kind in arguments.kinds.split(",") if kind.strip()]
