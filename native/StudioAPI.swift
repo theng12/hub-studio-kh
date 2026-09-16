@@ -1118,6 +1118,115 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// One voice found in a folder of existing voices: a clip, its name, and the words.
+    struct VoiceImportCandidate: Equatable {
+        let name: String
+        let clip: URL
+        let transcript: String
+        var isReady: Bool { !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// Read a folder of voices in the shape the old Voice Studio used: one folder per voice
+    /// holding a clip and, usually, a transcript; or loose clips with a transcript beside them.
+    ///
+    /// This is separate from the view so it can be tested without a window. The order is
+    /// sorted, so an import is repeatable rather than dependent on directory order.
+    nonisolated static func scanVoiceFolder(_ folder: URL) throws -> [VoiceImportCandidate] {
+        let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"]
+        let transcriptExtensions: Set<String> = ["txt", "text", "srt", "vtt", "md"]
+        let manager = FileManager.default
+        let entries: [URL]
+        do {
+            entries = try manager.contentsOfDirectory(at: folder,
+                                                       includingPropertiesForKeys: [.isDirectoryKey],
+                                                       options: [.skipsHiddenFiles])
+        } catch {
+            throw NativeAPIError.message("That folder could not be read.")
+        }
+        func text(beside clip: URL, in items: [URL]) -> String {
+            for item in items {
+                if transcriptExtensions.contains(item.pathExtension.lowercased()),
+                   let body = try? String(contentsOf: item, encoding: .utf8) {
+                    return plainTranscript(body)
+                }
+            }
+            // A loose clip with its transcript beside it, same stem.
+            for suffix in transcriptExtensions {
+                let sibling = clip.deletingPathExtension().appendingPathExtension(suffix)
+                if let body = try? String(contentsOf: sibling, encoding: .utf8) {
+                    return plainTranscript(body)
+                }
+            }
+            return ""
+        }
+        var found: [VoiceImportCandidate] = []
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let items = isDirectory
+                ? ((try? manager.contentsOfDirectory(at: entry, includingPropertiesForKeys: nil,
+                                                     options: [.skipsHiddenFiles])) ?? [])
+                : [entry]
+            guard let clip = items.first(where: { audioExtensions.contains($0.pathExtension.lowercased()) })
+            else { continue }
+            let name = isDirectory ? entry.lastPathComponent
+                                   : entry.deletingPathExtension().lastPathComponent
+            found.append(VoiceImportCandidate(name: name, clip: clip,
+                                              transcript: text(beside: clip, in: items)))
+        }
+        return found
+    }
+
+    /// Strip subtitle timing so an imported .srt or .vtt is usable as a transcript.
+    ///
+    /// A transcript has to be the words alone: cue numbers and timestamp lines would be fed to
+    /// the clone as if they were spoken, and the alignment would be wrong.
+    nonisolated static func plainTranscript(_ body: String) -> String {
+        var kept: [String] = []
+        for line in body.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if trimmed.uppercased() == "WEBVTT" { continue }
+            if trimmed.contains("-->") { continue }
+            if Int(trimmed) != nil { continue }
+            kept.append(trimmed)
+        }
+        return kept.joined(separator: " ")
+    }
+
+    /// Import every ready voice from a folder, skipping ones already saved and ones with no
+    /// words. Returns what happened, so the caller can say it rather than guess.
+    func importVoices(from folder: URL) async -> (added: Int, skipped: Int, total: Int) {
+        let candidates: [VoiceImportCandidate]
+        do { candidates = try Self.scanVoiceFolder(folder) }
+        catch {
+            voiceError = error.localizedDescription
+            return (0, 0, 0)
+        }
+        guard !candidates.isEmpty else {
+            voiceError = "No reference clips were found in that folder. Each voice needs a clip; a transcript beside it is used when present."
+            return (0, 0, 0)
+        }
+        var added = 0, skipped = 0
+        for candidate in candidates {
+            // A voice already saved under the same name is left alone: importing twice must not
+            // duplicate a library the operator has been curating.
+            if voices.contains(where: { $0.name.caseInsensitiveCompare(candidate.name) == .orderedSame })
+                || !candidate.isReady {
+                skipped += 1
+                continue
+            }
+            let ok = await addVoice(name: candidate.name, language: "en", gender: "n",
+                                    license: "self-owned",
+                                    notes: "Imported from \(folder.lastPathComponent)",
+                                    transcript: candidate.transcript, clip: candidate.clip,
+                                    acknowledged: true)
+            if ok { added += 1 } else { skipped += 1 }
+        }
+        voiceNote = "Imported \(added) voice\(added == 1 ? "" : "s")"
+            + (skipped > 0 ? "; skipped \(skipped) (no transcript, or already saved)." : ".")
+        return (added, skipped, candidates.count)
+    }
+
     func transcribe() async {
         guard !transcribing, let requestConnection = connectionID else { return }
         do {

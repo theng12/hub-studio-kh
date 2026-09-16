@@ -24,6 +24,9 @@ final class FixtureProtocol: URLProtocol {
     static var voiceListCalls = 0
     static var voiceAudioCalls = 0
     static var voiceDeleteCalls = 0
+    static var voiceAddCalls = 0
+    static var voiceEditCalls = 0
+    static var voiceAdded: [[String: Any]] = []
     static var audioAckPaths: [String] = []
     static var audioAckRejects = false
     static var uncertainImage = false
@@ -233,8 +236,52 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
         case ("GET", "/studio/voice/api/voices"):
-            Self.lock.lock(); Self.voiceListCalls += 1; Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"voices":[{"id":"voice-1","name":"Narrator","language":"en","gender":"f","notes":"booth","license":"self-owned","source_url":null,"permission_acknowledged":true,"has_transcript":true,"transcript":"The exact words in the clip","audio_extension":".wav","duration_seconds":12.5,"sample_rate":24000,"channels":1,"fleet_managed":false,"audio_sha256":"ab","created_at":1.0,"audio_url":"/api/voices/voice-1/audio","audio_filename":"reference.wav"},{"id":"voice-2","name":"No words yet","language":"en","gender":"n","notes":"","license":"self-owned","source_url":null,"permission_acknowledged":true,"has_transcript":false,"transcript":"","audio_extension":".wav","duration_seconds":4.0,"sample_rate":24000,"channels":1,"fleet_managed":false,"audio_sha256":"cd","created_at":2.0,"audio_url":"/api/voices/voice-2/audio","audio_filename":"reference.wav"}]}"#.utf8))
+            Self.lock.lock()
+            Self.voiceListCalls += 1
+            var rows: [[String: Any]] = [
+                ["id": "voice-1", "name": "Narrator", "language": "en", "gender": "f",
+                 "notes": "booth", "license": "self-owned", "source_url": NSNull(),
+                 "permission_acknowledged": true, "has_transcript": true,
+                 "transcript": "The exact words in the clip", "audio_extension": ".wav",
+                 "duration_seconds": 12.5, "sample_rate": 24000, "channels": 1,
+                 "fleet_managed": false, "audio_sha256": "ab", "created_at": 1.0,
+                 "audio_url": "/api/voices/voice-1/audio", "audio_filename": "reference.wav"],
+                ["id": "voice-2", "name": "No words yet", "language": "en", "gender": "n",
+                 "notes": "", "license": "self-owned", "source_url": NSNull(),
+                 "permission_acknowledged": true, "has_transcript": false,
+                 "transcript": "", "audio_extension": ".wav", "duration_seconds": 4.0,
+                 "sample_rate": 24000, "channels": 1, "fleet_managed": false,
+                 "audio_sha256": "cd", "created_at": 2.0,
+                 "audio_url": "/api/voices/voice-2/audio", "audio_filename": "reference.wav"],
+            ]
+            rows.append(contentsOf: Self.voiceAdded)
+            Self.lock.unlock()
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["voices": rows]))
+        case ("POST", "/studio/voice/api/voices"):
+            // The worker stores what it was given and returns it, so the fixture's list grows
+            // with each add. The body is a file upload, and `requestBody()` cannot read a
+            // streamed upload - the existing tests check paths for the same reason - so the
+            // fixture answers with the names these tests import, in the order they arrive.
+            Self.lock.lock()
+            Self.voiceAddCalls += 1
+            let knownNames = ["Imported Narrator", "Imported Subtitled"]
+            let name = Self.voiceAddCalls <= knownNames.count
+                ? knownNames[Self.voiceAddCalls - 1]
+                : "Imported voice \(Self.voiceAddCalls)"
+            let identifier = "voice-added-\(Self.voiceAddCalls)"
+            let added: [String: Any] = ["id": identifier, "name": name, "language": "en",
+                "gender": "n", "notes": "", "license": "self-owned", "source_url": NSNull(),
+                "permission_acknowledged": true, "has_transcript": true,
+                "transcript": "imported words", "audio_extension": ".wav",
+                "duration_seconds": 1.0, "sample_rate": 24000, "channels": 1,
+                "fleet_managed": false, "audio_sha256": "ef", "created_at": 3.0,
+                "audio_url": "/api/voices/\(identifier)/audio", "audio_filename": "reference.wav"]
+            Self.voiceAdded.append(added)
+            Self.lock.unlock()
+            result = (201, "application/json", try! JSONSerialization.data(withJSONObject: ["voice": added]))
+        case ("PATCH", "/studio/voice/api/voices/voice-1"):
+            Self.lock.lock(); Self.voiceEditCalls += 1; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"voice":{"id":"voice-1","name":"Narrator","language":"en","gender":"f","notes":"booth","license":"self-owned","source_url":null,"permission_acknowledged":true,"has_transcript":true,"transcript":"Corrected","audio_extension":".wav","duration_seconds":12.5,"sample_rate":24000,"channels":1,"fleet_managed":false,"audio_sha256":"ab","created_at":1.0,"audio_url":"/api/voices/voice-1/audio","audio_filename":"reference.wav"}}"#.utf8))
         case ("GET", "/studio/voice/api/voices/voice-1/audio"):
             Self.lock.lock(); Self.voiceAudioCalls += 1; Self.lock.unlock()
             result = (200, "audio/wav", Self.wav)
@@ -564,6 +611,55 @@ struct NativeAPITests {
         // Removing a saved voice reaches the worker.
         _ = await store.deleteVoice(unfinished)
         require(FixtureProtocol.voiceDeleteCalls == 1, "removing a voice must reach the worker")
+
+        // Importing voices that already exist: the shape the old Voice Studio used, one folder
+        // per voice with a clip and its transcript. Scanning is tested on its own because it is
+        // the part that decides what an import will do, and because getting it wrong is how an
+        // operator ends up re-importing everything or silently skipping voices.
+        // Cleared first: this folder is named, not unique per run, so a previous run's voices
+        // would otherwise be "already saved" and the import would look like it did nothing.
+        let importRoot = temporary.appendingPathComponent("existing-voices")
+        try? FileManager.default.removeItem(at: importRoot)
+        try FileManager.default.createDirectory(at: importRoot, withIntermediateDirectories: true)
+        func makeVoice(_ folder: String, clip: Data?, transcript: String?) throws {
+            let directory = importRoot.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let clip { try clip.write(to: directory.appendingPathComponent("reference.wav")) }
+            if let transcript { try transcript.write(to: directory.appendingPathComponent("transcript.txt"),
+                                                     atomically: true, encoding: .utf8) }
+        }
+        try makeVoice("Imported Narrator", clip: FixtureProtocol.wav, transcript: "The exact words")
+        try makeVoice("Imported NoWords", clip: FixtureProtocol.wav, transcript: nil)
+        // Already saved in this library under that name: importing it again must not duplicate.
+        try makeVoice("Narrator", clip: FixtureProtocol.wav, transcript: "already here")
+        // A subtitle file is a transcript with timing in it, which must not reach the clone.
+        try makeVoice("Imported Subtitled", clip: FixtureProtocol.wav,
+                      transcript: "1\n00:00:00,000 --> 00:00:02,000\nHello there\n\n2\n00:00:02,000 --> 00:00:04,000\nGeneral Kenobi\n")
+        try makeVoice("Empty", clip: nil, transcript: "no clip here")
+
+        let scanned = try NativeWorkspaceStore.scanVoiceFolder(importRoot)
+        require(scanned.count == 4, "a folder with no clip is not a voice: \(scanned.map(\.name))")
+        require(scanned.map(\.name) == ["Imported Narrator", "Imported NoWords", "Imported Subtitled", "Narrator"],
+                "the scan must be sorted and stable: \(scanned.map(\.name))")
+        let narratorScan = scanned.first { $0.name == "Imported Narrator" }!
+        require(narratorScan.isReady, "a clip with a transcript is ready to import")
+        require(narratorScan.transcript == "The exact words", "the transcript must be read whole")
+        require(!scanned.first { $0.name == "Imported NoWords" }!.isReady,
+                "a clip with no words is not ready - a clone would sound wrong")
+        let subtitled = scanned.first { $0.name == "Imported Subtitled" }!
+        require(subtitled.transcript == "Hello there General Kenobi",
+                "subtitle timing must be stripped: \(subtitled.transcript)")
+
+        // Importing brings in the ready ones and reports the rest, without duplicating what is
+        // already saved.
+        let imported = await store.importVoices(from: importRoot)
+        require(imported.total == 4, "the import must consider every clip: \(imported.total)")
+        require(imported.added == 2, "only new voices with words are added: \(imported)")
+        require(imported.skipped == 2,
+                "the voiceless clip and the one already saved are skipped: \(imported)")
+        require(FixtureProtocol.voiceListCalls >= 2, "adding a voice must refresh the library")
+        let repeated = await store.importVoices(from: importRoot)
+        require(repeated.added == 0, "importing twice must not duplicate a library: \(repeated)")
 
         // Local storage: the limits come from the Hub, and the bytes cleanup may not touch
         // are shown beside them - including on a machine that is over its limit.

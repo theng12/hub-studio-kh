@@ -986,65 +986,7 @@ struct StudioContent: View {
     }
 
     private func importVoiceFolder(_ folder: URL) async {
-        let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"]
-        let transcriptExtensions: Set<String> = ["txt", "text", "srt", "vtt", "md"]
-        let manager = FileManager.default
-        guard let entries = try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey],
-                                                             options: [.skipsHiddenFiles]) else {
-            workspace.voiceError = "That folder could not be read."
-            return
-        }
-        var clips: [(name: String, clip: URL, transcript: String)] = []
-        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            var clip: URL?
-            var text = ""
-            let candidates = isDirectory ? (try? manager.contentsOfDirectory(at: entry, includingPropertiesForKeys: nil,
-                                                                             options: [.skipsHiddenFiles])) ?? [] : [entry]
-            for item in candidates {
-                let ext = item.pathExtension.lowercased()
-                if audioExtensions.contains(ext), clip == nil { clip = item }
-                if transcriptExtensions.contains(ext),
-                   let body = try? String(contentsOf: item, encoding: .utf8) {
-                    text = Self.plainTranscript(body)
-                }
-            }
-            guard let clip else { continue }
-            let name = isDirectory ? entry.lastPathComponent
-                : entry.deletingPathExtension().lastPathComponent
-            clips.append((name: name, clip: clip, transcript: text))
-        }
-        guard !clips.isEmpty else {
-            workspace.voiceError = "No reference clips were found in that folder. Each voice needs a clip; a transcript beside it is used when present."
-            return
-        }
-        var added = 0, skipped = 0
-        for item in clips {
-            guard !workspace.voices.contains(where: { $0.name.caseInsensitiveCompare(item.name) == .orderedSame })
-            else { skipped += 1; continue }
-            guard !item.transcript.isEmpty else { skipped += 1; continue }
-            let ok = await workspace.addVoice(name: item.name, language: "en", gender: "n",
-                                              license: "self-owned", notes: "Imported from \(folder.lastPathComponent)",
-                                              transcript: item.transcript, clip: item.clip, acknowledged: true)
-            if ok { added += 1 } else { skipped += 1 }
-        }
-        workspace.voiceNote = "Imported \(added) voice\(added == 1 ? "" : "s")"
-            + (skipped > 0 ? "; skipped \(skipped) (need a transcript, or already saved)." : ".")
-    }
-
-    /// Strip timing lines so an imported .srt or .vtt is usable as a transcript.
-    private static func plainTranscript(_ body: String) -> String {
-        let lines = body.components(separatedBy: .newlines)
-        var kept: [String] = []
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { continue }
-            if trimmed == "WEBVTT" { continue }
-            if trimmed.contains("-->") { continue }
-            if Int(trimmed) != nil { continue }
-            kept.append(trimmed)
-        }
-        return kept.joined(separator: " ")
+        _ = await workspace.importVoices(from: folder)
     }
 
     private func playVoice(_ voice: NativeVoice) async {
