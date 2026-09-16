@@ -33,6 +33,7 @@ import httpx
 
 from . import (artifact_metadata, cloud_guard, execution_assets,
                execution_identity, ledger, peers, shared_voices)
+from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
 from .peers import studio_request
 from .monitor import is_cached
@@ -1003,14 +1004,10 @@ def _submit_batch_locked(envelope: dict) -> dict:
     )
     if refusal:
         return {"error": refusal, "code": cloud_guard.REFUSAL_CODE}
-    routing = str(envelope.get("routing") or "pool")
-    if routing not in {"pool", "remote"} and not (
-        routing.startswith("studio:") and routing.split(":", 1)[1]
-    ) and not (
-        routing.startswith("machine:") and routing.split(":", 1)[1]
-    ):
-        return {"error": "routing must be pool, remote, studio:<id> or machine:<id>"}
-    if routing.startswith("machine:"):
+    routing, routing_error = routing_rule.parse(envelope.get("routing"))
+    if routing_error:
+        return {"error": routing_error}
+    if routing.startswith(routing_rule.MACHINE_PREFIX):
         # A pin is an instruction, so an unknown machine is refused here rather than left to
         # queue forever with nothing to say. `local` is this Mac; anything else joined it.
         target = routing.split(":", 1)[1]
@@ -1976,13 +1973,11 @@ def _eligible_studios(modality: str, routing: str) -> list[dict]:
     out = []
     leased_machines = busy_machines()
     for s in mon.registry:
-        if routing.startswith("studio:") and s["id"] != routing.split(":", 1)[1]:
+        # A pin is the operator's instruction, so it beats the automatic choice: a Mac that
+        # has the model is still skipped when another Mac was named.
+        if not routing_rule.allows(s, routing):
             continue
         machine = s.get("machine", "local")
-        # A machine pin is the operator's instruction, so it beats the automatic choice: a Mac
-        # that has the model is still skipped when another Mac was named.
-        if routing.startswith("machine:") and machine != routing.split(":", 1)[1]:
-            continue
         # A remote render deliberately keeps the Hub Mac as the control plane.
         # It waits for an external Render Studio rather than quietly consuming
         # the Hub machine's CPU / Media Engine as a fallback.

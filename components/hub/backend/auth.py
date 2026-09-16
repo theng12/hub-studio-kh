@@ -451,6 +451,7 @@ FLEET_ALLOWED = (
     # a node is the controller owner's decision.
     ("POST", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/nodes$"),
+    ("GET", r"^/api/hub/fleet/overview$"),
 )
 _FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
 

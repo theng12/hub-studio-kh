@@ -98,6 +98,12 @@ struct ShellConfiguration {
     var modelsDirectory: URL?
     var offline: Bool
     var startAtLogin: Bool
+    /// Whether an at-login launch also starts the Hub and its Studios.
+    ///
+    /// Off by default, and deliberately a separate choice from starting the app at login: a Mac
+    /// that is only ever used in person should not hold its Studios open all night, while a
+    /// fleet node that must be ready for work the moment it wakes should.
+    var startServicesAtLogin: Bool
     /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
     var listenHost: String
     /// The address the owner app connects to. A wildcard bind also answers on loopback, so
@@ -122,6 +128,7 @@ struct ShellConfiguration {
         modelsDirectory = nil
         offline = false
         startAtLogin = true
+        startServicesAtLogin = false
         listenHost = "127.0.0.1"
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
         recoveryBackoffSeconds = StartupRecovery.defaultDelays
@@ -147,6 +154,7 @@ struct ShellConfiguration {
             modelsDirectory = URL(fileURLWithPath: saved.modelsPath).standardizedFileURL.resolvingSymlinksInPath()
             offline = saved.offline
             startAtLogin = saved.startAtLogin
+            startServicesAtLogin = saved.startServicesAtLogin
             listenHost = saved.listenHost
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
@@ -207,7 +215,9 @@ struct ShellConfiguration {
         guard let modelsDirectory else { return }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory.path, offline: offline,
-                                                        startAtLogin: startAtLogin, listenHost: listenHost,
+                                                        startAtLogin: startAtLogin,
+                                                        startServicesAtLogin: startServicesAtLogin,
+                                                        listenHost: listenHost,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds))
         try data.write(to: preferencesFile, options: .atomic)
@@ -217,15 +227,20 @@ struct ShellConfiguration {
         let modelsPath: String
         let offline: Bool
         let startAtLogin: Bool
+        /// Absent in every preferences file written before this setting existed, and absent
+        /// means off: the default is the conservative one.
+        let startServicesAtLogin: Bool
         let listenHost: String
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
 
-        init(modelsPath: String, offline: Bool, startAtLogin: Bool, listenHost: String,
-             recoveryMaxAttempts: Int, recoveryBackoffSeconds: [TimeInterval]) {
+        init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
+             listenHost: String, recoveryMaxAttempts: Int,
+             recoveryBackoffSeconds: [TimeInterval]) {
             self.modelsPath = modelsPath
             self.offline = offline
             self.startAtLogin = startAtLogin
+            self.startServicesAtLogin = startServicesAtLogin
             self.listenHost = listenHost
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
@@ -237,6 +252,7 @@ struct ShellConfiguration {
             offline = try values.decode(Bool.self, forKey: .offline)
             // Older previews did not persist this preference; the first-release default is on.
             startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true
+            startServicesAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startServicesAtLogin) ?? false
             // Every build before fleet support was loopback-only, and that stays the default
             // for preferences written by them.
             listenHost = try values.decodeIfPresent(String.self, forKey: .listenHost) ?? "127.0.0.1"

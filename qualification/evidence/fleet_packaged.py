@@ -245,6 +245,24 @@ def main() -> int:
                                 "sha256": hashlib.sha256(body).hexdigest() if isinstance(body, bytes) else None,
                                 "preview": text[:200]}
 
+        # What the operator would see in the app's fleet screen: one row per Mac, from the
+        # packaged Hub, after the work has actually run.
+        status, overview = request(f"{controller.url}/api/hub/fleet/overview",
+                                   token=controller.token)
+        evidence["overview"] = {"status": status}
+        if status == 200:
+            rows = {row.get("machine"): row for row in (overview.get("machines") or [])}
+            evidence["overview"]["machines"] = sorted(rows)
+            evidence["overview"]["summary"] = overview.get("summary")
+            evidence["overview"]["local"] = {
+                key: (rows.get("local") or {}).get(key)
+                for key in ("reachable", "version", "disk_free_gb", "memory_gb", "chip")}
+            node_row = rows.get("node-a") or {}
+            evidence["overview"]["node"] = {
+                key: node_row.get(key) for key in
+                ("reachable", "version", "jobs", "average_seconds", "modalities",
+                 "disk_free_gb", "chip")}
+
         problems = []
         if evidence["submit"]["status"] != 200:
             problems.append("the controller refused the submission")
@@ -252,6 +270,21 @@ def main() -> int:
             problems.append(f"the job did not finish: {evidence['job']}")
         if evidence["artifact"]["status"] != 200:
             problems.append("the artifact did not come back through the controller")
+        if evidence["overview"]["status"] != 200:
+            problems.append("the fleet overview was not served by the packaged Hub")
+        else:
+            if evidence["overview"]["machines"] != ["local", "node-a"]:
+                problems.append(f"the overview did not cover every Mac: "
+                                f"{evidence['overview']['machines']}")
+            local = evidence["overview"]["local"]
+            if not local.get("disk_free_gb") or not local.get("version"):
+                problems.append(f"this Mac's own row is incomplete: {local}")
+            node_row = evidence["overview"]["node"]
+            if not node_row.get("reachable"):
+                problems.append(f"the node that just ran the job reads as absent: {node_row}")
+            if node_row.get("jobs") != 1 or node_row.get("average_seconds") is None:
+                problems.append("the node's measured work is missing from its row: "
+                                f"{node_row}")
         evidence["problems"] = problems
         evidence["ok"] = not problems
         EVIDENCE.write_text(json.dumps(evidence, indent=1, sort_keys=True, default=str) + "\n")

@@ -16,6 +16,7 @@ import httpx
 from fastapi import HTTPException, UploadFile
 
 from . import broker, execution_identity, ledger, model_exposure, peers
+from . import routing as routing_rule
 from .peers import studio_request
 from .registry import DATA_DIR, machine_enabled, studio_enabled
 
@@ -226,6 +227,7 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
                        language: str | None, word_timestamps: bool, label: str | None,
                        project: str | None, episode: str | None,
                        genstudio_execution_json: str | None = None,
+                       routing: str = routing_rule.POOL,
                        deduplicate: bool = True, admission_guard=None) -> tuple[dict, bool]:
     if not files or len(files) > MAX_FILES:
         raise HTTPException(400, f"files must contain 1 to {MAX_FILES} uploads")
@@ -265,6 +267,9 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
         "model": model,
         "language": language or None,
         "word_timestamps": bool(word_timestamps),
+        # Carried on the batch so the dispatcher can honour a machine pin later, at the moment
+        # it actually chooses a Studio.
+        "routing": routing,
         "project": clean_project,
         "episode": clean_episode,
         "items": [
@@ -369,6 +374,7 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
         "label": clean_label, "project": clean_project, "episode": clean_episode,
         "model": model, "language": language or None,
         "word_timestamps": bool(word_timestamps), "items": items,
+        "routing": routing,
         "genstudio_execution": prepared.evidence,
     }
     batches[batch_id] = batch
@@ -408,6 +414,10 @@ def summary(batch: dict, include_items: bool = True,
     }
     if batch.get("governor_note"):
         out["governor_note"] = batch["governor_note"]
+    # Shown only when pinned: an operator looking at a queued job has to be able to see that a
+    # machine pin is why nothing has picked it up.
+    if str(batch.get("routing") or routing_rule.POOL) != routing_rule.POOL:
+        out["routing"] = batch["routing"]
     execution = batch.get("genstudio_execution")
     if isinstance(execution, dict):
         out["genstudio_execution"] = {
@@ -687,6 +697,12 @@ async def dispatch_once(monitor) -> int:
             eligible = await _eligible_studios(
                 monitor, batch["model"], item,
                 batch.get("genstudio_execution"), reasons)
+            routing = str(batch.get("routing") or routing_rule.POOL)
+            if routing != routing_rule.POOL:
+                eligible = [s for s in eligible if routing_rule.allows(s, routing)]
+                if not eligible:
+                    reasons.insert(0, f"routing {routing!r} excludes every Studio that could "
+                                      "otherwise take this job")
             if not eligible:
                 reason = "no transcription studio can take this job: " + (
                     "; ".join(reasons) if reasons else "no transcription studio is registered")

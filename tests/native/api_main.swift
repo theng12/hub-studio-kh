@@ -206,6 +206,9 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
+        case ("GET", "/api/hub/fleet/overview"):
+            Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
         case ("DELETE", "/api/hub/fleet/nodes/studio-3"):
             Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
@@ -442,6 +445,17 @@ struct NativeAPITests {
         require(store.fleetNodes?.nodes.first?.state == "reachable", "a reachable node must say so")
         require(store.fleetNodes?.nodes.last?.isReachable == false,
                 "a node that was joined but has since gone must not read as available")
+        // The fleet overview: one row per Mac, with the facts that decide where work goes.
+        require(store.fleetOverview?.summary.total == 2, "the overview must cover every machine")
+        require(store.fleetOverview?.machines.first?.machine == "local", "this Mac is one of them")
+        require(store.fleetOverview?.machines.first?.diskFreeGb == 220.0, "free disk must be shown")
+        require(store.fleetOverview?.machines.first?.averageSeconds == 41.5,
+                "measured speed must be shown, not estimated")
+        require(store.fleetOverview?.machines.last?.averageSeconds == nil,
+                "a machine with no measured work must report no average, not zero")
+        require(FixtureProtocol.fleetRequests().contains("overview"),
+                "the overview must be read from the Hub: \(FixtureProtocol.fleetRequests())")
+
         await store.leaveNode(store.fleetNodes!.nodes.last!)
         require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
                 "removing a node must reach the Hub: \(FixtureProtocol.fleetRequests())")
@@ -780,6 +794,16 @@ struct NativeAPITests {
         require(oldImageRequest["clientRequestId"] as? String != newImageRequest["clientRequestId"] as? String, "pending Image identity crossed device state directories")
         require((newImageRequest["items"] as? [[String: Any]])?.first?["prompt"] as? String == "New device prompt", "old Image prompt crossed device state directories")
         imageConnectionStore.disconnect()
+
+        // Automatic placement is the default: an unpinned app must not send a routing field at
+        // all, or the Hub would have to guess what an empty pin means.
+        require(imageReplay["routing"] == nil, "an unpinned job must leave routing to the Hub")
+        store.routingPin = "machine:studio-3"
+        store.imagePrompt = "Pinned to one Mac"
+        await store.generateImage()
+        require(FixtureProtocol.generatedBodies().last?["routing"] as? String == "machine:studio-3",
+                "a machine pin must reach the Hub: \(String(describing: FixtureProtocol.generatedBodies().last?["routing"]))")
+        store.routingPin = nil
 
         let input = temporary.appendingPathComponent("clip.wav")
         try Data([0x52, 0x49, 0x46, 0x46]).write(to: input)

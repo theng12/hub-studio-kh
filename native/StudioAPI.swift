@@ -243,6 +243,42 @@ struct NativeFleetSummary: Decodable, Equatable {
     let error: Int
 }
 
+/// One Mac in the fleet, with everything needed to judge whether to send it work.
+///
+/// A machine that has not reported in shows what is known - that it is absent - rather than
+/// numbers invented to fill the row: disk and memory stay nil, and a machine with no finished
+/// job reports no average instead of a zero that would read as "instant".
+struct NativeFleetMachine: Decodable, Equatable, Identifiable {
+    let machine: String
+    let label: String
+    let reachable: Bool
+    let version: String?
+    let health: String
+    let detail: String?
+    let memoryGb: Double?
+    let availableGb: Double?
+    let diskFreeGb: Double?
+    let diskTotalGb: Double?
+    let chip: String?
+    let jobs: Int
+    let averageSeconds: Double?
+    let modalities: [String: Int]
+
+    var id: String { machine }
+    var isLocal: Bool { machine == "local" }
+}
+
+struct NativeFleetOverview: Decodable, Equatable {
+    let machines: [NativeFleetMachine]
+    let summary: NativeFleetOverviewSummary
+}
+
+struct NativeFleetOverviewSummary: Decodable, Equatable {
+    let total: Int
+    let reachable: Int
+    let unreachable: Int
+}
+
 /// The Hub's own generation analytics, read straight from the job ledger.
 ///
 /// Every number here is recorded by the job that produced it — runtime, model, machine and
@@ -369,6 +405,10 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
     @Published var imageModel = "" { didSet { if imageModel != oldValue { imageSettings = nil }; scheduleSave() } }
     @Published var imageSettings: NativeImageSettings? { didSet { scheduleSave() } }
+    /// Which Mac new work should run on, as the Hub's `routing` value: nil means the Hub picks,
+    /// and `machine:<id>` pins one machine. Kept as the owner's standing choice so a pin set on
+    /// the fleet screen applies to every workspace until it is cleared.
+    @Published var routingPin: String? { didSet { scheduleSave() } }
     @Published private(set) var submittingImage = false
     var imageConfiguration: NativeImageConfiguration? { imageConfigurations[imageModel] }
 
@@ -418,6 +458,8 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var hubVersion: NativeVersion?
     @Published private(set) var roleNote: String?
     @Published private(set) var fleetNodes: NativeFleetInventory?
+    /// Every Mac in the fleet in one row each, for the fleet screen.
+    @Published private(set) var fleetOverview: NativeFleetOverview?
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
     @Published private(set) var fleetNote: String?
@@ -683,7 +725,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
                             presetSpeaker: "", language: language))],
-                        voiceReferenceAssetId: assetID)
+                        voiceReferenceAssetId: assetID, routing: routingPin)
                 } else {
                     guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
                         throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
@@ -693,7 +735,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
                             presetSpeaker: audioSpeaker, language: language))],
-                        voiceReferenceAssetId: nil)
+                        voiceReferenceAssetId: nil, routing: routingPin)
                 }
             }
             submittingAudio = true
@@ -738,7 +780,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     throw NativeAPIError.message("Image job \(original.id) has an uncertain result. Reconcile that original job before repeating this request.")
                 }
                 body = HubImageRequest(modality: "image", model: model.repo,
-                    clientRequestId: "native:\(UUID().uuidString)", items: [HubImageItem(prompt: prompt, params: settings)])
+                    clientRequestId: "native:\(UUID().uuidString)", items: [HubImageItem(prompt: prompt, params: settings)],
+                    routing: routingPin)
             }
             submittingImage = true
             defer { if connectionID == requestConnection { submittingImage = false } }
@@ -863,9 +906,13 @@ final class NativeWorkspaceStore: ObservableObject {
                     "language": transcriptionLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
                     "word_timestamps": wordTimestamps ? "true" : "false"
                 ]
+            // Only present when pinned, so the Hub's automatic choice stays the default rather
+            // than an empty string it would have to interpret.
+            var uploadFields = fields
+            if let routingPin, !routingPin.isEmpty { uploadFields["routing"] = routingPin }
             let uploadFile = try await Task.detached(priority: .userInitiated) {
                 try Self.makeMultipartFile(
-                    boundary: boundary, file: file, fields: fields, dataDirectory: uploadDirectory
+                    boundary: boundary, file: file, fields: uploadFields, dataDirectory: uploadDirectory
                 )
             }.value
             defer { try? FileManager.default.removeItem(at: uploadFile) }
@@ -1243,6 +1290,16 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             // An older Hub without the route must not break the screen.
             fleetNodes = nil
+        }
+        // The overview is a separate read because it can be slower - it waits on remote Macs -
+        // and the node list must still appear promptly when a node is off.
+        do {
+            let overview: NativeFleetOverview = try await get(["api", "hub", "fleet", "overview"])
+            guard connectionID == requestConnection else { return }
+            fleetOverview = overview
+        } catch {
+            guard connectionID == requestConnection else { return }
+            fleetOverview = nil
         }
     }
 
@@ -1786,6 +1843,8 @@ final class NativeWorkspaceStore: ObservableObject {
         let imagePrompt: String?
         let imageModel: String?
         let imageSettings: NativeImageSettings?
+        /// Absent in state written before pinning existed, and absent means automatic.
+        let routingPin: String?
     }
     private var pendingAudioURL: URL? { dataDirectory?.appendingPathComponent("native-pending-audio.json") }
     private func savePendingAudio() throws {
@@ -1853,7 +1912,8 @@ final class NativeWorkspaceStore: ObservableObject {
             audioText: audioText, audioModel: audioModel, audioSpeaker: audioSpeaker, audioLanguage: audioLanguage,
             transcriptionModel: transcriptionModel, transcriptionFile: transcriptionFile?.path,
             transcriptionLanguage: transcriptionLanguage, wordTimestamps: wordTimestamps,
-            transcriptionResult: transcriptionResult, imagePrompt: imagePrompt, imageModel: imageModel, imageSettings: imageSettings
+            transcriptionResult: transcriptionResult, imagePrompt: imagePrompt, imageModel: imageModel, imageSettings: imageSettings,
+            routingPin: routingPin
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1878,6 +1938,7 @@ final class NativeWorkspaceStore: ObservableObject {
         imagePrompt = state.imagePrompt ?? ""
         imageModel = state.imageModel ?? ""
         imageSettings = state.imageSettings
+        routingPin = state.routingPin
     }
 }
 
@@ -2028,6 +2089,19 @@ private struct HubImageRequest: Codable {
     let model: String
     let clientRequestId: String
     let items: [HubImageItem]
+    /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
+    let routing: String?
+    enum CodingKeys: String, CodingKey {
+        case modality, model, clientRequestId, items, routing
+    }
+    init(modality: String, model: String, clientRequestId: String, items: [HubImageItem],
+         routing: String?) {
+        self.modality = modality
+        self.model = model
+        self.clientRequestId = clientRequestId
+        self.items = items
+        self.routing = routing
+    }
 }
 private struct HubImageItem: Codable { let prompt: String; let params: NativeImageSettings }
 private struct HubAckReceipt: Decodable { let ok: Bool }
@@ -2039,8 +2113,10 @@ private struct HubAudioRequest: Codable {
     /// Staged voice-clone reference. Sent for Qwen Base models; the Hub streams the clip to the
     /// worker's reference endpoint and supplies the transcript from the staged asset.
     let voiceReferenceAssetId: String?
+    /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
+    let routing: String?
     enum CodingKeys: String, CodingKey {
-        case modality, model, clientRequestId, items
+        case modality, model, clientRequestId, items, routing
         case voiceReferenceAssetId = "voice_reference_asset_id"
     }
 }

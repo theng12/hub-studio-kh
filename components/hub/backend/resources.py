@@ -12,10 +12,13 @@ process RSS + host memory pressure is the honest picture.
 
 from functools import lru_cache
 import json
+import shutil
 import socket
 import subprocess
 
 import psutil
+
+from .registry import DATA_DIR
 
 _proc_cache: dict[int, psutil.Process] = {}
 _proxy_alert_state = {"degraded": False}
@@ -80,6 +83,15 @@ def host_stats() -> dict:
         stats["load_avg"] = [round(la1, 2), round(la5, 2), round(la15, 2)]
     except OSError:
         stats["load_avg"] = None
+    try:
+        # The state root is where this Mac's generated output and models live, so its free
+        # space is the number that decides whether the next job can be written.
+        usage = shutil.disk_usage(DATA_DIR)
+        stats["disk_free_gb"] = round(usage.free / 1e9, 2)
+        stats["disk_total_gb"] = round(usage.total / 1e9, 2)
+    except OSError:
+        stats["disk_free_gb"] = None
+        stats["disk_total_gb"] = None
     return stats
 
 

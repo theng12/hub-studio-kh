@@ -21,7 +21,8 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
-from .backend import auth, broker, cloud_guard, control_plane, ledger, transcription_jobs
+from .backend import auth, broker, cloud_guard, control_plane, ledger, routing as routing_rule
+from .backend import transcription_jobs
 from .backend.monitor import StudioMonitor
 
 
@@ -364,6 +365,70 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # One app is the controller and the others join it by address. Every route is behind the
     # Hub credential like the rest of the private surface: a join is not a public endpoint.
 
+    @app.get("/api/hub/fleet/overview")
+    def fleet_overview() -> dict[str, Any]:
+        """One row per machine in the fleet: is it there, what is it running, how fast is it.
+
+        The pieces existed in three places - the peer snapshot for remote host state, the fleet
+        roster for joined nodes, and the ledger for measured speed - and none of them answered
+        "how is my fleet doing". This puts them in one row per Mac so the app can show it.
+        """
+        from .backend import ledger, peers
+        from .backend import resources as resource_stats
+        measured = ledger.stats().get("by_machine") or {}
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for studio in monitor.registry:
+            machine = str(studio.get("machine") or "local")
+            if machine in seen:
+                continue
+            seen.add(machine)
+            if peers.is_local_studio(studio):
+                state = monitor.status.get(studio["id"]) or {}
+                try:
+                    host = resource_stats.host_stats()
+                except Exception:
+                    host = {}
+                row = {
+                    "machine": machine,
+                    "label": "This Mac",
+                    "reachable": True,
+                    "version": _app_version(),
+                    "health": state.get("status", "unknown"),
+                }
+            else:
+                snapshot = peers.cached(machine) or {}
+                row = {
+                    "machine": machine,
+                    "label": (studio.get("title") or machine).split(" · ")[0],
+                    "reachable": bool(snapshot.get("reachable") and snapshot.get("auth")),
+                    "version": snapshot.get("version"),
+                    "health": ("up" if snapshot.get("status") == "connected"
+                               else str(snapshot.get("status") or "unknown")),
+                    "detail": None if snapshot else "this Mac has not reported in yet",
+                }
+                host = snapshot.get("host") or {}
+            stats = measured.get(machine) or {}
+            rows.append({
+                **row,
+                "memory_gb": host.get("total_gb"),
+                "available_gb": host.get("available_gb"),
+                "disk_free_gb": host.get("disk_free_gb"),
+                "disk_total_gb": host.get("disk_total_gb"),
+                "chip": host.get("chip"),
+                "jobs": stats.get("count", 0),
+                "average_seconds": stats.get("avg_s"),
+                "modalities": stats.get("modalities") or {},
+            })
+        return {
+            "machines": rows,
+            "summary": {
+                "total": len(rows),
+                "reachable": sum(row["reachable"] for row in rows),
+                "unreachable": sum(not row["reachable"] for row in rows),
+            },
+        }
+
     @app.get("/api/hub/fleet/nodes")
     async def fleet_nodes() -> dict[str, Any]:
         from .backend import fleet_nodes as fleet
@@ -607,13 +672,26 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         word_timestamps: bool = Form(False), label: str | None = Form(None),
         project: str | None = Form(None), episode: str | None = Form(None),
         genstudio_execution: str | None = Form(None),
+        routing: str | None = Form(None),
     ) -> dict[str, Any]:
         if not control_plane.accepts_customer_jobs():
             raise HTTPException(409, "This Hub is in agent mode; submit transcription to a controller.")
+        parsed, routing_error = routing_rule.parse(routing)
+        if routing_error:
+            raise HTTPException(400, routing_error)
+        if parsed.startswith(routing_rule.MACHINE_PREFIX):
+            # Pinning a machine that is not in the fleet is refused at submission, like the
+            # other modalities, rather than left to sit in the queue with nothing to say.
+            known = {s.get("machine", "local") for s in monitor.registry}
+            target = parsed.split(":", 1)[1]
+            if target not in known:
+                raise HTTPException(400, f"no machine named {target!r} is in this fleet; known: "
+                                         + ", ".join(sorted(known)))
         try:
             batch, duplicate = await transcription_jobs.create_batch(
                 files, item_ids, model, language, word_timestamps, label, project,
                 episode, genstudio_execution,
+                routing=parsed,
                 admission_guard=lambda envelope: _submission_readiness(envelope, monitor),
             )
         finally:

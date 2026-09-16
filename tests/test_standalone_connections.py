@@ -1442,6 +1442,45 @@ class ControllerRegistryTests(unittest.TestCase):
             finally:
                 hub.stop()
 
+    def test_the_overview_shows_every_machine_in_one_row(self) -> None:
+        """One place to see the fleet: is each Mac there, what is it running, how fast is it."""
+        with tempfile.TemporaryDirectory(prefix="studiohub-overview-") as root:
+            directory = Path(root)
+            hub = HubProcess(directory, "controller", "controller-fixture-token-0123456789",
+                             joined=[{"node_id": "mac-mini-2", "name": "Studio 2",
+                                      "address": "http://192.168.1.21:47873",
+                                      "studios": [{"id": "image", "modality": "image"},
+                                                  {"id": "subtitle",
+                                                   "modality": "transcription"}]}])
+            hub.start()
+            try:
+                status, payload, _ = hub.request("/api/hub/fleet/overview", token=hub.token)
+                self.assertEqual(status, 200)
+                rows = {row["machine"]: row for row in payload["machines"]}
+                # This Mac is one row, and the joined node is another - one per machine, not
+                # one per studio, however many studios each of them runs.
+                self.assertEqual(sorted(rows), ["local", "mac-mini-2"])
+                self.assertEqual(payload["summary"]["total"], 2)
+
+                here = rows["local"]
+                self.assertTrue(here["reachable"])
+                self.assertEqual(here["label"], "This Mac")
+                self.assertTrue(here["version"])
+                # The facts that decide whether work can run here at all.
+                self.assertIsNotNone(here["disk_free_gb"])
+                self.assertIsNotNone(here["memory_gb"])
+                self.assertTrue(here["chip"])
+
+                # The node has not reported in, and must not be shown as if it had.
+                there = rows["mac-mini-2"]
+                self.assertFalse(there["reachable"])
+                self.assertIsNone(there["disk_free_gb"])
+                self.assertEqual(there["jobs"], 0)
+                self.assertIsNone(there["average_seconds"],
+                                  "a machine with no measured work must not report a zero")
+            finally:
+                hub.stop()
+
     def test_a_node_with_no_studios_is_not_dispatchable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="studiohub-controller-") as root:
             directory = Path(root)
@@ -1535,6 +1574,69 @@ def reachable_second_address() -> str | None:
     finally:
         probe.close()
     return address if address and not address.startswith("127.") else None
+
+
+class FleetSubtitlePinTests(unittest.TestCase):
+    """A Subtitle machine pin has to mean the same thing it means for Image and Voice.
+
+    Subtitle has its own dispatcher, so it needed its own routing check: a pin accepted at the
+    door but ignored by the scheduler would look like it worked while the work ran elsewhere.
+    """
+
+    def test_a_subtitle_pin_names_a_machine_and_a_bad_pin_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="studiohub-subtitle-pin-") as root:
+            directory = Path(root)
+            # The controller has to accept the model before it will route it anywhere, so the
+            # fleet has the model installed on the controller exactly as it would in reality.
+            manifests, library = tiny_whisper_install(directory / "controller-models")
+            hub = HubProcess(directory, "controller", "controller-fixture-token-0123456789",
+                             workers=[{"id": "subtitle", "modality": "transcription",
+                                       "port": free_port()}],
+                             env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                                  "STUDIOHUB_MODELS_DIR": str(library)},
+                             joined=[{"node_id": "node-a", "name": "Node A",
+                                      "address": "http://192.168.1.21:47873",
+                                      "studios": [{"id": "subtitle",
+                                                   "modality": "transcription"}]}])
+            hub.start()
+            try:
+                audio = b"RIFF" + b"\0" * 4096
+                status, payload, _ = hub.post_multipart(
+                    "/api/hub/transcription/jobs",
+                    {"model": WHISPER_MODEL_ID, "item_ids": "pin-1", "episode": "pin",
+                     "routing": "machine:node-a"},
+                    {"files": ("clip.wav", audio, "audio/wav")},
+                    token=hub.token)
+                self.assertEqual(status, 200, payload)
+                status, batch, _ = hub.request(
+                    f"/api/hub/transcription/jobs/{payload['batch_id']}", token=hub.token)
+                self.assertEqual(status, 200, batch)
+                # The pin is remembered on the batch, because the dispatcher chooses a Studio
+                # later - at dispatch time, not at the door.
+                self.assertEqual(batch.get("routing"), "machine:node-a", batch)
+
+                # A machine that is not in the fleet is refused at submission, exactly as the
+                # Image and Voice paths refuse it, rather than queued forever.
+                status, refused, _ = hub.post_multipart(
+                    "/api/hub/transcription/jobs",
+                    {"model": WHISPER_MODEL_ID, "item_ids": "pin-2", "episode": "pin2",
+                     "routing": "machine:not-a-mac"},
+                    {"files": ("clip.wav", audio, "audio/wav")},
+                    token=hub.token)
+                self.assertEqual(status, 400, refused)
+                self.assertIn("not-a-mac", str(refused))
+
+                # And a value that is not a routing instruction at all is a plain error.
+                status, refused, _ = hub.post_multipart(
+                    "/api/hub/transcription/jobs",
+                    {"model": WHISPER_MODEL_ID, "item_ids": "pin-3", "episode": "pin3",
+                     "routing": "somewhere-nice"},
+                    {"files": ("clip.wav", audio, "audio/wav")},
+                    token=hub.token)
+                self.assertEqual(status, 400, refused)
+                self.assertIn("routing must be", str(refused))
+            finally:
+                hub.stop()
 
 
 class MultiAddressTests(unittest.TestCase):

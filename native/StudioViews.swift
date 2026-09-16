@@ -752,6 +752,11 @@ struct StudioContent: View {
                 Section("General") {
                     Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled || studio.loginStatus == .requiresApproval }, set: { studio.setLogin($0) }))
                     if studio.loginStatus == .requiresApproval { Button("Approve in System Settings") { studio.setLogin(true) } }
+                    Toggle("Start services at login", isOn: Binding(
+                        get: { studio.configuration.startServicesAtLogin },
+                        set: { studio.setStartServicesAtLogin($0) }))
+                    Text("Off by default. With this on, signing in brings the Hub and its Studios up on their own, so this Mac is ready for work without anyone opening the app. Leave it off and services start when you open the app or press Start Services.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("Closing the window keeps local jobs running. Quit stops the app and its services.").foregroundStyle(.secondary)
                 }
                 Section("Model library") {
@@ -994,11 +999,109 @@ struct StudioContent: View {
             }
 
             Divider()
+            fleetOverview
+            Divider()
             joinedNodes
             Divider()
             joinController
         }
         .task(id: connected) { if connected { await workspace.refreshFleetNodes() } }
+    }
+
+    /// Every Mac in the fleet, one row each: is it there, what can it run, how fast, how full.
+    ///
+    /// This is the picture the owner asked for in one place, and it is the same row for this Mac
+    /// as for a joined one - a fleet view that left out the machine you are sitting at would
+    /// answer half the question.
+    @ViewBuilder private var fleetOverview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Fleet overview").font(.headline)
+                Spacer()
+                if let overview = workspace.fleetOverview {
+                    Text("\(overview.summary.reachable) of \(overview.summary.total) reachable")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            if let overview = workspace.fleetOverview {
+                Text(pinSummary)
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(overview.machines) { machine in
+                    fleetMachineRow(machine)
+                }
+            } else {
+                Text(connected ? "Fleet details are unavailable in this build." : "Start local services to see the fleet.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func fleetMachineRow(_ machine: NativeFleetMachine) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Image(systemName: machine.reachable
+                      ? (machine.health == "up" ? "checkmark.circle.fill" : "clock")
+                      : "exclamationmark.triangle")
+                    .foregroundStyle(machine.reachable
+                                     ? (machine.health == "up" ? Color.green : Color.secondary)
+                                     : Color.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(machine.isLocal ? "This Mac" : machine.label).fontWeight(.medium)
+                        if let version = machine.version, !version.isEmpty {
+                            Text(version).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(machineFacts(machine)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !machine.modalities.isEmpty {
+                    Text(machine.modalities.keys.sorted().map(modalityTitle).joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(seconds(machine.averageSeconds)).font(.system(.caption, design: .monospaced))
+                    .frame(minWidth: 78, alignment: .trailing)
+                Button(workspace.routingPin == "machine:\(machine.machine)" ? "Automatic" : "Send here") {
+                    // Pinning is a standing choice for every new job; pressing again clears it,
+                    // which keeps the way back to automatic on the same control that left it.
+                    workspace.routingPin = workspace.routingPin == "machine:\(machine.machine)"
+                        ? nil : "machine:\(machine.machine)"
+                }
+                .disabled(!connected)
+                .help("Send new Image, Voice and Subtitle work to this Mac until you clear the pin.")
+            }
+            if let detail = machine.detail {
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 3)
+    }
+
+    private var pinSummary: String {
+        guard let pin = workspace.routingPin, pin.hasPrefix("machine:") else {
+            return "New work runs on whichever Mac can take it. Use Send here to pin one."
+        }
+        return "New work is pinned to \(pin.replacingOccurrences(of: "machine:", with: "")). Press Automatic to let the Hub choose again."
+    }
+
+    private func machineFacts(_ machine: NativeFleetMachine) -> String {
+        var parts: [String] = []
+        if let chip = machine.chip, !chip.isEmpty { parts.append(chip) }
+        if let memory = machine.memoryGb { parts.append(String(format: "%.0f GB memory", memory)) }
+        if let free = machine.diskFreeGb, let total = machine.diskTotalGb {
+            parts.append(String(format: "%.0f GB free of %.0f GB", free, total))
+        }
+        parts.append(machine.jobs == 0 ? "no completed work"
+                                       : "\(machine.jobs) completed job\(machine.jobs == 1 ? "" : "s")")
+        return parts.joined(separator: " · ")
+    }
+
+    private func modalityTitle(_ modality: String) -> String {
+        switch modality {
+        case "image": return "Image"
+        case "transcription": return "Subtitle"
+        case "voice", "speech": return "Voice"
+        default: return modality.capitalized
+        }
     }
 
     /// What a controller has been joined by, with the state each node is actually in.

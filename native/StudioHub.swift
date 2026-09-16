@@ -359,6 +359,14 @@ final class StudioController: ObservableObject {
             if loginStatus == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
         } catch { failure = "Could not change login startup: \(error.localizedDescription)"; loginStatus = SMAppService.mainApp.status }
     }
+    /// Remember whether an at-login launch should also bring the Studio services up.
+    ///
+    /// Saving is enough: the choice is read on the next launch. Turning it on while the app is
+    /// already running changes nothing about the services that are running now.
+    func setStartServicesAtLogin(_ enabled: Bool) {
+        configuration.startServicesAtLogin = enabled
+        do { try configuration.save() } catch { failure = error.localizedDescription }
+    }
     private func enableLoginByDefault() {
         guard configuration.startAtLogin, loginStatus == .notRegistered else { return }
         do {
@@ -386,8 +394,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var failureObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let config: ShellConfiguration
         do {
-            let config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
+            config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
         } catch {
             let alert = NSAlert(); alert.messageText = "Studio Hub could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
@@ -443,7 +452,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let loginLaunch = NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
         if !loginLaunch || !controller.hasLibrary { openWindow() }
-        if controller.hasLibrary && controller.canConfigure { controller.start() }
+        // A login launch starts the Studios only when the owner asked for it; the default is
+        // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
+        // other launch starts them, because opening the app is the intent to use it.
+        if controller.hasLibrary && controller.canConfigure && (!loginLaunch || config.startServicesAtLogin) {
+            controller.start()
+        }
     }
     @objc func openWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); controller?.loginStatus = SMAppService.mainApp.status }
     @objc func openLog() { controller?.openLog() }
