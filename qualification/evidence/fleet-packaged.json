@@ -14,7 +14,7 @@
   "governor_note": null,
   "items": [
    {
-    "duration_seconds": 20.54,
+    "duration_seconds": 20.26,
     "error": null,
     "state": "done",
     "studio": "node-a:subtitle"
@@ -38,7 +38,7 @@
  "overview": {
   "local": {
    "chip": "Apple M4",
-   "disk_free_gb": 401.06,
+   "disk_free_gb": 400.46,
    "memory_gb": 17.18,
    "reachable": true,
    "version": "0.4.0"
@@ -48,9 +48,9 @@
    "node-a"
   ],
   "node": {
-   "average_seconds": 20.54,
+   "average_seconds": 20.26,
    "chip": "Apple M4",
-   "disk_free_gb": 401.08,
+   "disk_free_gb": 400.48,
    "jobs": 1,
    "modalities": {
     "image": 0,
@@ -58,7 +58,7 @@
     "voice": 0
    },
    "reachable": true,
-   "version": null
+   "version": "0.4.0"
   },
   "status": 200,
   "summary": {
@@ -70,7 +70,7 @@
  "problems": [],
  "steps": [],
  "submit": {
-  "batch_id": "66a53171a167",
+  "batch_id": "b7d20492d034",
   "detail": null,
   "status": 200
  },
