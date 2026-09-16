@@ -1481,15 +1481,55 @@ final class NativeWorkspaceStore: ObservableObject {
         error = "Hub model removal is unavailable until it can protect models with active readers."
     }
 
+    /// Fetch one completed voice clip, checked against the result the Hub recorded.
+    ///
+    /// The Hub records the byte count, the SHA-256 and the decoded WAV shape when it adopts a
+    /// finished voice job, so a clip that arrives truncated or altered is refused here rather
+    /// than played or saved as if it were the generation. The RIFF/WAVE header is required for
+    /// the same reason the Image path requires a PNG magic number: bytes that are not audio
+    /// must never reach the operator's disk under a .wav name.
     func audioData(for job: NativeJob) async throws -> Data {
         guard let requestConnection = connectionID else { throw NativeAPIError.message("Start the local services before retrieving audio.") }
-        guard job.state == "done", audioJobs.contains(where: { $0.id == job.id }) else {
-            throw NativeAPIError.message("Audio is available only for a completed job in the current history.")
+        guard job.state == "done", audioJobs.contains(where: { $0.id == job.id }),
+              let bytes = job.bytes, bytes > 0, let sha = job.sha256,
+              sha.count == 64, sha.allSatisfy({ $0.isHexDigit }) else {
+            throw NativeAPIError.message("This voice clip has no verified completed result. Refresh its job before playing or saving it.")
         }
         let request = try makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"])
         let data = try await performData(request)
         guard connectionID == requestConnection else { throw NativeAPIError.message("The local engine connection changed before audio retrieval completed.") }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard Int64(data.count) == bytes, digest == sha.lowercased(),
+              data.count >= 12, data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46]),
+              data[8..<12] == Data([0x57, 0x41, 0x56, 0x45]) else {
+            throw NativeAPIError.message("Voice clip verification failed. Refresh the job and retrieve its original result again.")
+        }
         return data
+    }
+
+    /// Save one voice clip and confirm delivery, in that order.
+    ///
+    /// Saving used to write the bytes and stop, which left two holes: a damaged clip could be
+    /// written silently, and the Hub was never told the operator had taken the result, so the
+    /// protected copy was never released for cleanup and a Mac's storage grew forever. Only a
+    /// verified save reaches the receipt, exactly as the Image and Subtitle paths do.
+    func saveAudio(_ job: NativeJob, to destination: URL) async throws {
+        let requestConnection = connectionID
+        let data = try await audioData(for: job)
+        try data.write(to: destination, options: .atomic)
+        guard try Data(contentsOf: destination) == data else {
+            throw NativeAPIError.message("Saved voice clip verification failed. Choose another destination and save again.")
+        }
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The voice clip was saved and verified, but the local service connection changed before delivery was acknowledged. Save again to confirm delivery.")
+        }
+        do {
+            let receipt: HubAckReceipt = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", "0", "ack"], method: "POST")
+            if !receipt.ok { throw NativeAPIError.message("rejected") }
+        } catch {
+            throw NativeAPIError.message("The voice clip was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
+        }
     }
 
     func transcriptData(format: NativeTranscriptFormat) throws -> Data {

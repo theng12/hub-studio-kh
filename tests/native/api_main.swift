@@ -20,6 +20,9 @@ final class FixtureProtocol: URLProtocol {
     static var transcriptionPorts: [Int] = []
     static var uncertainTranscription = false
     static var corruptImage = false
+    static var corruptAudio = false
+    static var audioAckPaths: [String] = []
+    static var audioAckRejects = false
     static var uncertainImage = false
     static var imageAckPaths: [String] = []
     static var imageAckRejects = false
@@ -38,6 +41,23 @@ final class FixtureProtocol: URLProtocol {
     static var modelImportBody: [String: Any]?
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
+    /// One frame of 16-bit mono 8 kHz PCM: the smallest thing that is still a WAV.
+    static let wav: Data = {
+        var body = Data()
+        func le32(_ value: UInt32) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        func le16(_ value: UInt16) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        let pcm = Data([0, 0])
+        body.append(Data("RIFF".utf8)); body.append(le32(UInt32(36 + pcm.count)))
+        body.append(Data("WAVE".utf8))
+        body.append(Data("fmt ".utf8)); body.append(le32(16))
+        body.append(le16(1)); body.append(le16(1))          // PCM, mono
+        body.append(le32(8000)); body.append(le32(16000))   // sample rate, byte rate
+        body.append(le16(2)); body.append(le16(16))         // block align, bits
+        body.append(Data("data".utf8)); body.append(le32(UInt32(pcm.count)))
+        body.append(pcm)
+        return body
+    }()
+    static func audioDigest() -> String { SHA256.hash(data: wav).map { String(format: "%02x", $0) }.joined() }
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
     static let releaseGeneration = DispatchSemaphore(value: 0)
@@ -61,6 +81,9 @@ final class FixtureProtocol: URLProtocol {
     static func transcriptionBody() -> String { lock.lock(); defer { lock.unlock() }; return lastTranscriptionBody }
     static func recordedTranscriptionPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return transcriptionPorts }
     static func setCorruptImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptImage = value }
+    static func setCorruptAudio(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptAudio = value }
+    static func setAudioAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; audioAckRejects = value }
+    static func audioAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return audioAckPaths }
     static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
     static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
@@ -263,7 +286,22 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs/old-job"):
             result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact"}]}"#.utf8))
         case ("GET", "/api/hub/jobs/new-job"):
-            result = (200, "application/json", Data(#"{"id":"new-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":20,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Hello locally","artifact_url":"/api/hub/jobs/new-job/items/0/artifact"}]}"#.utf8))
+            // `created_at` matters: history is sorted by it, and the assertions below take the
+            // most recent job, which is this one.
+            let audioBody: [String: Any] = ["id": "new-job", "modality": "voice", "model": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "created_at": 20,
+                "items": [["index": 0, "state": "done", "progress": 1.0, "prompt": "Hello locally",
+                           "artifact_url": "/api/hub/jobs/new-job/items/0/artifact",
+                           "bytes": Self.wav.count, "sha256": Self.audioDigest(),
+                           "media_type": "audio/wav", "audio_duration_s": 0.000125]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: audioBody))
+        case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
+            Self.lock.lock(); let corrupt = Self.corruptAudio; Self.lock.unlock()
+            result = (200, "audio/wav", corrupt ? Data([0x52, 0x49, 0x46, 0x46]) : Self.wav)
+        case ("POST", "/api/hub/jobs/new-job/items/0/ack"):
+            Self.lock.lock(); Self.audioAckPaths.append(path); let rejects = Self.audioAckRejects; Self.lock.unlock()
+            result = rejects
+                ? (502, "application/json", Data(#"{"detail":"voice worker did not acknowledge receipt"}"#.utf8))
+                : (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/jobs/image-job"):
             let sha = SHA256.hash(data: Self.png).map { String(format: "%02x", $0) }.joined()
             Self.lock.lock(); let uncertain = Self.uncertainImage; Self.lock.unlock()
@@ -339,9 +377,7 @@ final class FixtureProtocol: URLProtocol {
                 ? (502, "application/json", Data(#"{"detail":"subtitle worker did not acknowledge receipt"}"#.utf8))
                 : (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job/items/0/artifact"):
-            result = (200, "audio/wav", Data([0x52, 0x49, 0x46, 0x46]))
-        case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
-            result = (200, "audio/wav", Data([0x52, 0x49, 0x46, 0x46]))
+            result = (200, "audio/wav", Self.wav)
         default:
             result = (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
         }
@@ -678,6 +714,46 @@ struct NativeAPITests {
         require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
         require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
 
+        // A voice clip is the result the owner most cares about, and it used to be saved
+        // without being checked or receipted at all: a damaged WAV could be written silently,
+        // and - because the Hub was never told the result was taken - the protected copy was
+        // never released for cleanup, so local storage grew forever.
+        let audio = store.audioJobs.first { $0.id == "new-job" }!
+        let audioBytes = try await store.audioData(for: audio)
+        require(audioBytes == FixtureProtocol.wav, "audio export data")
+        FixtureProtocol.setCorruptAudio(true)
+        do { _ = try await store.audioData(for: audio); fatalError("a truncated voice clip was accepted") }
+        catch { require(error.localizedDescription.contains("verification"),
+                        "a voice clip that does not match its receipt needs an actionable message") }
+        FixtureProtocol.setCorruptAudio(false)
+        let audioDestination = temporary.appendingPathComponent("saved-audio.wav")
+        try await store.saveAudio(audio, to: audioDestination)
+        let savedAudio = try Data(contentsOf: audioDestination)
+        require(savedAudio == FixtureProtocol.wav, "saved voice clip bytes")
+        require(FixtureProtocol.audioAcks() == ["/api/hub/jobs/new-job/items/0/ack"],
+                "a verified voice clip save must acknowledge delivery exactly once")
+        let unwritableAudio = temporary.appendingPathComponent("missing-directory/never.wav")
+        do {
+            try await store.saveAudio(audio, to: unwritableAudio)
+            fatalError("a voice clip save into a missing directory must fail")
+        } catch {
+            require(FixtureProtocol.audioAcks().count == 1,
+                    "a failed voice clip save must never acknowledge delivery")
+        }
+        FixtureProtocol.setAudioAckRejects(true)
+        let rejectedAudio = temporary.appendingPathComponent("rejected-audio.wav")
+        do {
+            try await store.saveAudio(audio, to: rejectedAudio)
+            fatalError("a rejected voice clip acknowledgement must be reported")
+        } catch {
+            require(error.localizedDescription.contains("was not acknowledged"),
+                    "a rejected voice clip acknowledgement needs an actionable message")
+        }
+        require(FileManager.default.fileExists(atPath: rejectedAudio.path),
+                "the verified voice clip must remain on disk when acknowledgement fails")
+        FixtureProtocol.setAudioAckRejects(false)
+
+
         FixtureProtocol.dropNextSubmit()
         store.audioText = "Accepted before connection loss"
         await store.generateAudio()
@@ -848,9 +924,6 @@ struct NativeAPITests {
         require(FileManager.default.fileExists(atPath: rejectedTranscript.path),
                 "the verified transcript must remain on disk when acknowledgement fails")
         FixtureProtocol.setTranscriptionAckRejects(false)
-        let audioData = try await store.audioData(for: store.audioJobs.first!)
-        require(audioData == Data([0x52, 0x49, 0x46, 0x46]), "audio export data")
-
         FixtureProtocol.setUncertainTranscription(true)
         let uncertainUpload = Task { await store.transcribe() }
         try await Task.sleep(for: .seconds(1))

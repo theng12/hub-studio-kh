@@ -1390,7 +1390,13 @@ struct StudioContent: View {
     private func saveAudio(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "audio-\(job.id).wav"; panel.allowedContentTypes = [.wav]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { do { try await workspace.audioData(for: job).write(to: url, options: .atomic) } catch { fileActionError = error.localizedDescription } }
+        // The bytes are verified against the Hub's receipt before the write, then the write is
+        // re-read, and only then is delivery acknowledged - the same order the Image and
+        // Subtitle saves use. Acknowledgement is what releases the protected copy.
+        Task {
+            do { try await workspace.saveAudio(job, to: url) }
+            catch { fileActionError = error.localizedDescription }
+        }
     }
     private func exportTranscript() {
         guard workspace.transcriptionResult != nil else { return }

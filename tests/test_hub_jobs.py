@@ -298,8 +298,15 @@ class HubJobProofTests(unittest.TestCase):
             self.assertEqual(replay.json(), {"batch_id": batch_id, "items": 1, "replayed": True})
             done = self._wait_for(client, batch_id, "done")
             self.assertEqual(done["items"][0]["terminal_result"]["status"], "succeeded")
+            # The app refuses to play or save a voice clip it cannot check, so the completed
+            # item has to publish the byte count and digest the artifact is verified against.
+            # They come from the Hub decoding the WAV itself when it adopts the finished job.
+            self.assertEqual(done["items"][0]["bytes"], len(_AUDIO), done["items"][0])
+            self.assertEqual(done["items"][0]["sha256"], _AUDIO_SHA, done["items"][0])
+            self.assertEqual(done["items"][0]["media_type"], "audio/wav")
             artifact = client.get(done["items"][0]["artifact_url"], headers=headers)
             self.assertEqual((artifact.status_code, artifact.content), (200, _AUDIO))
+            self.assertEqual(hashlib.sha256(artifact.content).hexdigest(), _AUDIO_SHA)
 
             held = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
                 "clientRequestId": "cancel-0001", "items": [{"text": "hold"}]}, headers=headers).json()["batch_id"]
