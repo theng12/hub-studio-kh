@@ -1,75 +1,93 @@
 # Start here
 
-This folder has the Studio Hub app and all the models it needs.
+This folder has the Studio Hub app, the models, and your saved voices.
 
-Two files do the whole setup. You do not need to open anything else.
+Three things do the whole job. You never need to open anything else.
 
 - **1 - Install the app.command** — puts the app on your Mac
-- **2 - Copy the models.command** — puts the models on your Mac
+- **2 - Copy the models.command** — puts the models and your voices on your Mac
+- **Studio Hub.app** — the app itself
 
-If a double-click does nothing or says the file cannot be opened, right-click it
+If a double-click does nothing, or says the file cannot be opened, right-click it
 and choose **Open**, then **Open** again. That is normal for a file that is not
-signed. You only do it the first time.
+signed, and you only do it the first time.
 
 ---
 
 ## The whole job, in four steps
 
-### 1. Double-click **1 - Install the app**
+### 1. Double-click **2 - Copy the models**
 
-It asks for your password because putting an app in **Applications** needs it.
-That is the only time you will be asked.
+It reads how much memory your Mac has and copies only the models this Mac can run,
+plus all ten of your voices. On a 16 GB Mac that is about 28 GB, so give it a few
+minutes. Leave it alone until it says it is done.
 
-### 2. Double-click **2 - Copy the models**
+It can be run again any time. It is built for it: models and voices you do not have
+are added, ones that changed are updated, and ones that are already correct are left
+alone. A second run takes about a second.
 
-It reads how much memory your Mac has and copies only the models this Mac can
-actually run. On a 16 GB Mac that is about 28 GB, so give it a few minutes.
+### 2. Double-click **1 - Install the app**
 
-Leave it alone until it says **Done**. You can run it again any time.
+It asks for your password, because putting an app in **Applications** needs it. That
+is the only time you will be asked.
 
-### 3. Open Studio Hub
+### 3. Open Studio Hub from Applications
 
-Open it from **Applications**. It asks for a model folder. Choose:
+Right-click it and choose **Open**, then **Open** again the first time.
 
-```
-Downloads/model-library
-```
+It will say **Choose where your models live** and offer a button:
 
-The copy step tells you this path again when it finishes. Do this once. It
-remembers.
+> **Use the Models Already on This Mac**
+
+Press it. That is the folder step 1 filled in, and it is where your models and voices
+are. The app remembers, so you never do this again.
 
 ### 4. Say yes to the two pop-ups
 
 - **"wants to find devices on your local network"** → **Allow**
 - **a firewall question about incoming connections** → **Allow**
 
-Then look at the bottom left. When it says **Local services ready**, everything
-is running and you are done.
+Then look at the bottom left. When it says **Local services ready**, everything is
+running and you are done.
+
+---
+
+## Where things end up
+
+- the app: `Applications/Studio Hub.app`
+- the models: `Downloads/model-library`
+- your voices: inside the app's own folder, in your user library
+
+---
+
+## Giving this to another Mac
+
+Everything on that Mac comes from this drive, so the drive has to be there for it.
+
+1. Plug the drive into that Mac.
+2. Double-click **2 - Copy the models**, then **1 - Install the app**, then open the
+   app and press **Use the Models Already on This Mac**.
+
+The app and the models are copied onto that Mac. After that the drive can be
+unplugged and that Mac keeps working — but the next time you want to copy anything to
+it, the drive has to be plugged in again.
 
 ---
 
 ## When there are new models
 
-Double-click **2 - Copy the models** again. It is built to be run over and over:
-
-- models you do not have yet are copied,
-- models that changed on the SSD are updated in place,
-- models that are already correct are left completely alone, so a second run
-  takes seconds instead of minutes,
-- an older copy of a model that was just updated is removed, so your Mac does not
-  slowly fill up with versions you no longer use.
-
-Then open Studio Hub again. The new models are ready with nothing else to do.
+Double-click **2 - Copy the models** again. It adds what is new, updates what
+changed, leaves what is already correct alone, removes an older copy of a model it
+just updated, and repairs the app's record as it goes.
 
 ---
 
 ## What's new in each update
 
-Every update now shows a **What's New** page the first time you open it, written in plain
-language: what changed, what was broken, and what to do differently. You can reopen it any time
-from **What's New** in the sidebar, from the **Studio Hub** menu, or from the menu bar icon.
-
-The version is shown at the top of that page (this one is 0.5.0).
+Every update shows a **What's New** page the first time you open it, written in plain
+language: what changed, what was broken, and what to do differently. You can reopen it
+from **What's New** in the sidebar, from the **Studio Hub** menu, or from the menu bar
+icon. The version is at the top of that page.
 
 ---
 
@@ -81,12 +99,9 @@ The version is shown at the top of that page (this one is 0.5.0).
 
 Finished work appears in **Jobs**, with its length and size next to it.
 
----
-
-## Your old voices
-
-If you have voice clips from before and want them in the app, tell me and I will
-do it for you. It is one command and I would rather run it than have you guess.
+Your ten voices are under **Voices**: Christian, Vincent, Leo, Samuel, Todd, Archer,
+Aiden, Mark, Leona and Chris. Open **Voices** and press **Refresh** if they are not
+there yet.
 
 ---
 
@@ -96,15 +111,15 @@ do it for you. It is one command and I would rather run it than have you guess.
 Run **1 - Install the app** first, then the copy step again.
 
 **A model says "not installed" when you know it is there.**
-Run **2 - Copy the models** again — it repairs the record. If it still says that,
-open **Models** and press **Verify**.
+Run **2 - Copy the models** again — it repairs the record. If it still says that, open
+**Models** and press **Verify**.
 
 **The app will not start the services.**
 Quit the app and open it again. If that does not fix it, tell me.
 
 **You want to see what went wrong.**
-Open the app's menu bar icon and choose **Open Engine Log**. Or run this and send
-me the result:
+Open the app's menu bar icon and choose **Open Engine Log**. Or run this and send me
+the result:
 
 ```
 sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/check-everything.sh"
@@ -117,5 +132,5 @@ sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/check-everything.sh"
 ## The one rule
 
 If a message mentions **Python**, **developer tools**, or asks you to install
-something — say no and tell me. The app carries everything it needs. It should
-never ask for anything to be installed.
+something — say no and tell me. The app carries everything it needs. It should never
+ask for anything to be installed.

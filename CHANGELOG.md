@@ -43,6 +43,11 @@ New** screen shows.
   Qwen3-TTS Base reference over the model's 15-second maximum needs timestamped segments to be
   windowed; `qualification/time_kit_voices.py` computes them once at kit-build time with the app's
   own Whisper and the app reads them, so no Mac has to transcribe a voice before using it.
+- Offer the library the one-click setup filled in. On a fresh Mac the setup screen's only
+  prominent button was "Use Default Folder", which points at an empty folder inside the app's data
+  directory and invites a second, 29 GB download of models already sitting in Downloads. The app
+  now recognises `~/Downloads/model-library` by its install record and offers
+  **Use the Models Already on This Mac** as one click, and as the first choice.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

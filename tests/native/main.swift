@@ -93,6 +93,29 @@ for token in ["", "short", String(repeating: "a", count: 257), String(repeating:
     let payload = try JSONSerialization.data(withJSONObject: ["url": base.absoluteString, "pid": 1234, "version": "0.4.0", "token": token])
     do { _ = try WorkerReady.decode(payload, expectedPID: 1234); fatalError("invalid Hub credential accepted") } catch {}
 }
+// The one-click setup leaves a filled-in library in Downloads. Recognising it is what turns
+// "choose a folder in a file panel" into one click, and what keeps a fresh Mac from being offered
+// an empty folder that would download 29 GB it already has.
+let fakeHome = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("prepared-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: fakeHome.appendingPathComponent("Downloads/model-library"),
+                                        withIntermediateDirectories: true)
+require(ShellConfiguration.preparedLibrary(home: fakeHome) == nil,
+        "a folder without an install record is not a library")
+try FileManager.default.createDirectory(
+    at: fakeHome.appendingPathComponent("Downloads/model-library/.studiohub"),
+    withIntermediateDirectories: true)
+try Data("{}".utf8).write(to: fakeHome.appendingPathComponent(
+    "Downloads/model-library/.studiohub/installed.json"))
+let recognised = ShellConfiguration.preparedLibrary(home: fakeHome)
+require(recognised?.lastPathComponent == "model-library",
+        "a library with an install record must be recognised, got \(String(describing: recognised))")
+try? FileManager.default.removeItem(at: fakeHome)
+// An empty home must not invent one.
+require(ShellConfiguration.preparedLibrary(
+    home: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("absent-\(UUID().uuidString)")) == nil,
+        "an empty home must offer no prepared library")
+
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 // Voices sits beside Models: both are libraries the operator maintains, as opposed to the

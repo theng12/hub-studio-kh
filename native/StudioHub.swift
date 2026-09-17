@@ -70,6 +70,23 @@ final class StudioController: ObservableObject {
             } catch { failure = error.localizedDescription }
         }
     }
+    /// The library the one-click setup left in Downloads, if there is one.
+    var preparedLibrary: URL? { ShellConfiguration.preparedLibrary() }
+
+    /// Select the prepared library and start. One click, and the models the operator just copied
+    /// are the ones the app uses.
+    func usePreparedLibrary() {
+        guard canConfigure, let url = preparedLibrary else { return }
+        do {
+            try ShellConfiguration.requireExternal(url, bundle: Bundle.main.bundleURL)
+            try ShellConfiguration.requireDirectory(url)
+            configuration.modelsDirectory = url
+            try configuration.save()
+            enableLoginByDefault()
+            failure = nil
+            start()
+        } catch { failure = error.localizedDescription }
+    }
     func useDefaultLibrary() {
         guard canConfigure else { return }
         let url = configuration.dataDirectory.appendingPathComponent("models")

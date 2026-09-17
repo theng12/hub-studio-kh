@@ -222,6 +222,28 @@ struct ShellConfiguration {
             }
         }
     }
+    /// A model library the one-click setup has already filled in.
+    ///
+    /// The setup step copies models and voices into `~/Downloads/model-library`. Without this the
+    /// operator had to find that folder in a file panel, and the button offered on a fresh Mac
+    /// ("Use Default Folder") points at an empty folder inside the app's own data directory -
+    /// inviting a second, 29 GB download of models already sitting in Downloads.
+    ///
+    /// Recognised by its install record, not by its name: any folder holding
+    /// `.studiohub/installed.json` is a library the app wrote, so this can never offer a random
+    /// folder that merely happens to be called `model-library`.
+    static func preparedLibrary(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
+        let candidate = home.appendingPathComponent("Downloads/model-library")
+            .standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent(".studiohub/installed.json").path)
+        else { return nil }
+        return candidate
+    }
+
     static func requireExternal(_ url: URL, bundle: URL) throws {
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         let root = bundle.standardizedFileURL.resolvingSymlinksInPath().path

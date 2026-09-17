@@ -202,14 +202,31 @@ struct StudioContent: View {
             Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 440)
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    /// The line above the buttons. It names the click, because on a fresh Mac the difference
+    /// between the two prominent buttons is 29 GB of downloading.
+    private var setupDetail: String {
+        if studio.preparedLibrary != nil {
+            return "The models and voices you copied are ready. Accept them and the app starts using them."
+        }
+        return "Keep models on this Mac or an external drive. Your settings and generated files stay separate from the app."
+    }
+
     private var setup: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(studio.hasLibrary ? "Start your local services" : "Choose where your models live").font(.title3.weight(.semibold))
-            Text(studio.hasLibrary ? "Your model library is selected. Start the services to create assets and manage models." : "Keep models on this Mac or an external drive. Your settings and generated files stay separate from the app.").foregroundStyle(.secondary)
+            Text(studio.hasLibrary ? "Your model library is selected. Start the services to create assets and manage models." : setupDetail).foregroundStyle(.secondary)
             HStack {
                 if studio.starting || studio.stopping { ProgressView().controlSize(.small); Text(studio.status) }
                 else {
                     if studio.hasLibrary { Button("Start Services") { studio.start() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
+                    // The models the setup step just copied are one click away, and are offered
+                    // first: the alternative on a fresh Mac is an empty folder that would download
+                    // 29 GB that is already sitting in Downloads.
+                    else if let prepared = studio.preparedLibrary {
+                        Button("Use the Models Already on This Mac") { studio.usePreparedLibrary() }
+                            .buttonStyle(.borderedProminent).disabled(!studio.canConfigure)
+                        Text(prepared.path).font(.caption).foregroundStyle(.secondary)
+                    }
                     else { Button("Use Default Folder") { studio.useDefaultLibrary() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
                     Button("Choose Model Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure)
                 }

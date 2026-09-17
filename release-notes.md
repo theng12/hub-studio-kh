@@ -69,6 +69,17 @@ away instead of asking you to transcribe them first.
 drive, saying they could not find Studio Hub. Both now work from the top of the drive or from the
 Technical folder.
 
+### Opening the app for the first time is one click
+
+The app used to ask you to find your model folder in a file panel. Now, when the models
+have already been copied to your Mac, it says so and offers a single button:
+
+> **Use the Models Already on This Mac**
+
+Press it and everything starts. Before this, the only prominent button on a new Mac was
+"Use Default Folder" — an empty folder inside the app that would have downloaded all
+29 GB again.
+
 ### This screen
 
 Open **What's New** from the sidebar, from the app menu, or from the menu bar icon. It opens by
