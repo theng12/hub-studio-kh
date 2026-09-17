@@ -30,6 +30,12 @@ New** screen shows.
   an updated model reads as installed.
 - Make both kit launchers location-independent; the copy in the kit root had resolved its helper
   one directory above the kit and refused to run.
+- Return the engine's timed segments from the synchronous transcribe route instead of `null`, and
+  keep them in the app so **Prepare Voice** can send them with the reference. A Qwen3-TTS Base
+  reference longer than the model's 15-second maximum needs timestamped segments to select a
+  bounded, speech-aligned window; without them the engine refused with
+  `REFERENCE_TRANSCRIPT_ALIGNMENT_REQUIRED`. Timings are sent only while they still match the
+  transcript, so a hand-edited transcript is never windowed against stale timings.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

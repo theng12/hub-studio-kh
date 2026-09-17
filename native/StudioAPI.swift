@@ -527,6 +527,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var audioReferencePath: String? { didSet { invalidateStagedReference() } }
     @Published var audioReferenceTranscript = "" { didSet { invalidateStagedReference() } }
     @Published private(set) var audioReferenceAssetId: String?
+    /// Timings from the last Transcribe Clip, sent with the reference so the voice engine can
+    /// select a bounded window from a reference longer than the model's maximum clip length.
+    private var audioReferenceSegments: [[String: Any]] = []
     @Published private(set) var audioReferenceStatus: String?
     @Published private(set) var stagingReference = false
     @Published var transcriptionModel = whisperTurbo { didSet { scheduleSave() } }
@@ -772,10 +775,20 @@ final class NativeWorkspaceStore: ObservableObject {
             stagingReference = true
             defer { if connectionID == requestConnection { stagingReference = false } }
             let boundary = "StudioHub-\(UUID().uuidString)"
-            let fields = [
+            var fields = [
                 "transcript": transcript,
                 "language": audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
             ]
+            // Only when the timings still describe these words. The transcript can be edited by
+            // hand after transcribing, and the engine picks the reference window from the timings
+            // - so sending timings for words the operator has since changed would window the audio
+            // against a transcript it does not match. A mismatch simply means no timings, and the
+            // engine falls back to its own behaviour.
+            if Self.segments(audioReferenceSegments, match: transcript),
+               let encoded = try? JSONSerialization.data(withJSONObject: audioReferenceSegments),
+               let json = String(data: encoded, encoding: .utf8) {
+                fields["transcript_segments"] = json
+            }
             let uploadFile = try await Task.detached(priority: .userInitiated) {
                 try Self.makeMultipartFile(
                     boundary: boundary, file: file, fields: fields,
@@ -802,6 +815,7 @@ final class NativeWorkspaceStore: ObservableObject {
 
     private func invalidateStagedReference() {
         if audioReferenceAssetId != nil { audioReferenceAssetId = nil }
+        audioReferenceSegments = []
         if audioReferenceStatus != nil { audioReferenceStatus = nil }
     }
 
@@ -1129,6 +1143,20 @@ final class NativeWorkspaceStore: ObservableObject {
     /// because the operator has the clip in front of them — adding a voice, or about to clone
     /// from a reference — and being told to go and transcribe it elsewhere is how a transcript
     /// ends up skipped, which then produces a wrong-sounding clone.
+    /// Whether these timings still describe this transcript.
+    ///
+    /// Compared as words, case- and punctuation-insensitively: the engine's own transcript is
+    /// round-tripped through the operator's text field, and a lost comma is not a reason to throw
+    /// away timings that are otherwise exact.
+    static func segments(_ segments: [[String: Any]], match transcript: String) -> Bool {
+        guard !segments.isEmpty else { return false }
+        let words = { (value: String) -> [String] in
+            value.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        }
+        let timed = words(segments.compactMap { $0["text"] as? String }.joined(separator: " "))
+        return !timed.isEmpty && timed == words(transcript)
+    }
+
     func transcribeClip(at file: URL, language: String = "") async throws -> String {
         guard let requestConnection = connectionID, let directory = dataDirectory else {
             throw NativeAPIError.message("Start the local services before transcribing.")
@@ -1137,7 +1165,10 @@ final class NativeWorkspaceStore: ObservableObject {
             throw NativeAPIError.message("That clip is no longer on disk. Choose it again.")
         }
         let boundary = "StudioHub-\(UUID().uuidString)"
-        var fields = ["model": Self.whisperTurbo, "word_timestamps": "false"]
+        // Timestamps are requested because a long reference needs them to be cloneable: without
+        // them the voice engine refuses an oversized reference instead of selecting a window from
+        // it. The text is unchanged; only the timing comes along.
+        var fields = ["model": Self.whisperTurbo, "word_timestamps": "true"]
         let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { fields["language"] = trimmed }
         let upload = try await Task.detached(priority: .userInitiated) {
@@ -1159,6 +1190,12 @@ final class NativeWorkspaceStore: ObservableObject {
         let text = (wire.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw NativeAPIError.message("The transcriber found no words in that clip. Try a clip with clear speech.")
+        }
+        audioReferenceSegments = (wire.segments ?? []).compactMap { segment in
+            guard let start = segment.start, let end = segment.end, end > start,
+                  let words = segment.text, !words.trimmingCharacters(in: .whitespaces).isEmpty
+            else { return nil }
+            return ["start_seconds": start, "end_seconds": end, "text": words]
         }
         return text
     }
@@ -2697,6 +2734,24 @@ private struct HubSyncTranscript: Decodable {
     let text: String?
     let language: String?
     let duration: Double?
+    /// Timed sections, when the engine produced them. A Qwen3-TTS Base reference longer than the
+    /// model's maximum clip length needs these: the engine selects a bounded, speech-aligned
+    /// window and needs to know which words fall inside it.
+    let segments: [HubTranscriptSegment]?
+}
+private struct HubTranscriptSegment: Codable {
+    let start: Double?
+    let end: Double?
+    let text: String?
+    /// What the voice engine reads. Kept beside the decoded spelling rather than replacing it, so
+    /// the same value serves both the app's own use and the reference contract.
+    var wire: [String: Any] {
+        var value: [String: Any] = [:]
+        if let start { value["start_seconds"] = start }
+        if let end { value["end_seconds"] = end }
+        if let text, !text.isEmpty { value["text"] = text }
+        return value
+    }
 }
 private struct VoiceResponse: Decodable { let voice: NativeVoice }
 private struct VoiceDeleteResponse: Decodable { let deleted: Bool? }

@@ -140,7 +140,13 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
         payload = {
             'text': result.get('text'), 'language': result.get('language'),
             'duration': result.get('media_duration_seconds'),
-            'model': result.get('model'), 'segments': None,
+            'model': result.get('model'),
+            # The segments the engine already produced, not `None`. A Qwen3-TTS Base clone needs a
+            # timestamped transcript to pick a bounded window out of a reference longer than its
+            # 15-second maximum, and the app's Transcribe button is how that transcript is
+            # obtained. Dropping the timestamps here is what forced the operator to paste words
+            # that the engine had just measured.
+            'segments': result.get('segments') or [],
             'srt': _read(artifacts, 'srt'), 'vtt': _read(artifacts, 'vtt'),
             'elapsed_seconds': result.get('duration_seconds'),
             'studio_task_id': result['id'], 'task_id': result['id'],

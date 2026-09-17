@@ -29,6 +29,16 @@ invalid" error three layers away from the real cause. Fixed:
 - A transcription of the reference clip is required for Qwen Base. **Transcribe Clip** fills it in
   for you, and now that it works, this step works too.
 
+### Preparing a voice no longer needs timestamps typed by hand
+
+A Qwen Base reference clip longer than 15 seconds needs a *timestamped* transcript so the engine can
+choose the best 15 seconds of it. The app transcribed the clip and then threw the timings away, so
+a long reference could not be prepared at all.
+
+**Transcribe Clip** now keeps the timings from the same transcription and sends them along with the
+reference. You do not have to do anything differently: record or choose a clip, press
+**Transcribe Clip**, check the words, then press **Prepare Voice**.
+
 ### Copying models keeps them up to date
 
 **2 - Copy the models** is now safe and useful to run again at any time:
