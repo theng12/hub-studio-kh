@@ -362,7 +362,7 @@ def main() -> int:
     if nothing_to_copy:
         print("  Everything this Mac needs is already here. Nothing to copy.")
         if not voices_to_add:
-            print("  Checking the app's record of what is installed.")
+            print("  Checking the app's record of what is installed, then stopping.")
     else:
         answer = input(
             "  Press Return to start, or type n and press Return to stop: ").strip().lower()
@@ -421,6 +421,11 @@ def main() -> int:
             print(f"  {manifest['package_id']}: {outcome}")
 
     voices_added, voices_present, voice_names = copy_voices(voices_source, voices_target)
+
+    # Nothing copied, nothing added, no record needed repairing: there is no report to make, and
+    # the summary would only repeat what the two lines above already said.
+    if nothing_to_copy and not voices_added and not repaired and not failed:
+        return 0
 
     print()
     if incoming_voices:

@@ -83,19 +83,7 @@ Finished work appears in **Jobs**, with its length and size next to it.
 
 ---
 
-## Your voices come with it
-
-The kit carries your ten saved voices — Christian, Vincent, Leo, Samuel, Todd, Archer, Aiden, Mark,
-Leona and Chris. **2 - Copy the models** puts them on your Mac along with the models, and a voice
-already on a Mac is never overwritten, so nothing you have changed there is lost.
-
-Open Studio Hub, go to **Voices**, and press **Refresh**. All ten are ready to use.
-
-A voice whose clip is longer than about 15 seconds already carries the timing the app needs, so you
-can pick it and press **Prepare Voice** straight away. If you ever see a message about a transcript
-needing timestamps, press **Transcribe Clip** once and try again.
-
-## If you have voice clips from before
+## Your old voices
 
 If you have voice clips from before and want them in the app, tell me and I will
 do it for you. It is one command and I would rather run it than have you guess.
