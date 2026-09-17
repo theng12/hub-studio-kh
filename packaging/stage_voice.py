@@ -109,10 +109,12 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
     copy_tracked_tree(source / 'app/backend', voice / 'app/backend', suffix='.py')
     for directory in ('app/frontend', 'model-audits'):
         copy_tracked_tree(source / directory, voice / directory)
-    # The owner-facing notes, bundled so the app's What's New screen reads the same text that
-    # ships with the build instead of a second copy that can drift.
-    for name in ('VERSION', 'CHANGELOG.md', 'release-notes.md'):
+    for name in ('VERSION', 'CHANGELOG.md'):
         shutil.copyfile(ROOT / name, voice / name)
+    # The owner-facing notes go at the top of Resources, where `Bundle.main` finds them for the
+    # app's What's New screen. Bundling the shipped file rather than a second copy means the screen
+    # cannot describe a build it is not part of.
+    shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
     shutil.copyfile(ROOT / 'packaging/voice_worker.py', resources / 'voice_worker.py')
     runtime_hash = tree_digest(resources / 'runtimes/voice')

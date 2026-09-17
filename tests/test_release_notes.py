@@ -74,8 +74,11 @@ class VersionAgreementTests(unittest.TestCase):
             self.assertLessEqual(text.count("Studio Hub 0.4.0.app"), 4,
                                  f"{name} still leans on the old versioned name")
 
-    def test_the_notes_are_shipped_inside_the_app(self):
-        self.assertIn("release-notes.md", STAGE.read_text())
+    def test_the_notes_are_shipped_where_the_app_reads_them(self):
+        """`Bundle.main` looks in Resources, not in the Voice worker's subtree."""
+        text = STAGE.read_text()
+        self.assertIn("shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')",
+                      text)
 
 
 class ReleaseNotesScreenTests(unittest.TestCase):
