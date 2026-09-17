@@ -142,6 +142,67 @@ def prune_old_revisions(target: Path, keep: str) -> int:
     return freed
 
 
+def voice_library() -> Path:
+    """Where the app keeps its voices.
+
+    The Voice worker resolves `STUDIOHUB_DATA_DIR` and appends `voice/voices`; in the packaged app
+    the data root is `~/Library/Application Support/StudioHub Standalone`. That is the same path
+    `import_my_voices.py` writes, so a voice copied here and a voice imported by hand are
+    indistinguishable to the app.
+    """
+    override = os.environ.get("STUDIOHUB_VOICES_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return (Path.home() / "Library/Application Support/StudioHub Standalone/voice/voices")
+
+
+def kit_voices(library: Path) -> list[tuple[Path, str]]:
+    """Every voice folder the kit carries, as (folder, name).
+
+    A voice is one folder holding `metadata.json`, the reference clip it names and, usually,
+    `transcript.txt` — the shape the Voice worker reads. Anything without metadata is skipped
+    rather than copied, because the app would only ignore it.
+    """
+    found: list[tuple[Path, str]] = []
+    for folder in sorted(library.iterdir()):
+        if not folder.is_dir() or folder.name.startswith("."):
+            continue
+        metadata = folder / "metadata.json"
+        if not metadata.is_file():
+            continue
+        try:
+            name = str(json.loads(metadata.read_text()).get("name") or folder.name)
+        except (OSError, ValueError):
+            name = folder.name
+        found.append((folder, name))
+    return found
+
+
+def copy_voices(source: Path, destination: Path) -> tuple[int, int, list[str]]:
+    """Add the kit's voices to this Mac, and leave every voice already here alone.
+
+    Returns (added, already present, names added). A voice already on this Mac is never touched:
+    the operator may have corrected a transcript or replaced a clip on that machine, and a model
+    copy has no business overwriting a recording it did not make. Adding is the whole job.
+    """
+    if not source.is_dir():
+        return (0, 0, [])
+    destination.mkdir(parents=True, exist_ok=True)
+    added, present, names = 0, 0, []
+    for folder, name in kit_voices(source):
+        target = destination / folder.name
+        if target.is_dir():
+            present += 1
+            continue
+        try:
+            copy_folder(folder, target)
+        except OSError:
+            continue
+        added += 1
+        names.append(name)
+    return (added, present, names)
+
+
 def load_verifier(components: Path):
     """The app's own model code, so the record we write is exactly what the app checks."""
     if not components.is_dir():
@@ -281,11 +342,27 @@ def main() -> int:
         print()
 
     adding_gb = sum(size_gb(m) for _p, _n, m, how in new + update)
+
+    # Voices travel with the models but are a separate library, and they are tiny: the whole kit's
+    # set is under 10 MB, so a voice is always worth adding even when no model changed.
+    voices_source = kit / "voices"
+    voices_target = voice_library()
+    incoming_voices = kit_voices(voices_source) if voices_source.is_dir() else []
+    voices_to_add = [(folder, name) for folder, name in incoming_voices
+                     if not (voices_target / folder.name).is_dir()]
+
     print(f"  To copy now: {len(new) + len(update)} model(s), {adding_gb:.1f} GB")
+    if incoming_voices:
+        print(f"  Voices: {len(voices_to_add)} to add, "
+              f"{len(incoming_voices) - len(voices_to_add)} already on this Mac "
+              f"(voices already here are never overwritten)")
     print(f"  Going to: {destination}")
     print()
-    if not new and not update:
+    nothing_to_copy = not new and not update
+    if nothing_to_copy:
         print("  Everything this Mac needs is already here. Nothing to copy.")
+        if not voices_to_add:
+            print("  Checking the app's record of what is installed.")
     else:
         answer = input(
             "  Press Return to start, or type n and press Return to stop: ").strip().lower()
@@ -343,15 +420,27 @@ def main() -> int:
             repaired += 1
             print(f"  {manifest['package_id']}: {outcome}")
 
+    voices_added, voices_present, voice_names = copy_voices(voices_source, voices_target)
+
     print()
+    if incoming_voices:
+        print(f"  Voices: added {voices_added}, already here {voices_present}"
+              f"{' ' if voice_names else ''}")
+        for name in voice_names:
+            print(f"      + {name}")
+        print(f"  Now open Studio Hub and press Refresh on the Voices page.")
+        print()
     print(f"  Copied {copied} new, updated {updated}, {len(current)} already up to date"
           f"{f', {repaired} record(s) repaired' if repaired else ''}"
           f"{f', {failed} failed' if failed else ''} in {time.time() - started:.0f} seconds.")
     if freed:
         print(f"  Removed {freed / 1e9:.1f} GB of older model versions that are no longer used.")
     print()
-    print("  Now open Studio Hub and, when it asks for a model folder, choose:")
-    print(f"      {destination}")
+    if new or update:
+        print("  Now open Studio Hub and, when it asks for a model folder, choose:")
+        print(f"      {destination}")
+    else:
+        print("  Nothing needed copying. Open Studio Hub and use the new voices.")
     print()
     return 1 if failed else 0
 

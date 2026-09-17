@@ -415,6 +415,11 @@ class SubtitleManager:
                     bytes=receipts['srt']['bytes'] if 'srt' in receipts else None,
                     artifacts=receipts, text=result['text'],
                     language=result['language'],
+                    # The segments themselves, not only how many there are. The synchronous
+                    # transcribe route serves them to the app, which needs them so a Qwen3-TTS Base
+                    # reference longer than the model's 15-second maximum can be windowed against
+                    # its own words instead of being refused.
+                    segments=result['segments'],
                     media_duration_seconds=result['duration'],
                     segment_count=len(result['segments']))
                 try:

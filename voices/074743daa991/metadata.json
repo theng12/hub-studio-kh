@@ -1,0 +1,18 @@
+{
+  "id": "074743daa991",
+  "name": "Vincent - Deep & Relaxing",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 16.699002267573697,
+  "sample_rate": 44100,
+  "channels": 1,
+  "fleet_managed": true,
+  "audio_sha256": "8bf1d8a0b687cd93097fafffdaa729845b5eca52b20a8f2b37c37ecd6466d395",
+  "created_at": 1784163592.816322
+}

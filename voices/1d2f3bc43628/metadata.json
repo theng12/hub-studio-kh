@@ -1,0 +1,18 @@
+{
+  "id": "1d2f3bc43628",
+  "name": "Leo - Slow & Paced",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".wav",
+  "duration_seconds": 13.351473922902494,
+  "sample_rate": 44100,
+  "channels": 2,
+  "fleet_managed": true,
+  "audio_sha256": "60cb11d42e90fb459f9aa5656de03ac74ac8f79da4c24c225641eb69aefc0bee",
+  "created_at": 1784438571.826834
+}

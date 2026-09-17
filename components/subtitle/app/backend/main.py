@@ -146,7 +146,8 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
             # 15-second maximum, and the app's Transcribe button is how that transcript is
             # obtained. Dropping the timestamps here is what forced the operator to paste words
             # that the engine had just measured.
-            'segments': result.get('segments') or [],
+            'segments': [{'start': s.get('start'), 'end': s.get('end'), 'text': s.get('text')}
+                         for s in (result.get('segments') or [])],
             'srt': _read(artifacts, 'srt'), 'vtt': _read(artifacts, 'vtt'),
             'elapsed_seconds': result.get('duration_seconds'),
             'studio_task_id': result['id'], 'task_id': result['id'],

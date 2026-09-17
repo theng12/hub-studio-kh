@@ -1,0 +1,18 @@
+{
+  "id": "a9aedc5c6bd3",
+  "name": "Aiden - Soothing & Relaxing",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 13.65845804988662,
+  "sample_rate": 44100,
+  "channels": 2,
+  "fleet_managed": true,
+  "audio_sha256": "64376dc02320c0fa31fd2ce6373c3c1ebbd08b9449e78f49c3ac2e5b90b82151",
+  "created_at": 1784163531.061257
+}

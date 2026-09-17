@@ -1,0 +1,18 @@
+{
+  "id": "34e171ca810a",
+  "name": "Samuel - A Calming and Steady Australian",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 16.302471655328798,
+  "sample_rate": 44100,
+  "channels": 1,
+  "fleet_managed": true,
+  "audio_sha256": "92e86e233b8dbfbf71b29abee4f9e1e62fe9af2a7cd5fffc0d8fdb4c72119561",
+  "created_at": 1784163582.3580391
+}

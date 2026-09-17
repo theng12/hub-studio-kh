@@ -1,0 +1,18 @@
+{
+  "id": "0616aec33b41",
+  "name": "Christian - Slow & Calming",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".wav",
+  "duration_seconds": 18.877823129251702,
+  "sample_rate": 44100,
+  "channels": 2,
+  "fleet_managed": true,
+  "audio_sha256": "0fb9c76a924fb02c84f12df4a054e9c8bdda1cb5be9a71596b7091c494c8be1d",
+  "created_at": 1784438921.232113
+}

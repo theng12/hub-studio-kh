@@ -444,5 +444,78 @@ class KitManifestTests(unittest.TestCase):
             self.assertIsNone(kit.git_commit())
 
 
+class VoiceCopyTests(unittest.TestCase):
+    """Voices travel with the models, and a voice already on the Mac is never overwritten.
+
+    The operator's own recordings live only on that machine. A model-copy step that rewrote a clip
+    or a transcript because the kit's copy differed would destroy work nothing else can restore, so
+    the rule is add-and-leave-alone, and the tests hold it there.
+    """
+
+    REVISION = "9" * 40
+
+    def _voice(self, root: Path, voice_id: str, name: str, transcript: str = "the words") -> Path:
+        folder = root / voice_id
+        write(folder / "metadata.json", json.dumps({"id": voice_id, "name": name}))
+        write(folder / "reference.wav", f"audio for {name}")
+        if transcript:
+            write(folder / "transcript.txt", transcript)
+        return folder
+
+    def test_a_missing_voice_is_added(self):
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian")
+            added, present, names = COPY.copy_voices(source, target)
+            self.assertEqual((added, present), (1, 0))
+            self.assertEqual(names, ["Christian"])
+            self.assertTrue((target / "0616aec33b41/transcript.txt").is_file())
+
+    def test_a_voice_already_on_this_mac_is_left_exactly_as_it_is(self):
+        """A locally corrected transcript must survive the kit being copied again."""
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian", transcript="what the kit says")
+            self._voice(target, "0616aec33b41", "Christian", transcript="what I corrected here")
+            added, present, names = COPY.copy_voices(source, target)
+            self.assertEqual((added, present, names), (0, 1, []))
+            self.assertEqual((target / "0616aec33b41/transcript.txt").read_text(),
+                             "what I corrected here")
+
+    def test_running_it_twice_adds_nothing_the_second_time(self):
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian")
+            self._voice(source, "074743daa991", "Vincent")
+            self.assertEqual(COPY.copy_voices(source, target)[0], 2)
+            added, present, _ = COPY.copy_voices(source, target)
+            self.assertEqual((added, present), (0, 2))
+
+    def test_a_folder_without_metadata_is_not_a_voice(self):
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian")
+            write(source / "README.md", "notes")
+            write(source / "half-copied/reference.wav", "audio with no metadata")
+            added, _present, _names = COPY.copy_voices(source, target)
+            self.assertEqual(added, 1)
+            self.assertFalse((target / "half-copied").exists())
+
+    def test_the_kit_can_carry_voices_the_app_can_read(self):
+        """The real kit folder, loaded the way the Voice worker loads it."""
+        kit_voices = ROOT / "voices"
+        if not kit_voices.is_dir():
+            self.skipTest("this tree carries no voices")
+        found = COPY.kit_voices(kit_voices)
+        self.assertTrue(found, "the kit's voices folder holds no readable voices")
+        for folder, name in found:
+            self.assertTrue(name.strip(), f"{folder.name} has no usable name")
+            self.assertTrue((folder / "metadata.json").is_file())
+            reference = [p for p in folder.iterdir() if p.stem == "reference"]
+            self.assertTrue(reference, f"{name} has no reference clip")
+            self.assertTrue((folder / "transcript.txt").is_file(),
+                            f"{name} has no transcript, so it cannot clone")
+
+
 if __name__ == "__main__":
     unittest.main()

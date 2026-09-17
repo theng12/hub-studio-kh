@@ -1,0 +1,18 @@
+{
+  "id": "749af648bb63",
+  "name": "Archer - Meditative, Relaxing and Calm",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 15.424580498866213,
+  "sample_rate": 44100,
+  "channels": 2,
+  "fleet_managed": true,
+  "audio_sha256": "babd3d2921cf8f4a9eeceedd3af219c474d9c140b93ade4d88c456545b4e7966",
+  "created_at": 1784394279.025551
+}

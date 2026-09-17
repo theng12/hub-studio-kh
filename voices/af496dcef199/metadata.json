@@ -1,0 +1,18 @@
+{
+  "id": "af496dcef199",
+  "name": "Mark - Natural Conversations",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 19.534149659863946,
+  "sample_rate": 44100,
+  "channels": 1,
+  "fleet_managed": true,
+  "audio_sha256": "895032e6cec0775c5c55e30314fc8209e9439b1741266bfe7a9749e54082bb0c",
+  "created_at": 1784163565.8597372
+}

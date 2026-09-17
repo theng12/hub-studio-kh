@@ -1,0 +1,18 @@
+{
+  "id": "71c642135dcf",
+  "name": "Todd - Clear, Engaging and Educational",
+  "language": "en",
+  "gender": "m",
+  "notes": "",
+  "license": "self-owned",
+  "source_url": null,
+  "permission_acknowledged": true,
+  "has_transcript": true,
+  "audio_extension": ".mp3",
+  "duration_seconds": 18.933061224489794,
+  "sample_rate": 44100,
+  "channels": 2,
+  "fleet_managed": true,
+  "audio_sha256": "eaa78772ee23b98a950af7b6561291a0745102a6c6f8539514636b3fb5fe7c94",
+  "created_at": 1784814182.402508
+}
