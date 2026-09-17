@@ -172,6 +172,15 @@ are current; the longer narrative under it is historical and is kept for provena
 5. **ST-11.OS** needs an original M1 at the oldest candidate Sonoma release. Until then the only
    OS-floor evidence is Image's own refusal below macOS 14.0.
 
+**Cutting a release is now four edits and one gate.** `VERSION` is the source; `release-notes.md`
+is what the app's **What's New** screen shows and `CHANGELOG.md` is the engineering record. Add an
+entry to both, raise `VERSION`, and run `tests/test_release_notes.py`, which fails when the newest
+heading in either file is not the version being shipped, when the packaged `Info.plist` disagrees,
+or when the notes are not inside the bundle. The app bundle is called `Studio Hub.app` with no
+version in the name, so a bump does not invalidate the launchers, the verify scripts or the
+instructions — the old launchers still accept `Studio Hub 0.4.0.app` as a fallback for a Mac
+carrying a previous kit.
+
 **Verify every one of these by running the packaged app, not only the suites.** Seven integration
 defects in the Voice/Subtitle chain passed a fully green 192-test suite and were only visible when
 a real job ran (`st04-packaged-clone-e2e.json`, `st06-packaged-e2e.json`). `bash native/build.sh`,

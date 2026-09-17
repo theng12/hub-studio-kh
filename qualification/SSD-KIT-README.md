@@ -4,9 +4,9 @@ Everything needed to install and test this on a Mac is in this folder, or in thi
 No step requires another machine, a download, or anything from the machine this kit was
 built on.
 
-- **App:** `Studio Hub 0.4.0.app` — version 0.4.0, build `f146bc0e`, `development_build: false`
+- **App:** `Studio Hub.app` — version 0.4.0, build `f146bc0e`, `development_build: false`
 - **Models:** `model-library/` — 12 verified packages, ~29 GB
-- **Receipts:** `focused-release-manifest.json`, `Studio Hub 0.4.0.app.tree-sha256`
+- **Receipts:** `focused-release-manifest.json`, `Studio Hub.app.tree-sha256`
 **Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)
 
@@ -48,7 +48,7 @@ sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/2 - Copy the models.command"
 To place things manually instead — app by hand, library left on the SSD:
 
 ```sh
-cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
+cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
 ```
 
 A library can stay on the SSD, but it must be **outside** the app bundle — the app refuses a
@@ -68,12 +68,12 @@ If macOS still refuses — which happens when the copy came through iCloud Drive
 or a downloaded archive — paste this into Terminal once, then open it again:
 
 ```sh
-xattr -cr "/Applications/Studio Hub 0.4.0.app"
+xattr -cr "/Applications/Studio Hub.app"
 ```
 
 That is the command for the app in `/Applications`. If you ever run it straight off the SSD
 instead, the path is
-`xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app"`.
+`xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app"`.
 
 **About the errors it prints.** That command will scroll past a wall of `Permission denied` and
 `No such xattr` lines against files under `Contents/Resources/runtimes`. That is expected and it
@@ -86,7 +86,7 @@ and see whether it launches.
 If you would rather have a quiet run with no complaints:
 
 ```sh
-find "/Applications/Studio Hub 0.4.0.app" -path "*/Resources/runtimes" -prune -o -print0 \
+find "/Applications/Studio Hub.app" -path "*/Resources/runtimes" -prune -o -print0 \
   | xargs -0 xattr -d com.apple.quarantine 2>/dev/null; echo done
 ```
 
@@ -147,13 +147,13 @@ Send that message back and it will be obvious what is wrong.
 To point it at a different app or library:
 
 ```sh
-APP="/Applications/Studio Hub 0.4.0.app" LIB="/Volumes/SomeDrive/model-library" sh verify-launch.sh
+APP="/Applications/Studio Hub.app" LIB="/Volumes/SomeDrive/model-library" sh verify-launch.sh
 ```
 
 ## 7. Optional: prove the copy is intact
 
 ```sh
-python3 -c "import json;d=json.load(open('/Applications/Studio Hub 0.4.0.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
+python3 -c "import json;d=json.load(open('/Applications/Studio Hub.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
 ```
 
 Expect exactly:
@@ -163,7 +163,7 @@ Expect exactly:
 ```
 
 Change the path if you put the app somewhere else — running it straight from the SSD, that is
-`/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app/...`. If it prints that line,
+`/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app/...`. If it prints that line,
 you are running the exact build the tests passed against.
 
 ## Your own voices

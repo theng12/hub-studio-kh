@@ -53,7 +53,7 @@ without pressing Verify.
 
 Doing it by hand instead, if a launcher ever refuses to run:
 
-    cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
+    cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
     sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/copy-models.command"
 
 The models land in ~/Downloads/model-library, and that is the folder to choose
@@ -66,7 +66,7 @@ afterwards.
 ------------------------------------------------------------------
 Right-click the app -> Open -> Open first. If it still refuses:
 
-    xattr -cr "/Applications/Studio Hub 0.4.0.app"
+    xattr -cr "/Applications/Studio Hub.app"
 
 (That prints a wall of "Permission denied" and "No such xattr" lines from the
 read-only runtimes inside the app. That is expected and harmless - the files
@@ -75,7 +75,7 @@ whether the app opens, not by the errors.)
 
 Quieter version, same effect:
 
-    find "/Applications/Studio Hub 0.4.0.app" -path "*/Resources/runtimes" -prune -o -print0 | xargs -0 xattr -d com.apple.quarantine 2>/dev/null; echo done
+    find "/Applications/Studio Hub.app" -path "*/Resources/runtimes" -prune -o -print0 | xargs -0 xattr -d com.apple.quarantine 2>/dev/null; echo done
 
 
 ------------------------------------------------------------------
@@ -102,7 +102,7 @@ tells us:
 Also useful, the two lists side by side:
 
     ls "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/model-library"
-    ls "/Applications/Studio Hub 0.4.0.app/Contents/Resources/model-manifests"
+    ls "/Applications/Studio Hub.app/Contents/Resources/model-manifests"
 
 
 ------------------------------------------------------------------
@@ -199,11 +199,11 @@ answer.)
 7. What build is this app?
 ------------------------------------------------------------------
 
-    python3 -c "import json;d=json.load(open('/Applications/Studio Hub 0.4.0.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
+    python3 -c "import json;d=json.load(open('/Applications/Studio Hub.app/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])"
 
 Expected right now:
 
-    0.4.0 84128c5d787aa12de6a5da3e647ed3e1b9a2da8f development_build: False
+    0.5.0 <the commit in release-manifest.json> development_build: False
 
 
 ------------------------------------------------------------------

@@ -109,7 +109,8 @@ class StagedBundleTests(unittest.TestCase):
     """The real bundle, when one has been staged beside this tree."""
 
     def staged(self):
-        for candidate in (Path("/tmp/StudioTest/StudioHubTest.app"),
+        for candidate in (Path("/tmp/StudioTest/Studio Hub.app"),
+                          Path("/tmp/StudioTest/StudioHubTest.app"),
                           Path.home() / "Applications" / "Studio Hub.app",
                           Path("/Applications/Studio Hub.app")):
             if (candidate / "Contents/Info.plist").is_file():
