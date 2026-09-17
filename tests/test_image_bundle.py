@@ -60,7 +60,15 @@ class ImageBundleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
             self.assertEqual(payload['runtime_sha256'], 'a'*64)
-            self.assertTrue(payload['offline'])
+            # Not offline unless asked: this used to report offline unconditionally while the
+            # worker forced it on, so turning the setting off in the app changed nothing here.
+            self.assertFalse(payload['offline'], payload)
+            offline = subprocess.run(command + ['--offline'], capture_output=True, text=True,
+                                     env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'},
+                                     timeout=20)
+            self.assertEqual(offline.returncode, 0, offline.stderr)
+            self.assertTrue(json.loads(offline.stdout)['offline'],
+                            'asking for offline must actually be offline')
             self.assertEqual(payload['models'], str(models.resolve()))
             self.assertFalse((data / 'image-ready.json').exists())
             token.chmod(0o644)

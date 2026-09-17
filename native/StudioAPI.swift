@@ -1553,6 +1553,25 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the audio job") } }
     }
 
+    /// Call off a running subtitle batch. Its own route, because transcripts are batches rather
+    /// than the job queue the other two studios share.
+    func cancelSubtitle(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard subtitleJobs.contains(where: { $0.id == job.id }) else {
+                throw NativeAPIError.message("That subtitle job is no longer in the local history.")
+            }
+            let _: HubCancelResponse = try await sendEmpty(
+                ["api", "hub", "transcription", "jobs", job.id], method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            await refresh()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Cancel the subtitle job")
+            }
+        }
+    }
+
     /// Read the machine's memory policy and what each Studio is holding right now.
     ///
     /// The Hub fans this out to every Studio, so it is refreshed when Settings opens and

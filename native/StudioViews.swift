@@ -783,7 +783,7 @@ struct StudioContent: View {
                 if historyTab == .all || historyTab == .subtitle {
                     sectionTitle("Subtitle")
                     if workspace.subtitleJobs.isEmpty { Text("No subtitle jobs yet.").foregroundStyle(.secondary) }
-                    ForEach(workspace.subtitleJobs) { job in jobRow(job, compact: false); Divider() }
+                    ForEach(workspace.subtitleJobs) { job in subtitleJobRow(job); Divider() }
                     if let result = workspace.transcriptionResult {
                         HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Subtitle") { studio.select(.transcription) } }
                     }
@@ -797,6 +797,40 @@ struct StudioContent: View {
             }.padding(28)
         }
     }
+    /// A finished transcript is text, not sound.
+    ///
+    /// These rows were drawn with the Audio row, which offers Play and "Save…" for a clip. A
+    /// subtitle artifact is an SRT, so Play tried to play it and the app reported an audio
+    /// failure for a transcript that was perfectly fine. Text gets text actions.
+    private func subtitleJobRow(_ job: NativeJob) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: active(job.state) ? "waveform" : job.state == "done"
+                      ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if job.state == "done" {
+                        Text("Transcript").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if job.state == "done" {
+                    // Opens the Subtitle page, where the transcript is exported and delivery is
+                    // acknowledged - the same path the Subtitle screen already uses.
+                    Button("Open Transcript") { studio.select(.transcription) }.disabled(!connected)
+                } else if active(job.state) {
+                    Button("Cancel") { Task { await workspace.cancelSubtitle(job) } }.disabled(!connected)
+                }
+            }
+            if let error = job.error, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+
     private func jobRow(_ job: NativeJob, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {

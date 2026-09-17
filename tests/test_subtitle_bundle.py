@@ -104,7 +104,15 @@ class SubtitleBundleTests(unittest.TestCase):
             self.assertEqual(payload['component'], 'subtitle')
             self.assertEqual(payload['runtime_sha256'], 'e' * 64)
             self.assertEqual(payload['models'], str(models.resolve()))
-            self.assertTrue(payload['offline'])
+            # Not offline unless asked - the same defect the Image worker had, and the reason a
+            # model downloaded on this Mac could not be fetched by the app afterwards.
+            self.assertFalse(payload['offline'], payload)
+            offline = subprocess.run(command + ['--offline'], capture_output=True, text=True,
+                                     env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'},
+                                     timeout=20)
+            self.assertEqual(offline.returncode, 0, offline.stderr)
+            self.assertTrue(json.loads(offline.stdout)['offline'],
+                            'asking for offline must actually be offline')
             self.assertTrue(Path(payload['voice_source']).is_file())
             self.assertFalse((data / 'subtitle-ready.json').exists())
             # An inherited, unreadable token must be refused.
