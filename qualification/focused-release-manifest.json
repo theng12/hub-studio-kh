@@ -1,15 +1,15 @@
 {
  "app": {
-  "bytes": 2906705798,
+  "bytes": 2907512467,
   "name": "Studio Hub 0.4.0.app",
-  "recorded_tree_sha256": "cf1a8fe7311da4b07fd734d905f08d85e7286c42faf24319c367860937317558",
-  "resource_payload_sha256": "361d5d3d3a591e90f2a4d229b276888c35b2176eab14fbf1abff0ed230984135",
-  "tree_sha256_recomputed": "cf1a8fe7311da4b07fd734d905f08d85e7286c42faf24319c367860937317558"
+  "recorded_tree_sha256": "b6f1ff5312da60010d5f190b59a36cac8da34afa5bc510ddd2bc918499fe701e",
+  "resource_payload_sha256": "66fd21b809dfef205d583e0bee282d2dc0fad9d7ed8c5c5c24a06c252e8585c0",
+  "tree_sha256_recomputed": "b6f1ff5312da60010d5f190b59a36cac8da34afa5bc510ddd2bc918499fe701e"
  },
  "components": {
   "hub": {
    "runtime": "voice",
-   "source_sha256": "6ae77704f7aaf9f91f820e6b92355e518b14872d8a67b506cc03c6647b7aff0a",
+   "source_sha256": "4f7c3dbc0e9b1f5f0bca563b7b52ebe1742ac60548d233b201f94ef1546a2f6f",
    "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
    "upstream_version": "2.22.0"
   },
@@ -37,9 +37,10 @@
   "notarized": false,
   "signed": false
  },
- "generated_at": 1789574543.1272588,
- "generated_at_iso": "2026-09-16T16:02:23Z",
- "implementation_commit": "f146bc0e80ac2c3e9f7afa55a0b46abc49ac91c1",
+ "generated_at": 1789616869.550401,
+ "generated_at_iso": "2026-09-17T03:47:49Z",
+ "implementation_commit": "84128c5d787aa12de6a5da3e647ed3e1b9a2da8f",
+ "kit_commit": "a413673f65aa1f40e51386336d27daab229e78ec",
  "library": {
   "index": ".studiohub/installed.json",
   "installed_bytes": 28542256116,
@@ -217,10 +218,10 @@
   }
  ],
  "operator_steps": [
-  "Copy the app and the model library folder to the target Mac.",
-  "Right-click the app and choose Open, then confirm.",
-  "If macOS still refuses it, run: xattr -cr '/Applications/Studio Hub 0.4.0.app' and open it again.",
-  "Choose the copied model library when the app asks for one.",
+  "Double-click '1 - Install the app.command' in the kit folder.",
+  "Double-click '2 - Copy the models.command' - it copies the models this Mac can run into ~/Downloads/model-library.",
+  "Open Studio Hub from Applications and choose that model-library folder.",
+  "Allow the local-network and incoming-connection prompts.",
   "Wait for the status line to read 'Local services ready'.",
   "Run one generation per model to record that machine's speed and memory."
  ],
