@@ -1,0 +1,474 @@
+{
+  "audit_id": "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3-derived-qwen3-tts-12hz-1.7b-base-4bit",
+  "audited_at": "2026-08-26T00:00:00Z",
+  "contract": {
+    "adapter": {
+      "id": "voicestudio.mlx-audio.qwen3-tts-base",
+      "runtime": "mlx-audio 0.4.7+2c9461f5d8315fa8e7013ab2729495b2bb83d384",
+      "version": "1.4"
+    },
+    "approved_operations": [
+      "voice.tts"
+    ],
+    "capacity": {
+      "max_concurrency": 1
+    },
+    "controls": {
+      "language": {
+        "default": "en",
+        "required": true,
+        "type": "enum",
+        "values": [
+          "en",
+          "zh",
+          "ja",
+          "ko",
+          "de",
+          "fr",
+          "ru",
+          "pt",
+          "es",
+          "it"
+        ]
+      },
+      "quality_guardrails": {
+        "automatic_section_token_ceiling": true,
+        "max_local_quality_retries": 1,
+        "output_transcript_validation": true,
+        "reference_word_alignment": true,
+        "required_local_models": [
+          "mlx-community/whisper-large-v3-turbo"
+        ],
+        "retry_section_max_characters": 230,
+        "terminal_gate": {
+          "fails_closed_without_aligned_suffix": true,
+          "maximum_hard_mismatches": 1,
+          "ordered_word_timestamp_window": 24,
+          "revision": "voicestudio.qwen-clone-quality.v2",
+          "scope": "long_form_2gram_multiset"
+        },
+        "validator_revision": "voicestudio.qwen-clone-quality.v1"
+      },
+      "speed": {
+        "default": 1.0,
+        "maximum": 2.0,
+        "minimum": 0.5,
+        "processing": "pitch-preserving after final stitch",
+        "type": "number"
+      },
+      "voice_clone": {
+        "required": true,
+        "type": "reference_audio_with_exact_transcript",
+        "x_vector_only_fallback": false
+      }
+    },
+    "display_name": "Qwen3-TTS 1.7B Base",
+    "hardware": {
+      "ineligible_unified_memory_gb": [
+        8
+      ],
+      "minimum_unified_memory_gb": 16,
+      "platform": "Apple Silicon",
+      "recommended_unified_memory_gb": 24
+    },
+    "input_limits": {
+      "default_private_section_max_characters": 280,
+      "long_form_strategy": "adapter_managed_long_form",
+      "preset_voice_supported": false,
+      "private_edge_destructive_trim": false,
+      "private_join_pause_milliseconds": 300,
+      "private_paragraph_join_pause_milliseconds": 600,
+      "private_section_max_characters": 400,
+      "private_soft_join_pause_milliseconds": 180,
+      "private_speech_crossfade": false,
+      "reference_audio": {
+        "accepted_extensions": [
+          "wav",
+          "mp3",
+          "flac",
+          "m4a",
+          "aac",
+          "ogg",
+          "opus",
+          "webm"
+        ],
+        "channels": 1,
+        "max_audio_bytes": 25000000,
+        "maximum_duration_seconds": 15,
+        "minimum_duration_seconds": 3,
+        "recommended_duration_seconds": {
+          "maximum": 12,
+          "minimum": 8
+        },
+        "sample_rate_hz": 24000,
+        "selection": "speech-aware and word-boundary-aligned",
+        "target_duration_seconds": 8,
+        "timestamped_transcript_segments": "required_when_model_specific_selection_is_needed",
+        "transcript": "required"
+      },
+      "streaming_request_supported": false,
+      "supports_cancellation_between_chunks": true,
+      "supports_chunk_progress": true,
+      "text_max_characters": 10000,
+      "text_min_characters": 1,
+      "voice_design_supported": false
+    },
+    "license": {
+      "commercial_use": true,
+      "spdx": "Apache-2.0"
+    },
+    "modality": "voice",
+    "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+    "output_limits": {
+      "atomic_final_artifact": true,
+      "channels": 1,
+      "max_duration_seconds": null,
+      "media_type": "audio/wav",
+      "sample_format": "PCM_16",
+      "sample_rate_hz": 24000
+    },
+    "runtime_revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c",
+    "upstream_model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+  },
+  "derivation": {
+    "derived_at": null,
+    "derived_from_audit_id": "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3",
+    "derived_from_model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "derived_from_record": "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json",
+    "not_claimed": "the 4-bit checkpoint was not independently audited",
+    "reason": "A quantization changes weight precision, not the audio front end. The 8-bit sibling's reference path was verified with real cloning output; these bounds are properties of the shared processor and adapter.",
+    "scope": "reference_audio input contract only"
+  },
+  "evidence": {
+    "five_thousand_character_canary": {
+      "audio_seconds": 305.92,
+      "hub_batch_id": "dc6fc58779",
+      "independent_remote_asr": {
+        "compound_tokenization_caveat": "snowcaps to snow caps accounts for apparent extra snow",
+        "coverage_percent": 100.0,
+        "deletions": 0
+      },
+      "memory": {
+        "memory_failure_or_restart": false,
+        "minimum_free_gb": 1.905,
+        "peak_mlx_gb": 9.026,
+        "pressure": "normal",
+        "swap_delta_gb": 0.0
+      },
+      "quality_attempts": 1,
+      "quality_retry_count": 0,
+      "runtime_seconds": 339.104,
+      "section_max_characters": 400,
+      "seed": 23,
+      "terminal_sentinel": "exact final sentinel; no repeated tail",
+      "validator": {
+        "aligned_words": 867,
+        "branch": "edit_distance",
+        "cer": 0.0114,
+        "expected_tokens": 869,
+        "observed_tokens": 869,
+        "revision": "voicestudio.qwen-clone-quality.v1",
+        "ter": 0.0127,
+        "v2_terminal_gate": "not_applicable_below_2048_tokens"
+      },
+      "worker_job_id": "0df456ec1ed0"
+    },
+    "human_quality_review": {
+      "commercial_decision": "production-acceptable",
+      "qwen_1_7b_quality_percent": 95
+    },
+    "immutable_provenance": {
+      "unchanged_frame_retention": {
+        "private_edge_destructive_trim": false,
+        "private_join_pause_milliseconds": 300,
+        "private_paragraph_join_pause_milliseconds": 600,
+        "private_soft_join_pause_milliseconds": 180,
+        "private_speech_crossfade": false,
+        "source_v1_audit_id": "voicestudio-20260814-qwen3-tts-1.7b-base-production-v1",
+        "status": "unchanged; v1 frame-retention evidence remains applicable through v2 to v3"
+      },
+      "unchanged_section_policy": {
+        "default_private_section_max_characters": 280,
+        "private_section_max_characters": 400,
+        "retry_section_max_characters": 230,
+        "source_v2_audit_id": "voicestudio-20260815-qwen3-tts-1.7b-base-production-v2",
+        "status": "unchanged; the Auto 280 default and its 400 maximum were measured on the v2 canary and are inherited, not re-derived. qwen_17b_production_v2_limits() stays pinned to the v2 record on purpose -- that record is where the measurement lives."
+      },
+      "v1_to_v2_approval_migration": {
+        "approval_rule": "The Auto 280 runtime default may be relied on only after approval moves from the exact v1 audit ID/hash to the exact v2 audit ID/hash.",
+        "from": {
+          "audit_id": "voicestudio-20260814-qwen3-tts-1.7b-base-production-v1",
+          "contract_hash": "sha256:c9be3368abdb8817369cc09a01231c8f1f5a7d68b936a0494920a918b3b8a38a"
+        },
+        "required": true,
+        "to": {
+          "audit_id": "voicestudio-20260815-qwen3-tts-1.7b-base-production-v2",
+          "contract_hash": "sha256:feb681902d12102dd111932a3c0839df7a804c1f9058f00795cd664c9d419d42"
+        }
+      },
+      "v2_to_v3_approval_migration": {
+        "approval_rule": "The 10,000-character request ceiling may be relied on only after approval moves from the exact v2 audit ID/hash to the exact v3 audit ID/hash. GenStudio permits one live ruling per exact contract, so this is a supersede and not an addition: a node still reporting the v2 hash is not given work for this model until it updates.",
+        "from": {
+          "audit_id": "voicestudio-20260815-qwen3-tts-1.7b-base-production-v2",
+          "contract_hash": "sha256:feb681902d12102dd111932a3c0839df7a804c1f9058f00795cd664c9d419d42"
+        },
+        "required": true,
+        "sole_contract_change": "input_limits.text_max_characters: 5000 -> 10000",
+        "to": {
+          "audit_id": "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3",
+          "contract_hash": "sha256:323047e52c2000fd359ab6557ac89a91bcdb0b3b411a961bdb6874575a636ec8"
+        }
+      }
+    },
+    "language_gates": {
+      "genstudio_1_10_0_routing": "language-aware routing keeps Khmer and unsupported traffic off Qwen; OmniVoice remains installed and backup",
+      "khmer": "rejected and unsupported",
+      "official_languages": [
+        "en",
+        "zh",
+        "ja",
+        "ko",
+        "de",
+        "fr",
+        "ru",
+        "pt",
+        "es",
+        "it"
+      ],
+      "thai": "experimental and unsupported"
+    },
+    "paid_cloud_provider_calls": 0,
+    "promotion_boundary": {
+      "full_rollout_pending": true,
+      "genstudio_approval_required": true,
+      "post_release_canary_required": false,
+      "reason": "No execution behaviour changes. The engine, adapter, guardrails and section policy are v2's; only the published ceiling moves, and the measurement that moves it is already in hand."
+    },
+    "qualified_runtime": {
+      "cache": {
+        "complete_bytes": 3104164936,
+        "incomplete_bytes": 0
+      },
+      "checkpoint_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
+      "commit": "433fccebf08583aa8a61e88fc8804541ec61818b",
+      "hardware": "Apple M2, 17.18 GB unified memory",
+      "target": "studio-mac-0201",
+      "voice_studio_version": "2.1.2"
+    },
+    "rejected_boundaries": {
+      "fifteen_thousand_characters": {
+        "reason": "About 2,600 word tokens, past the 2,048-token boundary in qwen_quality._error_rate. Above it the validator falls back to an approximate n-gram-multiset score, so a 15,000 pass would be certified by a weaker instrument than the 5,000 and 10,000 passes were. Raising the published ceiling further requires either a stronger long-form validator or evidence that does not depend on the weaker branch.",
+        "recommendation": "fail; not measured and deliberately not published"
+      },
+      "malformed_fixtures": "rejected/informative only; not promotion evidence",
+      "ten_thousand_characters": {
+        "evidence": "evidence.ten_thousand_character_canary",
+        "hub_batch_id": "ec806a61a9",
+        "reason": "unexplained extra life plus missing at; snow may be compound-tokenization",
+        "recommendation": "fail; never publish",
+        "status": "superseded",
+        "superseded_because": "The v2 rejection rested on a single run whose apparent extra 'life' and missing 'at' were never explained. Three runs on the same checkpoint returned 1,727 word tokens for 1,727 sent, with zero deletions and zero insertions, and every remaining difference was a homophone rather than a lost or invented word. The original finding is kept because the history should stay readable, not because it still governs.",
+        "superseded_by": "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3",
+        "superseded_on": "2026-08-26",
+        "worker_job_id": "d2456790cecb"
+      },
+      "twenty_five_thousand_characters": "rejected/informative only; not promotion evidence"
+    },
+    "release_scope": {
+      "full_rollout": "pending",
+      "genstudio_approval": "approved",
+      "note": "The checkpoint, adapter, guardrails, section policy and hardware floor are unchanged from v2. The single contract change is input_limits.text_max_characters 5000 -> 10000, which is why the contract hash moves and the approval is a supersede rather than an addition.",
+      "post_release_canary": "not_required",
+      "purpose": "publish the measured 10,000-character ceiling",
+      "release": "2.4.5",
+      "release_prepared": true
+    },
+    "section_policy": {
+      "auto_default_private_section_max_characters": 280,
+      "custom_private_section_max_characters": {
+        "maximum": 400,
+        "minimum": 230
+      },
+      "owner_approved_configuration": true,
+      "retry_section_max_characters": 230
+    },
+    "supersedes_audit_id": "voicestudio-20260815-qwen3-tts-1.7b-base-production-v2",
+    "ten_thousand_character_canary": {
+      "checkpoint_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
+      "coverage_percent_range": [
+        99.48,
+        99.6
+      ],
+      "deletions": 0,
+      "discrepancy_character": "Every discrepancy is a one-for-one homophone substitution the transcriber cannot resolve from audio alone -- tales/tails, harbour/harbor. Token count in equals token count out on all three runs, so nothing was dropped or invented.",
+      "expected_word_tokens": 1727,
+      "hardware": "Apple M2, 17.18 GB unified memory",
+      "identifiers_note": "No hub batch id or worker job id is recorded for these three runs; they are omitted rather than invented.",
+      "input_characters": 9989,
+      "insertions": 0,
+      "observed_word_tokens": [
+        1727,
+        1727,
+        1727
+      ],
+      "recommendation": "pass; publish 10,000",
+      "runs": 3,
+      "seam_analysis": {
+        "conclusion": "Losses do not cluster at section joins; they sit at the rate a uniform random distribution predicts. This is not an assembly defect.",
+        "per_run_loss_percent": [
+          0.512,
+          0.487,
+          0.529
+        ],
+        "random_baseline_percent": 0.51
+      },
+      "target": "studio-mac-0202",
+      "transcriber_determinism_baseline": "Re-transcribing identical audio returned byte-identical text, so the residual variation is the model's, not the transcriber's.",
+      "validator": {
+        "branch": "edit_distance",
+        "branch_reason": "1,727 tokens is at or below the 2,048-token boundary in qwen_quality._error_rate, so every run was scored by exact edit distance rather than the approximate n-gram-multiset branch.",
+        "revision": "voicestudio.qwen-clone-quality.v1"
+      },
+      "voice_studio_version": "2.4.1"
+    },
+    "v1_retained": "passed historical evidence; not revoked",
+    "v2_retained": "passed historical evidence; superseded, not revoked"
+  },
+  "genstudio_candidate": {
+    "adapter": {
+      "id": "voicestudio.mlx-audio.qwen3-tts-base",
+      "runtime": "mlx-audio 0.4.7+2c9461f5d8315fa8e7013ab2729495b2bb83d384",
+      "version": "1.4"
+    },
+    "approved_operations": [
+      "voice.tts"
+    ],
+    "audit_id": "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3-derived-qwen3-tts-12hz-1.7b-base-4bit",
+    "audit_status": "passed",
+    "audited_at": "2026-08-26T00:00:00Z",
+    "candidate_for_genstudio": true,
+    "capacity": {
+      "max_concurrency": 1
+    },
+    "contract_hash": "sha256:88683512dfa9f87e636206c1ca7a80d711051b0202297272049b668a793426e0",
+    "controls": {
+      "language": {
+        "default": "en",
+        "required": true,
+        "type": "enum",
+        "values": [
+          "en",
+          "zh",
+          "ja",
+          "ko",
+          "de",
+          "fr",
+          "ru",
+          "pt",
+          "es",
+          "it"
+        ]
+      },
+      "quality_guardrails": {
+        "automatic_section_token_ceiling": true,
+        "max_local_quality_retries": 1,
+        "output_transcript_validation": true,
+        "reference_word_alignment": true,
+        "required_local_models": [
+          "mlx-community/whisper-large-v3-turbo"
+        ],
+        "retry_section_max_characters": 230,
+        "terminal_gate": {
+          "fails_closed_without_aligned_suffix": true,
+          "maximum_hard_mismatches": 1,
+          "ordered_word_timestamp_window": 24,
+          "revision": "voicestudio.qwen-clone-quality.v2",
+          "scope": "long_form_2gram_multiset"
+        },
+        "validator_revision": "voicestudio.qwen-clone-quality.v1"
+      },
+      "speed": {
+        "default": 1.0,
+        "maximum": 2.0,
+        "minimum": 0.5,
+        "processing": "pitch-preserving after final stitch",
+        "type": "number"
+      },
+      "voice_clone": {
+        "required": true,
+        "type": "reference_audio_with_exact_transcript",
+        "x_vector_only_fallback": false
+      }
+    },
+    "hardware": {
+      "ineligible_unified_memory_gb": [
+        8
+      ],
+      "minimum_unified_memory_gb": 16,
+      "platform": "Apple Silicon",
+      "recommended_unified_memory_gb": 24
+    },
+    "input_limits": {
+      "default_private_section_max_characters": 280,
+      "long_form_strategy": "adapter_managed_long_form",
+      "preset_voice_supported": false,
+      "private_edge_destructive_trim": false,
+      "private_join_pause_milliseconds": 300,
+      "private_paragraph_join_pause_milliseconds": 600,
+      "private_section_max_characters": 400,
+      "private_soft_join_pause_milliseconds": 180,
+      "private_speech_crossfade": false,
+      "reference_audio": {
+        "accepted_extensions": [
+          "wav",
+          "mp3",
+          "flac",
+          "m4a",
+          "aac",
+          "ogg",
+          "opus",
+          "webm"
+        ],
+        "channels": 1,
+        "max_audio_bytes": 25000000,
+        "maximum_duration_seconds": 15,
+        "minimum_duration_seconds": 3,
+        "recommended_duration_seconds": {
+          "maximum": 12,
+          "minimum": 8
+        },
+        "sample_rate_hz": 24000,
+        "selection": "speech-aware and word-boundary-aligned",
+        "target_duration_seconds": 8,
+        "timestamped_transcript_segments": "required_when_model_specific_selection_is_needed",
+        "transcript": "required"
+      },
+      "streaming_request_supported": false,
+      "supports_cancellation_between_chunks": true,
+      "supports_chunk_progress": true,
+      "text_max_characters": 10000,
+      "text_min_characters": 1,
+      "voice_design_supported": false
+    },
+    "output_limits": {
+      "atomic_final_artifact": true,
+      "channels": 1,
+      "max_duration_seconds": null,
+      "media_type": "audio/wav",
+      "sample_format": "PCM_16",
+      "sample_rate_hz": 24000
+    },
+    "runtime_revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c",
+    "schema": "studio.model-audit",
+    "schema_version": 1
+  },
+  "schema": "studio.model-audit-record",
+  "schema_version": 1,
+  "subject": {
+    "checkpoint_revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c",
+    "display_name": "Qwen3-TTS 1.7B Base",
+    "modality": "voice",
+    "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+    "upstream_model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+  }
+}

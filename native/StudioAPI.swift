@@ -675,7 +675,7 @@ final class NativeWorkspaceStore: ObservableObject {
         do {
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
             async let packages: HubModelPackagesResponse = get(["api", "hub", "model-packages"])
-            async let transcription: TranscriptionAvailability = get(["studio", "subtitle", "api", "transcribe", "availability"])
+            async let transcription: TranscriptionAvailability = get(["studio", "transcription", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability = get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse = get(["api", "hub", "jobs"])
             async let transfers: DownloadsResponse = get(["studio", "voice", "api", "downloads"])
@@ -1148,7 +1148,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard connectionID == requestConnection else {
             throw NativeAPIError.message("The connection changed before transcription started.")
         }
-        var request = try makeRequest(["studio", "subtitle", "api", "transcribe"], method: "POST")
+        var request = try makeRequest(["studio", "transcription", "api", "transcribe"], method: "POST")
         // A long recording takes as long as it takes; this is one synchronous request.
         request.timeoutInterval = 60 * 60
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

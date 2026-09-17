@@ -130,9 +130,27 @@ final class FixtureProtocol: URLProtocol {
         return data
     }
 
+    /// The modalities the Hub's `/studio/<modality>/...` peer surface actually routes.
+    ///
+    /// Hardcoded from `WORKER_FOR_MODALITY` in `components/hub/standalone.py`, and hardcoded
+    /// deliberately: this fixture exists to notice when the app and the Hub disagree, so it must
+    /// not derive the answer from the app. It previously answered `/studio/subtitle/...`, which
+    /// the real Hub refuses with 404 "unknown studio" - so every gate passed while the app's
+    /// Transcribe button could not work, and only the owner clicking it found out.
+    private static let hubRoutedModalities: Set<String> = ["image", "voice", "transcription"]
+
     override func startLoading() {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
+        if path.hasPrefix("/studio/") {
+            let modality = String(path.dropFirst("/studio/".count).split(separator: "/").first ?? "")
+            if !Self.hubRoutedModalities.contains(modality) {
+                // Exactly what the Hub answers, so this fixture cannot accept a path the real
+                // Hub refuses.
+                finish((404, "application/json", Data(#"{"detail":"unknown studio"}"#.utf8)))
+                return
+            }
+        }
         if method == "GET", path == "/api/hub/catalog" {
             let port = request.url?.port ?? -1
             Self.lock.lock()
@@ -290,7 +308,7 @@ final class FixtureProtocol: URLProtocol {
         case ("DELETE", "/studio/voice/api/voices/voice-2"):
             Self.lock.lock(); Self.voiceDeleteCalls += 1; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"deleted":true}"#.utf8))
-        case ("POST", "/studio/subtitle/api/transcribe"):
+        case ("POST", "/studio/transcription/api/transcribe"):
             // The synchronous route the app uses to transcribe a clip on the spot. It answers
             // with the words, which is what the "Transcribe Clip" button fills in.
             Self.lock.lock(); Self.syncTranscribeCalls += 1; Self.lock.unlock()
@@ -334,7 +352,7 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"ok":false,"action":"release","selected":2,"succeeded":1,"failed":1,"mode":null,"results":[{"id":"subtitle","ok":true,"result":"released","detail":null},{"id":"voice","ok":false,"result":"busy","detail":"Voice generation or transcription is active; memory was not released"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
-        case ("GET", "/studio/subtitle/api/transcribe/availability"):
+        case ("GET", "/studio/transcription/api/transcribe/availability"):
             // The Subtitle studio reads its availability from the subtitle worker, not Voice.
             result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
         case ("GET", "/studio/voice/api/generate/availability"):

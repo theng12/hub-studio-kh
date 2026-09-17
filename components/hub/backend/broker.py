@@ -2428,6 +2428,31 @@ def _clear_worker_attempt_evidence(item: dict) -> None:
     item["error"] = None
 
 
+def _worker_reason(response: httpx.Response) -> str:
+    """The worker's own explanation of a refusal, in a form an operator can act on.
+
+    Workers answer a refusal with ``{"detail": "<text>"}`` or
+    ``{"detail": {"code": ..., "detail": ...}}``. The code is the part that names the cause
+    ("REFERENCE_AUDIO_CONTRACT_UNAVAILABLE"), so it is kept; anything unparseable falls back to
+    the status, because a truncation here must never hide that the request failed.
+    """
+    detail: object = None
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+    except ValueError:
+        detail = None
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "").strip()
+        text = str(detail.get("detail") or "").strip()
+        if code and text:
+            return f"{code}: {text}"
+        return code or text or f"HTTP {response.status_code}"
+    text = str(detail or "").strip()
+    return text[:500] or f"HTTP {response.status_code}"
+
+
 def _record_worker_identity(item: dict, studio: dict, job: dict) -> None:
     """Keep bounded worker identity for both successful and failed attempts."""
     item["machine"] = str(studio.get("machine") or "local")[:500]
@@ -2602,6 +2627,18 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 headers=headers,
                 timeout=120.0,
             )
+            if r.status_code >= 400:
+                # The worker refused the reference. Until this check existed the refusal was
+                # discarded, the job was accepted anyway with no reference attached, and the
+                # operator saw only "Voice cloning needs a reference voice or private reference
+                # upload" three retries later - or the 502 "worker artifact reference is
+                # invalid" from a job that never produced anything. Surface the worker's own
+                # reason instead: it names the actual cause, such as a model whose audited
+                # reference contract is not installed.
+                item["state"] = "error"
+                item["error_code"] = "VOICE_REFERENCE_REJECTED"
+                item["error"] = f"the Voice worker rejected the reference: {_worker_reason(r)}"
+                return
             item["voice_reference_asset_id"] = voice_reference_asset_id
         elif refs:
             entry = await _catalog_entry(studio, b["model"])
