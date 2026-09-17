@@ -357,6 +357,31 @@ def _register(manifest, folder, root):
     return folder
 
 
+def _repair_if_stale(manifest, record, root):
+    """Rehash and re-record a receipt that was written in a different shape.
+
+    Compares the field names, not their values: a package whose files are untouched but whose
+    receipt lacks a field this build writes is not damaged, and rehashing once is cheaper than
+    telling the operator their library is broken. Verified this session so a package is repaired
+    at most once per process.
+    """
+    global _repaired
+    package_id = manifest['package_id']
+    if package_id in _repaired:
+        return
+    recorded = set()
+    for saved in record.get('files', {}).values():
+        recorded.update(k for k in saved if k != 'relative')
+    if recorded == set(_STAMP_FIELDS):
+        return
+    with _lock(_library(root)):
+        _register(manifest, root / _relative(record['folder']), _library(root))
+    _repaired.add(package_id)
+
+
+_repaired: set[str] = set()
+
+
 def preflight(manifest, library, *, catalog=None, _seen=None):
     """Cheap readability/change check against a previous full verification receipt.
 
@@ -369,6 +394,15 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
     base = {'package_id': manifest['package_id'], 'manifest_sha256': digest}
     if not record or record.get('manifest_sha256') != digest:
         return {**base, 'state': 'not_installed'}
+    # A receipt written by a different build may record different fields. That is a stale cache,
+    # not a damaged package, so rehash once and repair it. Without this, changing what the receipt
+    # records turned every installed model into `invalid` on every machine - which happened, twice,
+    # to the owner. A cache that fails instead of repairing itself is worse than no cache.
+    try:
+        _repair_if_stale(manifest, record, root)
+    except (OSError, KeyError, TypeError, PackageError) as error:
+        return {**base, 'state': 'invalid', 'reason': str(error)}
+    record = _index(root).get(manifest['package_id']) or record
     try:
         folder_relative = _relative(record['folder'])
         folder = root / folder_relative

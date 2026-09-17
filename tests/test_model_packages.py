@@ -147,6 +147,31 @@ class ModelPackageTests(unittest.TestCase):
         self.assertEqual(report['state'], 'invalid',
                          'a genuinely changed file must still be refused')
 
+    def test_a_receipt_from_an_older_build_repairs_itself(self):
+        """A stale cache must repair, not accuse.
+
+        Changing which fields the receipt records - twice, in one session - turned every installed
+        model into `invalid` on the owner's machines: the comparison raised KeyError on the missing
+        field and that was reported as a damaged package. A receipt written in another shape is a
+        cache miss, so it is rehashed once and rewritten.
+        """
+        installed = packages.import_folder(self.manifest, self.source, self.library)
+        receipt = self.library / '.studiohub' / 'installed.json'
+        index = json.loads(receipt.read_text())
+        # An older shape: the fields this build writes, minus one, plus one it no longer does.
+        for saved in index['test-model']['files'].values():
+            saved.pop('ctime_s', None)
+            saved['st_mtime_ns'] = 123456789
+        receipt.write_text(json.dumps(index, sort_keys=True))
+
+        report = packages.preflight(self.manifest, self.library)
+        self.assertEqual(report['state'], 'files_verified', report)
+        # And the receipt was rewritten in the current shape, so the next check is cheap again.
+        rewritten = json.loads(receipt.read_text())['test-model']['files']['weights.safetensors']
+        self.assertEqual({k for k in rewritten if k != 'relative'}, set(packages._STAMP_FIELDS),
+                         'the repaired receipt must be written in this build\'s shape')
+        self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'files_verified')
+
     def test_preflight_rejects_unreadable_file_and_directory_symlink(self):
         installed = packages.import_folder(self.manifest, self.source, self.library)
         weights = installed / 'weights.safetensors'
