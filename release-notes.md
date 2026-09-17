@@ -39,6 +39,17 @@ a long reference could not be prepared at all.
 reference. You do not have to do anything differently: record or choose a clip, press
 **Transcribe Clip**, check the words, then press **Prepare Voice**.
 
+### Your ten saved voices come with the kit
+
+**2 - Copy the models** now brings your voices too — Christian, Vincent, Leo, Samuel, Todd, Archer,
+Aiden, Mark, Leona and Chris. Open the app, go to **Voices**, press **Refresh**, and they are all
+there, ready to clone with.
+
+A voice already on a Mac is never overwritten, so anything you have changed there is kept.
+
+Clips longer than about 15 seconds already carry the timing the app needs, so they work straight
+away instead of asking you to transcribe them first.
+
 ### Copying models keeps them up to date
 
 **2 - Copy the models** is now safe and useful to run again at any time:

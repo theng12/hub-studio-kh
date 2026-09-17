@@ -1,0 +1,23 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 4.5,
+      "start_seconds": 0.0,
+      "text": "in a moment of prayer, opening our hearts to the presence of God"
+    },
+    {
+      "end_seconds": 9.6,
+      "start_seconds": 5.28,
+      "text": "and inviting his peace to dwell deeply within us."
+    },
+    {
+      "end_seconds": 14.48,
+      "start_seconds": 10.26,
+      "text": "As we pray, feel free to join your voice with mine."
+    }
+  ],
+  "timed_at": 1789624309.008717,
+  "transcript": "in a moment of prayer, opening our hearts to the presence of God and inviting his peace to dwell deeply within us. As we pray, feel free to join your voice with mine."
+}

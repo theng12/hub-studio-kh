@@ -1,0 +1,23 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 8.02,
+      "start_seconds": 0.0,
+      "text": "The tusk catches you just above the wrist, a raw tearing sensation that travels up to your elbow before your brain even registers the pain."
+    },
+    {
+      "end_seconds": 13.3,
+      "start_seconds": 9.14,
+      "text": "You look down. The gash is deep, really deep."
+    },
+    {
+      "end_seconds": 18.76,
+      "start_seconds": 13.82,
+      "text": "The skin gapes open, and inside you see something pale that you know is not supposed to be visible."
+    }
+  ],
+  "timed_at": 1789624314.284852,
+  "transcript": "The tusk catches you just above the wrist, a raw tearing sensation that travels up to your elbow before your brain even registers the pain. You look down. The gash is deep, really deep. The skin gapes open, and inside you see something pale that you know is not supposed to be visible."
+}

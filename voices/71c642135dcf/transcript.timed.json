@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 7.02,
+      "start_seconds": 0.0,
+      "text": "Okay, so you want to run the most powerful company in human history, not the most profitable, not the most innovative, the most powerful."
+    },
+    {
+      "end_seconds": 18.48,
+      "start_seconds": 7.28,
+      "text": "A company so dominant that it collected taxes from millions of people, commanded a private army of 260, zero soldiers, twice the size of the British military at the time, minted its own currency."
+    }
+  ],
+  "timed_at": 1789624305.1783302,
+  "transcript": "Okay, so you want to run the most powerful company in human history, not the most profitable, not the most innovative, the most powerful. A company so dominant that it collected taxes from millions of people, commanded a private army of 260, zero soldiers, twice the size of the British military at the time, minted its own currency."
+}

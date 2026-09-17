@@ -36,6 +36,13 @@ New** screen shows.
   bounded, speech-aligned window; without them the engine refused with
   `REFERENCE_TRANSCRIPT_ALIGNMENT_REQUIRED`. Timings are sent only while they still match the
   transcript, so a hand-edited transcript is never windowed against stale timings.
+- Carry the owner's voices in the kit. `2 - Copy the models` now adds the voices the kit holds
+  alongside the models, and never overwrites a voice already on a Mac, so a locally corrected
+  transcript or replaced clip survives. Ten voices, all with transcripts, arrive ready to clone.
+- Ship reference timings with the kit's long voice clips. Seven of the ten are 15.4–22.2 s, and a
+  Qwen3-TTS Base reference over the model's 15-second maximum needs timestamped segments to be
+  windowed; `qualification/time_kit_voices.py` computes them once at kit-build time with the app's
+  own Whisper and the app reads them, so no Mac has to transcribe a voice before using it.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

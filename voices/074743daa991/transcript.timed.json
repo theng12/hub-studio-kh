@@ -1,0 +1,28 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 2.54,
+      "start_seconds": 0.0,
+      "text": "The morning air held a cool, damp promise."
+    },
+    {
+      "end_seconds": 6.32,
+      "start_seconds": 3.34,
+      "text": "Phelan walked slowly toward the heart of the market square."
+    },
+    {
+      "end_seconds": 11.46,
+      "start_seconds": 6.7,
+      "text": "The very first light of day was just beginning to soften the edges of the world."
+    },
+    {
+      "end_seconds": 16.1,
+      "start_seconds": 11.9,
+      "text": "A delicate mist still clung to the cobblestones beneath their feet."
+    }
+  ],
+  "timed_at": 1789624296.3435478,
+  "transcript": "The morning air held a cool, damp promise. Phelan walked slowly toward the heart of the market square. The very first light of day was just beginning to soften the edges of the world. A delicate mist still clung to the cobblestones beneath their feet."
+}

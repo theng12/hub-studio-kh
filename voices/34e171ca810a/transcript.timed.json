@@ -1,0 +1,28 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 5.02,
+      "start_seconds": 0.0,
+      "text": "If Shackleton had known what waited for him in the Weddell Sea, he might never have set sail."
+    },
+    {
+      "end_seconds": 8.6,
+      "start_seconds": 5.42,
+      "text": "But he did not know, and so he pressed on."
+    },
+    {
+      "end_seconds": 12.18,
+      "start_seconds": 9.22,
+      "text": "He stood at his desk in a cramped office in London,"
+    },
+    {
+      "end_seconds": 15.62,
+      "start_seconds": 12.56,
+      "text": "holding a folded advertisement he had placed in the Times."
+    }
+  ],
+  "timed_at": 1789624300.946183,
+  "transcript": "If Shackleton had known what waited for him in the Weddell Sea, he might never have set sail. But he did not know, and so he pressed on. He stood at his desk in a cramped office in London, holding a folded advertisement he had placed in the Times."
+}

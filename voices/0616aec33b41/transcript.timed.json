@@ -1,0 +1,18 @@
+{
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "package_id": "whisper-turbo",
+  "segments": [
+    {
+      "end_seconds": 8.9,
+      "start_seconds": 0.0,
+      "text": "Your thoughts begin to fade and you are filled with a new clarity, comfort and peace."
+    },
+    {
+      "end_seconds": 17.78,
+      "start_seconds": 10.28,
+      "text": "It's as if you are being guided on this adventure and all you have to do is let go."
+    }
+  ],
+  "timed_at": 1789624291.2223911,
+  "transcript": "Your thoughts begin to fade and you are filled with a new clarity, comfort and peace. It's as if you are being guided on this adventure and all you have to do is let go."
+}

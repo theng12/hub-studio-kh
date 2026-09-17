@@ -784,8 +784,14 @@ final class NativeWorkspaceStore: ObservableObject {
             // - so sending timings for words the operator has since changed would window the audio
             // against a transcript it does not match. A mismatch simply means no timings, and the
             // engine falls back to its own behaviour.
-            if Self.segments(audioReferenceSegments, match: transcript),
-               let encoded = try? JSONSerialization.data(withJSONObject: audioReferenceSegments),
+            //
+            // A voice that came with timings - every long clip in the kit does, computed once when
+            // the kit was built - is used when there is nothing fresher, so a long reference can be
+            // prepared without transcribing it again on each Mac.
+            let timings = audioReferenceSegments.isEmpty
+                ? Self.shippedTimings(forReference: file) : audioReferenceSegments
+            if Self.segments(timings, match: transcript),
+               let encoded = try? JSONSerialization.data(withJSONObject: timings),
                let json = String(data: encoded, encoding: .utf8) {
                 fields["transcript_segments"] = json
             }
@@ -1143,6 +1149,27 @@ final class NativeWorkspaceStore: ObservableObject {
     /// because the operator has the clip in front of them — adding a voice, or about to clone
     /// from a reference — and being told to go and transcribe it elsewhere is how a transcript
     /// ends up skipped, which then produces a wrong-sounding clone.
+    /// Timings shipped beside a reference clip, when the kit carries them.
+    ///
+    /// `transcript.timed.json` sits beside the clip with the transcript and the timings the
+    /// transcriber measured for it. Nothing is inferred: a file that is missing, malformed or
+    /// about a different transcript contributes nothing, and the engine falls back to its own
+    /// behaviour rather than being handed timings that do not match the audio.
+    static func shippedTimings(forReference clip: URL) -> [[String: Any]] {
+        let file = clip.deletingLastPathComponent().appendingPathComponent("transcript.timed.json")
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let segments = root["segments"] as? [[String: Any]] else { return [] }
+        return segments.compactMap { segment in
+            let start = segment["start_seconds"] as? Double
+            let end = segment["end_seconds"] as? Double
+            guard let start, let end, end > start else { return nil }
+            var value: [String: Any] = ["start_seconds": start, "end_seconds": end]
+            if let text = segment["text"] as? String, !text.isEmpty { value["text"] = text }
+            return value
+        }
+    }
+
     /// Whether these timings still describe this transcript.
     ///
     /// Compared as words, case- and punctuation-insensitively: the engine's own transcript is

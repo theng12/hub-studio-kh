@@ -564,6 +564,36 @@ struct NativeAPITests {
                 "the studios must carry the modalities the fleet routes by")
         require(store.fleetNote?.contains("Joined") == true, "a join needs a visible result")
 
+        // Reference timings shipped beside a clip. Every long voice in the kit carries a
+        // `transcript.timed.json`, and the engine needs those timings to window a reference longer
+        // than its 15-second maximum. Reading them is what lets a long voice be prepared without
+        // transcribing it again on each Mac.
+        let timedVoice = temporary.appendingPathComponent("timed-voice")
+        try FileManager.default.createDirectory(at: timedVoice, withIntermediateDirectories: true)
+        let timedClip = timedVoice.appendingPathComponent("reference.wav")
+        try FixtureProtocol.wav.write(to: timedClip)
+        let shipped = """
+        {"transcript":"Hello there","segments":[{"start_seconds":0.0,"end_seconds":8.5,"text":"Hello there"},{"start_seconds":9.0,"end_seconds":12.0,"text":"General Kenobi"}]}
+        """
+        try shipped.write(to: timedVoice.appendingPathComponent("transcript.timed.json"),
+                          atomically: true, encoding: .utf8)
+        let timings = NativeWorkspaceStore.shippedTimings(forReference: timedClip)
+        require(timings.count == 2, "shipped timings must be read: \(timings.count)")
+        require(timings[0]["start_seconds"] as? Double == 0.0, "a shipped start must survive")
+        require(timings[1]["text"] as? String == "General Kenobi", "a shipped segment keeps its words")
+        require(NativeWorkspaceStore.segments(timings, match: "Hello there General Kenobi"),
+                "shipped timings must match the transcript they belong to")
+        require(!NativeWorkspaceStore.segments(timings, match: "Completely different words"),
+                "timings for other words must never be sent")
+        // A voice that shipped no timings contributes nothing rather than guessing. The file is
+        // looked for in the clip's own folder, so a second folder is what proves the absence.
+        let untimedVoice = temporary.appendingPathComponent("untimed-voice")
+        try FileManager.default.createDirectory(at: untimedVoice, withIntermediateDirectories: true)
+        let untimedClip = untimedVoice.appendingPathComponent("reference.wav")
+        try FixtureProtocol.wav.write(to: untimedClip)
+        require(NativeWorkspaceStore.shippedTimings(forReference: untimedClip).isEmpty,
+                "a clip with no shipped timings must yield none")
+
         // The fleet: a controller lists who joined, with the state each node is actually in.
         await store.refreshFleetNodes()
         require(FixtureProtocol.fleetRequests().contains("list"), "the joined nodes must be read from the Hub")
