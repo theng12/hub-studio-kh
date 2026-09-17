@@ -15,12 +15,28 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def git_commit() -> str | None:
+    """The commit building this kit, or None when it is not built from a checkout.
+
+    Never fatal: the manifest describes an artifact that must remain valid even when built from
+    an exported tree with no git metadata at all.
+    """
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT,
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and len(commit) == 40 else None
 
 
 def tree_sha256(root: Path) -> str:
@@ -100,6 +116,10 @@ def build(app: Path, library: Path) -> dict:
         "generated_at": time.time(),
         "generated_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "implementation_commit": release.get("implementation_commit"),
+        # The commit that produced the *distribution* files - the launchers, this manifest and the
+        # copy helper. The app itself may have been built earlier and left byte-identical, so
+        # without this the kit's own revision is not recorded anywhere on the drive.
+        "kit_commit": git_commit(),
         "version": release.get("version"),
         "qualification": release.get("qualification"),
         "distribution": {
@@ -124,11 +144,11 @@ def build(app: Path, library: Path) -> dict:
             "index": str(index_path.relative_to(library)),
         },
         "operator_steps": [
-            "Copy the app and the model library folder to the target Mac.",
-            "Right-click the app and choose Open, then confirm.",
-            "If macOS still refuses it, run: xattr -cr "
-            "'/Applications/Studio Hub 0.4.0.app' and open it again.",
-            "Choose the copied model library when the app asks for one.",
+            "Double-click '1 - Install the app.command' in the kit folder.",
+            "Double-click '2 - Copy the models.command' - it copies the models this Mac "
+            "can run into ~/Downloads/model-library.",
+            "Open Studio Hub from Applications and choose that model-library folder.",
+            "Allow the local-network and incoming-connection prompts.",
             "Wait for the status line to read 'Local services ready'.",
             "Run one generation per model to record that machine's speed and memory.",
         ],

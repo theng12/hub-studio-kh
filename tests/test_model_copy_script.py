@@ -147,7 +147,6 @@ class CopyTests(unittest.TestCase):
             COPY.copy_folder(source, target)
             self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["s", "t"])
 
-
 class PruneTests(unittest.TestCase):
     REVISION = "a" * 40
     OLDER = "b" * 40
@@ -328,6 +327,36 @@ class EndToEndTests(unittest.TestCase):
             self.assertFalse((root / "Downloads/model-library/one-terabyte-model").exists())
 
 
+    def test_a_missing_record_is_repaired_without_recopying_the_model(self):
+        """Running the copy step is the repair path for "not installed" - and must stay cheap.
+
+        The model's files are already right, so the only thing missing is the app's record. That
+        must be written from what is on this Mac, not by copying 28 GB again.
+        """
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit, _library, _manifests = self._build(
+                root, {"a-model": (self.REVISION, {"weights.bin": "weights"})})
+            destination = root / "Downloads/model-library"
+            code, output = self._run(root, kit)
+            self.assertEqual(code, 0, output)
+            self.assertIn("ready", output)
+
+            # Lose the record, as a botched manual copy would.
+            state = destination / ".studiohub/installed.json"
+            state.unlink()
+            before = (destination / "a-model" / self.REVISION / "weights.bin").stat().st_mtime_ns
+
+            code, output = self._run(root, kit)
+            self.assertEqual(code, 0, output)
+            self.assertIn("Nothing to copy", output)
+            self.assertIn("record(s) repaired", output)
+            self.assertEqual(self._receipt(destination, "a-model")["revision"], self.REVISION)
+            self.assertEqual(
+                (destination / "a-model" / self.REVISION / "weights.bin").stat().st_mtime_ns,
+                before)
+
+
 class LauncherTests(unittest.TestCase):
     """The launcher is the only part the owner touches, and it failed on the real drive.
 
@@ -376,6 +405,43 @@ class LauncherTests(unittest.TestCase):
                          "Technical/copy-models.command", "Technical/install_app.command",
                          "Technical/copy_models_for_this_mac.py"):
             self.assertTrue((kit / relative).is_file(), f"missing on the drive: {relative}")
+
+
+class KitManifestTests(unittest.TestCase):
+    """The kit manifest is the record of what was handed to a machine.
+
+    It described distribution as "copy the app and the model library folder to the target Mac",
+    which stopped being true the moment the two launchers existed; and it recorded only the app's
+    build commit, which does not change when only the distribution files do.
+    """
+
+    def _kit(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "release_kit", ROOT / "packaging" / "release_kit.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    def test_operator_steps_describe_the_launchers_not_a_manual_copy(self):
+        text = (ROOT / "packaging" / "release_kit.py").read_text()
+        self.assertIn("1 - Install the app.command", text)
+        self.assertIn("2 - Copy the models.command", text)
+        self.assertNotIn('"Copy the app and the model library folder to the target Mac."', text)
+
+    def test_the_kit_records_the_commit_that_built_it(self):
+        kit = self._kit()
+        commit = kit.git_commit()
+        if commit is None:
+            self.skipTest("not a git checkout")
+        self.assertRegex(commit, r"^[0-9a-f]{40}$")
+
+    def test_a_missing_git_does_not_break_the_manifest(self):
+        """The manifest describes an artifact, so it must build without git metadata."""
+        kit = self._kit()
+        with mock.patch.object(kit.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertIsNone(kit.git_commit())
 
 
 if __name__ == "__main__":

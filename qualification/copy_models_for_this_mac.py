@@ -154,12 +154,16 @@ def load_verifier(components: Path):
     return model_packages
 
 
-def register(verifier, manifest: dict, destination: Path) -> str:
-    """Write the app's receipt for one model and hash its files once.
+def register(verifier, manifest: dict, destination: Path, catalog: dict) -> str:
+    """Make sure the app's receipt exists for this model, hashing only if it has to.
 
-    This is what keeps an updated model reading as installed. Without it the app compares the
-    new manifest against an old receipt, decides the model is not installed, and makes the
-    operator verify 29 GB by hand - which is the whole failure this script exists to prevent.
+    This is what keeps a model reading as installed. Without it the app compares the manifest
+    against an old receipt, decides the model is not installed, and makes the operator verify
+    29 GB by hand - which is the whole failure this script exists to prevent.
+
+    A receipt that already satisfies the app is left alone, so a model that was copied months
+    ago is not hashed again on every run. The stale ones are still repaired here, because the
+    manifest has changed under them.
 
     The folder is resolved the same way the app resolves the library. On macOS `/tmp` is a link
     to `/private/tmp`, and the app refuses a folder that is not literally under the library it
@@ -168,7 +172,12 @@ def register(verifier, manifest: dict, destination: Path) -> str:
     if verifier is None:
         return "not recorded (the app will check this model itself)"
     library = verifier._library(destination)
-    folder = (library / manifest["package_id"] / manifest["revision"])
+    folder = library / manifest["package_id"] / manifest["revision"]
+    try:
+        if verifier.preflight(manifest, library, catalog=catalog)["state"] == "files_verified":
+            return "already recorded"
+    except Exception:
+        pass  # an unreadable or stale receipt is exactly what re-registering fixes
     try:
         verifier._register(manifest, folder, library)
     except Exception as error:  # damaged on arrival: say so rather than recording a false pass
@@ -274,12 +283,12 @@ def main() -> int:
     print()
     if not new and not update:
         print("  Everything this Mac needs is already here. Nothing to copy.")
-        return 0
-
-    answer = input("  Press Return to start, or type n and press Return to stop: ").strip().lower()
-    if answer == "n":
-        print("  Nothing was copied.")
-        return 0
+    else:
+        answer = input(
+            "  Press Return to start, or type n and press Return to stop: ").strip().lower()
+        if answer == "n":
+            print("  Nothing was copied.")
+            return 0
 
     # Carry the verified record across, so models that are already current keep proving
     # themselves without hashing 29 GB again. The app's own state folder must exist before any
@@ -296,6 +305,7 @@ def main() -> int:
             pass
 
     verifier = load_verifier(resources / "components")
+    catalog = {manifest["package_id"]: manifest for _p, _n, manifest in chosen}
     started = time.time()
     copied = updated = failed = 0
     freed = 0
@@ -312,15 +322,27 @@ def main() -> int:
             failed += 1
             continue
         freed += prune_old_revisions(target, manifest["revision"])
-        outcome = register(verifier, manifest, destination)
+        outcome = register(verifier, manifest, destination, catalog)
         if how == "new":
             copied += 1
         else:
             updated += 1
         print(f" done - {outcome}")
 
+    # Every model this Mac should have, copied or not, must satisfy the app's check. A run that
+    # copied nothing is still the repair path for a model the app calls "not installed" - a lost
+    # or stale record is fixed from the files already here, without copying anything again.
+    # `register` is a cheap no-op for a record the app already accepts, which is the usual case.
+    repaired = 0
+    for _package_id, _needs, manifest, _how in current:
+        outcome = register(verifier, manifest, destination, catalog)
+        if outcome not in ("already recorded", "not recorded (the app will check this model itself)"):
+            repaired += 1
+            print(f"  {manifest['package_id']}: {outcome}")
+
     print()
     print(f"  Copied {copied} new, updated {updated}, {len(current)} already up to date"
+          f"{f', {repaired} record(s) repaired' if repaired else ''}"
           f"{f', {failed} failed' if failed else ''} in {time.time() - started:.0f} seconds.")
     if freed:
         print(f"  Removed {freed / 1e9:.1f} GB of older model versions that are no longer used.")
