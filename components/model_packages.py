@@ -229,7 +229,13 @@ def _open_regular(root, relative):
 # rehashes every byte, the Hub hashes every artifact it serves, and a library that arrived from
 # another machine is re-verified once on arrival rather than trusted on faith. See
 # `library_identity` in `preflight`.
-_STAMP_FIELDS = ('st_size', 'mtime_s', 'ctime_s')
+# Only fields that survive being copied, because a receipt ships with the library.
+#
+# `ctime` was the last one to go. It changes on every copy - measured again while shipping a
+# receipt that had just been written here and rsynced to the SSD - so a receipt written on one
+# machine can never match the same files on another, and every package reads as changed. `size`
+# and `mtime` are the two that survive, measured rather than assumed.
+_STAMP_FIELDS = ('st_size', 'mtime_s')
 
 
 def _stamp(info):
@@ -247,8 +253,7 @@ def _stamp(info):
     everything, and the Hub hashes every artifact it serves.
     """
     return {'st_size': getattr(info, 'st_size'),
-            'mtime_s': getattr(info, 'st_mtime_ns') // 1_000_000_000,
-            'ctime_s': getattr(info, 'st_ctime_ns') // 1_000_000_000}
+            'mtime_s': getattr(info, 'st_mtime_ns') // 1_000_000_000}
 
 
 def _file_path(folder, entry):

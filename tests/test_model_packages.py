@@ -115,7 +115,6 @@ class ModelPackageTests(unittest.TestCase):
         index = json.loads(receipt.read_text())
         recorded = index['test-model']['files']['weights.safetensors']
         recorded['mtime_s'] -= 5
-        recorded['ctime_s'] -= 5
         receipt.write_text(json.dumps(index, sort_keys=True))
         (installed / 'weights.safetensors').write_bytes(b'wrong! weights')
         report = packages.preflight(self.manifest, self.library)
@@ -431,7 +430,6 @@ class ModelPackageTests(unittest.TestCase):
         index = json.loads(receipt.read_text())
         recorded = index['test-model']['files']['weights.safetensors']
         recorded['mtime_s'] -= 5
-        recorded['ctime_s'] -= 5
         receipt.write_text(json.dumps(index, sort_keys=True))
         (installed / 'weights.safetensors').write_bytes(self.files['weights.safetensors'])
         self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'invalid')
