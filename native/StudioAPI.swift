@@ -434,10 +434,21 @@ struct NativeTokenStatus: Equatable {
     let masked: String
 }
 
-struct NativeTokenTest: Equatable {
+struct NativeTokenTest: Decodable, Equatable {
     let name: String?
     let type: String?
+    /// Hugging Face answers with `orgs`; the app shows them as organisations.
     let organizations: [String]
+    enum CodingKeys: String, CodingKey {
+        case name, type
+        case organizations = "orgs"
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        type = try values.decodeIfPresent(String.self, forKey: .type)
+        organizations = try values.decodeIfPresent([String].self, forKey: .organizations) ?? []
+    }
 }
 
 private enum NativeAPIError: LocalizedError {
@@ -465,6 +476,10 @@ final class NativeWorkspaceStore: ObservableObject {
     static let qwenCustomVoice = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
     /// Requested Qwen3-TTS Base (voice-cloning) models. These clone from a reference clip and
     /// its exact transcript instead of using preset speakers.
+    /// The model the Audio page opens on. A packaged Base tier, because the owner's requirement
+    /// is clone-first and because the preset-speaker default was not in the shipped library at
+    /// all - the page opened on a model that could not generate.
+    static let qwenBase = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
     static let qwenBaseRepos: Set<String> = [
         "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
         "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
@@ -504,7 +519,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// A voice action that failed, shown where the action was taken.
     @Published var voiceError: String?
     @Published var audioText = "" { didSet { scheduleSave() } }
-    @Published var audioModel = qwenCustomVoice { didSet { scheduleSave() } }
+    @Published var audioModel = qwenBase { didSet { scheduleSave() } }
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
     /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
@@ -2002,14 +2017,46 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// Save a Hugging Face token through the Hub, so downloads of gated models are faster and
+    /// authenticated. The worker stores it; the app only ever sends it and shows it masked.
     func saveHFToken(_ token: String) async -> Bool {
-        error = "Hugging Face token editing needs an owner-authenticated Hub route."
-        return false
+        guard let requestConnection = connectionID else { return false }
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { error = "Enter a token first."; return false }
+        do {
+            let body = TokenRequest(hfToken: trimmed)
+            let updated: TokenStatusWire = try await sendJSON(
+                ["studio", "voice", "api", "settings"], method: "POST", body: body)
+            guard connectionID == requestConnection else { return false }
+            tokenStatus = NativeTokenStatus(isSet: updated.value.isSet, masked: updated.value.masked)
+            error = nil
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            self.error = Self.actionable(error, action: "Save the Hugging Face token")
+            return false
+        }
     }
 
+    /// Ask Hugging Face who the token belongs to. A token that cannot be checked is refused
+    /// here rather than failing later in the middle of a 12 GB download.
     func testHFToken(_ token: String) async -> NativeTokenTest? {
-        error = "Hugging Face token testing needs an owner-authenticated Hub route."
-        return nil
+        guard let requestConnection = connectionID else { return nil }
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            // An empty token tests the one already saved, which is what "Test Token" means
+            // when the operator has not typed a replacement.
+            let value: NativeTokenTest = try await sendJSON(
+                ["studio", "voice", "api", "settings", "test-hf-token"], method: "POST",
+                body: TokenRequest(hfToken: trimmed))
+            guard connectionID == requestConnection else { return nil }
+            error = nil
+            return value
+        } catch {
+            guard connectionID == requestConnection else { return nil }
+            self.error = Self.actionable(error, action: "Test the Hugging Face token")
+            return nil
+        }
     }
 
     private func usableModel(repo: String, function: StudioFunction) throws -> NativeModel {
@@ -2024,7 +2071,7 @@ final class NativeWorkspaceStore: ObservableObject {
 
     private func reconcileSelections(defaultTranscription: String?) {
         if !models.contains(where: { $0.repo == audioModel && $0.function == .audio && $0.supported }) {
-            audioModel = Self.qwenCustomVoice
+            audioModel = Self.qwenBase
         }
         if !models.contains(where: { $0.repo == transcriptionModel && $0.function == .transcription && $0.supported }) {
             transcriptionModel = models.first {

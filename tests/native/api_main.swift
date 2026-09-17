@@ -27,6 +27,7 @@ final class FixtureProtocol: URLProtocol {
     static var voiceAddCalls = 0
     static var voiceEditCalls = 0
     static var syncTranscribeCalls = 0
+    static var tokenSaves: [Data] = []
     static var voiceAdded: [[String: Any]] = []
     static var audioAckPaths: [String] = []
     static var audioAckRejects = false
@@ -294,6 +295,11 @@ final class FixtureProtocol: URLProtocol {
             // with the words, which is what the "Transcribe Clip" button fills in.
             Self.lock.lock(); Self.syncTranscribeCalls += 1; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"text":"The exact words in the clip","language":"en","duration":12.5,"model":"mlx-community/whisper-large-v3-turbo"}"#.utf8))
+        case ("POST", "/studio/voice/api/settings"):
+            Self.lock.lock(); Self.tokenSaves.append(requestBody()); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"hf_token_set":true,"hf_token_masked":"hf_…ent"}"#.utf8))
+        case ("POST", "/studio/voice/api/settings/test-hf-token"):
+            result = (200, "application/json", Data(#"{"ok":true,"name":"Fixture User","type":"user","orgs":["fixture-org"]}"#.utf8))
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
@@ -1171,11 +1177,15 @@ struct NativeAPITests {
 
         let tokenStore = NativeWorkspaceStore(sessionConfiguration: configuration)
         await tokenStore.connect(baseURL: URL(string: "http://127.0.0.1:45683")!, dataDirectory: state, token: "native-test-token")
+        // Saving and testing a Hugging Face token go through the worker's own settings routes,
+        // which the Hub proxies. These used to be stubs that always failed while the screen
+        // showed a masked token, so the control looked functional and never was.
         let tokenSaved = await tokenStore.saveHFToken("hf_current")
-        require(!tokenSaved, "native sent an unsupported Voice settings mutation")
-        require(tokenStore.error?.contains("owner-authenticated Hub route") == true, "unsupported token edit needs a clear reason")
+        require(tokenSaved, "a token must save through the Hub: \(tokenStore.error ?? "no error")")
+        require(tokenStore.tokenStatus.isSet, "the saved token must read as set")
         let tokenTest = await tokenStore.testHFToken("hf_current")
-        require(tokenTest == nil, "native sent an unsupported Voice token test")
+        require(tokenTest?.name == "Fixture User", "a token test must report who it belongs to: \(String(describing: tokenTest))")
+        require(tokenTest?.organizations == ["fixture-org"], "the test must report organisations")
         await tokenStore.removeModel(supportedSTT[0])
         require(tokenStore.error?.contains("active readers") == true, "unsafe model removal should be blocked")
         tokenStore.disconnect()

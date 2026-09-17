@@ -96,7 +96,6 @@ def main() -> None:
         'STUDIOHUB_MODEL_MANIFESTS': str(resources / 'model-manifests'),
         'STUDIOHUB_RELEASE_MANIFEST': str(release_path),
         'STUDIOHUB_FLEET_TOKEN': token,
-        'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
         'HF_HUB_DISABLE_TELEMETRY': '1', 'PYTHONNOUSERSITE': '1',
         'PYTHONDONTWRITEBYTECODE': '1',
         'HF_HOME': str(models), 'HF_HUB_CACHE': str(models / 'hub'),
@@ -104,6 +103,8 @@ def main() -> None:
         'MPLCONFIGDIR': str(subtitle_data / 'cache' / 'matplotlib'),
         'PATH': str(runtime / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
     })
+    # Only when the owner asked for it, so Offline mode off actually means online: it used to be
+    # forced on here regardless, and the setting changed nothing for this worker.
     if args.offline:
         os.environ['HF_HUB_OFFLINE'] = '1'
         os.environ['TRANSFORMERS_OFFLINE'] = '1'
@@ -112,7 +113,7 @@ def main() -> None:
         print(json.dumps({'component': 'subtitle', 'version': release['version'],
                           'source': str(source), 'voice_source': str(voice_source),
                           'runtime_sha256': identity, 'data': str(subtitle_data),
-                          'models': str(models), 'offline': True,
+                          'models': str(models), 'offline': bool(args.offline),
                           'managed_updates': False}))
         return
     os.chdir(subtitle_data)

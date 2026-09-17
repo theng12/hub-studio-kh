@@ -84,7 +84,6 @@ def main() -> None:
         'STUDIOHUB_IMAGE_MANIFEST': str(manifest_path),
         'STUDIOHUB_RELEASE_MANIFEST': str(release_path),
         'STUDIOHUB_FLEET_TOKEN': token,
-        'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
         'HF_HUB_DISABLE_TELEMETRY': '1', 'PYTHONNOUSERSITE': '1',
         'PYTHONDONTWRITEBYTECODE': '1',
         'HF_HOME': str(image_data / 'cache'),
@@ -92,12 +91,17 @@ def main() -> None:
         'MPLCONFIGDIR': str(image_data / 'cache' / 'matplotlib'),
         'PATH': str(runtime / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
     })
+    # Only when the owner asked for it. This used to be forced on, so switching Offline mode off
+    # in the app changed nothing here - the setting looked like it worked and did not.
+    if args.offline:
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
     sys.dont_write_bytecode = True
     if args.check:
         print(json.dumps({'component': 'image', 'version': release['version'],
                           'source': str(source), 'runtime_sha256': identity,
                           'data': str(image_data), 'models': str(models),
-                          'offline': True, 'managed_updates': False}))
+                          'offline': bool(args.offline), 'managed_updates': False}))
         return
     os.chdir(image_data)
     run_server('components.image.app.backend.main:from_environment', args.port,
