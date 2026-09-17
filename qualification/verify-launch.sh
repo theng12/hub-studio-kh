@@ -20,11 +20,12 @@
 # double-clicked in Finder rather than run from a terminal.
 KIT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if [ -z "${APP:-}" ]; then
-  if [ -d "/Applications/Studio Hub 0.4.0.app" ]; then
-    APP="/Applications/Studio Hub 0.4.0.app"
-  else
-    APP="$KIT/Studio Hub 0.4.0.app"
-  fi
+  for _cand in "/Applications/Studio Hub.app" "/Applications/Studio Hub 0.4.0.app" \
+               "$HOME/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub 0.4.0.app" \
+               "$KIT/Studio Hub.app" "$KIT/Studio Hub 0.4.0.app"; do
+    [ -d "$_cand" ] && { APP="$_cand"; break; }
+  done
+  APP="${APP:-$KIT/Studio Hub.app}"
 fi
 if [ -z "${LIB:-}" ]; then
   for candidate in "$KIT/model-library" "$HOME/model-library" "/Volumes/Models/model-library"; do

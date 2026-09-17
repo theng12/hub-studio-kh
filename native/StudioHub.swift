@@ -417,6 +417,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let applicationItem = NSMenuItem(); mainMenu.addItem(applicationItem)
         let applicationMenu = NSMenu(); applicationItem.submenu = applicationMenu
         applicationMenu.addItem(withTitle: "About Studio Hub", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let whatsNewItem = NSMenuItem(title: "What's New in Studio Hub", action: #selector(showWhatsNew), keyEquivalent: "")
+        whatsNewItem.target = self
+        applicationMenu.addItem(whatsNewItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         applicationMenu.addItem(settingsItem)
@@ -437,6 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         let openItem = NSMenuItem(title: "Open Studio Hub", action: #selector(openWindow), keyEquivalent: ""); openItem.target = self; menu.addItem(openItem)
         let logItem = NSMenuItem(title: "Open Engine Log", action: #selector(openLog), keyEquivalent: ""); logItem.target = self; menu.addItem(logItem)
+        let whatsNewBarItem = NSMenuItem(title: "What's New", action: #selector(showWhatsNew), keyEquivalent: ""); whatsNewBarItem.target = self; menu.addItem(whatsNewBarItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Studio Hub", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -451,6 +455,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controller.onStopped = { [weak self] in
             if self?.quitPending == true { NSApp.reply(toApplicationShouldTerminate: true) }
         }
+        // Decided before the window opens, and only once per launch.
+        announceReleaseNotes = ReleaseNotesSeen.shouldAnnounce()
         let loginLaunch = NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
         if !loginLaunch || !controller.hasLibrary { openWindow() }
@@ -461,7 +467,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             controller.start()
         }
     }
-    @objc func openWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); controller?.loginStatus = SMAppService.mainApp.status }
+    @objc func openWindow() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.loginStatus = SMAppService.mainApp.status
+        // A new version announces itself once. The flag is consumed here, so opening the window
+        // again - from the Dock, the menu bar icon, or a reopen - leaves the operator where they
+        // were.
+        if announceReleaseNotes {
+            announceReleaseNotes = false
+            controller?.select(.whatsNew)
+        }
+    }
+    @objc func showWhatsNew() { controller?.select(.whatsNew); openWindow() }
+    /// True only on the first launch of a version the operator has not seen notes for.
+    private var announceReleaseNotes = false
     @objc func openLog() { controller?.openLog() }
     @objc func openSettings() { controller?.select(.settings); openWindow() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openWindow(); return true }

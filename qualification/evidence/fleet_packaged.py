@@ -23,7 +23,7 @@ import uuid
 import wave
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / "dist" / "Studio Hub 0.4.0.app"
+APP = ROOT / "dist" / "Studio Hub.app"
 RESOURCES = APP / "Contents" / "Resources"
 LIBRARY = ROOT / "model-library"
 EVIDENCE = ROOT / "qualification" / "evidence" / "fleet-packaged.json"

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 — 2026-09-17 · the app actually runs its own features
+
+Owner-facing notes for this release are in `release-notes.md`, which is what the app's **What's
+New** screen shows.
+
+- Fix the peer-path modality. The app asked the Hub for `/studio/subtitle/...`; the Hub's fleet
+  surface routes `/studio/<modality>/...` and knows only `image`, `voice` and `transcription`, so
+  it answered `404 {"detail":"unknown studio"}`. Both the synchronous Transcribe route and the
+  transcription availability read were affected; the second meant Whisper models never reached the
+  Audio page, so no transcription model could be selected. The Swift fixture had been written
+  against the app's own spelling, which is why every gate passed. It now refuses an unrouted studio
+  exactly as the Hub does, and `tests/test_peer_path_contract.py` compares the app's paths with the
+  Hub's routing table and with a running Hub.
+- Fix the Hub job envelope encoding. `sendHubJSON` used a bare `JSONEncoder()` while `sendJSON`
+  converted keys to snake_case, so `voiceReferenceAssetId` reached the Hub while it reads
+  `voice_reference_asset_id`. The Hub ignores unknown keys, so the reference was discarded and
+  every Qwen3-TTS Base clone failed with a message about a missing reference. `clientRequestId` was
+  lost the same way, defeating the Hub's replay protection.
+- Add the missing reference-audio contract for the 4-bit Qwen3-TTS Base tiers, derived from the
+  audited 8-bit sibling of the same size and upstream model by
+  `packaging/derive_qwen_base_audits.py`. A quantization changes weight precision, not the audio
+  front end; the generated records carry a `derivation` block and claim no independent audit. On an
+  8 GB node the 4-bit tier is the only Qwen Base tier that fits.
+- Stop discarding a refused voice reference. The Hub now surfaces the worker's own reason, code
+  included, instead of running a job with no reference attached.
+- Make the model copy incremental and re-runnable: copy what is missing, replace what changed,
+  leave identical models untouched, prune the superseded revision, and rewrite the app's receipt so
+  an updated model reads as installed.
+- Make both kit launchers location-independent; the copy in the kit root had resolved its helper
+  one directory above the kit and refused to run.
+- Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
+
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof
 
 - Route the native workspace through the bundled authenticated Hub and its private Voice child, reusing the existing Hub scheduler and durable job identities.

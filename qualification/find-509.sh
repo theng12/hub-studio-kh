@@ -24,7 +24,17 @@ echo "===== free space where output is written ====="
 df -h "$HOME/Library/Application Support/StudioHub Standalone" | tail -1
 echo
 echo "===== disk-protection state (the app keeps a 50 GB / 30-day budget) ====="
-APP="${APP:-/Applications/Studio Hub 0.4.0.app}"
+APP="${APP:-/Applications/Studio Hub.app}"
+
+# Accept either the version-free bundle name or the older versioned one, and either Applications
+# folder, so a Mac carrying a previous kit still works.
+if [ ! -d "$APP" ]; then
+  for _cand in "/Applications/Studio Hub.app" "/Applications/Studio Hub 0.4.0.app" \
+               "$HOME/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub 0.4.0.app"; do
+    [ -d "$_cand" ] && { APP="$_cand"; break; }
+  done
+fi
+
 PY="$APP/Contents/Resources/runtimes/voice/bin/python3"
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 [ -x "$PY" ] || PY="$HERE/Studio Hub 0.4.0.app/Contents/Resources/runtimes/voice/bin/python3"

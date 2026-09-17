@@ -10,11 +10,14 @@ KIT="$(dirname -- "$HERE")"
 # This launcher sits either in the kit root or in its Technical folder; the app is beside one of
 # them.
 APP=""
-for spot in "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app"; do
+for spot in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app" \
+            "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app"; do
   [ -d "$spot" ] && { APP="$spot"; break; }
 done
-APP="${APP:-$HERE/Studio Hub 0.4.0.app}"
-NAME="Studio Hub 0.4.0.app"
+APP="${APP:-$HERE/Studio Hub.app}"
+# The installed name carries no version, so a new release replaces the old app instead of
+# leaving a second copy beside it.
+NAME="Studio Hub.app"
 
 clear
 echo "============================================================"

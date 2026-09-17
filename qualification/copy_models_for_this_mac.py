@@ -190,7 +190,10 @@ def main() -> int:
     kit = here.parent if here.name == "Technical" else here
     library = (kit / "model-library").resolve()
     app_root = None
-    for candidate in (kit / "Studio Hub 0.4.0.app", Path("/Applications/Studio Hub 0.4.0.app"),
+    for candidate in (kit / "Studio Hub.app", kit / "Studio Hub 0.4.0.app",
+                      Path("/Applications/Studio Hub.app"),
+                      Path("/Applications/Studio Hub 0.4.0.app"),
+                      Path.home() / "Applications/Studio Hub.app",
                       Path.home() / "Applications/Studio Hub 0.4.0.app"):
         if (candidate / "Contents/Resources/model-manifests").is_dir():
             app_root = candidate

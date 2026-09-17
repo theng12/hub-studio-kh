@@ -97,8 +97,12 @@ require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "I
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 // Voices sits beside Models: both are libraries the operator maintains, as opposed to the
 // per-workspace pages where work is created.
-require(StudioPage.management == [.models, .voices, .jobs, .connections, .settings],
-        "central management navigation includes the voice library")
+require(StudioPage.management == [.models, .voices, .jobs, .connections, .whatsNew, .settings],
+        "central management navigation includes the voice library and the release notes")
+// The notes are reachable without knowing a version, and the page must not pretend to be a
+// workspace: it creates nothing.
+require(StudioPage.whatsNew.function == nil, "What's New is a page, not a studio function")
+require(!StudioPage.workspaces.contains(.whatsNew), "What's New must not appear as a workspace")
 let firstLock = try InstanceLock(directory: state)
 do { _ = try InstanceLock(directory: state); fatalError("duplicate app owns same state") } catch {}
 withExtendedLifetime(firstLock) {}

@@ -2250,7 +2250,17 @@ final class NativeWorkspaceStore: ObservableObject {
     private func sendHubJSON<T: Decodable, Body: Encodable>(_ components: [String], body: Body) async throws -> T {
         var request = try makeRequest(components, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        // Same encoding as every other JSON request in this app. This call used a bare
+        // `JSONEncoder()` while `sendJSON` converted keys to snake_case, so a job envelope left
+        // for the Hub as `voiceReferenceAssetId` while the Hub reads
+        // `voice_reference_asset_id`. The Hub ignored the reference, dispatched the Voice job with
+        // nothing attached, and every Qwen3-TTS Base clone failed with "Voice cloning needs a
+        // reference voice or private reference upload". `clientRequestId` was lost the same way,
+        // which also defeated the Hub's replay protection: a resubmit started a second batch
+        // instead of recognising the first.
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(body)
         return try await perform(request)
     }
 
@@ -2648,10 +2658,9 @@ private struct HubAudioRequest: Codable {
     let voiceReferenceAssetId: String?
     /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
     let routing: String?
-    enum CodingKeys: String, CodingKey {
-        case modality, model, clientRequestId, items, routing
-        case voiceReferenceAssetId = "voice_reference_asset_id"
-    }
+    // No CodingKeys on purpose: every Hub request body is encoded with
+    // `.convertToSnakeCase`, and a hand-written mapping here silently overrode it once already.
+    // The key this decodes to is `voice_reference_asset_id`, pinned by a test.
 }
 
 /// Response of POST /api/hub/voice-references (one contract, local or GenStudio origin).

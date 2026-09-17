@@ -412,7 +412,7 @@ final class FixtureProtocol: URLProtocol {
         case ("POST", "/api/hub/jobs/image-job/items/0/reconcile"):
             Self.lock.lock()
             Self.uncertainImage = false
-            let originalRequestID = Self.generateBodies.last?["clientRequestId"] as? String ?? ""
+            let originalRequestID = Self.generateBodies.last?["client_request_id"] as? String ?? ""
             Self.lock.unlock()
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
         case ("GET", "/studio/voice/api/downloads"):
@@ -906,7 +906,8 @@ struct NativeAPITests {
         require(FixtureProtocol.lastGenerateToken == "native-test-token", "native Hub credential missing")
         require(generated?["modality"] as? String == "voice", "Hub modality")
         require(generated?["model"] as? String == supportedAudio[0].repo, "Hub model")
-        require((generated?["clientRequestId"] as? String)?.count ?? 0 >= 8, "durable clientRequestId missing")
+        require((generated?["client_request_id"] as? String)?.count ?? 0 >= 8,
+                "durable client_request_id missing - the Hub reads snake_case")
         let items = generated?["items"] as? [[String: Any]]
         require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
         require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
@@ -969,7 +970,7 @@ struct NativeAPITests {
         recovered.audioText = ""
         await recovered.generateAudio()
         let replayed = FixtureProtocol.generatedBodies().last!
-        require(beforeReplay["clientRequestId"] as? String == replayed["clientRequestId"] as? String,
+        require(beforeReplay["client_request_id"] as? String == replayed["client_request_id"] as? String,
                 "retry changed durable Hub replay identity")
         require((replayed["items"] as? [[String: Any]])?.first?["text"] as? String == "Accepted before connection loss",
                 "retry mutated the original accepted payload")
@@ -991,7 +992,7 @@ struct NativeAPITests {
         store.imageSettings?.steps = 8
         await store.generateImage()
         let imageReplay = FixtureProtocol.generatedBodies().last!
-        require(imageFirst["clientRequestId"] as? String == imageReplay["clientRequestId"] as? String, "Image replay changed identity")
+        require(imageFirst["client_request_id"] as? String == imageReplay["client_request_id"] as? String, "Image replay changed identity")
         require((imageReplay["items"] as? [[String: Any]])?.first?["prompt"] as? String == "A quiet garden", "Image replay changed prompt")
         require(!FileManager.default.fileExists(atPath: imagePending.path), "accepted Image submit remained pending")
         let image = store.imageJobs.first!
@@ -1047,7 +1048,7 @@ struct NativeAPITests {
         let uncertainImageRequest = FixtureProtocol.generatedBodies().last!
         FixtureProtocol.setUncertainImage(false)
         await store.generateImage()
-        require(FixtureProtocol.generatedBodies().last!["clientRequestId"] as? String == uncertainImageRequest["clientRequestId"] as? String, "uncertain Image response generated a new request identity")
+        require(FixtureProtocol.generatedBodies().last!["client_request_id"] as? String == uncertainImageRequest["client_request_id"] as? String, "uncertain Image response generated a new request identity")
         require(!FileManager.default.fileExists(atPath: imagePending.path), "reconciled Image response remained pending")
         FixtureProtocol.setUncertainImage(true)
         store.imagePrompt = "A second different request"
@@ -1070,7 +1071,7 @@ struct NativeAPITests {
         imageConnectionStore.imagePrompt = "New device prompt"
         await imageConnectionStore.generateImage()
         let newImageRequest = FixtureProtocol.generatedBodies().last!
-        require(oldImageRequest["clientRequestId"] as? String != newImageRequest["clientRequestId"] as? String, "pending Image identity crossed device state directories")
+        require(oldImageRequest["client_request_id"] as? String != newImageRequest["client_request_id"] as? String, "pending Image identity crossed device state directories")
         require((newImageRequest["items"] as? [[String: Any]])?.first?["prompt"] as? String == "New device prompt", "old Image prompt crossed device state directories")
         imageConnectionStore.disconnect()
 

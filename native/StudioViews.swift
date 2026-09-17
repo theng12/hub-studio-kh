@@ -172,6 +172,7 @@ struct StudioContent: View {
                 case .voices: voicesWorkspace
                 case .jobs: jobsWorkspace
                 case .connections: connections
+                case .whatsNew: whatsNew
                 case .settings: settings
                 default: unavailableWorkspace
                 }
@@ -1207,6 +1208,25 @@ struct StudioContent: View {
             }
         }.padding(24).frame(width: 460)
     }
+    /// What's New. Deliberately the same text the release ships as `release-notes.md`, so the
+    /// screen cannot describe a build it is not part of.
+    private var whatsNew: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("What's New").font(.largeTitle.bold())
+                Text(ReleaseNotes.currentVersion)
+                    .font(.title3.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding([.horizontal, .top], 20)
+            .padding(.bottom, 4)
+            Divider()
+            ReleaseNotesView()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private var connections: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {

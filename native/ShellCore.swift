@@ -21,13 +21,14 @@ enum StudioFunction: String, CaseIterable, Identifiable {
 enum StudioPage: String, CaseIterable, Identifiable {
     case overview = "Overview", audio = "Audio", transcription = "Transcription", image = "Image"
     case music = "Music", video = "Video", chat = "Chat"
-    case models = "Models", voices = "Voices", jobs = "Jobs", connections = "Connections", settings = "Settings"
+    case models = "Models", voices = "Voices", jobs = "Jobs", connections = "Connections"
+    case whatsNew = "What's New", settings = "Settings"
     var id: String { rawValue }
     /// Owner-facing name. The raw value stays stable because it is also the StudioFunction
     /// lookup key and is persisted in saved state.
     var title: String { self == .transcription ? "Subtitle" : rawValue }
     static let workspaces: [Self] = [.audio, .transcription, .image, .music, .video, .chat]
-    static let management: [Self] = [.models, .voices, .jobs, .connections, .settings]
+    static let management: [Self] = [.models, .voices, .jobs, .connections, .whatsNew, .settings]
     var function: StudioFunction? { StudioFunction(rawValue: rawValue) }
     var symbol: String {
         if let function { return function.symbol }
@@ -37,6 +38,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         case .voices: return "person.wave.2"
         case .jobs: return "list.bullet.rectangle"
         case .connections: return "network"
+        case .whatsNew: return "sparkles"
         case .settings: return "gearshape"
         default: return "circle"
         }

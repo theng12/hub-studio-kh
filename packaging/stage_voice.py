@@ -109,7 +109,9 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
     copy_tracked_tree(source / 'app/backend', voice / 'app/backend', suffix='.py')
     for directory in ('app/frontend', 'model-audits'):
         copy_tracked_tree(source / directory, voice / directory)
-    for name in ('VERSION', 'CHANGELOG.md'):
+    # The owner-facing notes, bundled so the app's What's New screen reads the same text that
+    # ships with the build instead of a second copy that can drift.
+    for name in ('VERSION', 'CHANGELOG.md', 'release-notes.md'):
         shutil.copyfile(ROOT / name, voice / name)
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
     shutil.copyfile(ROOT / 'packaging/voice_worker.py', resources / 'voice_worker.py')
@@ -165,6 +167,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *, incl
         '"$BUNDLE_BIN/../Resources/runtimes/voice/bin/python3" -I -B '
         f'"$BUNDLE_BIN/../Resources/{entry_point}" "$@"\n')
     executable.chmod(0o755)
+    # The app's display name carries no version on purpose. It used to be produced as
+    # `Studio Hub 0.4.0.app`, which meant every launcher, verify script and instruction file
+    # hardcoded a version that a release bump then invalidated. The version lives in
+    # `CFBundleShortVersionString` and the release manifest, where it belongs.
     plist = {'CFBundleExecutable': service_name,
         'CFBundleIdentifier': 'local.studiohub.hubproof' if include_hub else 'local.studiohub.voiceproof',
         'CFBundleName': 'Studio Hub Local Proof' if include_hub else 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',

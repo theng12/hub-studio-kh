@@ -18,7 +18,9 @@ for spot in "$HERE/Technical/copy_models_for_this_mac.py" "$HERE/copy_models_for
 done
 
 PY=""
-for app in "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app" \
+for app in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app" \
+           "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app" \
+           "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app" \
            "/Applications/Studio Hub 0.4.0.app" "$HOME/Applications/Studio Hub 0.4.0.app"; do
   if [ -x "$app/Contents/Resources/runtimes/voice/bin/python3" ]; then
     PY="$app/Contents/Resources/runtimes/voice/bin/python3"; break
