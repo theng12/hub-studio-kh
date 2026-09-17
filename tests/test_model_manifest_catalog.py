@@ -25,6 +25,11 @@ EXPECTED = {
     "whisper-turbo": ("mlx-community/whisper-large-v3-turbo", "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb", "subtitle-mlx"),
     "whisper-small": ("mlx-community/whisper-small-mlx", "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e", "subtitle-mlx"),
     "whisper-base": ("mlx-community/whisper-base-mlx", "1e3e249fb8d01c655324bd6841b1deadffd6d04c", "subtitle-mlx"),
+    # The preset-speaker and voice-design tiers. The kit shipped only the cloning tiers, so the
+    # Audio page could only ever offer cloning; these are what make the other two tabs possible.
+    "qwen3-tts-12hz-0-6b-customvoice-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "049ef77fe8816b536193c0c25f9a214d17921282", "voice-mlx"),
+    "qwen3-tts-12hz-1-7b-customvoice-8bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", "41d3337e8b7f2843a75841595fc14e4b9a7a4b96", "voice-mlx"),
+    "qwen3-tts-12hz-1-7b-voicedesign-8bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", "f90d617701d9f7f4ca499291e0b57f2b3c2fd2ee", "voice-mlx"),
 }
 PROCESSOR_FILES = {
     "added_tokens.json", "merges.txt", "normalizer.json", "special_tokens_map.json",
@@ -42,7 +47,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.manifests = {path.stem: json.loads(path.read_text()) for path in CATALOG.glob("*.json")}
 
-    def test_catalog_is_the_exact_twelve_model_release_menu(self):
+    def test_catalog_is_the_exact_release_menu(self):
         self.assertEqual(set(self.manifests), set(EXPECTED))
         for package_id, (model_id, revision, engine) in EXPECTED.items():
             manifest = self.manifests[package_id]
@@ -70,6 +75,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "whisper-base": "1a504fa7c9f76ab223ead7120cd8311c741f269521a300e5e81b0d5f1dc8e2ef",
             "whisper-small": "44a6a3600f7874dfa7494ff8cf3741724046c39769e6af3affb77a6da70fb141",
             "whisper-turbo": "952efaf4c2d12b0fdde2b9122c89d01667e83fc1a1abf0b0d0daa597214fc1ef",
+            "qwen3-tts-12hz-0-6b-customvoice-8bit": "cdefed4cdccf52a52c1858c39ab87d77811a8508e23c45d796b80b6469518a8c",
+            "qwen3-tts-12hz-1-7b-customvoice-8bit": "2690316310dfbc75249645bd7bcd021ebbb3ef7b114b0c9aa5ec2e4f24ecd18f",
+            "qwen3-tts-12hz-1-7b-voicedesign-8bit": "d4d7eddb9b9a3e17957389c1d685be1104ec933c2df5ee552eda784af223f990",
         }
         self.assertEqual(set(expected_digests), set(EXPECTED))
         for package_id, manifest in self.manifests.items():
@@ -105,6 +113,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "flux2-klein-4b-mlx-4bit": ("model/text_encoder/", "model/transformer/", "model/vae/", "model/tokenizer/"),
             "qwen3-tts-12hz-0-6b-base-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
             "qwen3-tts-12hz-1-7b-base-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
+            "qwen3-tts-12hz-0-6b-customvoice-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
+            "qwen3-tts-12hz-1-7b-customvoice-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
+            "qwen3-tts-12hz-1-7b-voicedesign-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
             "voxcpm2-4bit": ("model/model.safetensors", "model/tokenizer.json"),
             "voxcpm2-8bit": ("model/model.safetensors", "model/tokenizer.json"),
             "voxcpm2-bf16": ("model/model.safetensors", "model/tokenizer.json"),

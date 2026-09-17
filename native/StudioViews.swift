@@ -535,8 +535,9 @@ struct StudioContent: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         Text("Generation").font(.headline)
+                        voiceModeTabs
                         modelPicker(.audio)
-                        if selectedAudioModel?.requiresReference == true {
+                        if workspace.audioMode == .cloning {
                             voiceSourcePicker
                             if workspace.audioVoiceLibraryID != nil {
                                 // A saved voice carries its own clip, words and timings, so there is
@@ -583,11 +584,35 @@ struct StudioContent: View {
                                     }
                                 }
                             }
+                        } else if workspace.audioMode == .preset {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Voice").font(.callout)
+                                if workspace.audioSpeakers.isEmpty {
+                                    Text("This model has not reported its ready-made voices yet. Press Generate Audio once the model is installed and the runtime is ready, or choose another model above.")
+                                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    Picker("Voice", selection: $workspace.audioSpeaker) {
+                                        ForEach(workspace.audioSpeakers, id: \.self) { Text($0).tag($0) }
+                                    }.labelsHidden()
+                                    Text("These voices are built into the model. Nothing to choose or prepare.").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Speaker").font(.callout)
-                                Picker("Speaker", selection: $workspace.audioSpeaker) { ForEach(workspace.audioSpeakers, id: \.self) { Text($0).tag($0) } }.labelsHidden()
-                                Text("Speakers are supplied by the selected runtime.").font(.caption).foregroundStyle(.secondary)
+                                HStack {
+                                    Text("Voice description").font(.callout)
+                                    Spacer()
+                                    Menu("Examples") {
+                                        ForEach(Self.designExamples, id: \.self) { example in
+                                            Button(example) { workspace.audioDesignPrompt = example }
+                                        }
+                                    }.font(.caption)
+                                }
+                                TextField("For example: a deep, slow and warm narrator",
+                                          text: $workspace.audioDesignPrompt, axis: .vertical)
+                                    .lineLimit(2...4).textFieldStyle(.roundedBorder)
+                                Text("The model creates a voice from these words. Nothing is saved to your voice library, so the same description will not sound identical twice.")
+                                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
                         }
                         VStack(alignment: .leading, spacing: 6) {
@@ -630,9 +655,53 @@ struct StudioContent: View {
         }
     }
 
+    /// A few descriptions that produce a usable voice, so the design tab is not a blank box.
+    ///
+    /// Offered as examples rather than a fixed list: the model takes free text, and these are
+    /// simply the shapes that work - an age or character, a pace, and a tone.
+    static let designExamples = [
+        "a deep, slow and warm narrator",
+        "a bright, quick and friendly young woman",
+        "an older man, gravelly and calm, speaking slowly",
+        "a clear, neutral voice for reading instructions",
+    ]
+
+    /// The three ways of choosing a voice, as tabs.
+    ///
+    /// They were previously one form whose controls changed under the operator depending on the
+    /// model, with nothing saying why - a CustomVoice model showed a speaker list, a Base model
+    /// showed a file chooser, and the difference was only discoverable by trying. Each is a
+    /// different job, so each gets its own tab, its own model list and its own controls.
+    private var voiceModeTabs: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Voice", selection: $workspace.audioMode) {
+                ForEach(VoiceMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: workspace.audioMode) { _, mode in
+                // Keep the selected model consistent with the tab: a model from another tab would
+                // leave the controls below describing a different job than the one on screen.
+                if !workspace.audioModels(for: mode).contains(where: {
+                    $0.repo == workspace.audioModel && $0.supported
+                }) {
+                    workspace.audioModel = workspace.audioModels(for: mode).first?.repo ?? ""
+                }
+            }
+            Text(workspace.audioMode.detail).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func modelPicker(_ function: StudioFunction) -> some View {
         let selection = function == .audio ? $workspace.audioModel : function == .image ? $workspace.imageModel : $workspace.transcriptionModel
-        let models = workspace.models.filter { $0.function == function && $0.supported }
+        // On the Audio page the list is the one that belongs to the chosen voice tab, so the model
+        // and the controls under it always describe the same job.
+        let models = function == .audio
+            ? workspace.audioModels(for: workspace.audioMode).filter { $0.supported }
+            : workspace.models.filter { $0.function == function && $0.supported }
         return VStack(alignment: .leading, spacing: 7) {
             Text("Model").font(.callout)
             Picker("Model", selection: selection) {
@@ -643,7 +712,12 @@ struct StudioContent: View {
                 Label(model.cached ? "Installed" : "Download in Models", systemImage: model.cached ? "checkmark.circle" : "arrow.down.circle")
                     .font(.caption).foregroundStyle(model.cached ? Color.secondary : Color.orange)
             }
-            if models.isEmpty { Text(connected ? "No compatible model is available for this workspace yet." : "Start the services to load available models.").font(.caption).foregroundStyle(.secondary) }
+            if models.isEmpty {
+                Text(function == .audio
+                     ? (connected ? workspace.audioMode.emptyReason : "Start the services to load available models.")
+                     : (connected ? "No compatible model is available for this workspace yet." : "Start the services to load available models."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

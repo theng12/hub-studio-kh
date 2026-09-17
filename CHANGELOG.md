@@ -63,6 +63,16 @@ New** screen shows.
   `voice_reference_asset_id` already was. Without it the saved voice was dropped on the way to the
   worker, which then refused with a message about a missing reference the operator had never been
   asked for - the same silent-drop shape as the camelCase envelope bug.
+- Organise Audio into three voice tabs: cloning, ready-made voices, and voice design. The page was
+  one form whose controls changed with the selected model and never said why, so which models did
+  which job was only discoverable by trying. Models now carry a `VoiceMode`, each tab lists the
+  models for its job and its own controls, and switching tabs keeps the selected model consistent
+  with the tab. A model with no name hint and no clone capability is the preset form, since that is
+  the only Qwen mode needing nothing but a speaker name.
+- Capture and ship the preset-speaker and voice-design Qwen3-TTS tiers
+  (`qwen3-tts-12hz-0-6b-customvoice-8bit`, `qwen3-tts-12hz-1-7b-customvoice-8bit`,
+  `qwen3-tts-12hz-1-7b-voicedesign-8bit`). The kit shipped only the cloning tiers, so the Audio page
+  could offer cloning and nothing else no matter how it was arranged.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

@@ -946,7 +946,8 @@ struct NativeAPITests {
         store.audioSpeaker = "Ryan"
         store.audioLanguage = "en"
         await store.generateAudio()
-        require(store.audioJobs.first?.id == "new-job", "submitted audio job")
+        require(store.audioJobs.first?.id == "new-job",
+                "submitted audio job; error=\(store.error ?? "none") bodies=\(FixtureProtocol.generatedBodies().count)")
         let generated = FixtureProtocol.generatedBody()
         require(FixtureProtocol.lastGeneratePath == "/api/hub/jobs", "native generation must use Hub admission")
         require(FixtureProtocol.lastGenerateToken == "native-test-token", "native Hub credential missing")

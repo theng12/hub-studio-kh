@@ -34,6 +34,13 @@ CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "qwen3-tts-12hz-1-7b-base-8bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit", "revision": "e7dd0585652209fa0d7783659aad4e8a324de11c", "engine": "voice-mlx", "requires_packages": ["whisper-turbo"]},
     {"package_id": "qwen3-tts-12hz-0-6b-base-4bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b", "engine": "voice-mlx", "requires_packages": ["whisper-turbo"]},
     {"package_id": "qwen3-tts-12hz-1-7b-base-4bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", "revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c", "engine": "voice-mlx", "requires_packages": ["whisper-turbo"]},
+    # The preset-speaker and voice-design tiers. They are ordinary Qwen3-TTS packages, but the app
+    # had no way to install them: the kit shipped only the cloning tiers, so the Audio page could
+    # offer cloning and nothing else. A preset model needs no reference at all, and a design model
+    # works from a written description, so together they are two thirds of what the engine can do.
+    {"package_id": "qwen3-tts-12hz-0-6b-customvoice-8bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "revision": "049ef77fe8816b536193c0c25f9a214d17921282", "engine": "voice-mlx"},
+    {"package_id": "qwen3-tts-12hz-1-7b-customvoice-8bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", "revision": "41d3337e8b7f2843a75841595fc14e4b9a7a4b96", "engine": "voice-mlx"},
+    {"package_id": "qwen3-tts-12hz-1-7b-voicedesign-8bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", "revision": "f90d617701d9f7f4ca499291e0b57f2b3c2fd2ee", "engine": "voice-mlx"},
     {"package_id": "voxcpm2-4bit", "model_id": "mlx-community/VoxCPM2-4bit", "revision": "dc9e5c187858da5f4a13dc4c247e297339216381", "engine": "voice-mlx"},
     {"package_id": "voxcpm2-8bit", "model_id": "mlx-community/VoxCPM2-8bit", "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032", "engine": "voice-mlx"},
     {"package_id": "voxcpm2-bf16", "model_id": "mlx-community/VoxCPM2-bf16", "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5", "engine": "voice-mlx"},
@@ -44,6 +51,9 @@ CHOICES: tuple[dict[str, Any], ...] = (
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
+    "qwen3-tts-12hz-0-6b-customvoice-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (8, 16, "The 0.6B tier, and the only ready-made-voice model small enough for an 8 GB Mac. Speed and peak memory are unmeasured here.")},
+    "qwen3-tts-12hz-1-7b-customvoice-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (16, 24, "Weight size matches the 1.7B Base 8-bit tier, which carries a 16 GB floor; unmeasured here.")},
+    "qwen3-tts-12hz-1-7b-voicedesign-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (16, 24, "Weight size matches the 1.7B Base 8-bit tier, which carries a 16 GB floor; unmeasured here.")},
     "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (16, 16, "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.")},
     "qwen3-tts-12hz-0-6b-base-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (8, 16, "The 0.6B Base tier is the 8 GB cloning model, which is what the Voice catalog and the native app advertise; the earlier 16 GB figure was inventory guidance and disagreed with both.")},
     "qwen3-tts-12hz-1-7b-base-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (16, 24, "Historical source audit sets a 16 GB floor and 24 GB preference; standalone execution is still absent.")},

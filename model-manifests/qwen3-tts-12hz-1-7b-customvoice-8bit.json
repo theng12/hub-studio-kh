@@ -1,0 +1,148 @@
+{
+  "defaults": {
+    "parameters_source": "model/generation_config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "43f29f9ab55cf387bd2ce1d07e9d95a5ca8974fa2fda4e2b45c13ae64aad3bfa",
+      "size": 6058,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa",
+      "size": 245,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/merges.txt",
+      "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+      "size": 1671839,
+      "source_path": "merges.txt",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/merges.txt"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "b696f4bf45f54497b6de758981e76f1410bd68af05a657477dee466b0202df1a",
+      "size": 2393308931,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "2551ed02dc288b90cd6b7ec98652433f08ef2ae98fb3eda5248a4b9e5b47d08b",
+      "size": 71786,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119",
+      "size": 127,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/config.json",
+      "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167",
+      "size": 2336,
+      "source_path": "speech_tokenizer/config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/speech_tokenizer/config.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/configuration.json",
+      "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd",
+      "size": 76,
+      "source_path": "speech_tokenizer/configuration.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/speech_tokenizer/configuration.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/model.safetensors",
+      "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+      "size": 682293092,
+      "source_path": "speech_tokenizer/model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/speech_tokenizer/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/preprocessor_config.json",
+      "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb",
+      "size": 234,
+      "source_path": "speech_tokenizer/preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/speech_tokenizer/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670",
+      "size": 7344,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size": 2776833,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/resolve/41d3337e8b7f2843a75841595fc14e4b9a7a4b96/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+  "package_id": "qwen3-tts-12hz-1-7b-customvoice-8bit",
+  "qualification": {
+    "memory_evidence": "Weight size matches the 1.7B Base 8-bit tier, which carries a 16 GB floor; unmeasured here.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 24,
+    "status": "unqualified"
+  },
+  "revision": "41d3337e8b7f2843a75841595fc14e4b9a7a4b96",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+        "revision": "41d3337e8b7f2843a75841595fc14e4b9a7a4b96"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+        "revision": "41d3337e8b7f2843a75841595fc14e4b9a7a4b96",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/revision/41d3337e8b7f2843a75841595fc14e4b9a7a4b96",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/tree/41d3337e8b7f2843a75841595fc14e4b9a7a4b96?recursive=true&expand=true"
+      }
+    ]
+  }
+}

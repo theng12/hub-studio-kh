@@ -39,6 +39,21 @@ a long reference could not be prepared at all.
 reference. You do not have to do anything differently: record or choose a clip, press
 **Transcribe Clip**, check the words, then press **Prepare Voice**.
 
+### The Audio page is now three tabs
+
+Choosing a voice is really three different jobs, and they used to share one form whose controls
+changed under you depending on the model — with nothing saying why. Now each is a tab:
+
+- **Clone a Voice** — use a voice you saved, or a clip from disk. Yours are all here.
+- **Ready-Made Voices** — voices built into the model. Pick one from a list and type your script.
+  Nothing to prepare. This needs the **Qwen3-TTS CustomVoice** model.
+- **Design a Voice** — describe what you want in words, for example *"a deep, slow and warm
+  narrator"*, and the model makes it. This needs the **Qwen3-TTS VoiceDesign** model.
+
+Each tab lists only the models that do that job, and tells you which model to install if you do not
+have one yet. The three model tiers that make this possible are now in the kit, so **2 - Copy the
+models** can bring them over.
+
 ### Every voice plays now, and any of them can be picked in Audio
 
 Two things were wrong, and both are fixed.

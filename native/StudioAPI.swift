@@ -53,12 +53,63 @@ struct NativeModel: Identifiable, Equatable {
     let speakers: [String]
     /// Qwen3-TTS *Base* models clone from a reference clip instead of using preset speakers.
     var requiresReference: Bool = false
+    /// Which of the three ways of choosing a voice this model uses. The Audio page is organised by
+    /// this, because the three are different jobs with different controls: a saved voice, a picked
+    /// speaker, or a written description of the voice.
+    var voiceMode: VoiceMode = .cloning
     /// The runtime reports this as "required" for every Base tier: a clone fails closed on a
     /// transcript mismatch, so the app must not submit without one.
     var requiresTranscript: Bool = true
     /// Set when this Mac is below the tier the model is qualified at. It is advice, not a
     /// refusal: the model still runs, and the operator is told what they are trading.
     var memoryWarning: String? = nil
+}
+
+/// The three ways a local voice model can be told what to sound like.
+///
+/// They are genuinely different: cloning needs a recording plus its words, a preset needs only a
+/// name, and design needs a written description. Presenting them in one shared form is what made
+/// the Audio page hard to manage - the controls changed underneath the operator depending on the
+/// model, with nothing saying why.
+enum VoiceMode: String, CaseIterable, Identifiable {
+    case cloning, preset, design
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .cloning: return "Clone a Voice"
+        case .preset: return "Ready-Made Voices"
+        case .design: return "Design a Voice"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .cloning: return "waveform.badge.mic"
+        case .preset: return "person.wave.2"
+        case .design: return "text.bubble"
+        }
+    }
+    /// One line, in the operator's words, about what this tab does.
+    var detail: String {
+        switch self {
+        case .cloning:
+            return "Use a voice you saved, or a clip from disk. The model repeats that voice."
+        case .preset:
+            return "Voices that come with the model. Pick one and type your script."
+        case .design:
+            return "Describe a voice in words — 'deep, slow, warm' — and the model creates it."
+        }
+    }
+    /// What to say when no installed model offers this.
+    var emptyReason: String {
+        switch self {
+        case .cloning:
+            return "No voice-cloning model is installed. Clone models are the Qwen3-TTS Base tiers, OmniVoice and VoxCPM2."
+        case .preset:
+            return "This Mac has no model with ready-made voices installed. Qwen3-TTS CustomVoice is the model for this tab."
+        case .design:
+            return "This Mac has no voice-design model installed. Qwen3-TTS VoiceDesign is the model for this tab."
+        }
+    }
 }
 
 /// One selectable idle-release mode. Thresholds arrive from the Studio that owns them, so
@@ -571,6 +622,11 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var voiceError: String?
     @Published var audioText = "" { didSet { scheduleSave() } }
     @Published var audioModel = qwenBase { didSet { scheduleSave() } }
+    /// Which of the three voice tabs the operator is on. Kept so reopening the app returns them to
+    /// the job they were doing rather than to whichever model happens to sort first.
+    @Published var audioMode: VoiceMode = .cloning { didSet { scheduleSave() } }
+    /// The written description a voice-design model turns into a voice.
+    @Published var audioDesignPrompt = "" { didSet { scheduleSave() } }
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
     /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
@@ -887,7 +943,18 @@ final class NativeWorkspaceStore: ObservableObject {
                 guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
                 guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
                 let language = audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-                if model.requiresReference {
+                if model.voiceMode == .design {
+                    let description = audioDesignPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !description.isEmpty else {
+                        throw NativeAPIError.message("Describe the voice you want — for example 'deep, slow and warm'.")
+                    }
+                    body = HubAudioRequest(
+                        modality: "voice", model: model.repo,
+                        clientRequestId: "native:\(UUID().uuidString)",
+                        items: [HubAudioItem(text: text, params: HubAudioParams(
+                            presetSpeaker: "", language: language, designPrompt: description))],
+                        voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
+                } else if model.voiceMode == .cloning {
                     if let voiceID = audioVoiceLibraryID {
                         // A voice from the library: the worker reads the clip, its transcript and
                         // its timings from its own store. Nothing is uploaded, and there is no
@@ -2300,6 +2367,42 @@ final class NativeWorkspaceStore: ObservableObject {
            !selected.supportsWordTimestamps { wordTimestamps = false }
     }
 
+    /// Which way a model is told what to sound like.
+    ///
+    /// Qwen3-TTS ships three tiers that are told apart only by their name: Base clones, CustomVoice
+    /// takes preset speakers, VoiceDesign takes a description. VoxCPM2 and OmniVoice clone. The
+    /// runtime's declared capability is trusted where it settles the question, and the name is used
+    /// for the Qwen tiers because the capability list is identical across them.
+    static func voiceMode(repo: String, family: String, declaredClone: Bool,
+                          isCloneFamily: Bool) -> VoiceMode {
+        let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
+        if name.contains("voicedesign") { return .design }
+        if name.contains("customvoice") { return .preset }
+        if name.contains("base") { return .cloning }
+        if isCloneFamily || declaredClone { return .cloning }
+        // A Qwen tier with no name hint and no clone capability is the preset form: it is the only
+        // Qwen mode that needs nothing but a speaker name. Anything else keeps the clone form,
+        // which is the stricter of the two.
+        if family == "qwen3-tts" { return .preset }
+        return .cloning
+    }
+
+    /// The audio models for one tab, best first: installed and ready, then installed, then the
+    /// rest. A tab with nothing usable still shows what to install rather than an empty page.
+    func audioModels(for mode: VoiceMode) -> [NativeModel] {
+        models.filter { $0.function == .audio && $0.voiceMode == mode }
+            .sorted { left, right in
+                func rank(_ model: NativeModel) -> Int {
+                    if model.cached && model.runtimeReady { return 0 }
+                    if model.cached { return 1 }
+                    return 2
+                }
+                return rank(left) == rank(right)
+                    ? left.label.localizedCaseInsensitiveCompare(right.label) == .orderedAscending
+                    : rank(left) < rank(right)
+            }
+    }
+
     private static func combineModels(
         _ audio: [CatalogModel],
         _ transcription: [TranscriptionModel],
@@ -2323,6 +2426,11 @@ final class NativeWorkspaceStore: ObservableObject {
             // Qwen Base conditions on the reference transcript; VoxCPM2 and OmniVoice do not.
             let transcriptRequired = isClone
                 && (item.referenceAudio?.transcript ?? (isQwen ? "required" : "optional")) == "required"
+            // Which tab this model belongs in. Read from the name and the family, because that is
+            // what decides the engine's mode; `capabilities` cannot distinguish the three Qwen
+            // tiers, which is why the name is consulted at all.
+            let mode = Self.voiceMode(repo: item.repo, family: family,
+                                      declaredClone: declaredClone, isCloneFamily: isCloneFamily)
             let formCompatible = isQwen || isCloneFamily
             let package = packages[item.repo]
             let supported = formCompatible && package != nil
@@ -2345,8 +2453,12 @@ final class NativeWorkspaceStore: ObservableObject {
                 id: "audio:\(item.repo)", repo: item.repo, label: item.label, family: item.family ?? "Audio",
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
                 capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
-                supportsWordTimestamps: false, speakers: (supported && !isClone) ? speakers : [],
-                requiresReference: isClone, requiresTranscript: transcriptRequired
+                supportsWordTimestamps: false, speakers: (supported && mode == .preset) ? speakers : [],
+                requiresReference: isClone,
+                // Without this every model kept the struct's default of `.cloning`, so the preset
+                // and design tabs were empty and a CustomVoice model was sent down the clone path -
+                // which asked for a reference voice it does not have.
+                voiceMode: mode, requiresTranscript: transcriptRequired
             )
         }
         let transcriptionModels = transcription.map { item in
@@ -2570,6 +2682,9 @@ final class NativeWorkspaceStore: ObservableObject {
     private struct SavedState: Codable {
         let audioText: String
         let audioModel: String
+        /// Absent in state written before the three voice tabs existed; absent means cloning.
+        let audioMode: String?
+        let audioDesignPrompt: String?
         let audioSpeaker: String
         let audioLanguage: String
         let transcriptionModel: String
@@ -2646,7 +2761,9 @@ final class NativeWorkspaceStore: ObservableObject {
     private func saveState() throws {
         guard let stateURL else { return }
         let state = SavedState(
-            audioText: audioText, audioModel: audioModel, audioSpeaker: audioSpeaker, audioLanguage: audioLanguage,
+            audioText: audioText, audioModel: audioModel,
+            audioMode: audioMode.rawValue, audioDesignPrompt: audioDesignPrompt,
+            audioSpeaker: audioSpeaker, audioLanguage: audioLanguage,
             transcriptionModel: transcriptionModel, transcriptionFile: transcriptionFile?.path,
             transcriptionLanguage: transcriptionLanguage, wordTimestamps: wordTimestamps,
             transcriptionResult: transcriptionResult, imagePrompt: imagePrompt, imageModel: imageModel, imageSettings: imageSettings,
@@ -2667,6 +2784,10 @@ final class NativeWorkspaceStore: ObservableObject {
         audioModel = state.audioModel
         audioSpeaker = state.audioSpeaker
         audioLanguage = state.audioLanguage
+        // Absent in state written before the tabs existed, and absent means cloning, which is what
+        // every audio model in the earlier state did.
+        audioMode = state.audioMode.flatMap(VoiceMode.init(rawValue:)) ?? .cloning
+        audioDesignPrompt = state.audioDesignPrompt ?? ""
         transcriptionModel = state.transcriptionModel
         if let path = state.transcriptionFile, FileManager.default.fileExists(atPath: path) { transcriptionFile = URL(fileURLWithPath: path) }
         transcriptionLanguage = state.transcriptionLanguage
@@ -2878,7 +2999,9 @@ private struct HubAudioItem: Codable { let text: String; let params: HubAudioPar
 private struct HubAudioParams: Codable {
     let presetSpeaker: String
     let language: String
-    enum CodingKeys: String, CodingKey { case presetSpeaker = "preset_speaker", language }
+    /// Sent only by a voice-design model. Encoded as `voice_design_prompt`; the Hub and the Voice
+    /// worker both read that name.
+    var designPrompt: String?
 }
 private struct PendingTranscription: Codable {
     let episode: String
