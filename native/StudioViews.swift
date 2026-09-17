@@ -4,21 +4,6 @@ import AVFoundation
 import UniformTypeIdentifiers
 import ServiceManagement
 
-@MainActor
-final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published var playing = false
-    private var player: AVAudioPlayer?
-    func play(_ data: Data) throws {
-        player?.stop()
-        player = try AVAudioPlayer(data: data)
-        player?.delegate = self
-        player?.play()
-        playing = true
-    }
-    func stop() { player?.stop(); playing = false }
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) { Task { @MainActor [weak self] in self?.playing = false } }
-}
-
 struct StudioWindow: View {
     @ObservedObject var studio: StudioController
     var body: some View { StudioContent(studio: studio, workspace: studio.workspace) }
@@ -552,39 +537,50 @@ struct StudioContent: View {
                         Text("Generation").font(.headline)
                         modelPicker(.audio)
                         if selectedAudioModel?.requiresReference == true {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Reference clip").font(.callout)
-                                HStack(spacing: 8) {
-                                    Button("Choose Clip…") { chooseReferenceClip() }
-                                    Text(workspace.audioReferencePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
-                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            voiceSourcePicker
+                            if workspace.audioVoiceLibraryID != nil {
+                                // A saved voice carries its own clip, words and timings, so there is
+                                // nothing left to choose or prepare.
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Ready to clone").font(.callout)
+                                    Text("This voice's clip, its transcript and its timing are already stored with it. Type your script and press Generate Audio.")
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }
-                                Text("A short, clean recording of the voice you want to reuse.").font(.caption).foregroundStyle(.secondary)
-                            }
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Reference transcript").font(.callout)
-                                    Spacer()
-                                    Button(transcribingClip ? "Transcribing…" : "Transcribe Clip") {
-                                        Task { await transcribeIntoAudioReference() }
+                            } else {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Reference clip").font(.callout)
+                                    HStack(spacing: 8) {
+                                        Button("Choose Clip…") { chooseReferenceClip() }
+                                        Text(workspace.audioReferencePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
+                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                                     }
-                                    .disabled(transcribingClip || workspace.audioReferencePath == nil)
-                                    if transcribingClip { ProgressView().controlSize(.small) }
+                                    Text("A short, clean recording of the voice you want to reuse.").font(.caption).foregroundStyle(.secondary)
                                 }
-                                TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
-                                    .textFieldStyle(.roundedBorder)
-                                Text(selectedAudioModel?.requiresTranscript == false
-                                     ? "Optional for this model." : "Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
-                            }
-                            HStack(spacing: 8) {
-                                Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
-                                    .disabled(!connected || workspace.stagingReference
-                                              || workspace.audioReferencePath == nil
-                                              || (selectedAudioModel?.requiresTranscript != false
-                                                  && workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                                if workspace.stagingReference { ProgressView().controlSize(.small) }
-                                if let status = workspace.audioReferenceStatus {
-                                    Text(status).font(.caption).foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("Reference transcript").font(.callout)
+                                        Spacer()
+                                        Button(transcribingClip ? "Transcribing…" : "Transcribe Clip") {
+                                            Task { await transcribeIntoAudioReference() }
+                                        }
+                                        .disabled(transcribingClip || workspace.audioReferencePath == nil)
+                                        if transcribingClip { ProgressView().controlSize(.small) }
+                                    }
+                                    TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
+                                        .textFieldStyle(.roundedBorder)
+                                    Text(selectedAudioModel?.requiresTranscript == false
+                                         ? "Optional for this model." : "Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
+                                }
+                                HStack(spacing: 8) {
+                                    Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
+                                        .disabled(!connected || workspace.stagingReference
+                                                  || workspace.audioReferencePath == nil
+                                                  || (selectedAudioModel?.requiresTranscript != false
+                                                      && workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                                    if workspace.stagingReference { ProgressView().controlSize(.small) }
+                                    if let status = workspace.audioReferenceStatus {
+                                        Text(status).font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         } else {
@@ -605,6 +601,33 @@ struct StudioContent: View {
                 }.frame(minWidth: 245, idealWidth: 280, maxWidth: 330)
             }
         }.padding(28)
+    }
+
+    /// Where the voice for a clone comes from: one already saved, or a clip from disk.
+    ///
+    /// The app has had a voice library since the Voices page existed, and the engine has always
+    /// accepted a saved voice by its id, but the Audio page only ever offered a file chooser - so a
+    /// voice the operator could see in **Voices**, ready to clone, could not be picked where they
+    /// generate. This is that missing control.
+    private var voiceSourcePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Voice").font(.callout)
+                Spacer()
+                Button("Manage Voices") { studio.select(.voices) }.font(.caption)
+            }
+            Picker("Voice", selection: Binding(
+                get: { workspace.audioVoiceLibraryID ?? "" },
+                set: { workspace.audioVoiceLibraryID = $0.isEmpty ? nil : $0 })) {
+                Text("Choose a clip file…").tag("")
+                ForEach(workspace.selectableVoices) { voice in
+                    Text("\(voice.name)  ·  \(voice.durationLabel)").tag(voice.id)
+                }
+            }
+            .labelsHidden()
+            .disabled(workspace.selectableVoices.isEmpty)
+            Text(workspace.voicePickerDetail).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private func modelPicker(_ function: StudioFunction) -> some View {
@@ -865,7 +888,7 @@ struct StudioContent: View {
                 }
                 Spacer()
                 if job.state == "done" {
-                    Button("Play") { Task { do { try player.play(await workspace.audioData(for: job)) } catch { fileActionError = error.localizedDescription } } }.disabled(!connected)
+                    Button("Play") { Task { do { try await workspace.play(job, with: player) } catch { fileActionError = error.localizedDescription } } }.disabled(!connected)
                     Button("Save…") { saveAudio(job) }.disabled(!connected)
                 } else if active(job.state) { Button("Cancel") { Task { await workspace.cancelAudio(job) } }.disabled(!connected) }
             }
@@ -1127,7 +1150,7 @@ struct StudioContent: View {
     }
 
     private func playVoice(_ voice: NativeVoice) async {
-        do { try player.play(await workspace.voiceData(for: voice)) }
+        do { try await workspace.play(voice, with: player) }
         catch { workspace.voiceError = error.localizedDescription }
     }
 

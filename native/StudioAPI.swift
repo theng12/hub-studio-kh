@@ -1,4 +1,5 @@
 import Combine
+import AVFoundation
 import Foundation
 import CryptoKit
 
@@ -472,6 +473,56 @@ private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 @MainActor
+final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
+    @Published var playing = false
+    private var player: AVAudioPlayer?
+    private var scratch: URL?
+
+    /// Play fetched audio from a file on disk, not from memory.
+    ///
+    /// `AVAudioPlayer(data:)` fails on MP3 with `OSStatus error -4` ("The operation couldn't be
+    /// completed"), which is the error the operator saw on seven of the ten saved voices - the ones
+    /// stored as MP3. It is not the audio: `afinfo` reads those same files perfectly and macOS
+    /// plays them in Finder. `AVAudioPlayer` simply cannot identify the format of an MP3 handed to
+    /// it as bytes, because there is no filename to go on. WAV carries enough header to work, which
+    /// is why only the MP3 voices failed.
+    ///
+    /// Writing the bytes to a real file first, with the extension the worker reported, gives the
+    /// player what it needs. The file is written under the app's own directory, not `/tmp`, and is
+    /// removed as soon as playback stops or finishes.
+    func play(_ data: Data, extension ext: String, in directory: URL) throws {
+        stop()
+        let folder = directory.appendingPathComponent("Playback", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let suffix = ext.hasPrefix(".") ? ext : (ext.isEmpty ? ".wav" : "." + ext)
+        let file = folder.appendingPathComponent("preview-\(UUID().uuidString)\(suffix)")
+        try data.write(to: file, options: [.atomic, .completeFileProtection])
+        do {
+            let ready = try AVAudioPlayer(contentsOf: file)
+            ready.delegate = self
+            ready.play()
+            player = ready
+            scratch = file
+            playing = true
+        } catch {
+            try? FileManager.default.removeItem(at: file)
+            throw error
+        }
+    }
+    func stop() {
+        player?.stop()
+        player = nil
+        playing = false
+        if let scratch { try? FileManager.default.removeItem(at: scratch) }
+        scratch = nil
+    }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in self?.stop() }
+    }
+}
+
+@MainActor
 final class NativeWorkspaceStore: ObservableObject {
     static let qwenCustomVoice = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
     /// Requested Qwen3-TTS Base (voice-cloning) models. These clone from a reference clip and
@@ -837,21 +888,36 @@ final class NativeWorkspaceStore: ObservableObject {
                 guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
                 let language = audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
                 if model.requiresReference {
-                    guard audioReferencePath != nil else {
-                        throw NativeAPIError.message("Choose a reference clip before generating with this voice model.")
+                    if let voiceID = audioVoiceLibraryID {
+                        // A voice from the library: the worker reads the clip, its transcript and
+                        // its timings from its own store. Nothing is uploaded, and there is no
+                        // reference to prepare first.
+                        guard let voice = voices.first(where: { $0.id == voiceID }), voice.readyForCloning else {
+                            throw NativeAPIError.message("That saved voice is no longer in the voice library. Choose another, or refresh the Voices page.")
+                        }
+                        body = HubAudioRequest(
+                            modality: "voice", model: model.repo,
+                            clientRequestId: "native:\(UUID().uuidString)",
+                            items: [HubAudioItem(text: text, params: HubAudioParams(
+                                presetSpeaker: "", language: language))],
+                            voiceReferenceAssetId: nil, voiceLibraryId: voiceID, routing: routingPin)
+                    } else {
+                        guard audioReferencePath != nil else {
+                            throw NativeAPIError.message("Choose a saved voice, or a reference clip to clone from.")
+                        }
+                        guard !model.requiresTranscript || !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                            throw NativeAPIError.message("This Qwen Base voice needs the exact words spoken in the reference clip.")
+                        }
+                        guard let assetID = audioReferenceAssetId else {
+                            throw NativeAPIError.message("Prepare the reference voice before generating.")
+                        }
+                        body = HubAudioRequest(
+                            modality: "voice", model: model.repo,
+                            clientRequestId: "native:\(UUID().uuidString)",
+                            items: [HubAudioItem(text: text, params: HubAudioParams(
+                                presetSpeaker: "", language: language))],
+                            voiceReferenceAssetId: assetID, voiceLibraryId: nil, routing: routingPin)
                     }
-                    guard !model.requiresTranscript || !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        throw NativeAPIError.message("This Qwen Base voice needs the exact words spoken in the reference clip.")
-                    }
-                    guard let assetID = audioReferenceAssetId else {
-                        throw NativeAPIError.message("Prepare the reference voice before generating.")
-                    }
-                    body = HubAudioRequest(
-                        modality: "voice", model: model.repo,
-                        clientRequestId: "native:\(UUID().uuidString)",
-                        items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: "", language: language))],
-                        voiceReferenceAssetId: assetID, routing: routingPin)
                 } else {
                     guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
                         throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
@@ -861,7 +927,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
                             presetSpeaker: audioSpeaker, language: language))],
-                        voiceReferenceAssetId: nil, routing: routingPin)
+                        voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 }
             }
             submittingAudio = true
@@ -1225,6 +1291,75 @@ final class NativeWorkspaceStore: ObservableObject {
             return ["start_seconds": start, "end_seconds": end, "text": words]
         }
         return text
+    }
+
+    /// Fetch a finished job's audio and hand it to the player.
+    ///
+    /// Same reason as a saved voice: the player needs a file on disk, not bytes, or an MP3 result
+    /// fails with `OSStatus error -4`.
+    func play(_ job: NativeJob, with player: PreviewPlayer) async throws {
+        let data = try await audioData(for: job)
+        guard let directory = dataDirectory else {
+            throw NativeAPIError.message("The app data directory is unavailable.")
+        }
+        try player.play(data, extension: Self.audioExtension(of: data), in: directory)
+    }
+
+    /// The container a finished artifact is in, from its own bytes.
+    ///
+    /// Read from the file rather than assumed: a Voice worker returns whatever container the
+    /// engine wrote, and guessing ".wav" for an MP3 result would reintroduce the playback failure
+    /// this exists to fix. An unrecognised payload falls back to WAV, which is what the engine
+    /// writes by default.
+    static func audioExtension(of data: Data) -> String {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.count >= 12, String(decoding: bytes[0..<4], as: UTF8.self) == "RIFF",
+           String(decoding: bytes[8..<12], as: UTF8.self) == "WAVE" { return ".wav" }
+        if bytes.count >= 3, bytes[0] == 0x49, bytes[1] == 0x44, bytes[2] == 0x33 { return ".mp3" }
+        if bytes.count >= 2, bytes[0] == 0xFF, (bytes[1] & 0xE0) == 0xE0 { return ".mp3" }
+        if bytes.count >= 12, String(decoding: bytes[4..<8], as: UTF8.self) == "ftyp" { return ".m4a" }
+        if bytes.count >= 4, String(decoding: bytes[0..<4], as: UTF8.self) == "OggS" { return ".ogg" }
+        if bytes.count >= 4, String(decoding: bytes[0..<4], as: UTF8.self) == "fLaC" { return ".flac" }
+        return ".wav"
+    }
+
+    /// Chosen voice from the library, or nil to use a clip chosen from disk.
+    @Published var audioVoiceLibraryID: String? {
+        didSet {
+            invalidateStagedReference()
+            audioReferencePath = nil
+            audioReferenceSegments = []
+            audioReferenceTranscript = voices.first { $0.id == audioVoiceLibraryID }?.transcript ?? ""
+            audioReferenceStatus = nil
+        }
+    }
+
+    /// The saved voices a clone can use: a voice with no transcript cannot be aligned, so it is not
+    /// offered rather than being offered and then refused.
+    var selectableVoices: [NativeVoice] { voices.filter { $0.readyForCloning } }
+
+    /// Text for the Audio page, so an empty picker explains itself instead of looking broken.
+    var voicePickerDetail: String {
+        if !selectableVoices.isEmpty {
+            return "Clones \(selectableVoices.count) of your saved voices. The clip, its words and its timings stay in the app's own voice library."
+        }
+        if voices.isEmpty {
+            return "No saved voices yet. Import clips on the Voices page, or choose a clip file to clone from."
+        }
+        return "None of your saved voices has a transcript yet, so none can be aligned. Add the words on the Voices page, or choose a clip file."
+    }
+
+    /// Fetch one saved voice's clip and hand it to the player.
+    ///
+    /// The clip goes to a file on disk before it is played: `AVAudioPlayer(data:)` cannot identify
+    /// an MP3 handed to it as bytes and fails with `OSStatus error -4`, which is what stopped seven
+    /// of the ten saved voices from playing.
+    func play(_ voice: NativeVoice, with player: PreviewPlayer) async throws {
+        let data = try await voiceData(for: voice)
+        guard let directory = dataDirectory else {
+            throw NativeAPIError.message("The app data directory is unavailable.")
+        }
+        try player.play(data, extension: voice.audioExtension, in: directory)
     }
 
     /// Point the next generation at a saved voice instead of a loose file.
@@ -2720,6 +2855,10 @@ private struct HubAudioRequest: Codable {
     /// Staged voice-clone reference. Sent for Qwen Base models; the Hub streams the clip to the
     /// worker's reference endpoint and supplies the transcript from the staged asset.
     let voiceReferenceAssetId: String?
+    /// A voice already saved in the Voice library, used instead of a staged clip. The worker reads
+    /// the clip, its transcript and its timings from its own store, so nothing has to be uploaded
+    /// and a voice the operator can see in **Voices** can be used directly.
+    let voiceLibraryId: String?
     /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
     let routing: String?
     // No CodingKeys on purpose: every Hub request body is encoded with

@@ -960,18 +960,25 @@ def restore_batches():
 
 
 def _shared_params_with_local_reference(envelope: dict) -> dict:
-    """Lift a top-level ``voice_reference_asset_id`` into the item parameter map.
+    """Lift the top-level voice choices into the item parameter map.
 
-    GenStudio transports the staged reference inside ``sharedParams``.  The
-    native app submits one already-staged local asset, so its request carries
-    the id beside ``model``/``items`` like the Image reference envelope does.
-    Both origins must reach the same worker route, so the top-level form is
-    folded in without overwriting an explicit ``sharedParams`` value.
+    GenStudio transports these inside ``sharedParams``.  The native app submits
+    them beside ``model``/``items`` like the Image reference envelope does, so
+    the top-level form is folded in without overwriting an explicit
+    ``sharedParams`` value.
+
+    ``voice_library_id`` is lifted for the same reason as the reference asset
+    id, and it was missed at first: a saved voice chosen in the app reached the
+    Hub, was dropped here, and the Voice worker then refused the job with "Voice
+    cloning needs a reference voice or private reference upload" - a message
+    about the reference, for a voice the operator had just selected from a list.
+    Anything the app can put in one of these two slots belongs in this map.
     """
     shared = dict(envelope.get("sharedParams") or {})
-    reference = str(envelope.get("voice_reference_asset_id") or "").strip()
-    if reference and not str(shared.get("voice_reference_asset_id") or "").strip():
-        shared["voice_reference_asset_id"] = reference
+    for key in ("voice_reference_asset_id", "voice_library_id"):
+        value = str(envelope.get(key) or "").strip()
+        if value and not str(shared.get(key) or "").strip():
+            shared[key] = value
     return shared
 
 

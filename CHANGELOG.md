@@ -48,6 +48,21 @@ New** screen shows.
   directory and invites a second, 29 GB download of models already sitting in Downloads. The app
   now recognises `~/Downloads/model-library` by its install record and offers
   **Use the Models Already on This Mac** as one click, and as the first choice.
+- Play a saved voice from a file, not from memory. `AVAudioPlayer(data:)` cannot identify an MP3
+  handed to it as bytes and fails with `OSStatus error -4` - measured on this Mac against the same
+  files `afinfo` reads without complaint. Seven of the ten saved voices are MP3, which is exactly
+  the set that would not play. The clip is now written under the app's own directory with the
+  extension the worker reports and removed when playback stops. A finished job's audio is played
+  the same way, with its container read from its own bytes rather than assumed.
+- Offer the saved voices on the Audio page. The Voice library and the worker's `voice_library_id`
+  contract both existed; the page only ever offered a clip file, so a voice the operator could see
+  in **Voices**, ready to clone, could not be chosen where they generate. The page now has a Voice
+  list, and picking a saved voice skips Prepare Voice entirely because the clip, transcript and
+  timings are already stored with it.
+- Lift `voice_library_id` from the top level of a job envelope in the Hub, as
+  `voice_reference_asset_id` already was. Without it the saved voice was dropped on the way to the
+  worker, which then refused with a message about a missing reference the operator had never been
+  asked for - the same silent-drop shape as the camelCase envelope bug.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

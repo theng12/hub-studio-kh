@@ -564,6 +564,22 @@ struct NativeAPITests {
                 "the studios must carry the modalities the fleet routes by")
         require(store.fleetNote?.contains("Joined") == true, "a join needs a visible result")
 
+        // Which container a fetched result is in, read from its own bytes. Playback needs the
+        // right filename extension: `AVAudioPlayer(data:)` fails an MP3 with OSStatus -4, which is
+        // what stopped seven of the ten saved voices from playing at all.
+        let wavHeader = Data([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45])
+        require(NativeWorkspaceStore.audioExtension(of: wavHeader) == ".wav", "a RIFF/WAVE header")
+        require(NativeWorkspaceStore.audioExtension(of: Data([0x49, 0x44, 0x33, 0x04])) == ".mp3",
+                "an ID3-tagged MP3")
+        require(NativeWorkspaceStore.audioExtension(of: Data([0xFF, 0xFB, 0x90, 0x00])) == ".mp3",
+                "a bare MPEG frame header")
+        require(NativeWorkspaceStore.audioExtension(
+            of: Data([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x4D, 0x34, 0x41, 0x20])) == ".m4a",
+                "an ISO media file")
+        require(NativeWorkspaceStore.audioExtension(of: Data("OggS".utf8)) == ".ogg", "an Ogg stream")
+        require(NativeWorkspaceStore.audioExtension(of: Data()) == ".wav",
+                "an unreadable payload must not claim a format it cannot prove")
+
         // Reference timings shipped beside a clip. Every long voice in the kit carries a
         // `transcript.timed.json`, and the engine needs those timings to window a reference longer
         // than its 15-second maximum. Reading them is what lets a long voice be prepared without

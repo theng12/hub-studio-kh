@@ -39,6 +39,23 @@ a long reference could not be prepared at all.
 reference. You do not have to do anything differently: record or choose a clip, press
 **Transcribe Clip**, check the words, then press **Prepare Voice**.
 
+### Every voice plays now, and any of them can be picked in Audio
+
+Two things were wrong, and both are fixed.
+
+**Seven of your ten voices would not play.** They are MP3 files, and the player could not read an
+MP3 handed to it in memory — it reported an "OSStatus error -4". Playing them from a file works, so
+that is what the app does now. All ten play.
+
+**The Audio page had no way to pick a saved voice.** It only ever offered a clip file, even though
+the app keeps a voice library and the engine has always accepted a saved voice by name. So a voice
+sitting in **Voices**, ready to clone, could not be used where you generate. The Audio page now
+starts with a **Voice** list: choose one of your saved voices and type your script. There is nothing
+to prepare — the clip, its words and its timing are already with the voice.
+
+Choosing **Choose a clip file…** instead gives you the old behaviour, with **Transcribe Clip** and
+**Prepare Voice** as before.
+
 ### Your ten saved voices come with the kit
 
 **2 - Copy the models** now brings your voices too — Christian, Vincent, Leo, Samuel, Todd, Archer,

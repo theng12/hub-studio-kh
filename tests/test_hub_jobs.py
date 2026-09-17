@@ -678,5 +678,44 @@ class HubJobProofTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class VoiceChoiceLiftingTests(unittest.TestCase):
+    """Both ways of naming a voice must survive submission.
+
+    The Hub lifts a voice choice from the top level of the envelope into `sharedParams`, which is
+    where dispatch reads it. `voice_reference_asset_id` was lifted from the start;
+    `voice_library_id` was not, so a saved voice chosen in the app was dropped on the way to the
+    Voice worker - which then refused the job with "Voice cloning needs a reference voice or private
+    reference upload", a message about a reference the operator had not been asked for. These pin
+    both keys, and pin that an explicit `sharedParams` value still wins.
+    """
+
+    def _lift(self, envelope):
+        from components.hub.backend import broker
+        return broker._shared_params_with_local_reference(envelope)
+
+    def test_a_top_level_saved_voice_is_lifted(self):
+        self.assertEqual(self._lift({"voice_library_id": " b96e838f75ab "}),
+                         {"voice_library_id": "b96e838f75ab"})
+
+    def test_a_top_level_reference_asset_is_still_lifted(self):
+        self.assertEqual(self._lift({"voice_reference_asset_id": "abc123"}),
+                         {"voice_reference_asset_id": "abc123"})
+
+    def test_both_choices_travel_together(self):
+        lifted = self._lift({"voice_library_id": "voice-1", "voice_reference_asset_id": "asset-1"})
+        self.assertEqual(lifted, {"voice_library_id": "voice-1",
+                                  "voice_reference_asset_id": "asset-1"})
+
+    def test_an_explicit_shared_param_is_not_overwritten(self):
+        lifted = self._lift({"voice_library_id": "outer",
+                             "sharedParams": {"voice_library_id": "inner"}})
+        self.assertEqual(lifted["voice_library_id"], "inner")
+
+    def test_an_absent_choice_adds_nothing(self):
+        self.assertEqual(self._lift({}), {})
+        self.assertEqual(self._lift({"voice_library_id": "   "}), {})
+
+
+
 if __name__ == "__main__":
     unittest.main()
