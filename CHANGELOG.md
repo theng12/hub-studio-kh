@@ -73,6 +73,14 @@ New** screen shows.
   (`qwen3-tts-12hz-0-6b-customvoice-8bit`, `qwen3-tts-12hz-1-7b-customvoice-8bit`,
   `qwen3-tts-12hz-1-7b-voicedesign-8bit`). The kit shipped only the cloning tiers, so the Audio page
   could offer cloning and nothing else no matter how it was arranged.
+- Point the packaged app at the library the setup step fills in. A development checkout had left a
+  second `model-library` beside the source, and the installed app was bound to that older copy, so
+  the three newly captured voice tiers read as `not_installed` and the Audio page's model list was
+  empty. Measured on the running app: the Hub was serving `--models-dir
+  .../studiohub-standalone/model-library` with 12 verified packages instead of the 15 in
+  `~/Downloads`. The stale Hub was stopped, the duplicate folder moved to the Trash, and the app's
+  own `app-preferences.json` points at `~/Downloads/model-library`; the running app now reports
+  `15 of 15 ready`.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

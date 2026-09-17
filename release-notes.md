@@ -39,6 +39,16 @@ a long reference could not be prepared at all.
 reference. You do not have to do anything differently: record or choose a clip, press
 **Transcribe Clip**, check the words, then press **Prepare Voice**.
 
+### The app now uses the models you copied
+
+The app was reading a different, older copy of the models, so the three new voice models read as
+"not installed" and the Audio page's model list came up empty. It now uses
+`Downloads/model-library`, which is the folder **2 - Copy the models** fills in.
+
+If you ever see a model the app calls "not installed" when you know it is there, this is the first
+thing to check: open **Settings** and look at **Model library**. It should say
+`Downloads/model-library`.
+
 ### The Audio page is now three tabs
 
 Choosing a voice is really three different jobs, and they used to share one form whose controls
