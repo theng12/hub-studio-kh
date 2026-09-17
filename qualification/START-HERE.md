@@ -19,7 +19,7 @@ signed, and you only do it the first time.
 ### 1. Double-click **2 - Copy the models**
 
 It reads how much memory your Mac has and copies only the models this Mac can run,
-plus all ten of your voices. On a 16 GB Mac that is about 28 GB, so give it a few
+plus all ten of your voices. On a 16 GB Mac that is about 34 GB, so give it several
 minutes. Leave it alone until it says it is done.
 
 It can be run again any time. It is built for it: models and voices you do not have
@@ -95,7 +95,8 @@ icon. The version is at the top of that page.
 
 - **Image** — type what you want, press **Generate Image**
 - **Subtitle** — choose a recording, press to transcribe
-- **Audio** — type your words, choose a voice, press to generate
+- **Audio** — three tabs: **Clone a Voice** (your saved voices), **Ready-Made Voices** (built
+  into the model) and **Design a Voice** (describe one in words)
 
 Finished work appears in **Jobs**, with its length and size next to it.
 

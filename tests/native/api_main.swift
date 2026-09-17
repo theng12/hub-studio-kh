@@ -564,6 +564,32 @@ struct NativeAPITests {
                 "the studios must carry the modalities the fleet routes by")
         require(store.fleetNote?.contains("Joined") == true, "a join needs a visible result")
 
+        // Which job a voice model does. The Audio page is arranged by this, and getting it wrong
+        // put a CustomVoice model on the cloning path, where it was asked for a reference voice it
+        // does not have.
+        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", family: "qwen3-tts",
+                         declaredClone: true, isCloneFamily: false) == .cloning,
+                "a Base tier clones")
+        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", family: "qwen3-tts",
+                         declaredClone: false, isCloneFamily: false) == .preset,
+                "CustomVoice takes preset speakers")
+        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", family: "qwen3-tts",
+                         declaredClone: false, isCloneFamily: false) == .design,
+                "VoiceDesign takes a description")
+        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/VoxCPM2-4bit", family: "voxcpm-mlx",
+                         declaredClone: true, isCloneFamily: true) == .cloning,
+                "VoxCPM2 clones")
+        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/OmniVoice-bfloat16", family: "omnivoice",
+                         declaredClone: true, isCloneFamily: true) == .cloning,
+                "OmniVoice clones")
+        // A name that says nothing either way: the declared capability decides.
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-tts", family: "other",
+                         declaredClone: true, isCloneFamily: false) == .cloning,
+                "a declared clone capability must be believed")
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-qwen", family: "qwen3-tts",
+                         declaredClone: false, isCloneFamily: false) == .preset,
+                "an unnamed Qwen tier is the preset form, the only mode needing nothing but a name")
+
         // Which container a fetched result is in, read from its own bytes. Playback needs the
         // right filename extension: `AVAudioPlayer(data:)` fails an MP3 with OSStatus -4, which is
         // what stopped seven of the ten saved voices from playing at all.

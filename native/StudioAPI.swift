@@ -2373,6 +2373,8 @@ final class NativeWorkspaceStore: ObservableObject {
     /// takes preset speakers, VoiceDesign takes a description. VoxCPM2 and OmniVoice clone. The
     /// runtime's declared capability is trusted where it settles the question, and the name is used
     /// for the Qwen tiers because the capability list is identical across them.
+    /// Not private: the contract test drives it directly, and a rule this easy to get wrong
+    /// deserves a test rather than only a UI to exercise it through.
     static func voiceMode(repo: String, family: String, declaredClone: Bool,
                           isCloneFamily: Bool) -> VoiceMode {
         let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
