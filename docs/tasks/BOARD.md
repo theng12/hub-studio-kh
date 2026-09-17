@@ -25,6 +25,17 @@ are current; the longer narrative under it is historical and is kept for provena
   page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
+- **Distribution is two double-clicks, and copying models is now incremental
+  (`41…`, this session).** The kit root holds `1 - Install the app.command` and
+  `2 - Copy the models.command`. Both are location-independent (they failed on the real drive
+  when the copy in the kit *root* resolved its helper one directory too high), and the copy
+  step is safe to re-run: it copies models this Mac lacks, replaces models whose shipped files
+  changed, leaves identical ones untouched, prunes the superseded revision of a model it just
+  updated, and **re-writes the app's own receipt** with the app's bundled `model_packages`
+  module so an updated model reads as installed. Measured on the real 28.5 GB library: 12/12
+  copied and `files_verified`, second run a no-op in seconds. 24 new tests
+  (`tests/test_model_copy_script.py`), including the launcher behaviour and a
+  `model_packages.preflight` round trip.
 - **WORKING END TO END (verified in the packaged app): Image, Subtitle, Qwen cloning and
   OmniVoice.** Each produced real output through the real app: a FLUX image, Whisper transcripts
   on all three sizes, and cloned WAVs from a local reference clip. What is *not* yet done is the

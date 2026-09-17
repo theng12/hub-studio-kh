@@ -15,24 +15,47 @@ Python, no pip, no FFmpeg, and no internet. macOS 14.0 or later; Apple Silicon o
 
 ---
 
-## 1. Copy it onto the Mac
+## 1. Install it — two double-clicks
 
-Two things to place, and one rule about them.
+Two files in the kit folder do the whole job. You do not need Terminal.
 
-**The app** goes in `/Applications`, like any other app:
+**`1 - Install the app.command`** puts the app in `/Applications`. It asks for an administrator
+password, because that is what `/Applications` requires. Answer `n` at the prompt and it installs
+into `~/Applications` instead, which needs no password and works just as well.
+
+**`2 - Copy the models.command`** reads how much memory this Mac has, works out which models fit,
+and copies them into `~/Downloads/model-library`. Models that do not fit are left behind; the
+ones that need them are bigger Macs.
+
+Run the second file again whenever the SSD is refreshed. That is how models arrive and change:
+
+- models this Mac has never had are copied,
+- a model whose shipped files changed is replaced in place,
+- models that are already identical are left alone, so a second run takes seconds,
+- the older revision of a model that was just updated is removed, so the Mac does not slowly
+  fill with versions nothing uses,
+- the app's own record is refreshed as each model is copied, so an updated model reads as
+  installed without anyone pressing Verify.
+
+If a double-click does nothing, right-click the file → **Open** → **Open**; an unsigned file
+needs that once. Both files also work when run by hand:
+
+```sh
+sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/1 - Install the app.command"
+sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/2 - Copy the models.command"
+```
+
+To place things manually instead — app by hand, library left on the SSD:
 
 ```sh
 cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
 ```
 
-**The model library** goes somewhere permanent — 28 GB of it. It can stay right where it is on
-this SSD, or be copied to an internal drive. It does **not** need to be near the app, and it
-must be **outside** the app bundle: the app refuses a library inside itself.
-
-If you leave it on the SSD, remember the app needs that drive **mounted** when it runs. On the
-Mac Studio the SSD is likely to stay plugged in, so this is usually a non-issue; if the app is
-ever started without it, it says so plainly — *"The selected model library is unavailable.
-Connect its drive or choose another folder."* — rather than failing quietly.
+A library can stay on the SSD, but it must be **outside** the app bundle — the app refuses a
+library inside itself — and the drive must then be **mounted** whenever the app runs. The app
+says so plainly if it is not: *"The selected model library is unavailable. Connect its drive or
+choose another folder."* Copying it to `~/Downloads/model-library` avoids that dependency
+entirely, which is why the launcher does it that way.
 
 Either way, you point the app at the library once (step 4) and it remembers.
 
@@ -83,8 +106,14 @@ Both are normal, and neither is a bug:
 
 ## 4. Point it at the models
 
-Choose the copied `model-library` folder when the app asks. The choice is remembered per
-machine. Keep the drive mounted — the app refuses a library that is inside itself, and reports
+Choose the `model-library` folder the copy step filled in when the app asks:
+
+```
+~/Downloads/model-library
+```
+
+The choice is remembered per machine. If you left the library on the SSD instead, choose it
+there and keep the drive mounted — the app refuses a library that is inside itself, and reports
 a library that has gone missing rather than guessing.
 
 ## 5. Wait for ready

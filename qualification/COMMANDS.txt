@@ -39,10 +39,26 @@ the app. If it fails, copy the whole output back.
 
 
 ------------------------------------------------------------------
-1. Copy the app into Applications (this Mac, from the SSD)
+1. Install the app, and copy this Mac's models (no typing)
 ------------------------------------------------------------------
+In the kit folder (the one that opens from the SSD):
+
+    double-click  "1 - Install the app.command"
+    double-click  "2 - Copy the models.command"
+
+The second one is safe to run any time and is how new models arrive: it copies
+models this Mac does not have, updates ones that changed, and leaves identical
+ones alone. It also refreshes the app's record, so an updated model is ready
+without pressing Verify.
+
+Doing it by hand instead, if a launcher ever refuses to run:
 
     cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub 0.4.0.app" /Applications/
+    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/copy-models.command"
+
+The models land in ~/Downloads/model-library, and that is the folder to choose
+when the app asks. The app reads them from the Mac, so the SSD can be unplugged
+afterwards.
 
 
 ------------------------------------------------------------------
@@ -187,7 +203,7 @@ answer.)
 
 Expected right now:
 
-    0.4.0 5388203380003291e260c471b0a3e5f981349eef development_build: False
+    0.4.0 84128c5d787aa12de6a5da3e647ed3e1b9a2da8f development_build: False
 
 
 ------------------------------------------------------------------
@@ -212,6 +228,7 @@ Double-clickable files in this folder
 
   verify-this-app.command   same as step 0
   OPEN-THE-LOG.command      finds and opens the log
+  copy-models.command       copies/updates this Mac's models (same as step 1)
 
 
 ------------------------------------------------------------------
