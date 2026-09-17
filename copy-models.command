@@ -5,6 +5,8 @@
 # that fit into your Downloads folder, leaves the ones that do not, and adds the voice
 # clips the kit carries. Running it again adds anything new and never overwrites a voice
 # already on this Mac.
+#
+# Nothing else is needed: the app finds this folder by itself the first time it opens.
 
 set -u
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
