@@ -104,6 +104,16 @@ New** screen shows.
   now sent on all four voice paths and a slider sets it. Measured through the real worker, one
   sentence: 12.29 s at 0.5x, 4.88 s at 1.0x, 2.51 s at 2.0x - monotonic and correct in direction,
   and not exactly linear because the model's own generation length varies between runs.
+- Keep a finished artifact readable across a Hub restart. Worker ports are assigned at start, but
+  the job item stored the absolute worker URL the Hub built at dispatch time - including the port.
+  `job_artifact` requires a stored URL to share the worker's *current* origin, which a stored
+  absolute URL can never do again, so it answered 502 "worker artifact reference is invalid" for
+  files that were on disk the whole time. Measured 2026-09-18: a Voice job completed at
+  `127.0.0.1:65461`, the worker came back on `127.0.0.1:58107`, and every Voice and Image artifact
+  in the history became unopenable. The job item now stores the worker-relative path, the asset
+  record still gets the absolute URL it fetches from, and `ledger.load_batch` normalises an
+  absolute URL to its path on read so batches written before this change keep working without a
+  migration. Both old artifacts return 200 after the fix.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

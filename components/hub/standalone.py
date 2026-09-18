@@ -630,12 +630,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         worker = next((row for row in monitor.registry if row["id"] == item.get("studio")), None)
         if worker is None:
             raise HTTPException(503, "artifact worker is unavailable")
-        parsed = urlsplit(str(artifact_url))
         suffix = broker.MODALITY.get(batch.get("modality"), (None, None, None))[2]
         expected = f"/api/generate/jobs/{item.get('studio_job_id')}/{suffix}"
+        parsed = urlsplit(str(artifact_url))
         worker_origin = urlsplit(worker["base_url"])
-        same_origin = ((not parsed.scheme and not parsed.netloc)
-                       or (parsed.scheme == worker_origin.scheme and parsed.netloc == worker_origin.netloc))
+        # A path recorded by this Hub is checked against the worker's origin *now*, not the one it
+        # had when the job ran - which is why the stored value is a path and not a URL. An absolute
+        # URL from a before-this-change batch is accepted only when it happens to name the worker
+        # the item is still assigned to and the path this Hub would have written itself; anything
+        # else is refused, as before, so a worker-supplied URL is never followed on trust.
+        if not parsed.scheme and not parsed.netloc:
+            same_origin = True
+        else:
+            same_origin = (parsed.scheme == worker_origin.scheme
+                           and parsed.netloc == worker_origin.netloc
+                           and parsed.path == expected)
         if (not suffix or not same_origin or parsed.query or parsed.fragment or parsed.path != expected):
             # Never follow a worker-supplied URL outside its private origin or
             # attach the worker credential to an arbitrary location.

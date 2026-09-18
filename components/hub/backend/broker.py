@@ -1667,12 +1667,22 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         return  # terminal polling/recovery is idempotent
     _record_worker_resource_usage(item, job)
     item["artifact_path"] = job.get("output_path")
+    # The absolute form is built here because the asset record below fetches from it, and because
+    # the Hub is the only thing that should ever hold a worker's address.
     worker_url = (
         f"{base_url(studio)}{job['output_url']}" if job.get("output_url") else None)
-    item["worker_artifact_url"] = worker_url
-    # Kept internally for old ledger/reference behavior; API readers are
-    # normalized by public_item(), which returns the stable Hub proxy URL.
-    item["artifact_url"] = worker_url
+    # The job item keeps only the worker-relative path, never the port.
+    #
+    # Worker ports are assigned at start, so an absolute URL written today names a port that will
+    # belong to nothing after the next restart. Measured 2026-09-18: an artifact recorded at
+    # 127.0.0.1:65461 could not be read once the worker came back on 127.0.0.1:58107, and
+    # `job_artifact` - which requires the stored URL to share the worker's current origin - answered
+    # 502 "worker artifact reference is invalid" for a finished job whose file was on disk the whole
+    # time. Every Voice and Image artifact became unreadable after a restart.
+    item["worker_artifact_url"] = job.get("output_url")
+    # Kept for readers that predate `worker_artifact_url`; also relative now, and normalized for
+    # clients by public_item(), which returns the stable Hub proxy URL.
+    item["artifact_url"] = job.get("output_url")
     item["encoder"] = job.get("encoder")
     _record_worker_identity(item, studio, job)
     item["voice_revision"] = job.get("voice_revision")

@@ -49,6 +49,21 @@ If you ever see a model the app calls "not installed" when you know it is there,
 thing to check: open **Settings** and look at **Model library**. It should say
 `Downloads/model-library`.
 
+### Your finished audio and images open again after a restart
+
+A finished generation could stop opening. Pressing **Play**, **Save** or **Open Transcript** on
+something you made earlier gave:
+
+> Local engine http 502: worker artifact reference is invalid
+
+The cause was a stored address. Each time the app starts, its studios get new port numbers, but the
+record of a finished job kept the *old* port — so after a restart the app was told to collect the
+file from a door that no longer existed. The file itself was always safe on disk.
+
+The app now records where the file is *inside* its studio rather than the full address, and works out
+the address fresh each time. Everything you made before this update opens too — no need to re-make
+anything.
+
 ### You can now change how fast the audio speaks
 
 The engine has always been able to speed audio up or slow it down **without changing the voice** —

@@ -11,6 +11,7 @@ plus (when known) the studio's serving URL.
 """
 
 import json
+from urllib.parse import urlsplit
 import contextlib
 import shutil
 import sqlite3
@@ -717,13 +718,39 @@ def get_asset(asset_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _relative_worker_url(value):
+    """Strip a worker's origin from a stored artifact URL, keeping the path.
+
+    Items used to persist the absolute URL the Hub built at dispatch time, including the worker's
+    port. Ports are assigned at start, so that URL names a port belonging to nothing after the next
+    restart, and the artifact route - which requires a stored URL to share the worker's *current*
+    origin - refused it with 502 "worker artifact reference is invalid" for files that were on disk
+    the whole time.
+
+    Normalised on read rather than by rewriting stored rows: the path is the part that is still
+    true, the port is the part that is not, and doing it here repairs every batch that already
+    exists without a migration. Anything without a path is left untouched.
+    """
+    if not isinstance(value, str) or "://" not in value:
+        return value
+    path = urlsplit(value).path
+    return path or value
+
+
 def load_batch(batch_id: str) -> dict | None:
     """Fetch any persisted batch — lets clients query batches that finished
     before a Hub restart (they're no longer in broker memory)."""
     with _conn() as conn:
         row = conn.execute(
             "SELECT payload FROM batches WHERE id = ?", (batch_id,)).fetchone()
-    return json.loads(row[0]) if row else None
+    if not row:
+        return None
+    batch = json.loads(row[0])
+    for item in batch.get("items") or []:
+        for field in ("worker_artifact_url", "artifact_url"):
+            if item.get(field):
+                item[field] = _relative_worker_url(item[field])
+    return batch
 
 
 def load_batch_by_client_request_id(client_request_id: str) -> dict | None:
