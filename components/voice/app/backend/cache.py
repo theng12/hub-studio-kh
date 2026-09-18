@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
@@ -398,6 +399,44 @@ def _manifest_catalog() -> dict[str, tuple[str, str]]:
     return catalog
 
 
+def _view_is_sound(view: Path) -> bool:
+    """Whether a cached view still points at files that exist.
+
+    The view is built from absolute symlinks, so it is only valid while the library it was built
+    from stays where it was. Move or replace the library - which is exactly what happens when a
+    model folder is tidied up, or when the app is pointed at a different library - and every link
+    in the view dangles while the marker still says the view is finished. mlx-audio then fails with
+    "Config not found" for a model whose config is sitting right there in the library, and the view
+    is never rebuilt because the marker is present.
+
+    Measured on 2026-09-18: whisper-base and whisper-small failed this way after their library
+    moved, while whisper-turbo kept working because it needs no view at all.
+
+    A dangling link is found by ``exists()`` being false while ``is_symlink()`` is true. Nothing
+    else in the view is checked: the marker plus a resolved link set is what "finished" means, and
+    an unsound view is removed so the caller rebuilds it against the current library.
+    """
+    try:
+        usable = 0
+        for entry in view.iterdir():
+            if entry.name.startswith("."):
+                continue
+            if not entry.exists():
+                # Present in name only: the library it was linked from has moved.
+                shutil.rmtree(view, ignore_errors=True)
+                return False
+            usable += 1
+    except OSError:
+        return False
+    if not usable:
+        # An empty view is not a finished view. Requiring only "nothing dangles" would call a
+        # directory with no entries sound, which is precisely the state that failed: present on
+        # disk, so reused forever, and containing nothing mlx-audio could load.
+        shutil.rmtree(view, ignore_errors=True)
+        return False
+    return True
+
+
 def _merged_snapshot_view(package_id: str, revision: str, folder: Path) -> Path | None:
     """Build (once) a read-only snapshot view that mlx-audio can actually load.
 
@@ -416,7 +455,7 @@ def _merged_snapshot_view(package_id: str, revision: str, folder: Path) -> Path 
         return None
     view = Path(state) / "snapshot-views" / f"{package_id}-{revision[:16]}"
     marker = view / ".studiohub-view"
-    if marker.is_file():
+    if marker.is_file() and _view_is_sound(view):
         return view
     weights = folder / "model" if (folder / "model").is_dir() else folder
     sources = [weights, folder / "companions" / "processor"]

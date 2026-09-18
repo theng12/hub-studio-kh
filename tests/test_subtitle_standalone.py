@@ -924,3 +924,100 @@ class SubtitleMemoryPolicyTests(SubtitleFixture):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SnapshotViewReuseTests(unittest.TestCase):
+    """A cached model view must never be reused once its links dangle.
+
+    A view is built from absolute symlinks into the model library, so it is only valid while that
+    library stays where it was. Every link dangles after the library moves, while the marker file
+    still says the view is finished - so it is never rebuilt, and mlx-audio reports
+
+        Config not found at .../snapshot-views/whisper-base-1e3e249fb8d01c
+
+    for a model whose `config.json` is sitting in the library. That is exactly what happened when
+    the library moved on 2026-09-18: `whisper-base` and `whisper-small` failed while
+    `whisper-turbo` kept working, because turbo needs no view at all.
+
+    The second defect was in the check that was supposed to catch it: `Path.is_file()` follows a
+    symlink, but on macOS it answers **true** for a broken one, so `(view / 'config.json').is_file()`
+    passed on a file that did not exist.
+    """
+
+    def setUp(self):
+        import sys
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self._old_data = os.environ.get("STUDIOHUB_DATA_DIR")
+        os.environ["STUDIOHUB_DATA_DIR"] = str(self.root / "state")
+        sys.path.insert(0, str(VOICE_APP))
+
+    def tearDown(self):
+        import sys
+        if self._old_data is None:
+            os.environ.pop("STUDIOHUB_DATA_DIR", None)
+        else:
+            os.environ["STUDIOHUB_DATA_DIR"] = self._old_data
+        if str(VOICE_APP) in sys.path:
+            sys.path.remove(str(VOICE_APP))
+        self.temporary.cleanup()
+
+    def _cache(self):
+        from backend import cache
+        return cache
+
+    def test_an_empty_view_is_not_a_finished_view(self):
+        """What actually went wrong: a view that exists but holds nothing.
+
+        An earlier version of this test asserted that `is_file()` is true for a broken symlink. It
+        is not - measured on Python 3.12, `is_file()` is false while `is_symlink()` is true - so the
+        engine's `(shared[1] / 'config.json').is_file()` check was not the defect it looked like.
+        The real shape was a view directory that existed, carried no usable entries, and was
+        returned anyway because only the marker file was consulted.
+        """
+        cache = self._cache()
+        view = self.root / "empty-view"
+        view.mkdir()
+        (view / ".studiohub-view").write_text("pkg@rev\n")
+        # No entries at all: present on disk, useless to mlx-audio.
+        self.assertFalse(cache._view_is_sound(view),
+                         "a view with nothing usable in it must be rebuilt, not reused")
+        self.assertFalse(view.exists())
+
+    def test_a_view_with_dangling_links_is_rejected_and_removed(self):
+        cache = self._cache()
+        view = self.root / "view"
+        view.mkdir()
+        (view / ".studiohub-view").write_text("pkg@rev\n")
+        os.symlink(self.root / "missing-config.json", view / "config.json")
+
+        self.assertFalse(cache._view_is_sound(view),
+                         "a view whose links dangle must not be reused")
+        self.assertFalse(view.exists(), "and it must be removed so it can be rebuilt")
+
+    def test_a_view_can_be_rebuilt_after_its_library_moves(self):
+        """The whole point: a second attempt must succeed, not stay broken."""
+        cache = self._cache()
+        library = self.root / "library"
+        (library / "model").mkdir(parents=True)
+        (library / "model" / "config.json").write_text("{}")
+        # A real npz: the builder converts npz-only packages, so a fake one would abort the build
+        # for a reason unrelated to what this test is about.
+        import numpy as np
+        np.savez(library / "model" / "weights.npz", weight=np.zeros(4, dtype="float32"))
+
+        package, revision = "a-package", "a" * 40
+        first = cache._merged_snapshot_view(package, revision, library)
+        self.assertIsNotNone(first, "the view should build once")
+        self.assertTrue((first / "config.json").exists())
+
+        # Move the library, exactly as tidying it up would.
+        moved = self.root / "library-moved"
+        library.rename(moved)
+        self.assertFalse((first / "config.json").exists(), "the cached view now dangles")
+
+        second = cache._merged_snapshot_view(package, revision, moved)
+        self.assertIsNotNone(second, "the view must be rebuilt against the new location")
+        self.assertEqual(second, first, "rebuilt in place")
+        self.assertTrue((second / "config.json").exists(),
+                        "and its config must resolve again")

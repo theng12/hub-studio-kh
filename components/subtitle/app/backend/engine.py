@@ -26,6 +26,7 @@ from hashlib import sha256
 import importlib
 import json
 import os
+import shutil
 from pathlib import Path
 import platform
 import re
@@ -236,7 +237,11 @@ class SubtitleEngine:
             try:
                 from components.voice.app.backend import cache as voice_cache
                 shared = voice_cache.package_snapshot(model_id)
-                if shared is not None and (shared[1] / 'config.json').is_file():
+                # `exists()` and not `is_file()`: a broken symlink satisfies `is_file()` on
+                # macOS, so this passed while the config it named did not exist, and mlx-audio
+                # then failed with "Config not found" pointing at a folder it had been told was
+                # complete.
+                if shared is not None and (shared[1] / 'config.json').exists():
                     return shared[1]
             except Exception:
                 pass
@@ -251,8 +256,20 @@ class SubtitleEngine:
             return model
         view = Path(state) / 'snapshot-views' / f'{package_id}-{revision[:16]}' / 'model'
         marker = view / '.studiohub-weights'
+        # A view is built from absolute symlinks into the library, so it is only valid while that
+        # library stays where it was. Reusing one whose links dangle is what produced "Config not
+        # found" for a model whose config was present in the library all along.
         if marker.is_file():
-            return view
+            try:
+                entries = [e for e in view.iterdir() if not e.name.startswith('.')]
+            except OSError:
+                entries = []
+            # Every entry must resolve, and there must be at least one. An empty view is not a
+            # finished view - it is the state that got reused forever and produced "Config not
+            # found" for a model whose config was in the library the whole time.
+            if entries and all(e.exists() for e in entries):
+                return view
+            shutil.rmtree(view, ignore_errors=True)
         try:
             view.mkdir(parents=True, exist_ok=True)
             for entry in model.iterdir():
