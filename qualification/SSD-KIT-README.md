@@ -222,11 +222,16 @@ Both Base tiers ship at 8-bit and 4-bit. On a Mac that is also running Image or 
 with a **4-bit** Base model — same cloning contract, roughly half the weights. The 8-bit and
 bf16 builds are the higher-fidelity tiers when the machine is otherwise idle.
 
-**4. Only then, the fleet.** **Connections → Fleet** → set this Mac to **Controller** → pick the
-network address it should answer on (a Tailscale address if you have one) → restart the
-services when prompted. On the other Mac, paste this controller's address and the fleet token
-shown under **Connections → Local API → Fleet token** into the Join form. **Fleet overview**
-should then show both Macs, with the jobs each has run and its measured average time.
+**4. Only then, the fleet.** **Connections → Fleet** → set this Mac to **Controller** → turn on
+the network address it should answer on (a Tailscale address if you have one) → restart the
+services when prompted. It answers on port **47873** every time, so the address below it stays
+true. On the other Mac, turn on one of its own network addresses the same way - a node has to be
+reachable too, or the controller can never send it work - then paste this controller's
+**address:port** and the **Hub token** shown under **Connections** into the Join form. **Fleet
+overview** should then show both Macs, with the jobs each has run and its measured average time.
+A node keeps that address and **re-joins by itself** whenever its services start, so restarting
+either Mac does not mean retyping anything. Retiring, replacing or selling a Mac — including the
+token rotation that goes with it — is written out in `NODE-SETUP-CHECKLIST.md`.
 
 ## If something goes wrong
 

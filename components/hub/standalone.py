@@ -461,6 +461,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         control_plane.save_settings({"fleet_credential_origin": "adopted"})
         return {"ok": True, "adopted": True}
 
+    @app.post("/api/hub/fleet/leave")
+    def fleet_leave() -> dict[str, Any]:
+        """Stop being a node: drop the borrowed credential and run on this Mac's own again.
+
+        The mirror of adopting, and the answer to "this Mac is being retired or sold". A Mac that
+        leaves a group must not keep the group's token: it is the credential of a machine somebody
+        else owns, and it is the one thing that must not travel with a Mac out of the door. Minting
+        a fresh token here makes the departure real rather than cosmetic - the old controller's
+        credential stops working on this Mac immediately, so it cannot dispatch to it even while
+        its roster still lists it.
+
+        Like adopting, this needs the Hub token and stays outside the fleet credential's allowlist:
+        a controller must not be able to un-join a node, because leaving is the Mac owner's
+        decision and the local Hub token never leaves this machine.
+        """
+        from .backend import peers
+        peers.set_fleet_token("")
+        control_plane.save_settings({
+            "fleet_credential_origin": "minted",
+            "role": "standalone",
+            "parent_controller_url": None,
+        })
+        return {"ok": True, "left": True}
+
     @app.post("/api/hub/fleet/nodes", status_code=201)
     async def fleet_join(body: dict[str, Any]) -> dict[str, Any]:
         from .backend import fleet_nodes as fleet

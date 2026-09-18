@@ -28,6 +28,21 @@ servicesConfig.startServicesAtLogin = true
 try servicesConfig.save()
 let servicesRestored = try ShellConfiguration(arguments: ["app", "--data-dir", state.path], bundle: bundle)
 require(servicesRestored.startServicesAtLogin, "an on service start must survive restart")
+// The port and the controller this Mac joined must both survive a restart: one is the address a
+// node is told, the other is how this Mac finds its way back into its group after a reboot.
+var fleetConfig = servicesRestored
+fleetConfig.port = 49001
+fleetConfig.controllerAddress = "100.64.0.9:47873"
+try fleetConfig.save()
+let fleetRestored = try ShellConfiguration(arguments: ["app", "--data-dir", state.path], bundle: bundle)
+require(fleetRestored.port == 49001, "a chosen port must survive a restart, got \(fleetRestored.port)")
+require(fleetRestored.controllerAddress == "100.64.0.9:47873",
+        "the joined controller must survive a restart, got \(fleetRestored.controllerAddress ?? "nil")")
+// A command-line port is for a throwaway Hub - the launch verifier uses one - and must not be
+// silently replaced by whatever the saved preferences happen to say.
+let explicitPortConfig = try ShellConfiguration(
+    arguments: ["app", "--data-dir", state.path, "--port", "49123"], bundle: bundle)
+require(explicitPortConfig.port == 49123, "--port must override the saved port, got \(explicitPortConfig.port)")
 let legacyState = temporary.appendingPathComponent("Legacy State")
 try FileManager.default.createDirectory(at: legacyState, withIntermediateDirectories: true)
 let legacyPreferences = Data("{\"modelsPath\":\"\(library.path)\",\"offline\":false}".utf8)
@@ -35,6 +50,11 @@ try legacyPreferences.write(to: legacyState.appendingPathComponent("app-preferen
 let legacyConfig = try ShellConfiguration(arguments: ["app", "--data-dir", legacyState.path], bundle: bundle)
 require(legacyConfig.startAtLogin && legacyConfig.recoveryMaxAttempts == 3, "legacy preferences must use safe defaults")
 require(!legacyConfig.startServicesAtLogin, "preferences written before this setting must not start services")
+// A preferences file written before the port was pinned must use the Hub's own default rather
+// than a number the operating system happened to hand out, and must not claim a controller.
+require(legacyConfig.port == ShellConfiguration.defaultPort,
+        "legacy preferences must use the pinned default port, got \(legacyConfig.port)")
+require(legacyConfig.controllerAddress == nil, "a Mac that has never joined must have no controller")
 // The app's service command line must use the flags the bundled worker actually defines.
 // It once passed `--listen-host` to a worker that defines `--host`, and argparse answers an
 // unknown argument by exiting 2 - which the app shows as "the engine exited (code 2)" with no
@@ -48,6 +68,12 @@ require(!serviceArgs.contains("--listen-host"),
         "the worker has no --listen-host; passing it makes the worker exit 2")
 require(serviceArgs[serviceArgs.firstIndex(of: "--host")! + 1] == "100.64.0.1,192.168.1.5",
         "a multi-address listen value must reach the worker unchanged")
+// The port is pinned, not left to the operating system. A new port each start is what made an
+// address written on one Mac meaningless on the next, on both sides of a join.
+require(serviceArgs[serviceArgs.firstIndex(of: "--port")! + 1] == String(ShellConfiguration.defaultPort),
+        "the service must be told the pinned port, got: \(serviceArgs)")
+require(ShellConfiguration.defaultPort == 47873,
+        "the pinned default must be the Hub's own default port, or peers build URLs to nowhere")
 require(!serviceArgs.contains("--offline"), "offline must not be passed when it is off")
 let offlineArgs = ShellConfiguration.serviceArguments(
     dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
@@ -212,6 +238,43 @@ require(ShellConfiguration.clientHost(for: "127.0.0.1") == "127.0.0.1", "loopbac
 // started; these cases pin that it always agrees with the worker now.
 require(ShellConfiguration.clientHost(for: "100.101.102.103") == "127.0.0.1",
         "a Tailscale-only bind must still be reached on loopback")
+// The port a node is told has to be one the app may bind: below 1024 needs root, and 0 means
+// "ask the operating system", which is the behaviour that broke addresses across restarts.
+for badPort in [0, 1, 80, 1023, 65536, 99999, -1] {
+    do { try ShellConfiguration.requireBindablePort(badPort); fatalError("invalid port accepted: \(badPort)") } catch {}
+}
+for goodPort in [1024, 47873, 65535] { try ShellConfiguration.requireBindablePort(goodPort) }
+// A port another program is holding must be refused before anything is started: otherwise the
+// Hub exits, the app retries three times, and the operator is told about repeated service
+// failures over a number they never chose.
+let heldDescriptor = socket(AF_INET, SOCK_STREAM, 0)
+require(heldDescriptor >= 0, "the test needs a socket to hold a port")
+var heldAddress = sockaddr_in()
+heldAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+heldAddress.sin_family = sa_family_t(AF_INET)
+heldAddress.sin_port = 0
+heldAddress.sin_addr.s_addr = INADDR_ANY
+_ = withUnsafePointer(to: &heldAddress) {
+    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(heldDescriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+    }
+}
+_ = listen(heldDescriptor, 1)
+var boundAddress = sockaddr_in()
+var boundLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+_ = withUnsafeMutablePointer(to: &boundAddress) {
+    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(heldDescriptor, $0, &boundLength) }
+}
+let heldPort = Int(UInt16(bigEndian: boundAddress.sin_port))
+require(heldPort > 1023, "the test must hold a real port, got \(heldPort)")
+do {
+    try ShellConfiguration.requireFreePort(heldPort)
+    fatalError("a port another program holds must be refused, not started and retried")
+} catch {}
+close(heldDescriptor)
+// And the same port is accepted once it is free.
+try ShellConfiguration.requireFreePort(heldPort)
+require(ShellConfiguration.defaultPort == 47873, "the pinned port is the Hub's own default")
 require(ShellConfiguration.clientHost(for: "192.168.1.20") == "127.0.0.1",
         "a LAN-only bind must still be reached on loopback")
 require(ShellConfiguration.clientHost(for: "127.0.0.1,192.168.1.20") == "127.0.0.1",

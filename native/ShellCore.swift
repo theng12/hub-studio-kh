@@ -109,6 +109,19 @@ struct ShellConfiguration {
     var startServicesAtLogin: Bool
     /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
     var listenHost: String
+    /// The port the Hub binds, the same one on every start.
+    ///
+    /// It used to be the operating system's choice, which meant a new port each launch. Nothing
+    /// could then name this Mac: a controller's address in a node's **Join** box, and a node's
+    /// address in the controller's registry, both died at the next restart, and nothing repaired
+    /// them. `47873` is the Hub's own default from `peers.DEFAULT_HUB_PORT`, which the fleet code
+    /// already assumed when it built a peer's studio URL - pinning it here makes that assumption
+    /// true instead of about half true.
+    var port: Int
+    static let defaultPort = 47873
+    /// The controller this Mac joined, so its services can re-join by themselves after a restart.
+    /// Not a credential: after joining, this Mac's own fleet token *is* the controller's.
+    var controllerAddress: String?
     /// The address this app's own Hub answers on. Always loopback.
     ///
     /// Loopback is bound in every configuration - `bind_hosts` adds it unconditionally - and the
@@ -130,12 +143,14 @@ struct ShellConfiguration {
     /// place nothing exercised: the argument list the app builds. The worker's own
     /// `tests/test_fleet_binding.py` pins its side; this pins ours, and the names must stay equal.
     static func serviceArguments(dataDirectory: URL, modelsDirectory: URL, readyFile: URL,
-                                 parentPID: Int32, listenHost: String, offline: Bool) -> [String] {
+                                 parentPID: Int32, listenHost: String, offline: Bool,
+                                 port: Int = ShellConfiguration.defaultPort) -> [String] {
         var arguments = ["--data-dir", dataDirectory.path,
                          "--models-dir", modelsDirectory.path,
                          "--ready-file", readyFile.path,
                          "--parent-pid", String(parentPID),
-                         "--host", listenHost]
+                         "--host", listenHost,
+                         "--port", String(port)]
         if offline { arguments.append("--offline") }
         return arguments
     }
@@ -151,11 +166,14 @@ struct ShellConfiguration {
         startAtLogin = true
         startServicesAtLogin = false
         listenHost = "127.0.0.1"
+        port = ShellConfiguration.defaultPort
+        controllerAddress = nil
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
         recoveryBackoffSeconds = StartupRecovery.defaultDelays
         var explicitModels: URL?
         var explicitOffline = false
         var explicitHost: String?
+        var explicitPort: Int?
         var index = 1
         while index < arguments.count {
             let argument = arguments[index]
@@ -167,6 +185,12 @@ struct ShellConfiguration {
             } else if argument == "--listen-host" {
                 guard index + 1 < arguments.count else { throw ShellFailure(message: "Missing address for --listen-host.") }
                 explicitHost = arguments[index + 1]
+                index += 2
+            } else if argument == "--port" {
+                guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                    throw ShellFailure(message: "Missing number for --port.")
+                }
+                explicitPort = value
                 index += 2
             } else { if argument == "--offline" { explicitOffline = true }; index += 1 }
         }
@@ -180,6 +204,8 @@ struct ShellConfiguration {
             startAtLogin = saved.startAtLogin
             startServicesAtLogin = saved.startServicesAtLogin
             listenHost = saved.listenHost
+            port = saved.port ?? Self.defaultPort
+            controllerAddress = saved.controllerAddress
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
                 recoveryMaxAttempts = saved.recoveryMaxAttempts
@@ -189,7 +215,9 @@ struct ShellConfiguration {
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
         if let explicitHost { listenHost = explicitHost }
+        if let explicitPort { port = explicitPort }
         try Self.requireBindableHost(listenHost)
+        try Self.requireBindablePort(port)
         if let modelsDirectory {
             try Self.requireExternal(modelsDirectory, bundle: bundle)
             // Persisted missing volumes stay selected and visible for recovery. Explicit CLI input fails early.
@@ -220,6 +248,39 @@ struct ShellConfiguration {
             }) else {
                 throw ShellFailure(message: "The listen address must be an IPv4 address such as 127.0.0.1.")
             }
+        }
+    }
+
+    /// The port has to be one an unprivileged app may bind and a node may type.
+    static func requireBindablePort(_ port: Int) throws {
+        guard (1024...65535).contains(port) else {
+            throw ShellFailure(message: "The port must be between 1024 and 65535.")
+        }
+    }
+
+    /// Fail before starting when the port is already taken.
+    ///
+    /// Without this the Hub exits during startup with a bind error in its log, the app retries it
+    /// three times, and the operator sees "Automatic recovery stopped after repeated service
+    /// failures" - about a number they never chose. The check is a bind on the wildcard address,
+    /// so it also catches a service holding the port on only one interface.
+    static func requireFreePort(_ port: Int) throws {
+        try requireBindablePort(port)
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return }  // No socket to test with: let the Hub decide.
+        defer { close(descriptor) }
+        var reuse: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr.s_addr = INADDR_ANY
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0 else {
+            throw ShellFailure(message: "Port \(port) is already in use on this Mac. Change the port under Connections, or quit whatever is using it, then start again.")
         }
     }
     /// The folder the setup step fills. A sibling of the home folder, because macOS protects
@@ -300,6 +361,8 @@ struct ShellConfiguration {
                                                         startAtLogin: startAtLogin,
                                                         startServicesAtLogin: startServicesAtLogin,
                                                         listenHost: listenHost,
+                                                        port: port,
+                                                        controllerAddress: controllerAddress,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds))
         try data.write(to: preferencesFile, options: .atomic)
@@ -313,17 +376,24 @@ struct ShellConfiguration {
         /// means off: the default is the conservative one.
         let startServicesAtLogin: Bool
         let listenHost: String
+        /// Absent in a preferences file written before the port was pinned, and absent means the
+        /// Hub's own default rather than whatever the operating system hands out next time.
+        let port: Int?
+        /// Absent for every Mac that has never joined a controller, which is most of them.
+        let controllerAddress: String?
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
-             listenHost: String, recoveryMaxAttempts: Int,
+             listenHost: String, port: Int?, controllerAddress: String?, recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval]) {
             self.modelsPath = modelsPath
             self.offline = offline
             self.startAtLogin = startAtLogin
             self.startServicesAtLogin = startServicesAtLogin
             self.listenHost = listenHost
+            self.port = port
+            self.controllerAddress = controllerAddress
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
         }
@@ -340,6 +410,8 @@ struct ShellConfiguration {
             // Every build before fleet support was loopback-only, and that stays the default
             // for preferences written by them.
             listenHost = try values.decodeIfPresent(String.self, forKey: .listenHost) ?? "127.0.0.1"
+            port = try values.decodeIfPresent(Int.self, forKey: .port)
+            controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)

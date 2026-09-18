@@ -25,6 +25,31 @@ are current; the longer narrative under it is historical and is kept for provena
   page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
+- **A restart no longer breaks a group (`6588a34` + this, 0.5.2, 2026-09-19).** The Hub took its
+  port from the operating system on every start, so both directions of a join were perishable: a
+  node's stored controller address died when the controller restarted, and the controller's stored
+  node address died when the node did - with nothing to repair either, because the app never
+  re-joined. The port is now pinned to **47873** (`peers.DEFAULT_HUB_PORT`, the number the fleet
+  code already assumed), an occupied port is refused *before* starting instead of costing three
+  failed starts, a successful join is remembered in the app preferences, and
+  `rejoinControllerIfNeeded()` calls the already-idempotent join route once the Hub is ready. It
+  runs only when the credential origin is `adopted`; promotion to controller forgets the old
+  controller. The node's own credential *is* the controller's after adoption, so nothing secret is
+  stored twice. **Connections** shows the port and the address to hand a node. Verified live on this
+  Mac: the Hub binds 47873, the preferences carry port and controller, and a restart comes back on
+  the same address. The two-Mac enrolment is still the owner's test - see the checklist.
+- **Leaving a group, and the omission that made the re-join inert (same commit, 0.5.2).** A Mac can
+  now **Leave this group** under Connections: the Hub mints a fresh local credential, the origin
+  goes back to `minted`, the role returns to `standalone`, and the app asks the controller to drop
+  it from the roster first, while the borrowed token still works. `POST /api/hub/fleet/leave` is
+  deliberately outside the fleet allowlist, so a controller cannot un-join a node. Writing its test
+  exposed the real find: `save_settings` writes an explicit key list and `fleet_credential_origin`
+  was not on it, so `fleet_adopt`'s write was dropped and every reader was told `minted`. Silent
+  consequences, both serious - the automatic re-join (adopted only) could never fire, and promotion
+  containment rested on the operator having set the role to Node by hand. Fixed, with a rule-shaped
+  test that every key in `defaults()` survives a settings write. Two live Hubs prove leaving end to
+  end: the group's token is refused with 403 to leave, the borrowed credential 401s afterwards, and
+  the fresh one differs.
 - **The model library moved out of `~/Downloads` (`6113476`, 0.5.1, 2026-09-19).** Every launch
   from the app hung. All three workers started, the Voice worker printed
   `[gen] loaded 4 jobs from history` and then slept forever inside `open()` while reading
@@ -225,7 +250,8 @@ subtitle. What is left is not code: VoxCPM2 has never produced output on any hos
 and none of ST-04/05/06/10/11 has had independent review. Every one of those is named as a
 condition with the exact step that clears it, in `qualification/st11.md`.
 
-Updated: 2026-09-19 (the model library moved out of ~/Downloads, 0.5.1). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
+Updated: 2026-09-19 (model library out of ~/Downloads in 0.5.1; a pinned port and automatic
+re-join in 0.5.2). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
 integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was
 merged into `implementation/voice-runtime` and a **real packaged 1K generation is

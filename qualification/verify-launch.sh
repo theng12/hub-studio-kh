@@ -61,8 +61,18 @@ echo
 
 TMP=$(mktemp -d)
 chmod 700 "$TMP"
+# The flags have to be the ones the app passes, or this proves a command line nobody uses -
+# which is exactly how a `--listen-host`/`--host` mismatch shipped. The port is one of them now:
+# the app pins it so a node's address keeps naming this Mac. When Studio Hub is already running on
+# this Mac it holds that port, and a verifier that fought it would fail on its own refusal rather
+# than on the copy being checked - so it steps aside and says so. Set PORT to force a value.
+PORT="${PORT:-47873}"
+if [ "$PORT" != "0" ] && /usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "port $PORT is in use on this Mac (Studio Hub running?); using a system-chosen port instead"
+  PORT=0
+fi
 "$SVC" --data-dir "$TMP" --models-dir "$LIB" --ready-file "$TMP/hub-ready.json" \
-       --parent-pid "$$" --host "127.0.0.1" > "$TMP/start.log" 2>&1 &
+       --parent-pid "$$" --host "127.0.0.1" --port "$PORT" > "$TMP/start.log" 2>&1 &
 svc=$!
 stop() { kill -TERM "$svc" 2>/dev/null; sleep 2; kill -9 "$svc" 2>/dev/null; }
 trap stop EXIT

@@ -218,6 +218,9 @@ struct NativeControllerSettings: Decodable, Equatable {
     let databaseConfigured: Bool?
     let globalAuthority: String?
     let migrationStage: String?
+    /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
+    /// Absent from a Hub older than this field, which is why it is optional.
+    let fleetCredentialOrigin: String?
 }
 
 struct NativeControllerReadiness: Decodable, Equatable {
@@ -681,6 +684,18 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var fleetOverview: NativeFleetOverview?
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
+    /// What this Mac needs to re-join its controller by itself: the address it was told, this
+    /// Mac's own fleet credential (which, after joining, *is* the controller's), and the networks
+    /// it is reachable on. Set by the app from its saved preferences once the Hub is ready.
+    struct FleetMembership {
+        let controllerAddress: String
+        let token: String?
+        let boundHosts: [String]
+    }
+    var storedMembership: FleetMembership?
+    /// Called once a join succeeds, so the app can save the controller for the next start; called
+    /// with nil when this Mac stops being somebody else's node.
+    var onControllerJoined: ((String?) -> Void)?
     @Published private(set) var fleetNote: String?
     @Published private(set) var joiningFleet = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
@@ -2046,6 +2061,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 ["api", "hub", "controller"], method: "PUT", body: RoleChange(role: role))
             guard connectionID == requestConnection else { return }
             await refreshConnection()
+            // A Mac running its own group is nobody's node, so it keeps no controller to re-join.
+            if role == "controller" { onControllerJoined?(nil) }
             // The note names the role the way the picker does, and reports the Hub's answer
             // rather than the operator's request.
             let applied = role == "agent" ? "Node" : role.capitalized
@@ -2083,7 +2100,8 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The request leaves this Mac for another one, so it does not go through the helper that
     /// targets our own Hub — and the address is validated here as well as on the controller,
     /// because a token must never be sent to a host that was not checked first.
-    func joinController(address: String, token: String, boundHosts: [String] = []) async {
+    func joinController(address: String, token: String, boundHosts: [String] = [],
+                        quiet: Bool = false) async {
         guard let requestConnection = connectionID else { return }
         fleetNote = nil
         do {
@@ -2145,7 +2163,79 @@ final class NativeWorkspaceStore: ObservableObject {
             controllerAddress = "\(target.host ?? ""):\(target.port ?? 0)"
             fleetNote = "Joined the controller at \(controllerAddress)."
             error = nil
-        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Join the controller") } }
+            // Remember it, so this Mac's services can re-join by themselves after a restart
+            // instead of waiting for someone to retype an address that may have changed.
+            onControllerJoined?(controllerAddress)
+        } catch {
+            guard connectionID == requestConnection else { return }
+            if quiet {
+                // A start that cannot reach its controller is still a working Mac: the operator
+                // gets a line to read, not a modal failure over a machine that is fine.
+                fleetNote = "Could not reach the controller at \(address): \(error.localizedDescription)"
+            } else {
+                self.error = Self.actionable(error, action: "Join the controller")
+            }
+        }
+    }
+
+    /// Re-join the controller this Mac belongs to, once per start.
+    ///
+    /// A node's own address changes when its Hub restarts, and a controller's address changed on
+    /// every restart before the port was pinned, so a group that had ever restarted was held
+    /// together by nothing but the operator retyping addresses. The join route is idempotent - it
+    /// records a node or refreshes what a rejoining node reports about itself - so the fix is to
+    /// call it at startup.
+    ///
+    /// Only a Mac that adopted someone else's credential belongs to a group; a controller's own
+    /// credential is minted, and its place is not inside another controller.
+    func rejoinControllerIfNeeded() async {
+        guard let membership = storedMembership, let token = membership.token, !token.isEmpty else { return }
+        guard controllerIdentity?.settings.fleetCredentialOrigin == "adopted" else { return }
+        await joinController(address: membership.controllerAddress, token: token,
+                             boundHosts: membership.boundHosts, quiet: true)
+    }
+
+    /// Leave the group this Mac belongs to: stop carrying its token and run on this Mac's own.
+    ///
+    /// This is the action for a Mac that is being retired, sold or moved, and the only one that
+    /// takes the group's credential off it. Telling the controller to drop this Mac from its roster
+    /// happens first, while the borrowed token still works; if the controller is off or already
+    /// gone, leaving is still this Mac's decision and goes ahead with a line saying so.
+    func leaveGroup() async {
+        guard let requestConnection = connectionID else { return }
+        fleetNote = nil
+        var controllerNote = ""
+        if let membership = storedMembership, let token = membership.token, !token.isEmpty,
+           let nodeID = controllerIdentity?.settings.controllerId.lowercased(),
+           let target = try? Self.privateHTTPAddress(membership.controllerAddress) {
+            var request = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes/\(nodeID)"))
+            request.httpMethod = "DELETE"
+            request.timeoutInterval = 15
+            request.setValue(token, forHTTPHeaderField: "X-Hub-Token")
+            if let (_, response) = try? await session.data(for: request),
+               let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                controllerNote = " The controller at \(membership.controllerAddress) still lists this Mac; remove it there."
+            }
+        }
+        guard connectionID == requestConnection else { return }
+        do {
+            var request = try makeRequest(["api", "hub", "fleet", "leave"], method: "POST")
+            request.timeoutInterval = 30
+            let (_, response) = try await session.data(for: request)
+            guard connectionID == requestConnection else { return }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw NativeAPIError.message("The Hub refused to leave the group (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
+            }
+            storedMembership = nil
+            controllerAddress = ""
+            onControllerJoined?(nil)
+            await refreshConnection()
+            fleetNote = "This Mac has left the group and now runs on its own credential." + controllerNote
+            error = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            self.error = Self.actionable(error, action: "Leave the group")
+        }
     }
 
     func leaveNode(_ node: NativeFleetNode) async {

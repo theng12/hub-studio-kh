@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.5.2 — 2026-09-19 · a restart no longer breaks the group
+
+- **Pin the Hub's port.** `packaging/hub_worker.py` takes `--port` and the app never passed one, so
+  the Hub bound an ephemeral port and got a different one on every start. That made both directions
+  of a join perishable: a node's stored controller address died when the controller restarted, and
+  the controller's stored node address died when the node did, with nothing to repair either.
+  `ShellConfiguration.port` (default `47873`, which is `peers.DEFAULT_HUB_PORT` - the number the
+  fleet code already assumed when it built a peer's studio URL) is now saved and passed as
+  `--port`, so an address written on one Mac still names that Mac tomorrow. Pinning it also makes
+  the `DEFAULT_HUB_PORT` assumption true rather than about half true.
+- **Fail before starting when the port is held.** `ShellConfiguration.requireFreePort` binds the
+  wildcard address before anything is spawned. Without it a held port costs three failed starts and
+  ends in "Automatic recovery stopped after repeated service failures" - over a number the operator
+  never chose.
+- **Re-join on start.** A successful join is remembered in the app preferences, and
+  `NativeWorkspaceStore.rejoinControllerIfNeeded()` calls the join route again once the Hub is
+  ready. That route is already idempotent ("record one node, or refresh what a rejoining node
+  reports about itself"), which is what makes an automatic call safe. It runs only for a Mac whose
+  credential origin is `adopted`: a controller's own credential is minted and its place is not
+  inside another controller. Promotion to controller forgets the controller it used to follow.
+  The re-join authenticates with this Mac's own fleet token, which *is* the controller's after
+  adoption, so no second copy of a credential is stored anywhere.
+- **Connections shows the port and the address to hand a node**, and says when no network address
+  is on yet, which is the state that makes a join impossible rather than merely fail.
+- **Leave this group.** `POST /api/hub/fleet/leave` mints a fresh local credential, records the
+  origin as `minted`, returns the role to `standalone`, and stays outside the fleet credential's
+  allowlist so a controller cannot un-join a node. The app asks the controller to drop the Mac from
+  its roster first, while the borrowed token still works, then clears the remembered controller.
+  This is the action for a Mac being retired, moved or sold - the group's token is a file on it.
+- **Fix: the credential origin was never persisted.** `save_settings` writes an explicit key list
+  and `fleet_credential_origin` was not on it, so `fleet_adopt`'s write was dropped and the
+  in-memory cache was seeded without the key: every reader was told `minted`. Two consequences, both
+  silent - the app's automatic re-join (which fires only for an adopted credential) could never run,
+  and promotion containment rested solely on the operator having set the role to Node by hand. The
+  live two-Hub test for leaving is what exposed it. `tests/test_fleet_credentials_origin.py` now
+  asserts that every key in `defaults()` survives a settings write, so the next key added cannot be
+  dropped the same way, and that adoption alone forces a rotation on promotion.
+- Tests: the native fixture now serves `fleet_credential_origin` and asserts that a join is
+  remembered, that an adopted Mac re-joins on start, that a minted one does not, and that becoming
+  a controller forgets the old controller; `tests/native/main.swift` pins the pinned port, the
+  `--port` override, legacy preferences, the port bounds and the held-port refusal;
+  `tests/test_fleet_nodes.py` pins that a re-join with a new address updates the stored address and
+  keeps the original `joined_at`.
+
 ## 0.5.1 — 2026-09-19 · a protected model library stopped the app from starting
 
 - Move the model library out of `~/Downloads`. A 34 GB library at `~/Downloads/model-library` made

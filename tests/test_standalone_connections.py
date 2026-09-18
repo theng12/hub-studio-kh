@@ -445,6 +445,59 @@ class IndependentClientTests(unittest.TestCase):
             finally:
                 node.stop()
 
+    def test_a_mac_that_leaves_a_group_stops_carrying_its_credential(self) -> None:
+        """Leaving is the action for a Mac that is being retired, sold or moved.
+
+        A node holds the controller's token - one token per controller, copied to every joining
+        Mac - so the thing that must not travel out of the door with it is that credential. What
+        makes leaving real is that the Hub mints a fresh local one there and then: the old
+        controller's token stops working here, so it cannot dispatch to this Mac even while its
+        roster still lists it.
+        """
+        with tempfile.TemporaryDirectory(prefix="studiohub-leave-") as root:
+            directory = Path(root)
+            node = HubProcess(directory, "node", "node-leave-token-0123456789abcd")
+            node.start()
+            try:
+                controller = HubProcess(directory, "controller", "controller-leave-token-0123456789")
+                controller.start()
+                try:
+                    borrowed = (controller.data / ".fleet_token").read_text().strip()
+                    status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                                        {"token": borrowed}, token=node.token)
+                    self.assertEqual(status, 200, adopted)
+                    status, _, _ = node.request("/api/hub/capabilities", token=borrowed)
+                    self.assertEqual(status, 200, "the controller must be able to work here first")
+
+                    # A controller must not be able to un-join a node: leaving is the Mac owner's
+                    # decision, so the borrowed credential is refused.
+                    status, refused, _ = node.post_json("/api/hub/fleet/leave", {}, token=borrowed)
+                    self.assertEqual(status, 403, refused)
+
+                    status, left, _ = node.post_json("/api/hub/fleet/leave", {}, token=node.token)
+                    self.assertEqual(status, 200, left)
+                    self.assertTrue(left.get("left"))
+
+                    status, _, _ = node.request("/api/hub/capabilities", token=borrowed)
+                    self.assertEqual(status, 401,
+                                     "the group's credential must stop working on a Mac that left")
+                    fresh = (node.data / ".fleet_token").read_text().strip()
+                    self.assertNotEqual(fresh, borrowed, "leaving must mint, not merely forget")
+                    status, settings, _ = node.request("/api/hub/controller", token=node.token)
+                    self.assertEqual(status, 200, settings)
+                    # The credential origin is served by the controller read, which is where the
+                    # app takes it from - the capabilities snapshot carries the role only.
+                    self.assertEqual(settings["settings"]["fleet_credential_origin"], "minted")
+                    self.assertEqual(settings["settings"]["role"], "standalone",
+                                     "a Mac that left must be able to take work on its own again")
+                    # And this Mac's own token still has full control of it.
+                    status, _, _ = node.request("/api/hub/settings", token=node.token)
+                    self.assertEqual(status, 200)
+                finally:
+                    controller.stop()
+            finally:
+                node.stop()
+
     def test_the_hub_address_is_loopback_only(self) -> None:
         """There is no cloud-domain assumption to make; the app talks to a private address."""
         host = self.hub.base.split("://", 1)[1].split(":", 1)[0]

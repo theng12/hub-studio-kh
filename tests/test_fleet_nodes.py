@@ -155,6 +155,14 @@ class FleetNodeStoreTests(unittest.TestCase):
                                      "address": "http://192.168.1.21:8080"})
         self.assertEqual(reloaded["joined_at"], node["joined_at"])
         self.assertEqual(reloaded["name"], "Studio 2 renamed")
+        # A node that restarted reports a new address, and the controller has to take it: the
+        # whole point of re-joining on start is that nothing else repairs the stored address, so a
+        # controller dispatching to the old one fails with the node sitting there healthy.
+        moved = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2 renamed",
+                                  "address": "http://192.168.1.21:47873"})
+        self.assertEqual(moved["address"], "http://192.168.1.21:47873")
+        self.assertEqual(moved["joined_at"], node["joined_at"], "a re-join must not restamp the join")
+        self.assertGreaterEqual(moved["updated_at"], node["updated_at"])
         self.assertTrue(fleet_nodes.leave("mac-mini-2"))
         self.assertFalse(fleet_nodes.leave("mac-mini-2"))
 

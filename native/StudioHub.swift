@@ -41,6 +41,11 @@ final class StudioController: ObservableObject {
         self.configuration = configuration
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
         catch { failure = error.localizedDescription; status = "Unable to open" }
+        // The workspace knows when a join succeeded; only the app owns the preferences file the
+        // answer has to be written to, so the two are wired together here rather than in a view.
+        workspace.onControllerJoined = { [weak self] address in
+            self?.rememberController(address)
+        }
     }
     var running: Bool { worker?.isRunning == true }
     var canConfigure: Bool { !running && !starting && !stopping && instanceLock != nil }
@@ -115,6 +120,9 @@ final class StudioController: ObservableObject {
         guard canConfigure, let models = configuration.modelsDirectory else { return }
         do {
             try ShellConfiguration.requireDirectory(models)
+            // Before anything is spawned: a port another program is holding would otherwise cost
+            // three failed starts and a message about "repeated service failures".
+            try ShellConfiguration.requireFreePort(configuration.port)
             try configuration.save()
             // A stale readiness record is never proof of a running owner.
             if FileManager.default.fileExists(atPath: configuration.readyFile.path) {
@@ -136,7 +144,8 @@ final class StudioController: ObservableObject {
             process.arguments = ShellConfiguration.serviceArguments(
                 dataDirectory: configuration.dataDirectory, modelsDirectory: models,
                 readyFile: configuration.readyFile, parentPID: ProcessInfo.processInfo.processIdentifier,
-                listenHost: configuration.listenHost, offline: configuration.offline)
+                listenHost: configuration.listenHost, offline: configuration.offline,
+                port: configuration.port)
             process.currentDirectoryURL = configuration.dataDirectory
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
             process.standardOutput = log
@@ -169,6 +178,15 @@ final class StudioController: ObservableObject {
                                                      dataDirectory: self.configuration.dataDirectory,
                                                      token: ready.token,
                                                      allowedHost: self.configuration.clientHost)
+                        // Re-join the group this Mac belongs to, once per start. A node's own
+                        // address changes when it restarts and the controller needs to be told;
+                        // a controller that had to be restarted is found again at the same
+                        // address because the port is pinned.
+                        self.workspace.storedMembership = NativeWorkspaceStore.FleetMembership(
+                            controllerAddress: self.configuration.controllerAddress ?? "",
+                            token: self.fleetToken,
+                            boundHosts: self.configuration.listenHosts)
+                        await self.workspace.rejoinControllerIfNeeded()
                         let session = URLSession(configuration: .ephemeral)
                         defer { session.invalidateAndCancel() }
                         while !Task.isCancelled && process.isRunning && !self.stopping {
@@ -348,6 +366,32 @@ final class StudioController: ObservableObject {
         }
         configuration.listenHost = unique.isEmpty ? "127.0.0.1" : unique.joined(separator: ",")
         saveConfiguration()
+    }
+
+    /// Set the port the Hub binds. Fixed rather than chosen by the operating system, because a
+    /// node has to be able to name this Mac again after either of them restarts.
+    func setPort(_ port: Int) {
+        guard canConfigure, (1024...65535).contains(port), port != configuration.port else { return }
+        configuration.port = port
+        saveConfiguration()
+        fleetNote = "Port set to \(port). Stop and start the services to use it, then tell every node the new address."
+    }
+
+    /// The address a node should be given, when this Mac answers on more than itself.
+    var nodeFacingAddress: String? {
+        guard let entry = LocalAddresses.current().first(where: { configuration.listenHosts.contains($0.address)
+            || configuration.listenHosts.contains("0.0.0.0") }) else { return nil }
+        return "\(entry.address):\(configuration.port)"
+    }
+
+    /// Remember the controller this Mac joined, so its services can re-join by themselves.
+    ///
+    /// Called with nil when it leaves: leaving mints a fresh local credential, so the cached one
+    /// has to be re-read or the app would keep showing a token the Hub no longer accepts.
+    func rememberController(_ address: String?) {
+        configuration.controllerAddress = address
+        readFleetToken()
+        do { try configuration.save() } catch { failure = error.localizedDescription }
     }
 
     /// Persist a configuration change made from a picker, and say that it needs a restart.

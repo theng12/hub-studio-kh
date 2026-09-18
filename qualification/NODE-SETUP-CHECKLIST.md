@@ -36,6 +36,21 @@ Do NOT enrol all the machines yet. Do this first:
 machine with an empty roster. That is the single biggest unknown, and it is the thing you are about
 to do — so do it once, carefully, before doing it forty-nine times.
 
+## Retiring, moving or selling a Mac
+
+1. **If it is a node:** **Connections → Leave this group**. This Mac stops using the group's token
+   and mints its own, and it asks the controller to drop it from the list while the old token still
+   works. Check the controller no longer shows it.
+2. **If it is a controller:** promote one of its nodes to **Controller** first — that mints a fresh
+   token — then **Join** each remaining node to it with the new address and token, and only then
+   retire the old Mac. Until the nodes re-join, dispatch to them fails.
+3. **Before the Mac goes:** quit Studio Hub and delete
+   `~/Library/Application Support/Studio Hub Standalone/`. It holds the credential, the job history,
+   the saved voices and the outputs. Nothing else on the Mac identifies it to the group.
+
+Rotating a controller's token is a group-wide operation, not a one-machine edit: every node has to
+be told the new token once, because a node cannot take on a new credential by itself.
+
 ## What is not proven, said plainly
 
 - **A second Mac has never joined a fleet.** See above.
@@ -79,6 +94,14 @@ never runs on the old group's credential. Its nodes then re-register with the ne
 
 ### Setting up a group
 
-1. On the controller: **Connections → Hub token → Copy**.
-2. On each node: **Connections → Join**, paste the controller's address and that token.
-3. The node registers and takes the token on. The controller should then list it as reachable.
+1. On the controller: **Connections** → turn on the network address a node will use → restart the
+   services → **Hub token → Copy**, and note the address and port shown there (**47873** unless it
+   was changed).
+2. On each node: turn on one of its own network addresses the same way and restart the services. A
+   node must be reachable, or the controller can never send it work; the Join form refuses and says
+   so if it is not.
+3. Then **Connections → Join** on the node with the controller's `address:port` and that token. The
+   node registers and takes the token on. The controller should then list it as reachable.
+4. Nothing else to remember: a node keeps the controller's address and re-joins by itself every
+   time its services start. Only if the controller's address genuinely changes - a new network, or
+   a different port because 47873 was already taken on that Mac - press Join again on each node.

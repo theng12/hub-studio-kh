@@ -165,6 +165,17 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             "parent_controller_url": values.get(
                 "parent_controller_url", current.get("parent_controller_url")),
         }
+        # Every key `defaults()` defines has to be carried here, or `save_settings` writes a file -
+        # and seeds the in-memory cache - without it, and the value silently reverts to its default.
+        # This one was dropped exactly that way: joining wrote "adopted", nothing persisted it, and
+        # every reader was told "minted". That made the app's automatic re-join impossible (it only
+        # fires for an adopted credential) and left promotion containment resting on the operator
+        # having set the role by hand.
+        origin = str(values.get("fleet_credential_origin",
+                                current.get("fleet_credential_origin") or "minted")).strip().lower()
+        if origin not in {"minted", "adopted"}:
+            raise ValueError("fleet_credential_origin must be 'minted' or 'adopted'")
+        updated["fleet_credential_origin"] = origin
         if updated["role"] not in ROLES:
             raise ValueError(f"role must be one of {sorted(ROLES)}")
         if updated["database_mode"] not in DATABASE_MODES:

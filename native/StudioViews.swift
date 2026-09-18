@@ -1610,10 +1610,37 @@ struct StudioContent: View {
                 get: { studio.configuration.listenHosts.contains("0.0.0.0") },
                 set: { studio.setListenHosts($0 ? ["0.0.0.0"] : []) }))
             .disabled(!studio.canConfigure)
+            // The port is fixed rather than picked at each start, so an address written down on
+            // one Mac still names this one tomorrow. Shown with the address a node types, because
+            // that string is the whole handshake.
+            HStack {
+                Text("Port").frame(width: 96, alignment: .leading)
+                TextField("47873", value: Binding(
+                    get: { studio.configuration.port },
+                    set: { studio.setPort($0) }), format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 90)
+                    .disabled(!studio.canConfigure)
+                Text(studio.nodeFacingAddress.map { "A node joins with the address \($0) and this Mac's Hub token below." }
+                     ?? "Until one of these is on, only this Mac can reach the Hub — a node needs an address like the ones above.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             listenWarning
 
             if let note = studio.fleetNote {
                 Text(note).font(.callout).foregroundStyle(.secondary)
+            }
+            // Only a Mac that joined somebody belongs to a group. This is the action that takes
+            // the group's credential off it, which is what a Mac being retired or sold needs.
+            if workspace.controllerIdentity?.settings.fleetCredentialOrigin == "adopted" {
+                HStack(alignment: .top) {
+                    Button("Leave this group") { Task { await workspace.leaveGroup() } }
+                        .disabled(!connected)
+                    Text("Stops this Mac using the group's token and returns it to running on its own. Do this before retiring or selling it.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let note = workspace.fleetNote {
+                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()

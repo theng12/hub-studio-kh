@@ -44,6 +44,9 @@ final class FixtureProtocol: URLProtocol {
     static var joinBody: [String: Any]?
     static var adoptBody: [String: Any]?
     static var currentRole = "standalone"
+    /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
+    /// The app re-joins on start only for the second kind, so the fixture has to be able to be both.
+    static var credentialOrigin = "minted"
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
     static var storagePreviewRejects = false
@@ -103,6 +106,8 @@ final class FixtureProtocol: URLProtocol {
     static func storageRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return storageCalls }
     static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
     static func fleetRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return fleetCalls }
+    static func setCredentialOrigin(_ value: String) { lock.lock(); defer { lock.unlock() }; credentialOrigin = value }
+    static func resetFleetRequests() { lock.lock(); defer { lock.unlock() }; fleetCalls = [] }
     static func joinPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return joinBody }
     static func adoptPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return adoptBody }
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
@@ -261,6 +266,19 @@ final class FixtureProtocol: URLProtocol {
             Self.adoptBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"adopted":true}"#.utf8))
+        case ("POST", "/api/hub/fleet/leave"):
+            Self.lock.lock()
+            Self.fleetCalls.append("leave")
+            // Leaving is the Hub's own doing: it mints a fresh credential and stops being a node.
+            Self.credentialOrigin = "minted"
+            Self.currentRole = "standalone"
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"left":true}"#.utf8))
+        case ("DELETE", "/api/hub/fleet/nodes/controller-local"):
+            // The controller is asked to drop this Mac while the borrowed token still works, so a
+            // Mac that leaves does not stay on the roster as a node that can never be reached.
+            Self.lock.lock(); Self.fleetCalls.append("dropped-from-controller"); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
@@ -334,8 +352,8 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/controller"):
-            Self.lock.lock(); let roleNow = Self.currentRole; Self.lock.unlock()
-            result = (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
+            Self.lock.lock(); let roleNow = Self.currentRole; let originNow = Self.credentialOrigin; Self.lock.unlock()
+            result = (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\",\"fleet_credential_origin\":\"\(originNow)\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
         case ("GET", "/api/version"):
             result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
@@ -580,6 +598,66 @@ struct NativeAPITests {
                 "joining must also adopt the controller's credential: \(FixtureProtocol.fleetRequests())")
         require(FixtureProtocol.adoptPayload()?["token"] as? String == "fleet-token-value",
                 "adoption must hand over the controller's credential, got: \(String(describing: FixtureProtocol.adoptPayload()))")
+
+        // Joining has to be remembered, or the Mac cannot re-join by itself after a restart. The
+        // app owns the preferences file, so the workspace reports the address and the app saves it.
+        var remembered: [String?] = []
+        store.onControllerJoined = { remembered.append($0) }
+        await store.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                   boundHosts: LocalAddresses.current().map(\.address))
+        require(remembered.last == "192.168.1.21:8080",
+                "a successful join must be remembered, got: \(String(describing: remembered))")
+
+        // And a restart must re-join without anyone retyping anything: the controller may have a
+        // new address and the node certainly has one, so the stored call is the repair.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        await store.refreshConnection()
+        FixtureProtocol.resetFleetRequests()
+        store.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address))
+        await store.rejoinControllerIfNeeded()
+        require(FixtureProtocol.fleetRequests().contains("join"),
+                "a node must re-join its controller on start: \(FixtureProtocol.fleetRequests())")
+        require(store.fleetNote?.contains("Joined") == true,
+                "a re-join needs a visible result, got: \(store.fleetNote ?? "nil")")
+
+        // A Mac running its own group has no controller to re-join, and must not call one.
+        FixtureProtocol.setCredentialOrigin("minted")
+        await store.refreshConnection()
+        FixtureProtocol.resetFleetRequests()
+        await store.rejoinControllerIfNeeded()
+        require(FixtureProtocol.fleetRequests().isEmpty,
+                "a Mac with its own credential must not re-join anyone: \(FixtureProtocol.fleetRequests())")
+
+        // Leaving a group is the action that takes the group's credential off a Mac that is being
+        // retired or sold. It has to reach the Hub (which mints a fresh credential there) and it
+        // has to forget the controller, or the app would keep re-joining a group it left.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        await store.refreshConnection()
+        FixtureProtocol.resetFleetRequests()
+        store.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address))
+        await store.leaveGroup()
+        require(FixtureProtocol.fleetRequests().contains("leave"),
+                "leaving must reach the Hub so it can mint its own credential: \(FixtureProtocol.fleetRequests())")
+        require(FixtureProtocol.fleetRequests().contains("dropped-from-controller"),
+                "leaving must ask the controller to drop this Mac while the old token still works: \(FixtureProtocol.fleetRequests())")
+        require(store.storedMembership == nil, "a Mac that left must not keep re-joining its old group")
+        require(store.controllerIdentity?.settings.fleetCredentialOrigin == "minted",
+                "the screen must show the Hub's answer, not the previous membership")
+        require(store.fleetNote?.contains("left the group") == true,
+                "leaving needs a visible result, got: \(store.fleetNote ?? "nil")")
+
+        // Promotion to controller is the end of being somebody's node.
+        remembered = []
+        store.onControllerJoined = { remembered.append($0) }
+        await store.setRole("controller")
+        require(remembered == [nil],
+                "becoming a controller must forget the controller it used to follow, got: \(String(describing: remembered))")
+        await store.setRole("standalone")
+        FixtureProtocol.setCredentialOrigin("minted")
 
         // Which job a voice model does. The Audio page is arranged by this, and getting it wrong
         // put a CustomVoice model on the cloning path, where it was asked for a reference voice it

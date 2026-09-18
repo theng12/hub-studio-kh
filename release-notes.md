@@ -2,6 +2,37 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.2 — 2026-09-19
+
+### A group of Macs now survives a restart
+
+Two things made a fleet of Macs fragile. The Hub picked a **new port every time it started**, so
+the address you wrote down for a controller stopped meaning anything the moment it restarted; and
+a Mac that had joined one never re-joined on its own, so after a reboot somebody had to retype the
+controller's address on every node.
+
+- The Hub answers on the **same port every time** (47873), so an address stays true. If something
+  else on that Mac is already using that port, the app says so before starting, instead of failing
+  three times and reporting service failures.
+- A Mac that has joined a controller **re-joins by itself** whenever its services start, which also
+  tells the controller its own address again.
+- **Connections** shows the port and the exact address to give a node, so setting up a group is:
+  turn on a network address here, copy the token, paste the address and token there.
+
+Both Macs need a network address turned on. A node has to be reachable for a controller to send it
+work, and the Join form says so plainly if it is not.
+
+### Leaving a group, and selling a Mac
+
+A Mac that joined a controller now has **Leave this group** under **Connections**. It stops using
+the group's token — this Mac mints a fresh one on the spot — and goes back to running on its own.
+Use it before you retire, move or sell a Mac: the group's token is a file on that Mac, and without
+this it travels with the machine.
+
+Replacing a controller is the same idea from the other side: set the replacement to **Controller**
+and it mints its own token, then each node joins it once with the new address and token. The old
+machine's token stops working everywhere the moment that happens.
+
 ## 0.5.1 — 2026-09-19
 
 ### The app starts again, and the models have moved out of Downloads
