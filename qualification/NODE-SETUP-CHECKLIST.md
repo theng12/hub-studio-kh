@@ -56,3 +56,18 @@ The app is a folder and the models are a folder, so nothing is hard to undo:
 - Replace the app: drag a fresh `Studio Hub.app` into Applications over the old one.
 - Point the app at a different library: **Settings → Model library → Choose Folder…**
 - Models are only ever added, never deleted, except an older revision of a model just updated.
+
+## Before the fleet is large: one decision
+
+Every Studio Hub mints its own credential, and joining a fleet makes the nodes adopt one shared
+credential. That is fine for a handful of Macs and becomes a problem at fifty:
+
+**Revoking one machine means rotating the credential that all of them share** - so a lost or sold Mac
+cannot be shut out without touching every other Mac.
+
+The option is a **per-node credential the controller can revoke on its own**, keeping the shared one
+only for joining. Then losing one Mac costs one node.
+
+That is a security decision rather than a feature, so it is the owner's to make. It is not urgent at
+two machines and it is urgent well before fifty, and it is cheapest to do before the machines are
+handed out rather than after.
