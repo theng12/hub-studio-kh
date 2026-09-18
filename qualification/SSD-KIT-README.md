@@ -24,7 +24,7 @@ password, because that is what `/Applications` requires. Answer `n` at the promp
 into `~/Applications` instead, which needs no password and works just as well.
 
 **`2 - Copy the models.command`** reads how much memory this Mac has, works out which models fit,
-and copies them into `~/Downloads/model-library`. Models that do not fit are left behind; the
+and copies them into `~/StudioHubModels`. Models that do not fit are left behind; the
 ones that need them are bigger Macs.
 
 Run the second file again whenever the SSD is refreshed. That is how models arrive and change:
@@ -54,7 +54,7 @@ cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
 A library can stay on the SSD, but it must be **outside** the app bundle — the app refuses a
 library inside itself — and the drive must then be **mounted** whenever the app runs. The app
 says so plainly if it is not: *"The selected model library is unavailable. Connect its drive or
-choose another folder."* Copying it to `~/Downloads/model-library` avoids that dependency
+choose another folder."* Copying it to `~/StudioHubModels` avoids that dependency
 entirely, which is why the launcher does it that way.
 
 Either way, you point the app at the library once (step 4) and it remembers.
@@ -109,7 +109,7 @@ Both are normal, and neither is a bug:
 Choose the `model-library` folder the copy step filled in when the app asks:
 
 ```
-~/Downloads/model-library
+~/StudioHubModels
 ```
 
 The choice is remembered per machine. If you left the library on the SSD instead, choose it

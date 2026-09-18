@@ -146,8 +146,9 @@ def build(app: Path, library: Path) -> dict:
         "operator_steps": [
             "Double-click '1 - Install the app.command' in the kit folder.",
             "Double-click '2 - Copy the models.command' - it copies the models this Mac "
-            "can run into ~/Downloads/model-library.",
-            "Open Studio Hub from Applications and choose that model-library folder.",
+            "can run into ~/StudioHubModels.",
+            "Open Studio Hub from Applications; it offers that library as 'Use the Models Already "
+            "on This Mac'.",
             "Allow the local-network and incoming-connection prompts.",
             "Wait for the status line to read 'Local services ready'.",
             "Run one generation per model to record that machine's speed and memory.",

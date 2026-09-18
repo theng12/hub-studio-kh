@@ -28,6 +28,13 @@ import sys
 import time
 from pathlib import Path
 
+# Where the library goes. A sibling of the home folder, not ~/Downloads: macOS privacy
+# protection covers Downloads, and a service the app starts can be blocked from reading a
+# library inside it - the worker then waits inside open() forever and the app never becomes
+# ready. Kept here as one name so the app, the kit and this script cannot drift apart.
+LIBRARY_FOLDER = "StudioHubModels"
+LEGACY_LIBRARY_FOLDER = Path("Downloads") / "model-library"
+
 # Some models are shipped with a conservative figure in their manifest, and the owner has run
 # them on smaller Macs many times. Raising a model's floor here is a deliberate, reviewable act;
 # lowering one is not, so there is no way to say "needs less than the manifest says" - only
@@ -313,7 +320,19 @@ def main() -> int:
                 carried.append(dependency)
     chosen.sort(key=lambda row: row[0])
 
-    destination = Path.home() / "Downloads" / "model-library"
+    destination = Path.home() / LIBRARY_FOLDER
+    # An earlier kit copied into ~/Downloads/model-library. Move that tree once rather than copy
+    # 34 GB again, and move it out of the protected folder while we are here.
+    legacy = Path.home() / LEGACY_LIBRARY_FOLDER
+    if not destination.exists() and legacy.is_dir():
+        try:
+            legacy.rename(destination)
+            print(f"  Moved the model library out of Downloads to {destination}")
+        except OSError as exc:
+            print(f"  Could not move {legacy} to {destination}: {exc}")
+    elif legacy.is_dir():
+        print(f"  A second library is still at {legacy}. This Mac uses {destination}; "
+              "the Downloads copy can be deleted once you are happy with it.")
     destination.mkdir(parents=True, exist_ok=True)
 
     # Sort every model this Mac should have into: new, changed, or already identical.

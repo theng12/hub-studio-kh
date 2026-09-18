@@ -201,7 +201,7 @@ class EndToEndTests(unittest.TestCase):
                 "qualification": {"minimum_unified_memory_gb": 1}}
 
     def _build(self, root: Path, packages: dict):
-        """Lay out a kit, a Downloads folder and the app's own verifier, as on the SSD."""
+        """Lay out a kit, a home folder and the app's own verifier, as on the SSD."""
         kit = root / "kit"
         library = kit / "model-library"
         manifests = kit / self.APP / "Contents/Resources/model-manifests"
@@ -233,7 +233,7 @@ class EndToEndTests(unittest.TestCase):
 
         argv = sys.argv
         home = os.environ.get("HOME")
-        os.environ["HOME"] = str(root)          # the script writes to ~/Downloads/model-library
+        os.environ["HOME"] = str(root)          # the script writes to ~/StudioHubModels
         sys.argv = ["copy_models_for_this_mac.py"]
         out = io.StringIO()
         try:
@@ -256,7 +256,7 @@ class EndToEndTests(unittest.TestCase):
                 "current-model": ("d" * 40, {"weights.bin": "already correct"}),
                 "brand-new-model": ("e" * 40, {"weights.bin": "never copied before"}),
             })
-            destination = root / "Downloads" / "model-library"
+            destination = root / "StudioHubModels"
             # This Mac already has two of the three: one identical, one stale.
             write(destination / "old-model" / self.REVISION / "weights.bin", "the old weights")
             write(destination / "current-model" / ("d" * 40) / "weights.bin", "already correct")
@@ -280,7 +280,7 @@ class EndToEndTests(unittest.TestCase):
             kit, library, manifests = self._build(root, {
                 "changed-model": (self.REVISION, {"weights.bin": "the corrected weights"}),
             })
-            destination = root / "Downloads" / "model-library"
+            destination = root / "StudioHubModels"
             write(destination / "changed-model" / self.REVISION / "weights.bin", "the old weights")
 
             code, output = self._run(root, kit)
@@ -324,7 +324,7 @@ class EndToEndTests(unittest.TestCase):
             code, output = self._run(root, kit)
             self.assertEqual(code, 0, output)
             self.assertIn("this Mac is too small", output)
-            self.assertFalse((root / "Downloads/model-library/one-terabyte-model").exists())
+            self.assertFalse((root / "StudioHubModels/one-terabyte-model").exists())
 
 
     def test_a_missing_record_is_repaired_without_recopying_the_model(self):
@@ -337,7 +337,7 @@ class EndToEndTests(unittest.TestCase):
             root = Path(tmp)
             kit, _library, _manifests = self._build(
                 root, {"a-model": (self.REVISION, {"weights.bin": "weights"})})
-            destination = root / "Downloads/model-library"
+            destination = root / "StudioHubModels"
             code, output = self._run(root, kit)
             self.assertEqual(code, 0, output)
             self.assertIn("ready", output)
@@ -355,6 +355,51 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(
                 (destination / "a-model" / self.REVISION / "weights.bin").stat().st_mtime_ns,
                 before)
+
+    def test_a_library_the_earlier_kit_left_in_downloads_is_moved_not_copied(self):
+        """The old kit filled ~/Downloads/model-library, which macOS protects.
+
+        A library inside that folder stops the app's services from starting at all, so the copy
+        step has to get it out of the way. Moving it is a rename on the same disk: the 34 GB must
+        not be copied a second time, and the old folder must not be left behind to be chosen by
+        mistake.
+        """
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit, _library, _manifests = self._build(
+                root, {"a-model": (self.REVISION, {"weights.bin": "weights"})})
+            legacy = root / "Downloads" / "model-library"
+            write(legacy / "a-model" / self.REVISION / "weights.bin", "weights")
+            before = (legacy / "a-model" / self.REVISION / "weights.bin").stat().st_ino
+
+            code, output = self._run(root, kit)
+            self.assertEqual(code, 0, output)
+            self.assertIn("Moved the model library out of Downloads", output)
+            moved = root / "StudioHubModels" / "a-model" / self.REVISION / "weights.bin"
+            self.assertTrue(moved.is_file())
+            self.assertEqual(moved.stat().st_ino, before, "the file must be moved, not copied")
+            self.assertFalse(legacy.exists(), "the protected folder must not be left behind")
+
+    def test_a_second_library_in_downloads_is_reported_and_left_alone(self):
+        """A Mac that already has both keeps using the home-folder library.
+
+        Nothing is merged or deleted behind the operator's back; the leftover copy is named so it
+        can be removed once they are satisfied, which is the only reason it is mentioned.
+        """
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit, _library, _manifests = self._build(
+                root, {"a-model": (self.REVISION, {"weights.bin": "weights"})})
+            write(root / "StudioHubModels" / "a-model" / self.REVISION / "weights.bin", "weights")
+            write(root / "Downloads/model-library" / "a-model" / self.REVISION / "weights.bin",
+                  "weights")
+
+            code, output = self._run(root, kit)
+            self.assertEqual(code, 0, output)
+            self.assertIn("A second library is still at", output)
+            self.assertIn("Downloads/model-library", output)
+            self.assertTrue((root / "Downloads/model-library" / "a-model" / self.REVISION).is_dir(),
+                            "the leftover library is not deleted for the operator")
 
 
 class LauncherTests(unittest.TestCase):

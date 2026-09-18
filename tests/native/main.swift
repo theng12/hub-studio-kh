@@ -93,23 +93,47 @@ for token in ["", "short", String(repeating: "a", count: 257), String(repeating:
     let payload = try JSONSerialization.data(withJSONObject: ["url": base.absoluteString, "pid": 1234, "version": "0.4.0", "token": token])
     do { _ = try WorkerReady.decode(payload, expectedPID: 1234); fatalError("invalid Hub credential accepted") } catch {}
 }
-// The one-click setup leaves a filled-in library in Downloads. Recognising it is what turns
+// The one-click setup leaves a filled-in library in the home folder. Recognising it is what turns
 // "choose a folder in a file panel" into one click, and what keeps a fresh Mac from being offered
 // an empty folder that would download 29 GB it already has.
 let fakeHome = URL(fileURLWithPath: NSTemporaryDirectory())
     .appendingPathComponent("prepared-\(UUID().uuidString)")
-try FileManager.default.createDirectory(at: fakeHome.appendingPathComponent("Downloads/model-library"),
+let homeLibrary = "StudioHubModels"
+let legacyLibrary = "Downloads/model-library"
+func installRecord(_ relative: String) throws {
+    try FileManager.default.createDirectory(at: fakeHome.appendingPathComponent("\(relative)/.studiohub"),
+                                            withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: fakeHome.appendingPathComponent("\(relative)/.studiohub/installed.json"))
+}
+try FileManager.default.createDirectory(at: fakeHome.appendingPathComponent(homeLibrary),
                                         withIntermediateDirectories: true)
 require(ShellConfiguration.preparedLibrary(home: fakeHome) == nil,
         "a folder without an install record is not a library")
-try FileManager.default.createDirectory(
-    at: fakeHome.appendingPathComponent("Downloads/model-library/.studiohub"),
-    withIntermediateDirectories: true)
-try Data("{}".utf8).write(to: fakeHome.appendingPathComponent(
-    "Downloads/model-library/.studiohub/installed.json"))
+try installRecord(homeLibrary)
 let recognised = ShellConfiguration.preparedLibrary(home: fakeHome)
-require(recognised?.lastPathComponent == "model-library",
+require(recognised?.lastPathComponent == homeLibrary,
         "a library with an install record must be recognised, got \(String(describing: recognised))")
+// A Mac the earlier kit filled in is still recognised, but never as the first choice: that folder
+// is one macOS protects, and a library inside it stops the services from starting at all.
+try installRecord(legacyLibrary)
+require(ShellConfiguration.preparedLibrary(home: fakeHome)?.lastPathComponent == homeLibrary,
+        "the home-folder library must win over the one inside Downloads")
+try FileManager.default.removeItem(at: fakeHome.appendingPathComponent(homeLibrary))
+require(ShellConfiguration.preparedLibrary(home: fakeHome)?.lastPathComponent == "model-library",
+        "a library left in Downloads by the earlier kit must still be recognised")
+// macOS protects these folders, and its refusal looks like a service that never becomes ready.
+// The operator must be told before starting rather than after, so the warning is part of the
+// configuration rules and not advice in a document.
+for protected in ["Downloads/model-library", "Documents/models", "Desktop/models"] {
+    require(ShellConfiguration.protectedFolderWarning(
+                for: fakeHome.appendingPathComponent(protected), home: fakeHome) != nil,
+            "\(protected) must warn: macOS protects it")
+}
+require(ShellConfiguration.protectedFolderWarning(
+            for: fakeHome.appendingPathComponent(homeLibrary), home: fakeHome) == nil,
+        "the home-folder library must not warn")
+require(ShellConfiguration.protectedFolderWarning(for: URL(fileURLWithPath: "/Volumes/SomeDrive/models")) == nil,
+        "an external drive is not one of the protected home folders")
 try? FileManager.default.removeItem(at: fakeHome)
 // An empty home must not invent one.
 require(ShellConfiguration.preparedLibrary(

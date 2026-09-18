@@ -70,8 +70,14 @@ final class StudioController: ObservableObject {
             } catch { failure = error.localizedDescription }
         }
     }
-    /// The library the one-click setup left in Downloads, if there is one.
+    /// The library the one-click setup left behind, if there is one.
     var preparedLibrary: URL? { ShellConfiguration.preparedLibrary() }
+
+    /// Why the selected library is a folder macOS protects, or nil when it is safe to use.
+    var libraryPrivacyWarning: String? {
+        guard let url = configuration.modelsDirectory else { return nil }
+        return ShellConfiguration.protectedFolderWarning(for: url)
+    }
 
     /// Select the prepared library and start. One click, and the models the operator just copied
     /// are the ones the app uses.

@@ -25,6 +25,25 @@ are current; the longer narrative under it is historical and is kept for provena
   page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
+- **The model library moved out of `~/Downloads` (`6113476`, 0.5.1, 2026-09-19).** Every launch
+  from the app hung. All three workers started, the Voice worker printed
+  `[gen] loaded 4 jobs from history` and then slept forever inside `open()` while reading
+  `~/Downloads/model-library`; `subprocess.poll()` stayed `None` for the whole 120 s wait, so no
+  readiness record was written and the app reported only "the local services did not become ready
+  within two minutes". Nothing logged a reason because nothing failed. macOS privacy protection
+  (TCC) covers `~/Downloads`: `sample` showed the worker blocked in `_io_FileIO___init__` →
+  `open`, and `tccd` logged an access request against `kTCCServiceSystemPolicyAllFiles` attributed
+  to this app. The same library at `~/StudioHubModels` brings the Hub up with all five workers in
+  about two seconds, and an empty folder outside Downloads does too, which rules out the library's
+  contents. The app now prefers `~/StudioHubModels` and still offers a legacy
+  `~/Downloads/model-library`; the setup card and **Settings → Model library** name a protected
+  folder before a start is attempted; the copy step renames a legacy tree instead of copying
+  34 GB again. Kit documents follow, and `focused-release-manifest.json` was regenerated
+  (**0.5.1, 15 models, 34.2 GiB, `problems: []`**). Verified in the packaged app: ready in 6 s
+  with 5 workers and 10 voices, a real Whisper transcript (3.1 s clip, 23.8 s wall) and a real
+  Qwen clone artifact (HTTP 200, 161 KB WAV) both through the app's own Hub. Suite **375 tests,
+  5 skips** - one fewer skip than before because `tests/test_peer_path_contract.py` had been
+  looking only for the versioned bundle name and its live router probe never ran.
 - **Distribution is two double-clicks, and copying models is now incremental
   (`41…`, this session).** The kit root holds `1 - Install the app.command` and
   `2 - Copy the models.command`. Both are location-independent (they failed on the real drive
@@ -206,7 +225,7 @@ subtitle. What is left is not code: VoxCPM2 has never produced output on any hos
 and none of ST-04/05/06/10/11 has had independent review. Every one of those is named as a
 condition with the exact step that clears it, in `qualification/st11.md`.
 
-Updated: 2026-09-16 (memory contract, connections, statistics fix, ST-11 kit). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
+Updated: 2026-09-19 (the model library moved out of ~/Downloads, 0.5.1). [Design](../standalone-plan.md) · [Execution plan](../implementation-plan.md).
 ST-01 foundation, ST-02 bundled Hub and ST-07 output storage are reviewed and locally
 integrated; ST-09 startup/recovery is reviewed and integrated. ST-03 Packaged FLUX was
 merged into `implementation/voice-runtime` and a **real packaged 1K generation is

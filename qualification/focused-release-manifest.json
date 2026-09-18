@@ -219,7 +219,7 @@
  ],
  "operator_steps": [
   "Double-click '1 - Install the app.command' in the kit folder.",
-  "Double-click '2 - Copy the models.command' - it copies the models this Mac can run into ~/Downloads/model-library.",
+  "Double-click '2 - Copy the models.command' - it copies the models this Mac can run into ~/StudioHubModels.",
   "Open Studio Hub from Applications and choose that model-library folder.",
   "Allow the local-network and incoming-connection prompts.",
   "Wait for the status line to read 'Local services ready'.",

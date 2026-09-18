@@ -56,9 +56,11 @@ Doing it by hand instead, if a launcher ever refuses to run:
     cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
     sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/copy-models.command"
 
-The models land in ~/Downloads/model-library, and that is the folder to choose
-when the app asks. The app reads them from the Mac, so the SSD can be unplugged
-afterwards.
+The models land in ~/StudioHubModels, and that is the folder the app offers as
+"Use the Models Already on This Mac". Keep a library out of Downloads, Desktop
+and Documents: macOS protects those folders, and a library inside one stops the
+local services from starting. The app reads the models from the Mac, so the SSD
+can be unplugged afterwards.
 
 
 ------------------------------------------------------------------

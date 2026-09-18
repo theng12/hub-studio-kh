@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.1 — 2026-09-19 · a protected model library stopped the app from starting
+
+- Move the model library out of `~/Downloads`. A 34 GB library at `~/Downloads/model-library` made
+  every launch hang: the app started all three workers, the Voice worker imported its generation
+  store, printed `[gen] loaded 4 jobs from history`, and then blocked forever inside `open()`.
+  `subprocess.poll()` stayed `None` for the whole 120 s wait, so the Hub never wrote
+  `hub-ready.json` and the app reported only "the local services did not become ready within two
+  minutes". No process logged anything: `sample` showed the worker asleep in the kernel in
+  `_io_FileIO___init__` -> `open`, and `tccd` logged an access request against
+  `kTCCServiceSystemPolicyAllFiles` attributed to this app. macOS privacy protection covers
+  `~/Downloads`, and there a refusal arrives as a wait rather than an error. Moving the same
+  library to `~/StudioHubModels` brought the Hub up with all five workers in about two seconds, and
+  an empty folder outside Downloads did too - which ruled out the library's own contents.
+- `ShellConfiguration.preparedLibrary` offers `~/StudioHubModels` first and still recognises
+  `~/Downloads/model-library` for a Mac the earlier kit filled in. `protectedFolderWarning` names
+  the protected folder, so the setup card and Settings can say why before a start is attempted
+  rather than after two minutes of waiting.
+- `qualification/copy_models_for_this_mac.py` writes to `~/StudioHubModels` and renames a legacy
+  `~/Downloads/model-library` tree instead of copying 34 GB again; when both exist it names the
+  leftover rather than deleting it.
+- The kit's documents, the one-click steps and the release-kit manifest text follow the new path.
+- `tests/test_peer_path_contract.py` looked for `Studio Hub 0.4.0.app` alone, so its live router
+  probe skipped silently on the version-free bundle name. It now finds `Studio Hub.app` and the new
+  library location and actually runs: 375 tests, 5 skips.
+
 ## 0.5.0 — 2026-09-17 · the app actually runs its own features
 
 Owner-facing notes for this release are in `release-notes.md`, which is what the app's **What's

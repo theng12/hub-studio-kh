@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.1 — 2026-09-19
+
+### The app starts again, and the models have moved out of Downloads
+
+Starting Studio Hub could wait forever on "Starting local services…", and all the app said was that
+the services did not become ready. The reason was where the models were: the setup step put them in
+**Downloads**, and macOS treats that folder as private. The first service to read its models was
+stopped by macOS without being told why, so it waited inside that request instead of failing - no
+error, no timeout, and no clue in the log.
+
+The models now live in **~/StudioHubModels**, and the app starts in about two seconds. If you
+already copied models into Downloads, the copy step moves them across the next time it runs, and a
+library left in Downloads is still offered as a last resort. This replaces the note in 0.5.0 that
+described a library in Downloads as the right place for it. If the app is pointed at a folder
+macOS protects - Downloads, Desktop or Documents - it now says so before starting, instead of
+waiting.
+
+Nothing else changed.
+
 ## 0.5.0 — 2026-09-17
 
 ### The Transcribe button works, and you can pick a Whisper model again

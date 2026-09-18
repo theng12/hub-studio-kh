@@ -19,7 +19,7 @@ fresher timings of its own.
 
     python3 tools/time_kit_voices.py --voices /Volumes/KH-STUDIO-ATLAS/Studio\ Hub\ App/voices \\
         --app "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" \\
-        --models "$HOME/Downloads/model-library"
+        --models "$HOME/StudioHubModels"
 
 It starts the app's own Hub, transcribes each long clip with the app's own Whisper, writes the
 result, and stops. Clips already short enough are left alone; none of the audio is modified.

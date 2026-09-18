@@ -11,10 +11,10 @@ failure here means the machine differs, not that the step is wrong.
 |---|---|---|
 | 1 | Double-click **2 - Copy the models** | It prints the Mac's memory, lists the models that fit, copies them and all 10 voices. ~2–5 minutes. |
 | 2 | Double-click **1 - Install the app** | Asks for the password once. Installs to `/Applications`. |
-| 3 | Open Studio Hub, press **Use the Models Already on This Mac** | The button appears only because step 1 filled `~/Downloads/model-library`. |
+| 3 | Open Studio Hub, press **Use the Models Already on This Mac** | The button appears only because step 1 filled `~/StudioHubModels`. |
 | 4 | Allow the two pop-ups | Local network, incoming connections. |
 | 5 | Status line bottom-left | **Local services ready** |
-| 6 | **Settings → Model library** | Shows `/Users/<you>/Downloads/model-library` |
+| 6 | **Settings → Model library** | Shows `/Users/<you>/StudioHubModels` |
 | 7 | **Models** page | Every model the copy step listed reads as installed |
 | 8 | **Audio → Clone a Voice** | The ten voices are in the dropdown |
 | 9 | Generate one clip | A playable WAV. **Play** works on an MP3 voice too (try Vincent or Aiden). |

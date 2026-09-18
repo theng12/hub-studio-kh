@@ -55,7 +55,7 @@ running and you are done.
 ## Where things end up
 
 - the app: `Applications/Studio Hub.app`
-- the models: `Downloads/model-library`
+- the models: `StudioHubModels`
 - your voices: inside the app's own folder, in your user library
 
 ---

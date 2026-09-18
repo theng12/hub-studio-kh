@@ -111,9 +111,22 @@ class LiveRouterTests(unittest.TestCase):
     """
 
     # A Hub only starts from a complete bundle: it insists on a real `runtimes/voice` beside it.
-    INSTALLED = (Path("/Applications") / "Studio Hub 0.4.0.app",
-                 Path.home() / "Applications" / "Studio Hub 0.4.0.app")
-    LIBRARY = Path.home() / "Downloads" / "model-library"
+    # The bundle name carries no version, so the versioned names only matter for an older install;
+    # omitting the current one made this whole live probe skip while looking green.
+    INSTALLED = tuple(Path(folder) / f"Studio Hub{version}.app"
+                      for folder in (Path.home() / "Applications", Path("/Applications"))
+                      for version in ("", " 0.4.0"))
+    # The library lives outside the home folder because macOS protects ~/Downloads; the old
+    # location is still accepted so this probe keeps working on a Mac the earlier kit filled in.
+    LIBRARIES = (Path.home() / "StudioHubModels",
+                 Path.home() / "Downloads" / "model-library")
+
+    @classmethod
+    def _library(cls):
+        for candidate in cls.LIBRARIES:
+            if candidate.is_dir():
+                return candidate
+        return None
 
     def _bundle(self):
         for candidate in self.INSTALLED:
@@ -125,7 +138,8 @@ class LiveRouterTests(unittest.TestCase):
 
     def test_every_studio_path_the_app_builds_is_routed(self):
         bundle = self._bundle()
-        if bundle is None or not self.LIBRARY.is_dir():
+        library = self._library()
+        if bundle is None or library is None:
             self.skipTest("no installed app bundle or local model library on this machine")
         runtime, worker, hub_source = bundle
         # An installed bundle can predate the very fix this probes for. Reported as a skip rather
@@ -143,7 +157,7 @@ class LiveRouterTests(unittest.TestCase):
             ready = data / "ready.json"
             process = subprocess.Popen(
                 [str(runtime), str(worker), "--data-dir", str(data),
-                 "--models-dir", str(self.LIBRARY), "--ready-file", str(ready),
+                 "--models-dir", str(library), "--ready-file", str(ready),
                  "--host", "127.0.0.1"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             try:

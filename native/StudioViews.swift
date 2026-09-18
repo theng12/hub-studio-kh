@@ -199,17 +199,25 @@ struct StudioContent: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(studio.hasLibrary ? "Start your local services" : "Choose where your models live").font(.title3.weight(.semibold))
             Text(studio.hasLibrary ? "Your model library is selected. Start the services to create assets and manage models." : setupDetail).foregroundStyle(.secondary)
+            if let warning = studio.libraryPrivacyWarning {
+                Text(warning).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 if studio.starting || studio.stopping { ProgressView().controlSize(.small); Text(studio.status) }
                 else {
                     if studio.hasLibrary { Button("Start Services") { studio.start() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
                     // The models the setup step just copied are one click away, and are offered
                     // first: the alternative on a fresh Mac is an empty folder that would download
-                    // 29 GB that is already sitting in Downloads.
+                    // 29 GB that is already on the disk.
                     else if let prepared = studio.preparedLibrary {
                         Button("Use the Models Already on This Mac") { studio.usePreparedLibrary() }
                             .buttonStyle(.borderedProminent).disabled(!studio.canConfigure)
                         Text(prepared.path).font(.caption).foregroundStyle(.secondary)
+                        if let warning = ShellConfiguration.protectedFolderWarning(for: prepared) {
+                            Text(warning).font(.caption).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     else { Button("Use Default Folder") { studio.useDefaultLibrary() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
                     Button("Choose Model Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure)
@@ -1358,6 +1366,10 @@ struct StudioContent: View {
                 }
                 Section("Model library") {
                     LabeledContent("Location") { Text(studio.configuration.modelsDirectory?.path ?? "Not selected").textSelection(.enabled).multilineTextAlignment(.trailing) }
+                    if let warning = studio.libraryPrivacyWarning {
+                        Text(warning).font(.callout).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     HStack { Button("Choose Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure); if let url = studio.configuration.modelsDirectory { Button("Show in Finder") { NSWorkspace.shared.open(url) } } }
                     if !studio.canConfigure { Text("Stop services before changing the model folder or offline mode.").font(.callout).foregroundStyle(.secondary) }
                     Toggle("Use imported models offline", isOn: Binding(get: { studio.configuration.offline }, set: { studio.setOffline($0) })).disabled(!studio.canConfigure)

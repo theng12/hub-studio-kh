@@ -222,26 +222,60 @@ struct ShellConfiguration {
             }
         }
     }
+    /// The folder the setup step fills. A sibling of the home folder, because macOS protects
+    /// `~/Downloads`, `~/Documents` and `~/Desktop` and a protected library is worse than useless:
+    /// see `protectedFolderWarning`.
+    static let libraryFolderName = "StudioHubModels"
+    /// The folder the first kit used. Still recognised so a Mac set up with it keeps working, but
+    /// never offered first, because a library inside `~/Downloads` can stop the app from starting.
+    static let legacyLibraryFolder = "Downloads/model-library"
+
     /// A model library the one-click setup has already filled in.
     ///
-    /// The setup step copies models and voices into `~/Downloads/model-library`. Without this the
-    /// operator had to find that folder in a file panel, and the button offered on a fresh Mac
-    /// ("Use Default Folder") points at an empty folder inside the app's own data directory -
-    /// inviting a second, 29 GB download of models already sitting in Downloads.
+    /// Without this the operator had to find the folder in a file panel, and the button offered on
+    /// a fresh Mac ("Use Default Folder") points at an empty folder inside the app's own data
+    /// directory - inviting a second, 29 GB download of models that are already on the disk.
     ///
     /// Recognised by its install record, not by its name: any folder holding
     /// `.studiohub/installed.json` is a library the app wrote, so this can never offer a random
     /// folder that merely happens to be called `model-library`.
     static func preparedLibrary(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
-        let candidate = home.appendingPathComponent("Downloads/model-library")
-            .standardizedFileURL.resolvingSymlinksInPath()
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
-              isDirectory.boolValue,
-              FileManager.default.fileExists(
-                atPath: candidate.appendingPathComponent(".studiohub/installed.json").path)
-        else { return nil }
-        return candidate
+        for relative in [libraryFolderName, legacyLibraryFolder] {
+            let candidate = home.appendingPathComponent(relative)
+                .standardizedFileURL.resolvingSymlinksInPath()
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  FileManager.default.fileExists(
+                    atPath: candidate.appendingPathComponent(".studiohub/installed.json").path)
+            else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    /// Folders macOS protects from the app and the services it starts.
+    static let protectedLibraryFolders = ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures"]
+
+    /// Why a library in this folder will not work, or nil when the folder is safe.
+    ///
+    /// On 2026-09-18 a 34 GB library at `~/Downloads/model-library` made the app hang forever:
+    /// every service started, then the Voice worker blocked inside `open()` reading the library,
+    /// wrote no readiness record, and the app reported only "the local services did not become
+    /// ready" after two minutes. No log said why - the process was alive and asleep in the kernel
+    /// - and moving the same library to `~/StudioHubModels` brought the Hub up in two seconds.
+    /// macOS privacy protection (TCC) covers these folders, and its refusal is a wait, not an
+    /// error, so the operator needs telling before starting rather than after.
+    static func protectedFolderWarning(for url: URL,
+                                       home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> String? {
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let homePath = home.standardizedFileURL.resolvingSymlinksInPath().path
+        guard let name = protectedLibraryFolders.first(where: { folder in
+            path == homePath + "/" + folder || path.hasPrefix(homePath + "/" + folder + "/")
+        }) else { return nil }
+        return "macOS privacy protection covers \(name), and the local services can be blocked from "
+            + "reading a library inside it - the app then waits for services that never become ready. "
+            + "Move the folder out of \(name) (for example to ~/\(libraryFolderName)) and choose it again."
     }
 
     static func requireExternal(_ url: URL, bundle: URL) throws {
