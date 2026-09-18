@@ -57,6 +57,11 @@ def defaults() -> dict:
         "controller_id": f"{hostname}-hub"[:100],
         "database_mode": "off",
         "parent_controller_url": None,
+        # "minted" when this Hub generated it, "adopted" when it took a controller's during a join.
+        # Absent in settings written before this existed, and absent is treated as minted unless the
+        # machine is joining, which is the conservative reading: never rotate a credential that
+        # might be the one its own nodes hold.
+        "fleet_credential_origin": "minted",
     }
 
 
@@ -187,6 +192,17 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             clear_database_url = True
         if updated["role"] != "agent":
             updated["parent_controller_url"] = None
+        # A machine that was a node holds the credential of the controller it joined. Promoting it
+        # to controller without minting its own would leave two independent groups sharing one
+        # secret: the new controller, and the old controller plus every node under it. That is the
+        # whole containment the five-controller split is supposed to buy, so it is worth one
+        # rotation at the moment of promotion rather than a credential that quietly spans groups.
+        previous_role = str(current.get("role") or "").lower()
+        origin = str(current.get("fleet_credential_origin") or "minted").lower()
+        if updated["role"] == "controller" and (previous_role == "agent" or origin == "adopted"):
+            from . import peers
+            peers.set_fleet_token("")          # empty asks for a fresh one
+            updated["fleet_credential_origin"] = "minted"
         elif updated["parent_controller_url"] is not None:
             updated["parent_controller_url"] = str(updated["parent_controller_url"]).strip() or None
 

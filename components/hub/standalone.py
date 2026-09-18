@@ -455,6 +455,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", value):
             raise HTTPException(400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
         peers.set_fleet_token(value)
+        # Record that this credential is someone else's. Promotion to controller reads this and
+        # mints a fresh one, so a machine that was a node never ends up running a group on the
+        # credential of the group it used to belong to.
+        control_plane.save_settings({"fleet_credential_origin": "adopted"})
         return {"ok": True, "adopted": True}
 
     @app.post("/api/hub/fleet/nodes", status_code=201)
