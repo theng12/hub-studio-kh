@@ -415,6 +415,13 @@ def _view_is_sound(view: Path) -> bool:
     A dangling link is found by ``exists()`` being false while ``is_symlink()`` is true. Nothing
     else in the view is checked: the marker plus a resolved link set is what "finished" means, and
     an unsound view is removed so the caller rebuilds it against the current library.
+
+    ponytail: reachability, not identity. A library replaced in place by a *different* revision of
+    the same package leaves every link resolving, so this reuses a view that no longer matches the
+    bytes it was built from. Every path the package is registered under carries its revision
+    (``<package>/<40-hex>/...``), and the marker records ``package@revision``, so replacing a model
+    means a new directory and a new view name - which is why reachability is enough here. Upgrade
+    path if that ever stops holding: compare the marker's revision against the manifest revision.
     """
     try:
         usable = 0

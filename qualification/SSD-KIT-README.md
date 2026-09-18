@@ -246,8 +246,10 @@ should then show both Macs, with the jobs each has run and its measured average 
 
 ## What this build does *not* have
 
-- No per-model RAM gate. Every model runs on every Apple Silicon Mac; a Mac below a model's
-  qualified tier shows a warning beside the model and runs it anyway.
+- No per-model RAM gate **in the running app**. Every listed model runs on every Apple Silicon
+  Mac; a Mac below a model's qualified tier shows a warning beside it and runs it anyway. The
+  library itself is filtered by memory before it gets there - `2 - Copy the models` copies only
+  the models whose floor this Mac meets, which is why the app has nothing to gate.
 - VoxCPM2 has never produced output on any host that has tried it, including a 16 GiB M4. It
   is in the library; treat it as unproven until it works for you.
 - Nothing has run on a second Mac yet. This Studio is the first machine other than the build

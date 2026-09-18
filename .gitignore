@@ -22,3 +22,6 @@ components/.kh_studio_token
 # Written by the Hub at runtime; the role tests redirect it, but a manual run must not commit it.
 /components/controller_settings.json
 /components/controller_settings.json.repair.lock
+
+# The graphify knowledge graph is a local index, rebuilt from the tree.
+/graphify-out/

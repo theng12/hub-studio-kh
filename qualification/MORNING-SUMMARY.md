@@ -93,15 +93,17 @@ that route answers 200.
 
 ## Needs your attention
 
-**Two controls that do not work, and I did not paper over them:**
+**Two controls that did not work, and I did not paper over them: both are now FIXED.**
 
-- **Hugging Face token — Save and Test.** Both are stubs: Save always fails and Test always
-  returns nothing. The masked token display makes it look functional. Either I implement it
-  (the Voice worker already has the routes) or it should come out of the screen. **Your call.**
-- **"Use imported models offline"** is not honoured by the Image and Subtitle workers, which
-  force offline mode regardless, and the Hub's download route does not enforce it. Turning the
-  setting off changes nothing for those two. Worth fixing, but it needs a decision about what
-  the setting should mean.
+> **Resolved 2026-09-18.** This section is kept as the record of what was wrong on 2026-09-17.
+> Do not read either item as a current defect; both were fixed the next day.
+
+- **Hugging Face token — Save and Test.** ~~Both are stubs: Save always fails and Test always
+  returns nothing.~~ **Fixed.** `saveHFToken` and `testHFToken` now call
+  `/studio/voice/api/settings` and `/settings/test-hf-token` and report the real answer.
+- **"Use imported models offline"** ~~is not honoured by the Image and Subtitle workers, which
+  force offline mode regardless~~. **Fixed.** Both workers set `HF_HUB_OFFLINE` only when
+  `--offline` is passed, so turning the setting off now takes effect.
 
 **The Audio page opens on a preset-speaker model** (Qwen CustomVoice) that is not in the shipped
 library, so it reads as unsupported until you pick a Base model by hand. Given your clone-first
