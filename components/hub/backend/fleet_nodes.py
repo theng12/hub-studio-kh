@@ -213,7 +213,13 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     Reachability is asked for, never assumed: a node that was joined last week and has been
     switched off must read as unreachable rather than as available.
     """
-    row = {key: node.get(key) for key in ("id", "name", "address", "joined_at")}
+    # What the node said about itself when it joined, alongside what it answers now.
+    #
+    # `role` and `studios` were recorded at join time and then dropped here, so a Fleet page could
+    # list a node's name and reachability but not what it is or what it can run. A controller
+    # deciding where to send work needs both, and re-reading them from the node would mean the
+    # roster depended on every node being awake.
+    row = {key: node.get(key) for key in ("id", "name", "address", "role", "studios", "joined_at")}
     owned = client is None
     if owned:
         client = httpx.AsyncClient(follow_redirects=False)

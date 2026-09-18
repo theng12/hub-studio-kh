@@ -287,6 +287,20 @@ class FleetRoleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(str(settings).startswith(self.temporary.name),
                         f"role settings would be written to {settings}")
 
+    async def test_a_node_row_reports_what_the_node_is_and_runs(self):
+        """A roster row must answer "what is this Mac and what can it run".
+
+        `probe()` dropped the `role` and `studios` recorded at join time, so a Fleet page could
+        show a node's name and reachability and nothing about the work it could take.
+        """
+        from components.hub.backend import fleet_nodes
+        node = {"id": "node-a", "name": "Studio 2", "address": "http://127.0.0.1:1",
+                "role": "agent", "studios": [{"id": "voice", "modality": "voice"}],
+                "joined_at": 1.0}
+        row = await fleet_nodes.probe(node)
+        self.assertEqual(row["role"], "agent")
+        self.assertEqual(row["studios"], [{"id": "voice", "modality": "voice"}])
+
 
 if __name__ == "__main__":
     unittest.main()
