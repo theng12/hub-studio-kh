@@ -295,5 +295,47 @@ class AudioSpeedWireTests(unittest.TestCase):
                       "the slider must not repeat the range by hand")
 
 
+class AudioBlockageTests(unittest.TestCase):
+    """A disabled Generate button must say why.
+
+    The owner hit a Generate Audio button that could not be pressed and gave no reason, on a Mac
+    Studio, and had to ask what was wrong. The page also only ever loaded the voice library on the
+    Voices page, so going straight to Audio showed "no saved voices" while ten were on the machine.
+
+    Both are pinned here from the view source, because neither is reachable from the fixtures: one is
+    a disabled state with no output, the other is a missing side effect.
+    """
+
+    VIEWS = (ROOT / "native" / "StudioViews.swift").read_text()
+
+    def test_the_generate_button_is_disabled_by_one_named_reason(self):
+        audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var modelsWorkspace")]
+        # No inline condition: the button and the message under it must read the same rule.
+        self.assertIn(".disabled(audioBlockedReason != nil)", audio)
+        self.assertNotIn(".disabled(!connected || workspace.submittingAudio", audio)
+
+    def test_the_reason_is_shown_next_to_the_button(self):
+        audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var modelsWorkspace")]
+        self.assertIn("if let reason = audioBlockedReason", audio)
+        self.assertIn("Label(reason, systemImage:", audio)
+
+    def test_every_way_to_be_blocked_is_named(self):
+        body = self.VIEWS[self.VIEWS.index("private var audioBlockedReason"):]
+        body = body[:body.index("private var voiceLibraryLoadKey")]
+        for covered in ("Start the local services", "Write the script", "Choose a model",
+                        "Download", "runtime is unavailable", "saved voice", "Prepare Voice",
+                        "Describe the voice", "ready-made voices"):
+            self.assertIn(covered, body, f"the reason list does not cover: {covered}")
+
+    def test_the_audio_page_loads_the_voice_library_itself(self):
+        """Loading it only on the Voices page left the picker empty on a fresh launch."""
+        audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var modelsWorkspace")]
+        self.assertIn("await workspace.refreshVoices()", audio)
+        self.assertIn(".task(id: voiceLibraryLoadKey)", audio)
+
+
 if __name__ == "__main__":
     unittest.main()

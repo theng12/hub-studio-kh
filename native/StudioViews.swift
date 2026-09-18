@@ -524,7 +524,15 @@ struct StudioContent: View {
                         if workspace.submittingAudio { ProgressView().controlSize(.small) }
                         Button("Generate Audio") { Task { await workspace.generateAudio() } }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!connected || workspace.submittingAudio || workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAudioModel?.cached != true || selectedAudioModel?.supported != true || selectedAudioModel?.runtimeReady != true || (selectedAudioModel?.requiresReference == true && workspace.audioReferenceAssetId == nil))
+                            .disabled(audioBlockedReason != nil)
+                    }
+                    // A disabled prominent button with no explanation is the worst state a form can
+                    // be in: the operator can see the control, cannot use it, and has nothing to act
+                    // on. Whatever is holding it up is named here, in the order it has to be fixed.
+                    if let reason = audioBlockedReason {
+                        Label(reason, systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Divider().padding(.top, 8)
                     HStack { Text("Recent audio").font(.headline); Spacer(); if player.playing { Button("Stop Playback") { player.stop() } }; Button("All Jobs") { studio.select(.jobs) } }
@@ -654,6 +662,57 @@ struct StudioContent: View {
             .disabled(workspace.selectableVoices.isEmpty)
             Text(workspace.voicePickerDetail).font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// Why Generate Audio cannot run yet, or nil when it can.
+    ///
+    /// One rule, read by both the button and the message under it, so the control and the
+    /// explanation can never describe different problems. Ordered by what has to be fixed first:
+    /// services, then the script, then the model, then the voice.
+    ///
+    /// This exists because a disabled prominent button with nothing beside it is the worst state a
+    /// form can be in: the operator can see the control, cannot use it, and has nothing to act on.
+    /// The owner hit exactly that on a Mac Studio and had to ask what was wrong.
+    private var audioBlockedReason: String? {
+        if !connected { return "Start the local services first." }
+        if workspace.submittingAudio { return "Generating. One job at a time." }
+        if workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Write the script you want spoken."
+        }
+        guard let model = selectedAudioModel else { return "Choose a model." }
+        if model.supported != true { return model.supportNote }
+        if model.cached != true { return "Download \(model.label) on the Models page first." }
+        if model.runtimeReady != true {
+            return "\(model.label) is installed, but its local runtime is unavailable."
+        }
+        switch model.voiceMode {
+        case .cloning:
+            if workspace.audioVoiceLibraryID == nil, workspace.audioReferencePath == nil {
+                return workspace.selectableVoices.isEmpty
+                    ? "No saved voice can be used yet. Add or fix one on the Voices page, or choose a clip file."
+                    : "Choose a saved voice, or a clip file."
+            }
+            if workspace.audioVoiceLibraryID == nil, workspace.audioReferenceAssetId == nil {
+                return "Press Prepare Voice to upload the clip."
+            }
+        case .design:
+            if workspace.audioDesignPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Describe the voice you want."
+            }
+        case .preset:
+            if workspace.audioSpeakers.isEmpty {
+                return "This model has not reported its ready-made voices yet."
+            }
+        }
+        return nil
+    }
+
+    /// When the Audio page should (re)load the voice library.
+    ///
+    /// The connection, and which tab is showing: cloning is the only tab that offers saved voices,
+    /// so the other two have no reason to fetch them.
+    private var voiceLibraryLoadKey: String {
+        "\(connected)/\(workspace.audioMode.rawValue)"
     }
 
     /// Speaking pace: one slider, with the engine's own pace as the default.
@@ -814,6 +873,14 @@ struct StudioContent: View {
                 }.frame(minWidth: 245, idealWidth: 280, maxWidth: 330)
             }
         }.padding(28)
+        // The Audio page reads the voice library itself. Loading it only on the Voices page meant a
+        // fresh launch that went straight here showed "No saved voices yet" and a disabled picker
+        // while ten voices were sitting on the Mac, and nothing on screen said the list had simply
+        // never been fetched.
+        .task(id: voiceLibraryLoadKey) {
+            guard connected, workspace.audioMode == .cloning else { return }
+            await workspace.refreshVoices()
+        }
     }
 
     private var modelsWorkspace: some View {
