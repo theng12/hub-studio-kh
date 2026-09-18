@@ -91,6 +91,13 @@ New** screen shows.
   could not be dispatched and is cleared on a successful dispatch, but one written on an attempt
   that was later retried into success stayed on the record: all eleven transcripts in the owner's
   history carried "model is not in the packaged catalog" next to a finished result.
+- Rebuild a cached model view when the library it was built from moves. Views are made of absolute
+  symlinks, so moving the library leaves every link dangling while a marker file still calls the
+  view finished - and it is reused forever. Seen in two states on this Mac: a view whose links all
+  dangle, and a view directory with no entries. Both are now detected and rebuilt, in
+  `cache._merged_snapshot_view()` and in the Subtitle engine's own view builder. This is why
+  `whisper-base` and `whisper-small` failed with "Config not found" while `whisper-turbo` - which
+  needs no view - kept working. All three verified transcribing after the fix.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

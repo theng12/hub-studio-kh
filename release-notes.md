@@ -49,6 +49,19 @@ If you ever see a model the app calls "not installed" when you know it is there,
 thing to check: open **Settings** and look at **Model library**. It should say
 `Downloads/model-library`.
 
+### Whisper Base and Small work again
+
+**Whisper Base** and **Whisper Small** refused to transcribe, saying the model's config was missing
+even though it was sitting in the model folder. **Whisper Turbo** was unaffected, which is what
+pointed at the cause.
+
+The two broken ones are stored in a form the engine has to convert, and that conversion is cached
+in a folder built from links into your model library. When the library moved, every link in that
+cached folder broke — and the app kept trusting the folder because it looked finished. It now
+checks that the cached copy actually points at real files, and rebuilds it when it does not.
+
+All three Whisper models transcribe correctly now.
+
 ### The Subtitle page no longer offers to play a transcript
 
 **Recent subtitles** was showing **Play** and **Save** for transcripts, which are text — and
