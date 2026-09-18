@@ -2089,7 +2089,7 @@ final class NativeWorkspaceStore: ObservableObject {
         do {
             let target = try Self.privateHTTPAddress(address)
             let secret = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !secret.isEmpty else { throw NativeAPIError.message("Enter the controller's Hub token.") }
+            guard !secret.isEmpty else { throw NativeAPIError.message("Enter the controller's token.") }
             let nodeID = (controllerIdentity?.settings.controllerId ?? "studiohub-node")
                 .lowercased()
             let name = controllerIdentity?.settings.machineName ?? "Studio Hub"
@@ -2124,6 +2124,18 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             guard let http = response as? HTTPURLResponse else {
                 throw NativeAPIError.message("The controller returned no response.")
+            }
+            if (200..<300).contains(http.statusCode), !secret.isEmpty {
+                // Take on the controller's credential, which is what registration means.
+                //
+                // The route existed and nothing called it, so a Mac joined a controller and then
+                // answered 401 to that controller: the controller drives its nodes with its own
+                // credential, and handing it over is the point of registering. The one credential
+                // per cluster is the whole design, and this is the half that installs it.
+                //
+                // Registration first, adoption second: the controller has to accept the node before
+                // the node stops accepting its own credential.
+                try? await adoptClusterCredential(secret)
             }
             guard (200..<300).contains(http.statusCode) else {
                 throw NativeAPIError.message(http.statusCode == 401
@@ -2258,6 +2270,21 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Fetch one completed voice clip, checked against the result the Hub recorded.
     ///
+    /// Take on the cluster credential, so this Mac accepts work from its controller.
+    ///
+    /// Best-effort by design: a failure here leaves the node registered but unable to take work,
+    /// which the controller reports as unreachable, and re-joining fixes it. Failing the join
+    /// instead would be worse - the controller would have a node it cannot reach and the operator
+    /// would see only that registration failed, with the credential already half adopted.
+    private func adoptClusterCredential(_ token: String) async throws {
+        let body = try JSONEncoder().encode(["token": token])
+        var request = try makeRequest(["api", "hub", "fleet", "adopt"], method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = body
+        _ = try await performData(request)
+    }
+
     /// The Hub records the byte count, the SHA-256 and the decoded WAV shape when it adopts a
     /// finished voice job, so a clip that arrives truncated or altered is refused here rather
     /// than played or saved as if it were the generation. The RIFF/WAVE header is required for

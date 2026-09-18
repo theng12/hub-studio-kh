@@ -42,6 +42,7 @@ final class FixtureProtocol: URLProtocol {
     static var roleChanges: [String] = []
     static var fleetCalls: [String] = []
     static var joinBody: [String: Any]?
+    static var adoptBody: [String: Any]?
     static var currentRole = "standalone"
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
@@ -103,6 +104,7 @@ final class FixtureProtocol: URLProtocol {
     static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
     static func fleetRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return fleetCalls }
     static func joinPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return joinBody }
+    static func adoptPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return adoptBody }
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
@@ -252,6 +254,13 @@ final class FixtureProtocol: URLProtocol {
             Self.joinBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             Self.lock.unlock()
             result = (201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8))
+        case ("POST", "/api/hub/fleet/adopt"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.fleetCalls.append("adopt")
+            Self.adoptBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"adopted":true}"#.utf8))
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
@@ -563,6 +572,14 @@ struct NativeAPITests {
                     == ["image", "transcription", "voice"],
                 "the studios must carry the modalities the fleet routes by")
         require(store.fleetNote?.contains("Joined") == true, "a join needs a visible result")
+        // Registering is half of joining. A controller drives its nodes with its own credential,
+        // and a node that has not taken that credential on answers 401 to the controller it just
+        // registered with - so the first job dispatched to it fails. The app called the register
+        // route and never the adopt route, which nothing caught because no fixture asserted it.
+        require(FixtureProtocol.fleetRequests().contains("adopt"),
+                "joining must also adopt the controller's credential: \(FixtureProtocol.fleetRequests())")
+        require(FixtureProtocol.adoptPayload()?["token"] as? String == "fleet-token-value",
+                "adoption must hand over the controller's credential, got: \(String(describing: FixtureProtocol.adoptPayload()))")
 
         // Which job a voice model does. The Audio page is arranged by this, and getting it wrong
         // put a CustomVoice model on the cloning path, where it was asked for a reference voice it

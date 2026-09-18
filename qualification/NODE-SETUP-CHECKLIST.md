@@ -57,17 +57,28 @@ The app is a folder and the models are a folder, so nothing is hard to undo:
 - Point the app at a different library: **Settings → Model library → Choose Folder…**
 - Models are only ever added, never deleted, except an older revision of a model just updated.
 
-## Before the fleet is large: one decision
+## One token per controller
 
-Every Studio Hub mints its own credential, and joining a fleet makes the nodes adopt one shared
-credential. That is fine for a handful of Macs and becomes a problem at fifty:
+There is **one token** to think about. On the controller it is under **Connections** as the **Hub
+token**, and it does three jobs:
 
-**Revoking one machine means rotating the credential that all of them share** - so a lost or sold Mac
-cannot be shut out without touching every other Mac.
+- it is the controller's own credential on that Mac;
+- the **gateway** uses it to reach that controller's Hub;
+- each **node** is given it when it registers, so a controller can send work to its nodes.
 
-The option is a **per-node credential the controller can revoke on its own**, keeping the shared one
-only for joining. Then losing one Mac costs one node.
+The owner's decision, recorded: **one token per controller, copied to each joining Mac**, rather than
+a separate credential per node. That keeps signup to a single value.
 
-That is a security decision rather than a feature, so it is the owner's to make. It is not urgent at
-two machines and it is urgent well before fifty, and it is cheapest to do before the machines are
-handed out rather than after.
+**What that costs, so it is a known trade rather than a surprise:** losing the token for one
+controller means re-entering it on that controller's nine or ten nodes. The five controllers are
+independent, so one group's token cannot reach another group. Keep each controller's token with that
+controller.
+
+**If a node is ever promoted to controller**, it mints a fresh token on the spot, so the new group
+never runs on the old group's credential. Its nodes then re-register with the new one.
+
+### Setting up a group
+
+1. On the controller: **Connections → Hub token → Copy**.
+2. On each node: **Connections → Join**, paste the controller's address and that token.
+3. The node registers and takes the token on. The controller should then list it as reachable.
