@@ -239,30 +239,53 @@ class FleetRoleTests(unittest.IsolatedAsyncioTestCase):
     own nodes while `/api/hub/capabilities` reported `standalone` from the same setting - two
     endpoints, two answers, on the field a fleet gateway uses to decide whether a location can
     accept an enrolment. Measured on a standalone Mac, 2026-09-18.
+
+    Isolated in a temporary data directory on purpose. This test writes a role, and an earlier
+    version of it wrote `controller_settings.json` into the source tree. `SETTINGS_FILE` is bound
+    at import time, so redirecting the environment alone is not enough; the module attribute is
+    redirected too, exactly as the roster tests above do it.
     """
 
-    async def test_a_standalone_hub_does_not_call_itself_a_controller(self):
-        from components.hub.backend import fleet_nodes, control_plane
-        saved = control_plane.load_settings()["role"]
-        try:
-            control_plane.save_settings({"role": "standalone"})
-            self.assertEqual((await fleet_nodes.inventory())["role"], "standalone")
-            control_plane.save_settings({"role": "controller"})
-            self.assertEqual((await fleet_nodes.inventory())["role"], "controller")
-        finally:
-            control_plane.save_settings({"role": saved})
+    def setUp(self):
+        from components.hub.backend import control_plane
+        self.temporary = tempfile.TemporaryDirectory()
+        self.old_env = os.environ.get("STUDIOHUB_DATA_DIR")
+        os.environ["STUDIOHUB_DATA_DIR"] = self.temporary.name
+        self.control_plane = control_plane
+        self.old_file = control_plane.SETTINGS_FILE
+        self.old_cache = control_plane._settings_cache
+        control_plane.SETTINGS_FILE = Path(self.temporary.name) / "controller_settings.json"
+        control_plane._settings_cache = None
 
-    async def test_the_roster_and_the_capabilities_agree(self):
+    def tearDown(self):
+        self.control_plane.SETTINGS_FILE = self.old_file
+        self.control_plane._settings_cache = self.old_cache
+        if self.old_env is None:
+            os.environ.pop("STUDIOHUB_DATA_DIR", None)
+        else:
+            os.environ["STUDIOHUB_DATA_DIR"] = self.old_env
+        self.temporary.cleanup()
+
+    async def test_a_standalone_hub_does_not_call_itself_a_controller(self):
+        from components.hub.backend import fleet_nodes
+        self.control_plane.save_settings({"role": "standalone"})
+        self.assertEqual((await fleet_nodes.inventory())["role"], "standalone")
+        self.control_plane.save_settings({"role": "controller"})
+        self.assertEqual((await fleet_nodes.inventory())["role"], "controller")
+
+    async def test_the_roster_and_the_saved_setting_always_agree(self):
         """One role per Hub, whichever endpoint is asked."""
-        from components.hub.backend import fleet_nodes, control_plane
-        saved = control_plane.load_settings()["role"]
-        try:
-            for role in ("standalone", "controller", "agent"):
-                control_plane.save_settings({"role": role})
-                self.assertEqual((await fleet_nodes.inventory())["role"], role)
-                self.assertEqual(control_plane.load_settings()["role"], role)
-        finally:
-            control_plane.save_settings({"role": saved})
+        from components.hub.backend import fleet_nodes
+        for role in ("standalone", "controller", "agent"):
+            self.control_plane.save_settings({"role": role})
+            self.assertEqual((await fleet_nodes.inventory())["role"], role)
+            self.assertEqual(self.control_plane.load_settings()["role"], role)
+
+    def test_this_test_never_writes_into_the_source_tree(self):
+        """The guard for the mistake this file already made once."""
+        settings = self.control_plane.SETTINGS_FILE
+        self.assertTrue(str(settings).startswith(self.temporary.name),
+                        f"role settings would be written to {settings}")
 
 
 if __name__ == "__main__":

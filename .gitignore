@@ -18,3 +18,7 @@ components/hub.db
 components/.fleet_token
 components/.kh_studio_token
 .kh_studio_token
+
+# Written by the Hub at runtime; the role tests redirect it, but a manual run must not commit it.
+/components/controller_settings.json
+/components/controller_settings.json.repair.lock
