@@ -49,6 +49,29 @@ If you ever see a model the app calls "not installed" when you know it is there,
 thing to check: open **Settings** and look at **Model library**. It should say
 `Downloads/model-library`.
 
+### You can now change how fast the audio speaks
+
+The engine has always been able to speed audio up or slow it down **without changing the voice** —
+it has been doing the long-script splitting and joining all along too, automatically. What was
+missing was any way to set the pace from the window.
+
+There is now a **Speed** slider on the Audio page, next to Language: 0.5× to 2×, with **Normal** to
+put it back. It applies to every voice — your saved voices, the ready-made ones, and designed ones.
+
+Measured on this Mac:
+
+| Setting | Length of the same sentence |
+|---|---|
+| 0.5× (slowest) | 12.3 s |
+| 1× (normal) | 4.9 s |
+| 2× (fastest) | 2.5 s |
+
+### Long scripts already split and rejoin by themselves
+
+Nothing to set. A script longer than the model can speak in one go is split at sentence boundaries,
+each part is generated, and the parts are rejoined with a short pause — with the engine's own
+cleanup of any silence the model adds at the end of a part. You see it as `section 3/7` progress.
+
 ### Whisper Base and Small work again
 
 **Whisper Base** and **Whisper Small** refused to transcribe, saying the model's config was missing

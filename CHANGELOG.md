@@ -98,6 +98,12 @@ New** screen shows.
   `cache._merged_snapshot_view()` and in the Subtitle engine's own view builder. This is why
   `whisper-base` and `whisper-small` failed with "Config not found" while `whisper-turbo` - which
   needs no view - kept working. All three verified transcribing after the fix.
+- Expose the speaking pace in the app. The engine has applied pitch-preserving tempo to the
+  finished audio all along, and the audited contract has carried `speed` (0.5-2.0) since the start of
+  the project, but nothing ever sent it: every clip was generated at 1.0. `HubAudioParams.speed` is
+  now sent on all four voice paths and a slider sets it. Measured through the real worker, one
+  sentence: 12.29 s at 0.5x, 4.88 s at 1.0x, 2.51 s at 2.0x - monotonic and correct in direction,
+  and not exactly linear because the model's own generation length varies between runs.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof
