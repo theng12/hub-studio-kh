@@ -516,6 +516,45 @@ class VoiceCopyTests(unittest.TestCase):
             self.assertTrue((folder / "transcript.txt").is_file(),
                             f"{name} has no transcript, so it cannot clone")
 
+    def test_timings_are_added_to_a_voice_that_is_already_here(self):
+        """A measured file the app needs must not be skipped along with the operator's own clip.
+
+        The rule "never overwrite an existing voice" protects the recording and its transcript. The
+        timings are neither: they are measured, the app only uses them when they match the transcript
+        exactly, and without them a clip longer than the model's window cannot be prepared at all.
+        Measured on a real node on 2026-09-18: 0 of 10 voices had timings while the kit carried 7,
+        because the timings were added to the kit after the voices were already on the Mac.
+        """
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian", "the words")
+            self._voice(target, "0616aec33b41", "Christian", "the words I corrected")
+            (source / "0616aec33b41" / COPY.TIMED_TRANSCRIPT).write_text(
+                json.dumps({"transcript": "the words", "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 1.0, "text": "the words"}]}))
+
+            added, present, names = COPY.copy_voices(source, target)
+
+            self.assertEqual((added, present), (0, 1), "the voice itself is not re-copied")
+            self.assertTrue((target / "0616aec33b41" / COPY.TIMED_TRANSCRIPT).is_file(),
+                            "the timings must reach a voice that was already present")
+            self.assertEqual((target / "0616aec33b41/transcript.txt").read_text(),
+                             "the words I corrected", "the operator's transcript is untouched")
+            self.assertIn("timings", " ".join(names), "and it is reported")
+
+    def test_timings_are_not_overwritten_if_this_mac_already_has_them(self):
+        with TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / "kit/voices", Path(tmp) / "library"
+            self._voice(source, "0616aec33b41", "Christian")
+            self._voice(target, "0616aec33b41", "Christian")
+            (source / "0616aec33b41" / COPY.TIMED_TRANSCRIPT).write_text('{"segments": []}')
+            (target / "0616aec33b41" / COPY.TIMED_TRANSCRIPT).write_text('{"segments": [{"mine": 1}]}')
+
+            COPY.copy_voices(source, target)
+
+            self.assertIn("mine", (target / "0616aec33b41" / COPY.TIMED_TRANSCRIPT).read_text(),
+                          "timings already measured here are left alone")
+
 
 if __name__ == "__main__":
     unittest.main()

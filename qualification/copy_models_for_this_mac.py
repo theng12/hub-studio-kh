@@ -178,6 +178,12 @@ def kit_voices(library: Path) -> list[tuple[Path, str]]:
     return found
 
 
+#: Timings measured for a long reference clip, written beside the transcript by
+#: `qualification/time_kit_voices.py`. One name, so the tool that writes it and the copy step that
+#: carries it cannot disagree.
+TIMED_TRANSCRIPT = "transcript.timed.json"
+
+
 def copy_voices(source: Path, destination: Path) -> tuple[int, int, list[str]]:
     """Add the kit's voices to this Mac, and leave every voice already here alone.
 
@@ -193,6 +199,19 @@ def copy_voices(source: Path, destination: Path) -> tuple[int, int, list[str]]:
         target = destination / folder.name
         if target.is_dir():
             present += 1
+            timed = folder / TIMED_TRANSCRIPT
+            # The clip and the transcript belong to whoever recorded them, so an existing voice is
+            # never overwritten. The timings are different: they are measured, not authored, the app
+            # only uses them when they match the transcript exactly, and a long clip cannot be
+            # prepared without them. Added later to the kit, they were skipped along with the voice
+            # and never reached the Mac at all - measured on 2026-09-18, 0 of 10 voices on a node
+            # had timings while the kit carried 7.
+            if timed.is_file() and not (target / TIMED_TRANSCRIPT).exists():
+                try:
+                    shutil.copyfile(timed, target / TIMED_TRANSCRIPT)
+                    names.append(f"{name} (timings added)")
+                except OSError:
+                    pass
             continue
         try:
             copy_folder(folder, target)
