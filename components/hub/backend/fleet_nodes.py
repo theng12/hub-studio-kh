@@ -242,8 +242,16 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     rows = []
     for node_id in sorted(nodes):
         rows.append(await probe(nodes[node_id], client))
+    # The role this Hub is actually in, not a constant.
+    #
+    # This was hardcoded to "controller", so a standalone Mac answered "controller" here while
+    # `/api/hub/capabilities` and `/api/hub/controller` answered "standalone" from the saved
+    # setting. Measured on a standalone Mac on 2026-09-18, and it matters directly: gateway-kh
+    # decides "can this site own nodes" from this field, so a standalone location was advertised as
+    # able to accept enrolments it would never manage.
+    from . import control_plane
     return {
-        "role": "controller",
+        "role": control_plane.load_settings()["role"],
         "nodes": rows,
         "summary": {
             "total": len(rows),

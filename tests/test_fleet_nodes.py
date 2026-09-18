@@ -232,5 +232,38 @@ class FleetNodeStoreTests(unittest.TestCase):
         self.assertEqual(inventory["summary"]["total"], 0)
 
 
+class FleetRoleTests(unittest.IsolatedAsyncioTestCase):
+    """The fleet roster must report the role this Hub is actually in.
+
+    `inventory()` hardcoded `"role": "controller"`, so a standalone Mac advertised itself as able to
+    own nodes while `/api/hub/capabilities` reported `standalone` from the same setting - two
+    endpoints, two answers, on the field a fleet gateway uses to decide whether a location can
+    accept an enrolment. Measured on a standalone Mac, 2026-09-18.
+    """
+
+    async def test_a_standalone_hub_does_not_call_itself_a_controller(self):
+        from components.hub.backend import fleet_nodes, control_plane
+        saved = control_plane.load_settings()["role"]
+        try:
+            control_plane.save_settings({"role": "standalone"})
+            self.assertEqual((await fleet_nodes.inventory())["role"], "standalone")
+            control_plane.save_settings({"role": "controller"})
+            self.assertEqual((await fleet_nodes.inventory())["role"], "controller")
+        finally:
+            control_plane.save_settings({"role": saved})
+
+    async def test_the_roster_and_the_capabilities_agree(self):
+        """One role per Hub, whichever endpoint is asked."""
+        from components.hub.backend import fleet_nodes, control_plane
+        saved = control_plane.load_settings()["role"]
+        try:
+            for role in ("standalone", "controller", "agent"):
+                control_plane.save_settings({"role": role})
+                self.assertEqual((await fleet_nodes.inventory())["role"], role)
+                self.assertEqual(control_plane.load_settings()["role"], role)
+        finally:
+            control_plane.save_settings({"role": saved})
+
+
 if __name__ == "__main__":
     unittest.main()

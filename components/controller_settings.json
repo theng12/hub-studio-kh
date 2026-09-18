@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "role": "standalone",
+  "site_id": "local-site",
+  "site_name": "Local site",
+  "controller_id": "macmini-angkor-hub",
+  "database_mode": "off",
+  "parent_controller_url": null
+}
