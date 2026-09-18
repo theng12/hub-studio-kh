@@ -619,6 +619,7 @@ struct StudioContent: View {
                             Text("Language").font(.callout)
                             TextField("Language code, e.g. en", text: $workspace.audioLanguage).textFieldStyle(.roundedBorder)
                         }
+                        speedControl
                         Spacer(minLength: 12)
                         Text("Model installation and storage are managed centrally.").font(.callout).foregroundStyle(.secondary)
                         Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
@@ -652,6 +653,41 @@ struct StudioContent: View {
             .labelsHidden()
             .disabled(workspace.selectableVoices.isEmpty)
             Text(workspace.voicePickerDetail).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Speaking pace: one slider, with the engine's own pace as the default.
+    ///
+    /// The engine applies this as pitch-preserving tempo to the finished audio, so the voice keeps
+    /// its identity at every setting - which is why it is a plain slider and not an engine choice.
+    /// The range is the audited contract's, taken from the store rather than repeated here.
+    private var speedControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Speed").font(.callout)
+                Spacer()
+                if abs(workspace.audioSpeed - 1.0) > 0.001 {
+                    Button("Normal") { workspace.audioSpeed = 1.0 }
+                        .font(.caption).buttonStyle(.link)
+                }
+                Text(String(format: "%.2f×", workspace.audioSpeed))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(abs(workspace.audioSpeed - 1.0) > 0.001 ? .primary : .secondary)
+            }
+            Slider(value: $workspace.audioSpeed, in: NativeWorkspaceStore.audioSpeedRange, step: 0.05) {
+                Text("Speed")
+            } minimumValueLabel: {
+                Text("0.5×").font(.caption2)
+            } maximumValueLabel: {
+                Text("2×").font(.caption2)
+            }
+            .labelsHidden()
+            Text(workspace.audioSpeed > 1.0
+                 ? "Faster than normal, with the voice unchanged."
+                 : workspace.audioSpeed < 1.0
+                 ? "Slower than normal, with the voice unchanged."
+                 : "The engine's own pace.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

@@ -982,6 +982,8 @@ struct NativeAPITests {
         require((generated?["client_request_id"] as? String)?.count ?? 0 >= 8,
                 "durable client_request_id missing - the Hub reads snake_case")
         let items = generated?["items"] as? [[String: Any]]
+        require((items?.first?["params"] as? [String: Any])?["speed"] as? Double == 1.0,
+                "the engine's own pace must be sent explicitly, got: \(String(describing: items?.first?["params"]))")
         require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
         require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
 

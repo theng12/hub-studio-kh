@@ -262,5 +262,38 @@ class JobRowContractTests(unittest.TestCase):
         self.assertIn('Button("Play")', body[:2000])
 
 
+class AudioSpeedWireTests(unittest.TestCase):
+    """The pace control must reach the worker, and within the range the audit allows.
+
+    The engine applies speed as pitch-preserving tempo to the finished audio, so the value is a
+    plain number on the job parameters. It has to be in the body: a control that changes the UI and
+    not the audio is worse than no control.
+    """
+
+    def test_the_audio_params_carry_a_speed(self):
+        text = (NATIVE / "StudioAPI.swift").read_text()
+        params = re.search(r"private struct HubAudioParams: Codable \{(.*?)\n\}", text, re.S)
+        self.assertIsNotNone(params, "HubAudioParams not found")
+        self.assertIn("var speed: Double", params.group(1))
+
+    def test_every_audio_submission_sends_the_chosen_speed(self):
+        """All four voice paths: clone-from-library, clone-from-clip, preset and design."""
+        text = (NATIVE / "StudioAPI.swift").read_text()
+        constructions = re.findall(r"presetSpeaker: [^\n]*\n?[^\n]*language: language[^\n]*", text)
+        audio = [line for line in constructions if "HubAudioParams" not in line]
+        self.assertTrue(audio, "no audio parameter constructions found")
+        for line in audio:
+            self.assertIn("speed: audioSpeed", line,
+                          f"an audio path does not send the pace: {line.strip()}")
+
+    def test_the_slider_uses_the_audited_range(self):
+        """0.5-2.0 comes from the contract, and is declared once."""
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        self.assertIn("static let audioSpeedRange: ClosedRange<Double> = 0.5...2.0", api)
+        views = (NATIVE / "StudioViews.swift").read_text()
+        self.assertIn("in: NativeWorkspaceStore.audioSpeedRange", views,
+                      "the slider must not repeat the range by hand")
+
+
 if __name__ == "__main__":
     unittest.main()

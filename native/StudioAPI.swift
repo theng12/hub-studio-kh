@@ -627,6 +627,11 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var audioMode: VoiceMode = .cloning { didSet { scheduleSave() } }
     /// The written description a voice-design model turns into a voice.
     @Published var audioDesignPrompt = "" { didSet { scheduleSave() } }
+    /// Speaking pace, 0.5-2.0. The engine's own pace is 1.0, and the worker clamps anything else.
+    @Published var audioSpeed: Double = 1.0 { didSet { scheduleSave() } }
+    /// The bounds the audited contract allows. Held here so the slider, the store and anything that
+    /// reports the value cannot disagree about the range.
+    static let audioSpeedRange: ClosedRange<Double> = 0.5...2.0
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
     /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
@@ -952,7 +957,8 @@ final class NativeWorkspaceStore: ObservableObject {
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: "", language: language, designPrompt: description))],
+                            presetSpeaker: "", language: language, speed: audioSpeed,
+                            designPrompt: description))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 } else if model.voiceMode == .cloning {
                     if let voiceID = audioVoiceLibraryID {
@@ -966,7 +972,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: language))],
+                                presetSpeaker: "", language: language, speed: audioSpeed))],
                             voiceReferenceAssetId: nil, voiceLibraryId: voiceID, routing: routingPin)
                     } else {
                         guard audioReferencePath != nil else {
@@ -982,7 +988,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: language))],
+                                presetSpeaker: "", language: language, speed: audioSpeed))],
                             voiceReferenceAssetId: assetID, voiceLibraryId: nil, routing: routingPin)
                     }
                 } else {
@@ -993,7 +999,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: audioSpeaker, language: language))],
+                            presetSpeaker: audioSpeaker, language: language, speed: audioSpeed))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 }
             }
@@ -2736,6 +2742,8 @@ final class NativeWorkspaceStore: ObservableObject {
         /// Absent in state written before the three voice tabs existed; absent means cloning.
         let audioMode: String?
         let audioDesignPrompt: String?
+        /// Absent in state written before the pace control existed; absent means the engine's pace.
+        let audioSpeed: Double?
         let audioSpeaker: String
         let audioLanguage: String
         let transcriptionModel: String
@@ -2814,6 +2822,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let state = SavedState(
             audioText: audioText, audioModel: audioModel,
             audioMode: audioMode.rawValue, audioDesignPrompt: audioDesignPrompt,
+            audioSpeed: audioSpeed,
             audioSpeaker: audioSpeaker, audioLanguage: audioLanguage,
             transcriptionModel: transcriptionModel, transcriptionFile: transcriptionFile?.path,
             transcriptionLanguage: transcriptionLanguage, wordTimestamps: wordTimestamps,
@@ -2839,6 +2848,10 @@ final class NativeWorkspaceStore: ObservableObject {
         // every audio model in the earlier state did.
         audioMode = state.audioMode.flatMap(VoiceMode.init(rawValue:)) ?? .cloning
         audioDesignPrompt = state.audioDesignPrompt ?? ""
+        // Absent means 1.0, and a value from an older or edited file that is out of range is pulled
+        // back to the contract's bounds rather than refused - a saved pace is not worth an error.
+        audioSpeed = min(max(state.audioSpeed ?? 1.0, Self.audioSpeedRange.lowerBound),
+                         Self.audioSpeedRange.upperBound)
         transcriptionModel = state.transcriptionModel
         if let path = state.transcriptionFile, FileManager.default.fileExists(atPath: path) { transcriptionFile = URL(fileURLWithPath: path) }
         transcriptionLanguage = state.transcriptionLanguage
@@ -3050,6 +3063,9 @@ private struct HubAudioItem: Codable { let text: String; let params: HubAudioPar
 private struct HubAudioParams: Codable {
     let presetSpeaker: String
     let language: String
+    /// How fast to speak. The worker bounds this to 0.5-2.0 and applies tempo to the finished
+    /// audio, so pitch is preserved; 1.0 is the engine's own pace and is sent as-is.
+    var speed: Double
     /// Sent only by a voice-design model. Encoded as `voice_design_prompt`; the Hub and the Voice
     /// worker both read that name.
     var designPrompt: String?
