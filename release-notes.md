@@ -49,6 +49,16 @@ If you ever see a model the app calls "not installed" when you know it is there,
 thing to check: open **Settings** and look at **Model library**. It should say
 `Downloads/model-library`.
 
+### The Subtitle page no longer offers to play a transcript
+
+**Recent subtitles** was showing **Play** and **Save** for transcripts, which are text — and
+**Open Transcript**, which did nothing except switch pages and leave the page empty. Both fixed:
+the row now offers **Open Transcript** and it actually loads the transcript, so you can read it,
+switch between Text / SRT / VTT and export it.
+
+Finished transcripts also stopped carrying an old warning. Every one of them said *"model is not in
+the packaged catalog"* — a note from a retry, left on a job that had since completed successfully.
+
 ### The Audio page is now three tabs
 
 Choosing a voice is really three different jobs, and they used to share one form whose controls

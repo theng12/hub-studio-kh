@@ -81,6 +81,16 @@ New** screen shows.
   `~/Downloads`. The stale Hub was stopped, the duplicate folder moved to the Trash, and the app's
   own `app-preferences.json` points at `~/Downloads/model-library`; the running app now reports
   `15 of 15 ready`.
+- Draw subtitle lists with the subtitle row everywhere. The Subtitle page's "Recent subtitles" panel
+  was the last place using the audio row, so it offered Play and Save for a transcript while the
+  Jobs page offered "Open Transcript" for the same job.
+- Make "Open Transcript" load the transcript. It switched pages and left them empty; it now reads
+  the finished batch's own SRT artifact and derives the plain text and WebVTT from those cues, so
+  the format picker and Export work on a transcript from an earlier sitting.
+- Report `governor_note` only while a batch is still waiting. The note explains why a queued job
+  could not be dispatched and is cleared on a successful dispatch, but one written on an attempt
+  that was later retried into success stayed on the record: all eleven transcripts in the owner's
+  history carried "model is not in the packaged catalog" next to a finished result.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof
