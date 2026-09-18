@@ -172,6 +172,13 @@ are current; the longer narrative under it is historical and is kept for provena
 5. **ST-11.OS** needs an original M1 at the oldest candidate Sonoma release. Until then the only
    OS-floor evidence is Image's own refusal below macOS 14.0.
 
+**Staging and copying must go together.** `stage_voice.py` writes `Studio Hub.app.tree-sha256`
+beside the app, and `release_kit.py` fails when that file does not match the app's contents. Copying
+a newer app onto the drive without re-running the staging tool therefore ships a kit whose own
+integrity check fails - which happened on 2026-09-18, and was only visible by reading
+`focused-release-manifest.json`'s `problems` list. Whenever the app is replaced, run staging and
+then regenerate the manifest, and check `problems` is empty before handing the drive over.
+
 **Cutting a release is now four edits and one gate.** `VERSION` is the source; `release-notes.md`
 is what the app's **What's New** screen shows and `CHANGELOG.md` is the engineering record. Add an
 entry to both, raise `VERSION`, and run `tests/test_release_notes.py`, which fails when the newest
