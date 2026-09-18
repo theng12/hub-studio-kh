@@ -114,6 +114,11 @@ New** screen shows.
   record still gets the absolute URL it fetches from, and `ledger.load_batch` normalises an
   absolute URL to its path on read so batches written before this change keep working without a
   migration. Both old artifacts return 200 after the fix.
+- Give the app an icon. The bundle had none - no `.icns` and no `CFBundleIconFile` - so macOS drew
+  the blank page placeholder everywhere an icon appears. `packaging/make_app_icon.py` draws the mark
+  with CoreGraphics and assembles the `.icns` from one 1024px master, so every size is a true
+  downscale rather than separately tuned bitmaps. Staging copies it, the plist names it, and staging
+  now refuses to build when it is missing.
 - Add **What's New** to the app, fed by the bundled `release-notes.md`, shown once after an update.
 
 ## 0.4.0 — 2026-09-15 · bundled Hub development proof

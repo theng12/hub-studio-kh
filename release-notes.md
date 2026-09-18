@@ -49,6 +49,12 @@ If you ever see a model the app calls "not installed" when you know it is there,
 thing to check: open **Settings** and look at **Model library**. It should say
 `Downloads/model-library`.
 
+### Studio Hub has an icon
+
+It was shipping without one, so the Dock, the app switcher and the About panel all showed the blank
+page macOS uses when a bundle has no artwork. It now has its own: a broadcast source above a
+waveform, which is what the app is — a Hub with Studios around it, carrying sound and picture.
+
 ### Your finished audio and images open again after a restart
 
 A finished generation could stop opening. Pressing **Play**, **Save** or **Open Transcript** on
