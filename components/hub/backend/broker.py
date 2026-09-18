@@ -1325,7 +1325,11 @@ def batch_summary(b: dict) -> dict:
         "created_at": b["created_at"], "finished_at": b.get("finished_at"),
         "cancelled": b["cancelled"],
         "routing": b.get("routing", "pool"),
-        "governor_note": b.get("governor_note"),
+        # Same rule as the transcription summary: a note explains a job that is waiting, and a
+        # finished job is not waiting for anything.
+        "governor_note": (b.get("governor_note")
+                          if any(state in ("queued", "running", "cancel_requested")
+                                 for state in states) else None),
         "label": b.get("label"),
         "total": len(states),
         "queued": states.count("queued") - len(retrying),

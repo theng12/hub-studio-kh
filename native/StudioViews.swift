@@ -768,7 +768,10 @@ struct StudioContent: View {
                         Divider().padding(.top, 8)
                         HStack { Text("Recent subtitles").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
                         if workspace.subtitleJobs.isEmpty { Text("Completed subtitles will appear here.").foregroundStyle(.secondary).font(.callout) }
-                        ForEach(workspace.subtitleJobs.prefix(5)) { job in jobRow(job, compact: true) }
+                        // The subtitle row, not the audio one. This panel drew Play and Save for a
+                        // transcript, so the Subtitle page offered to play a text file while the
+                        // Jobs page correctly offered "Open Transcript" for the very same job.
+                        ForEach(workspace.subtitleJobs.prefix(5)) { job in subtitleJobRow(job) }
                         Text("This workspace keeps its recording, model and transcript separate from Audio.").font(.callout).foregroundStyle(.secondary)
                         Button("Manage Subtitle Models") { modelFilter = "Transcription"; studio.select(.models) }
                     }.padding(.leading, 20).padding(.bottom, 20)
@@ -935,7 +938,16 @@ struct StudioContent: View {
                 if job.state == "done" {
                     // Opens the Subtitle page, where the transcript is exported and delivery is
                     // acknowledged - the same path the Subtitle screen already uses.
-                    Button("Open Transcript") { studio.select(.transcription) }.disabled(!connected)
+                    // Loads the transcript from the batch, then shows it. Switching pages alone
+                    // left the Subtitle page empty for anything not transcribed in this sitting.
+                    Button("Open Transcript") {
+                        Task {
+                            do {
+                                try await workspace.openSubtitle(job)
+                                studio.select(.transcription)
+                            } catch { fileActionError = error.localizedDescription }
+                        }
+                    }.disabled(!connected)
                 } else if active(job.state) {
                     Button("Cancel") { Task { await workspace.cancelSubtitle(job) } }.disabled(!connected)
                 }

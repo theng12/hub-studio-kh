@@ -216,5 +216,51 @@ class WireEncodingTests(unittest.TestCase):
         self.assertIn("voice_reference_asset_id", text + " ".join(quoted))
 
 
+class JobRowContractTests(unittest.TestCase):
+    """A transcript is text; it must never be drawn with the audio row.
+
+    The Subtitle page's own panel drew every subtitle with the audio row, so it offered Play and
+    Save for a transcript - while the Jobs page, looking at the same job, correctly offered "Open
+    Transcript". Reading the rendered window is the only way to see a mistake like that, and this
+    pins it from the source instead.
+
+    This is the second time this exact defect has appeared: it was fixed once for the subtitle rows
+    and the fix was applied in one place rather than everywhere the list is drawn.
+    """
+
+    VIEWS = (ROOT / "native" / "StudioViews.swift").read_text()
+
+    def _lines(self):
+        return self.VIEWS.splitlines()
+
+    def test_every_subtitle_list_is_drawn_with_the_subtitle_row(self):
+        offenders = [line.strip() for line in self._lines()
+                     if "subtitleJobs" in line and "ForEach" in line
+                     and "subtitleJobRow" not in line]
+        self.assertFalse(offenders, "a subtitle list is drawn with the audio row: " + str(offenders))
+
+    def test_the_audio_row_is_never_handed_a_subtitle_job(self):
+        offenders = [line.strip() for line in self._lines()
+                     if "jobRow(" in line and "subtitle" in line.lower()]
+        self.assertFalse(offenders, "the audio row was given subtitle work: " + str(offenders))
+
+    def test_the_subtitle_row_offers_no_playback(self):
+        body = self.VIEWS[self.VIEWS.index("private func subtitleJobRow"):]
+        body = body[:body.index("private func jobRow(")]
+        for forbidden in ('Button("Play")', 'Button("Save…")', "saveAudio", "workspace.play("):
+            self.assertNotIn(forbidden, body,
+                             f"the subtitle row must not offer {forbidden}")
+
+    def test_the_subtitle_row_opens_the_transcript(self):
+        body = self.VIEWS[self.VIEWS.index("private func subtitleJobRow"):]
+        body = body[:body.index("private func jobRow(")]
+        self.assertIn('Button("Open Transcript")', body)
+        self.assertIn("studio.select(.transcription)", body)
+
+    def test_the_audio_row_still_plays_audio(self):
+        body = self.VIEWS[self.VIEWS.index("private func jobRow("):]
+        self.assertIn('Button("Play")', body[:2000])
+
+
 if __name__ == "__main__":
     unittest.main()

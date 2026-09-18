@@ -384,6 +384,9 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
     return batch, False
 
 
+TERMINAL_STATUSES = frozenset({"done", "error", "cancelled", "partial", "uncertain"})
+
+
 def summary(batch: dict, include_items: bool = True,
             include_metadata: bool = False) -> dict:
     states = [item["state"] for item in batch["items"]]
@@ -412,7 +415,12 @@ def summary(batch: dict, include_items: bool = True,
         "duration_seconds": round(sum(i.get("duration_seconds") or 0 for i in batch["items"]), 2),
         "storage_cleaned": bool(batch.get("storage_cleaned_at")),
     }
-    if batch.get("governor_note"):
+    # Only while it still matters. `governor_note` records why a batch could not be dispatched; it
+    # is cleared when a dispatch succeeds, but a note written on an attempt that was retried and
+    # later finished stays in the record for good. Every transcript in one owner's history carried
+    # "model is not in the packaged catalog" from a retry, on jobs that had completed - a warning
+    # about the past, sitting next to a finished result.
+    if batch.get("governor_note") and status not in TERMINAL_STATUSES:
         out["governor_note"] = batch["governor_note"]
     # Shown only when pinned: an operator looking at a queued job has to be able to see that a
     # machine pin is why nothing has picked it up.

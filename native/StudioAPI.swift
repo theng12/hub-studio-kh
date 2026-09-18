@@ -1360,6 +1360,55 @@ final class NativeWorkspaceStore: ObservableObject {
         return text
     }
 
+    /// Open a finished subtitle from the history on the Subtitle page.
+    ///
+    /// The row said "Open Transcript" and only switched pages, leaving the page empty: the
+    /// transcript lived in the finished Hub batch, and nothing fetched it. This reads the batch's
+    /// own artifact - the SRT the worker produced - and loads it, so the formats and the export
+    /// button work on a transcript from an earlier sitting.
+    func openSubtitle(_ job: NativeJob) async throws {
+        guard connectionID != nil else {
+            throw NativeAPIError.message("Start the local services before opening a transcript.")
+        }
+        guard job.state == "done" else {
+            throw NativeAPIError.message("That transcription is not finished yet.")
+        }
+        var request = try makeRequest(
+            ["api", "hub", "transcription", "jobs", job.id, "items", "0", "artifact"])
+        request.timeoutInterval = 300
+        let data = try await performData(request)
+        guard let srt = String(data: data, encoding: .utf8),
+              !srt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NativeAPIError.message("That transcript is empty or could not be read.")
+        }
+        let text = Self.plainTranscript(srt)
+        guard !text.isEmpty else {
+            throw NativeAPIError.message("That transcript has no words in it.")
+        }
+        transcriptionResult = NativeTranscript(
+            text: text, srt: srt, vtt: Self.vtt(fromSRT: srt),
+            language: "", duration: 0, model: job.model,
+            sourceFilename: nil, batchID: job.id)
+        transcriptionModel = job.model.isEmpty ? transcriptionModel : job.model
+    }
+
+    /// The WebVTT spelling of an SRT, from the same cue times. Only the header and the decimal
+    /// separator differ, which is why one conversion serves both formats.
+    nonisolated static func vtt(fromSRT srt: String) -> String {
+        var lines = ["WEBVTT", ""]
+        for line in srt.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || Int(trimmed) != nil { continue }
+            if trimmed.contains("-->") {
+                lines.append(trimmed.replacingOccurrences(of: ",", with: "."))
+            } else {
+                lines.append(trimmed)
+                lines.append("")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Fetch a finished job's audio and hand it to the player.
     ///
     /// Same reason as a saved voice: the player needs a file on disk, not bytes, or an MP3 result
