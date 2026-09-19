@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.8 — 2026-09-19
+
+### An alert can no longer take the health check down with it
+
+The Hub watches each Studio every few seconds and that watch is what tells the rest of the app
+whether a Studio is alive — including whether a job may run at all. Sending a "Studio went down"
+alert happened in the middle of that watch, unguarded: if the alert could not be sent (a webhook that
+does not answer, an alert log that cannot be written), the exception ended the whole health pass. The
+studios kept reporting whatever they last said while the app showed it as current, so a Mac could be
+shown as ready while it was gone, or the other way round. Alerts now fail on their own.
+
 ## 0.6.7 — 2026-09-19
 
 ### A Mac can no longer forget who it is

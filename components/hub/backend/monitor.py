@@ -512,6 +512,20 @@ class StudioMonitor:
         # guarded inside) so a slow/offline fleet never stalls the health poll.
         asyncio.create_task(peers.refresh(self.registry, self._client))
 
+    def _alert(self, kind: str, message: str, detail: dict) -> None:
+        """Emit an alert without letting alerting failure touch the health state.
+
+        The health poll is what tells the rest of the Hub whether a Studio is live - the admission
+        guard reads `self.status` to decide whether a job can run at all - so an unreachable webhook
+        or an unwritable alert log must not abort the pass and leave every Studio on its previous
+        state while the app shows it as current.
+        """
+        try:
+            from . import alerts
+            alerts.emit(kind, message, detail)
+        except Exception:
+            pass
+
     def _note_transition(self, studio: dict, prev: str, new: str):
         """Fire an alert when a studio flips up<->down (ignore first-poll
         'unknown' so we don't alert on startup)."""
@@ -521,10 +535,10 @@ class StudioMonitor:
         label = studio.get("title", studio["id"])
         machine = studio.get("machine", "local")
         if new == "up" and prev == "down":
-            alerts.emit("studio_recovered", f"{label} on {machine} is back up",
+            self._alert("studio_recovered", f"{label} on {machine} is back up",
                         {"studio": studio["id"], "machine": machine})
         elif new != "up" and prev == "up":
-            alerts.emit("studio_down", f"{label} on {machine} went down",
+            self._alert("studio_down", f"{label} on {machine} went down",
                         {"studio": studio["id"], "machine": machine})
 
     def _note_restart_health(self, studio: dict, health: dict) -> None:
@@ -539,7 +553,7 @@ class StudioMonitor:
         machine = studio.get("machine", "local")
         if active and not previous.get("active"):
             from . import alerts
-            alerts.emit(
+            self._alert(
                 "worker_restart_rate",
                 f"{label} on {machine} is restarting repeatedly",
                 {
@@ -554,7 +568,7 @@ class StudioMonitor:
             )
         elif not active and previous.get("active"):
             from . import alerts
-            alerts.emit(
+            self._alert(
                 "worker_restart_rate_recovered",
                 f"{label} on {machine} restart rate returned to normal",
                 {"studio": sid, "machine": machine},

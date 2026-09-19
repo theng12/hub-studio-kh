@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.8 — 2026-09-19 · an alert failure aborted the health poll
+
+- **`_note_transition` and `_note_restart_health` called `alerts.emit` unguarded**, inside the poll
+  path. An unreachable webhook or an unwritable alert log raised out of the pass, so `self.status`
+  kept its previous values for every Studio while the app presented them as current - and since
+  0.6.3 the admission guard reads exactly that status to decide whether a job can run. Both helpers
+  now use `self._alert`, which swallows the failure; the alerting module still raises for direct
+  callers, so a broken alert is not silently hidden from anything that asks it directly.
+  Evidence: `tests/test_monitor_alert_isolation.py` (6 checks) - a down transition, a recovery and a
+  restart alert each survive a raising `emit`, a working `emit` is still called with the right kind,
+  startup/steady-state transitions stay silent, and only the guarded helper may emit directly.
+
 ## 0.6.7 — 2026-09-19 · the identity file was written in place
 
 - **`control_plane` wrote `controller_settings.json` with `write_text`**, which truncates first: a
