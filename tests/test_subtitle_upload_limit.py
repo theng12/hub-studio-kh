@@ -68,7 +68,7 @@ class UploadLimitTests(unittest.TestCase):
                   / "components/subtitle/app/backend/main.py").read_text()
         self.assertNotIn("data = await file.read()", source,
                          "a bare read buffers the whole body before its limit is applied")
-        self.assertEqual(source.count("read_upload_limited(file, manager.MAX_INPUT_BYTES)"), 2)
+        self.assertEqual(source.count("read_upload_limited(file, MAX_INPUT_BYTES)"), 2)
 
 
 if __name__ == "__main__":

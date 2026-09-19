@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.10 — 2026-09-19
+
+### A correction to 0.6.9
+
+0.6.9 changed how Subtitle reads an upload so that an oversized file is refused as it arrives rather
+than after it is in memory. That change referred to the size limit on the wrong object, which broke
+submitting **any** Subtitle job — it would have failed immediately, and the test suite caught it
+before anything was handed to you.
+
+The limit is now read from where it is actually defined, and all 57 Subtitle tests pass. Nothing else
+in 0.6.9 changed. If you installed 0.6.9 in the last few minutes, this replaces it; every other
+release today is unaffected.
+
 ## 0.6.9 — 2026-09-19
 
 ### A huge upload can no longer exhaust the Mac's memory

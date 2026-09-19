@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.10 — 2026-09-19 · fix for a regression in 0.6.9
+
+- **0.6.9 referenced `manager.MAX_INPUT_BYTES`**, but `manager` in that module is the *instance* and
+  the constant is a module-level name in `manager.py` - so every Subtitle upload raised
+  `AttributeError: 'SubtitleManager' object has no attribute 'MAX_INPUT_BYTES'`. Caught by the full
+  suite before it reached the owner (`tests/test_subtitle_standalone.py`: 4 errors, all on upload).
+  The handler now imports and uses the module constant.
+- The lesson worth recording: the new unit checks passed against a fake upload while the real
+  endpoint path was broken, because they exercised the helper rather than the route. The
+  route-level tests in `test_subtitle_standalone.py` are what caught it, which is why they are the
+  gate for anything touching a handler's collaborators.
+
 ## 0.6.9 — 2026-09-19 · the Subtitle upload limit was applied after buffering
 
 - **`data = await file.read()` in both Subtitle upload handlers** returned the whole body before

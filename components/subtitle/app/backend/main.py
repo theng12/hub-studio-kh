@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import memory_policy
 from .engine import ModelPackageError, host_eligibility
-from .manager import SubtitleManager, safe_input_name, validate_request
+from .manager import SubtitleManager, safe_input_name, validate_request, MAX_INPUT_BYTES
 
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -37,7 +37,18 @@ async def read_upload_limited(file, limit: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        try:
+            chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        except TypeError:
+            # An upload double whose `read` takes no size (Starlette's real UploadFile does, and so
+            # does the Hub's client): one read, then the limit is applied to what came back.
+            chunk = await file.read()
+            total += len(chunk)
+            if total > limit:
+                raise _HTTPException(
+                    413, f'upload exceeds the {limit // (1024 * 1024)} MB per-file limit')
+            chunks.append(chunk)
+            break
         if not chunk:
             break
         total += len(chunk)
@@ -137,7 +148,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
             name = safe_input_name(file.filename or '')
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        data = await read_upload_limited(file, manager.MAX_INPUT_BYTES)
+        data = await read_upload_limited(file, MAX_INPUT_BYTES)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),
@@ -198,7 +209,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
             name = safe_input_name(file.filename or '')
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        data = await read_upload_limited(file, manager.MAX_INPUT_BYTES)
+        data = await read_upload_limited(file, MAX_INPUT_BYTES)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),
