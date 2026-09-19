@@ -46,6 +46,29 @@ struct PageRenderHarness {
             bundle: Bundle.main.bundleURL)
         let studio = StudioController(configuration: config)
 
+        // `STUDIOHUB_RENDER_LIVE=1` connects the page to the Hub already running on this Mac, so a
+        // render shows the operator's real jobs instead of empty lists. Read-only: it takes the
+        // address and token from the readiness record and polls, and it is given a scratch data
+        // directory so it cannot touch the running app's own workspace file.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_LIVE"] == "1" {
+            let live = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support/StudioHub Standalone")
+            let record = live.appendingPathComponent("hub-ready.json")
+            if let raw = try? Data(contentsOf: record),
+               let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+               let address = object["url"] as? String, let token = object["token"] as? String,
+               let url = URL(string: address) {
+                Task { await studio.workspace.connect(baseURL: url, dataDirectory: scratch,
+                                                      token: token, allowedHost: "127.0.0.1") }
+                // The connection, its first poll and the history it reads all have to land before
+                // the snapshot, or the page renders empty and proves nothing.
+                for _ in 0..<48 { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+                print("connected to the running Hub at \(address)")
+            } else {
+                print("no running Hub readiness record at \(record.path)")
+            }
+        }
+
         for page in pages {
         studio.selection = page
         for size in sizes {

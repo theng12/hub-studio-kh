@@ -3,6 +3,9 @@
 #
 #   native/render-page.sh [page[,page...]] [output-dir] [WxH ...]
 #
+# STUDIOHUB_RENDER_LIVE=1 connects the page to the Hub already running on this Mac, so the render
+# shows real jobs and history instead of empty lists. Read-only and safe to run while the app is up.
+#
 # Defaults: audio, /tmp/studiohub-render, 1920x1053 and 980x620 (this Mac's usual window and the
 # window's own minimum). Pages are named by the sidebar: overview, audio, subtitle, image, music,
 # video, chat, models, voices, jobs, connections, whats-new, settings - and several at once, which

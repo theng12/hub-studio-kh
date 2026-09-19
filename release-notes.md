@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.5 — 2026-09-19
+
+### You can see how long a generation takes
+
+Every finished job now says how long it took, in the generator and in **Jobs**: *"Completed · took
+52.2 s"*, or *"took 1 min 28 s"* once it is long enough to read that way. A generation still running
+says *"running 12 s"* instead, so there is a clock either way.
+
+This is a different number from the one already on the row: **4.6 s** is how long the clip plays
+for, and **52.2 s** is how long it took to make. The Hub had been recording both all along; the app
+was showing only the first, which is why the app appeared never to mention generation time at all.
+
 ## 0.5.4 — 2026-09-19
 
 ### The Audio page's controls can be read and clicked now

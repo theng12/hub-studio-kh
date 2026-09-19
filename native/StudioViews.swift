@@ -498,7 +498,8 @@ struct StudioContent: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))").font(.caption).foregroundStyle(.secondary)
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
+                        .font(.caption).foregroundStyle(.secondary)
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -1115,7 +1116,7 @@ struct StudioContent: View {
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))")
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
                         .font(.caption).foregroundStyle(.secondary)
                     if job.state == "done" {
                         Text("Transcript").font(.caption).foregroundStyle(.secondary)
@@ -1151,7 +1152,8 @@ struct StudioContent: View {
                 Image(systemName: active(job.state) ? "waveform" : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))").font(.caption).foregroundStyle(.secondary)
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
+                        .font(.caption).foregroundStyle(.secondary)
                     // What was actually produced: length, size and the size requested. An asset
                     // with no stated facts is hard to tell apart from one that came back wrong.
                     if job.state == "done", !job.assetFacts.isEmpty {

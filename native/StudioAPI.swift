@@ -396,6 +396,38 @@ struct NativeJob: Identifiable, Equatable {
     var durationSeconds: Double? = nil
     var requestedWidth: Int? = nil
     var requestedHeight: Int? = nil
+    /// How long the generation took, or has been running. Separate from `durationSeconds`, which
+    /// is the length of the media produced.
+    var generationSeconds: Double? = nil
+    var runningSeconds: Double? = nil
+
+    /// "· took 52 s", "· running 12 s", or nothing when the Hub has not timed it.
+    ///
+    /// One function, read by every job row, so the generator pages and the Jobs tab cannot
+    /// disagree about how long something took. The wire types are private to this file, so the
+    /// fixture pins this derivation rather than the decode, and the plumbing is checked against a
+    /// live Hub by `native/render-page.sh`.
+    var generationSuffix: String {
+        Self.generationSuffix(generationSeconds: generationSeconds, runningSeconds: runningSeconds)
+    }
+
+    static func generationSuffix(generationSeconds: Double?, runningSeconds: Double?) -> String {
+        if let generationSeconds, generationSeconds > 0 {
+            return " · took \(clock(generationSeconds))"
+        }
+        if let runningSeconds, runningSeconds > 0 {
+            return " · running \(clock(runningSeconds))"
+        }
+        return ""
+    }
+
+    /// Minutes and seconds once it is long enough to be worth reading that way.
+    static func clock(_ seconds: Double) -> String {
+        if seconds < 60 { return String(format: "%.1f s", seconds) }
+        let minutes = Int(seconds) / 60
+        let rest = Int(seconds.rounded()) % 60
+        return rest == 0 ? "\(minutes) min" : "\(minutes) min \(rest) s"
+    }
 
     /// "12.5 s · 1.4 MB · 1024×1024" — only the parts that are known.
     var assetFacts: String {
@@ -2693,7 +2725,8 @@ final class NativeWorkspaceStore: ObservableObject {
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
             imageSettings: item?.params?.imageSettings,
             durationSeconds: item?.audioDurationS,
-            requestedWidth: item?.params?.width, requestedHeight: item?.params?.height)
+            requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
+            generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS)
     }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
@@ -3122,6 +3155,14 @@ private struct HubJobItem: Decodable {
     /// How long the produced audio runs. The Hub records it when it adopts a finished voice
     /// job, and the app showed none of it - a generated clip had no stated length.
     let audioDurationS: Double?
+    /// How long the generation itself took. `runtime_s` is written when an item finishes; a
+    /// running job reports `elapsed_s` instead, so the operator sees a clock either way.
+    ///
+    /// This is not the length of the clip it produced, which is what the rows used to show and
+    /// what the owner read as "how long it takes": a 4.6-second clip that took 52 seconds to make
+    /// showed only "4.6 s".
+    let runtimeS: Double?
+    let elapsedS: Double?
 }
 private struct HubJobParams: Decodable {
     let width: Int?

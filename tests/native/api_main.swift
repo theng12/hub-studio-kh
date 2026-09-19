@@ -409,7 +409,7 @@ final class FixtureProtocol: URLProtocol {
                            "artifact_url": "/api/hub/jobs/new-job/items/0/artifact",
                            "bytes": Self.wav.count, "sha256": Self.audioDigest(),
                            "media_type": "audio/wav",
-                           "audio_duration_s": 12.5]]]
+                           "audio_duration_s": 12.5, "runtime_s": 52.2]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: audioBody))
         case ("GET", "/api/hub/jobs/new-job/items/0/artifact"):
             Self.lock.lock(); let corrupt = Self.corruptAudio; Self.lock.unlock()
@@ -562,6 +562,21 @@ struct NativeAPITests {
         await store.setRole("standalone")
         require(store.controllerIdentity?.settings.role == "standalone", "the role must be settable back")
         store.error = nil
+
+        // How long a generation took, shown in the generator and in Jobs. The Hub writes
+        // `runtime_s` when an item finishes and `elapsed_s` while it runs; the app showed neither,
+        // so a 4.6-second clip that took 52 seconds to make read as "4.6 s" - which the owner
+        // reported as the app never saying how long a generation takes.
+        require(NativeJob.generationSuffix(generationSeconds: 52.2, runningSeconds: nil) == " · took 52.2 s",
+                "a finished job must state how long it took")
+        require(NativeJob.generationSuffix(generationSeconds: nil, runningSeconds: 7.5) == " · running 7.5 s",
+                "a running job must state how long it has been running")
+        require(NativeJob.generationSuffix(generationSeconds: nil, runningSeconds: nil).isEmpty,
+                "an untimed job must not invent a duration")
+        require(NativeJob.generationSuffix(generationSeconds: 125, runningSeconds: nil) == " · took 2 min 5 s",
+                "a long generation must read in minutes, not 125 seconds")
+        require(NativeJob.generationSuffix(generationSeconds: 0, runningSeconds: nil).isEmpty,
+                "a zero must read as unknown rather than as an instant")
 
         // Joining has to say what this Mac runs, or the controller registers a node that
         // nothing can be dispatched to.

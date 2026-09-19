@@ -1488,6 +1488,14 @@ async def _post_item_webhook(client: httpx.AsyncClient, b: dict, item: dict):
             "asset_id": item.get("asset_id"),
             "runtime_s": item.get("runtime_s", item.get("duration_s")),
             "duration_s": item.get("runtime_s", item.get("duration_s")),  # legacy alias
+            # How long it has been running, for a job that has not finished yet. `runtime_s` is
+            # only written when an item completes, so a running generation had no duration at all
+            # in this payload - which is why the app could show a clip's length but never how long
+            # the clip took to make.
+            "run_started": item.get("run_started"),
+            "elapsed_s": (round(max(0.0, time.time() - item["run_started"]), 1)
+                          if isinstance(item.get("run_started"), (int, float))
+                          and item.get("state") == "running" else None),
             "execution_started_at": safe_item.get("execution_started_at"),
             "terminal_result": terminal_result(b, item),
             "error_code": safe_item.get("error_code"),

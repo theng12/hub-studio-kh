@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.5 — 2026-09-19 · how long a generation took, which the app never said
+
+- **The number existed and was not read.** The Hub writes `runtime_s` on an item when it finishes
+  and `run_started` when it starts, and `terminal_result` already carried the runtime - but
+  `HubJobItem` parsed neither, and the rows showed only `audio_duration_s`, the length of the media
+  produced. The owner read "4.6 s · 219 KB" as the app refusing to state a generation time, which is
+  exactly what it was doing.
+- `HubJobItem` now decodes `runtime_s` and `elapsed_s`, `NativeJob` carries `generationSeconds` /
+  `runningSeconds`, and one `generationSuffix` renders as "· took 52.2 s" / "· running 12 s" (in
+  minutes past a minute, and nothing at all when the Hub has not timed it). It is appended to the
+  state line of all three job row styles, so the generator pages and the Jobs tab show the same
+  thing by construction rather than by two edits.
+- The Hub's item payload gained `run_started` and `elapsed_s`, because `runtime_s` is only written on
+  completion: a generation that was still running had no duration in the payload at all.
+- Evidence: `tests/test_generation_time.py` (4 checks: the payload carries both numbers, the app
+  parses both, all three rows render it, and the clip length is not folded into the generation
+  time), plus `tests/native/api_main.swift` for the formatting ("52.2 s", "2 min 5 s", nothing when
+  untimed, nothing for a zero). Verified against the owner's own history by rendering the Audio page
+  and the Jobs tab from the running Hub: five real clones at 62.0 / 79.7 / 43.0 / 52.2 / 45.4 s, a
+  failed job at 2.3 s, and an image at 1 min 28 s.
+
 ## 0.5.4 — 2026-09-19 · the Generation column was clipping its own controls
 
 - **The layout, not the logic.** `audioWorkspace` put a `TextEditor` with only a `minHeight` beside
