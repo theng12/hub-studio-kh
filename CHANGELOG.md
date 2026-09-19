@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.24 — 2026-09-19 · the storage families and the memory verdict reach the app
+
+- **The app now reads `/studio/voice/api/model-storage`** (the payload the worker has always served,
+  which no part of the native app rendered) and shows a **Storage cache** line above the model split:
+  the family count, how many cannot run on this Mac, and one warning per family naming the declared
+  floor and this Mac's memory. It sits above the split with the other notes, so it reads as context
+  for what is installed.
+- The fetch is `try?`-contained like the rest of the refresh since 0.6.18: a Studio that does not
+  answer leaves the list empty and cannot disturb models, jobs or connections.
+- Evidence: the native fixture serves a two-family storage payload and the API contract test asserts
+  both families decode and that exactly one is flagged, carrying both numbers (`required_gb: 32`,
+  `this_mac_gb: 16`). Build and both native gates pass. Never copied from a plan: the verdict itself
+  was verified live against the real endpoint in 0.6.23 (Echo-TTS 24 GB, Fish Audio S2 Pro 32 GB).
+
 ## 0.6.23 — 2026-09-19 · the storage page reports a memory verdict per family
 
 - **`model_storage.inventory()` now attaches `memory: {required_gb, this_mac_gb, runs_here}` to each

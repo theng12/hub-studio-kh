@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.24 — 2026-09-19
+
+### "This Mac cannot run that" is now something you see
+
+The Models page shows what is actually on disk, grouped the way the worker groups it — a model together
+with the companions it needs — and flags the ones this Mac cannot hold:
+
+> Storage cache · 16 families on disk · 2 cannot run on this Mac
+> ⚠️ Echo-TTS (MLX) needs 24 GB; this Mac has 16 GB
+> ⚠️ Fish Audio S2 Pro (MLX) needs 32 GB; this Mac has 16 GB
+
+That comes from the memory each model declares, not from its file size — the 6.7 GB 8-bit Fish model
+is in a family whose declared floor is 32 GB, so size alone would have called it fine. This matters
+most for models copied in from another install: they are present on disk and would otherwise look
+runnable here.
+
 ## 0.6.23 — 2026-09-19
 
 ### The storage page can now say "this Mac cannot run that"

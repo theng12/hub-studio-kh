@@ -161,6 +161,17 @@ struct NativeMemoryPolicy: Decodable, Equatable {
     var isFixed: Bool { fixed == true }
 }
 
+/// One family of cached model files: a model plus the companions it needs, as one unit.
+struct NativeStorageFamily: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let bytes: Int64?
+    /// The memory the model declares it needs, and this Mac's memory, when the worker knows both.
+    let requiredGB: Int?
+    let thisMacGB: Int?
+    let runsHere: Bool?
+}
+
 /// One row of the Hub's per-machine memory inventory.
 struct NativeMemoryStudio: Decodable, Identifiable, Equatable {
     let id: String
@@ -764,6 +775,13 @@ final class NativeWorkspaceStore: ObservableObject {
     /// states that *do* come back (`uncertain`, re-queued by the Hub) are not final and are never
     /// cached. If a retry route is ever added, invalidate this cache there -
     /// `tests/test_job_detail_cache_is_safe.py` fails when that route appears.
+    /// What the Voice worker has on disk, grouped by family, with the memory verdict per family.
+    ///
+    /// Models copied in from another install are present on disk and would otherwise look runnable
+    /// here; the worker declares a memory floor per model, so this is the honest answer to "can this
+    /// Mac run it". Optional: a Studio that does not answer must not disturb the rest of the refresh.
+    @Published private(set) var storageFamilies: [NativeStorageFamily] = []
+
     private var finishedJobCache: [String: NativeJob] = [:]
 
     private var pollTask: Task<Void, Never>?
@@ -966,6 +984,15 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             downloads = hubTransfers + (transfersValue?.jobs ?? []).map(Self.mapDownload)
             tokenStatus = settingsValue?.value ?? NativeTokenStatus(isSet: false, masked: "")
+            if let storage: HubStorageGroups = try? await get(["studio", "voice", "api", "model-storage"]) {
+                guard connectionID == requestConnection else { return }
+                storageFamilies = storage.groups.map { group in
+                    NativeStorageFamily(id: group.id, label: group.label, bytes: group.bytesTotal,
+                                        requiredGB: group.memory?.requiredGb,
+                                        thisMacGB: group.memory?.thisMacGb,
+                                        runsHere: group.memory?.runsHere)
+                }
+            }
             reconcileSelections(defaultTranscription: transcriptionValue?.defaultModel)
             await reconcileTranscription()
             isReachable = true
@@ -3190,6 +3217,19 @@ private struct HubModelPackage: Decodable {
     let minimumMacos: String?
     let macosVersion: String?
     let reason: String?
+}
+/// How the Voice worker groups its cached files, and the memory each family's model declares.
+private struct HubStorageGroups: Decodable { let groups: [HubStorageGroup] }
+private struct HubStorageGroup: Decodable {
+    let id: String
+    let label: String
+    let bytesTotal: Int64?
+    let memory: HubStorageMemory?
+}
+private struct HubStorageMemory: Decodable {
+    let requiredGb: Int
+    let thisMacGb: Int
+    let runsHere: Bool
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }

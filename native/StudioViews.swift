@@ -997,6 +997,29 @@ struct StudioContent: View {
                 Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
 
+            // What is actually on disk, per family, with the memory the model declares. This matters
+            // most for models copied in from another install: they are present and would otherwise
+            // look runnable on a Mac that cannot hold them.
+            if !workspace.storageFamilies.isEmpty {
+                let tooBig = workspace.storageFamilies.filter { $0.runsHere == false }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("Storage cache").font(.callout.weight(.medium))
+                        Text("\(workspace.storageFamilies.count) families on disk")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if !tooBig.isEmpty {
+                            Text("· \(tooBig.count) cannot run on this Mac")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    ForEach(tooBig) { family in
+                        Label("\(family.label) needs \(family.requiredGB ?? 0) GB; this Mac has \(family.thisMacGB ?? 0) GB",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }
+
             // Above the list, not below the split: a flexible split pushes anything after it to the
             // foot of the window, where a line about the library reads as a stray footer.
             if let note = workspace.modelNote, workspace.modelNoteRepo == nil {

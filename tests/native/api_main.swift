@@ -407,6 +407,8 @@ final class FixtureProtocol: URLProtocol {
         case ("DELETE", "/api/hub/model-downloads/hub-download-1"):
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
+        case ("GET", "/studio/voice/api/model-storage"):
+            result = (200, "application/json", Data(#"{"cache_root":"/tmp/hub","groups":[{"id":"voxcpm2","label":"VoxCPM2 (MLX)","bytes_total":5000000000,"memory":{"required_gb":8,"this_mac_gb":16,"runs_here":true}},{"id":"fish-s2-pro","label":"Fish Audio S2 Pro (MLX)","bytes_total":17000000000,"memory":{"required_gb":32,"this_mac_gb":16,"runs_here":false}}]}"#.utf8))
         case ("GET", "/api/hub/jobs"):
             Self.lock.lock(); let pendingUncertain = Self.uncertainImage; Self.lock.unlock()
             // The unresolved request is a *different* batch (older, so it does not become the most
@@ -634,6 +636,16 @@ struct NativeAPITests {
                 "the unreadable batch must be reported, got: \(degraded.startupNote ?? "nil")")
         require(!degraded.imageJobs.isEmpty || !degraded.audioJobs.isEmpty,
                 "the jobs that could be read must still be shown")
+
+        // The storage families, with the worker's own memory verdict. This is what makes a model
+        // copied in from another install visible as "present but not runnable here" rather than
+        // looking like any other download.
+        require(store.storageFamilies.count == 2,
+                "storage families must decode: \(store.storageFamilies.count)")
+        let flagged = store.storageFamilies.filter { $0.runsHere == false }
+        require(flagged.count == 1, "exactly one fixture family exceeds this Mac")
+        require(flagged.first?.requiredGB == 32 && flagged.first?.thisMacGB == 16,
+                "the flag must carry both numbers")
 
         // And a finished job is not asked about twice: the poll is every two seconds, for ever.
         FixtureProtocol.resetJobDetailCount()
