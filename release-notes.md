@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.23 — 2026-09-19
+
+### The storage page can now say "this Mac cannot run that"
+
+Every model in the catalogue already declares how much memory it needs. The storage page now joins
+each family to its declared floor and reports it against this Mac's memory, so a model that cannot
+run here says so instead of looking like any other download:
+
+- fish-audio-s2-pro-bf16 — needs 32 GB, this Mac has 16 GB
+- fish-audio-s2-pro-8bit and echo-tts-base — need 24 GB
+
+That is measured, not guessed: file size would have called the 6.7 GB 8-bit model fine.
+
 ## 0.6.22 — 2026-09-19
 
 ### A rolled-back dispatch is left for the next pass

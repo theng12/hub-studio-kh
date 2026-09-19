@@ -7,6 +7,7 @@ family and dependency layer that the raw cache intentionally lacks.
 from __future__ import annotations
 
 import shutil
+import os
 from pathlib import Path
 
 from . import cache, catalog
@@ -191,6 +192,44 @@ each folder and to remove only packages that are safe to delete.
     return path
 
 
+def _family_memory(items: list[dict], tts_models: dict, this_mac: int | None) -> dict | None:
+    """The memory verdict for one family, or None when it cannot be made.
+
+    The floor belongs to the model, so the family takes the highest declared floor among its model
+    items. Catalogue entries are `ModelEntry` dataclasses (not dicts) - reading them with `.get()`
+    raised `AttributeError` and would have taken the whole storage endpoint down with it, which a test
+    run over an empty cache could not see. `getattr` handles both a dataclass and a mapping.
+    """
+    floors = []
+    for item in items:
+        if item.get("type") != "model":
+            continue
+        entry = tts_models.get(item.get("repo"))
+        if entry is None:
+            continue
+        floor = entry.get("min_unified_memory_gb") if isinstance(entry, dict) \
+            else getattr(entry, "min_unified_memory_gb", None)
+        if isinstance(floor, int):
+            floors.append(floor)
+    if not floors or this_mac is None:
+        return None
+    required = max(floors)
+    return {"required_gb": required, "this_mac_gb": this_mac, "runs_here": required <= this_mac}
+
+
+def _machine_memory_gb() -> int | None:
+    """This Mac's unified memory, or None when it cannot be read.
+
+    The catalogue already declares `min_unified_memory_gb` per model, so "can this Mac run it" is a
+    comparison rather than a guess — a file-size heuristic would flag a 6 GB model as fine on a 16 GB
+    Mac when its declared floor is 24 GB.
+    """
+    try:
+        return int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3)) or None
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
 def inventory() -> dict:
     """Build a live family/dependency tree over the existing cache in place."""
     notice = ensure_cache_notice()
@@ -277,12 +316,18 @@ def inventory() -> dict:
     for family, family_items in grouped.items():
         label, summary = _family_metadata(family)
         family_items.sort(key=lambda item: (type_rank.get(item["type"], 9), item["label"].lower()))
+        # The memory floor belongs to the model, not to its companions, so the family takes the
+        # highest declared floor among its model items. Absent for families whose entries declare
+        # none (other modalities, and the "other" bucket), and then the flag is simply omitted
+        # rather than guessed.
+        memory = _family_memory(family_items, tts_models, _machine_memory_gb())
         groups.append({
             "id": family,
             "label": label,
             "summary": summary,
             "items": family_items,
             "bytes_total": sum(item["cache"]["bytes_total"] for item in family_items),
+            "memory": memory,
         })
     groups.sort(key=lambda group: (group["id"] == "other", group["label"].lower()))
 

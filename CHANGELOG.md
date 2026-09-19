@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.23 — 2026-09-19 · the storage page reports a memory verdict per family
+
+- **`model_storage.inventory()` now attaches `memory: {required_gb, this_mac_gb, runs_here}` to each
+  family**, joining the family's model items to the catalogue's declared `min_unified_memory_gb`. The
+  floor belongs to the model, so the family takes the highest among its models; companions contribute
+  none, and a family whose entries declare no floor reports `null` rather than a guess.
+  Measured on this 16 GB Mac: `fish-audio-s2-pro-bf16` (32 GB), `fish-audio-s2-pro-8bit` (24 GB) and
+  `echo-tts-base` (24 GB) are flagged `runs_here: false`.
+- **Two bugs caught while landing it, both by the tests being wrong rather than the code:**
+  (1) the first test called `inventory()` from the repository, where the cache resolves elsewhere, so
+  it exercised **zero groups** and passed without touching the new code; (2) `_tts_models()` returns
+  `ModelEntry` dataclasses, so the first implementation's `.get("min_unified_memory_gb")` would have
+  raised `AttributeError` on every real request — invisible to that vacuous test. The join is now a
+  unit-testable `_family_memory(items, tts_models, this_mac)` that reads dataclasses or mappings, and
+  the tests drive it with fakes (6 checks that fail against the broken version), plus a live check
+  that skips honestly when the process can see no cache.
+
 ## 0.6.22 — 2026-09-19 · a rolled-back dispatch retried the same Studio at once
 
 - After the rollback added in 0.6.19, the loop `continue`d to the next candidate Studio - with a
