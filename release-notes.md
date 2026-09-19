@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.4 — 2026-09-19
+
+### The Hub stops re-reading every file several times a second
+
+Before accepting a job the Hub asks whether the storage rule allows it — and it answered that
+question by **walking and hashing every managed output folder**. It asked it for every waiting job,
+on every scheduling pass, several times a second, on the thread that answers the app. On a Mac with
+the full model library and a busy history that is the Hub stalling itself, and it is why the app
+could feel unresponsive while nothing was actually wrong.
+
+The answer is now remembered for a few seconds, so a burst of scheduling reuses one reading. Nothing
+about enforcement changes: files are still deleted on their own timer and whenever you ask for it,
+and each machine's own limits are still asked about separately.
+
 ## 0.6.3 — 2026-09-19
 
 ### A job that nothing can run is refused, with the reason

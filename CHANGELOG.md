@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.4 — 2026-09-19 · the admission sweep no longer runs in the scheduler's inner loop
+
+- **`output_storage.admission` calls `enforce`**, which walks and hashes the managed output roots.
+  `_submission_readiness` calls admission for every queued item on every dispatch pass - several
+  times a second while work waits - synchronously on the event loop, so a Mac with a full library and
+  a busy history stalled its own Hub (and the app's polls with it). Admission now answers from
+  `_ADMISSION_SNAPSHOT`, a 10-second per-policy cache, deep-copied in and out so a caller annotating
+  its refusal cannot corrupt a later answer, with a 64-entry bound so a fleet's per-node policies do
+  not evict one another. Enforcement is unchanged: the background timer and every operator action
+  still run it.
+  Evidence: `tests/test_storage_admission_cache.py` (5 checks) - one sweep per burst, per-policy
+  separation, the refusal still computed from the real numbers, copies handed out, and the snapshot
+  expiring. All 27 tests in the modules that touch output storage still pass.
+
 ## 0.6.3 — 2026-09-19 · no Studio, no acceptance
 
 - **The submission guard never asked whether a Studio was running.** `_submission_readiness` checked

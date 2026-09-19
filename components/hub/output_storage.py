@@ -7,6 +7,7 @@ arbitrary local pathname into a deletion candidate.
 from __future__ import annotations
 
 import os
+import copy
 import hashlib
 import stat
 import threading
@@ -387,10 +388,34 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
         return final | {"deleted": deleted, "freed_bytes": freed}
 
 
+# How long an admission answer may be reused. The scheduler asks this question for every queued item
+# on every pass - several times a second while work is waiting - and `enforce` walks and hashes the
+# managed output roots to answer it, synchronously, on the event loop. The answer is therefore
+# remembered for a few seconds per policy. Enforcement itself is unchanged: it still runs on the
+# background timer (which is what deletes files) and on every operator action; this only stops the
+# scheduler re-sweeping the same roots in a tight loop, which is where a Mac with a full library
+# stalled its own Hub.
+_ADMISSION_TTL_SECONDS = 10.0
+_ADMISSION_SNAPSHOT: dict[tuple, tuple[float, dict]] = {}
+
+
 def admission(*, machine: str, max_bytes: int, retention_days: int, enabled: bool,
               managed_output_roots: object = None, minimum_free_bytes: int = 0) -> dict | None:
-    result = enforce(machine=machine, max_bytes=max_bytes, retention_days=retention_days, enabled=enabled,
-                     managed_output_roots=managed_output_roots, minimum_free_bytes=minimum_free_bytes)
+    key = (machine, max_bytes, retention_days, enabled, minimum_free_bytes,
+           tuple(managed_output_roots) if isinstance(managed_output_roots, list) else managed_output_roots)
+    cached = _ADMISSION_SNAPSHOT.get(key)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _ADMISSION_TTL_SECONDS:
+        result = copy.deepcopy(cached[1])
+    else:
+        result = enforce(machine=machine, max_bytes=max_bytes, retention_days=retention_days,
+                         enabled=enabled, managed_output_roots=managed_output_roots,
+                         minimum_free_bytes=minimum_free_bytes)
+        # One entry per policy: a fleet of nodes each with their own limits must not evict each other.
+        _ADMISSION_SNAPSHOT[key] = (now, copy.deepcopy(result))
+        if len(_ADMISSION_SNAPSHOT) > 64:
+            oldest = min(_ADMISSION_SNAPSHOT, key=lambda item: _ADMISSION_SNAPSHOT[item][0])
+            _ADMISSION_SNAPSHOT.pop(oldest, None)
     if result["used_bytes"] > max_bytes:
         return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": "generated output cannot meet this device policy", "storage": result}
     has_managed_root = isinstance(managed_output_roots, list) and bool(managed_output_roots)
