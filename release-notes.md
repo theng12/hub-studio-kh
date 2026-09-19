@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.19 — 2026-09-19
+
+### A job that could not be recorded no longer sticks as "running"
+
+When the Hub hands a job to a Mac it writes that down first, and then starts watching the job. If that
+write failed — a full disk, an unreadable database — the job was left reading as **running** with
+nothing watching it: it could never finish, never fail, and never be retried, while the Mac stayed
+reserved for it and read as busy. The only way out was restarting the Hub. Both are now rolled back —
+the job returns to the queue, the Mac is released, and the next pass tries again — and it says so:
+
+> A job could not be recorded when it was handed to a Mac, so it is queued again.
+
 ## 0.6.18 — 2026-09-19
 
 ### The app stopped re-reading its entire job history every two seconds

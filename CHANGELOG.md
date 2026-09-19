@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.19 — 2026-09-19 · a failed dispatch write stranded the job and the Mac
+
+- **`transcription_jobs`' dispatch loop leased the Mac, marked the item running in memory, then
+  saved.** A raising `_save` (full disk, unreadable database) propagated out of the loop, leaving the
+  item `running` with no task attached - it could never finish, fail or be retried - and the Mac
+  leased to that job, reading as busy until the Hub restarted. The write is now wrapped: on failure
+  `broker.release_external_machine` is called, the item returns to `queued` with its running fields
+  cleared, the attempt it had just spent is given back, the studio is dropped from the pass's busy
+  set, and the batch records why ("...so it is queued again").
+- Evidence: `tests/test_hub_jobs.py` (7 tests) passes, including the dispatch paths it exercises. A
+  dedicated regression test could **not** be placed reliably: the fixture constants it needs
+  (`_WORKERS`) sit inside a dead region of that module (see below), so the test was withdrawn rather
+  than left failing. This is the one fix today without its own test, and it is recorded as such.
+- New finding, from trying to write that test: **`tests/test_hub_jobs.py` contains a large dead
+  region.** Its AST shows only three top-level classes and two assignments while the text contains
+  five `class` definitions and constants such as `_WORKERS` at line 39 - so some of that file's
+  fixture code and at least one duplicate class definition never execute. Two of my edits this session
+  landed inside it and silently did nothing until a test failed. That is the "tests that cannot fail"
+  class of defect, and it is the next thing to fix.
+
 ## 0.6.18 — 2026-09-19 · the app re-read every historical job every two seconds
 
 - **`refresh()` fetched one job detail per batch, every two seconds, for ever.** History does not

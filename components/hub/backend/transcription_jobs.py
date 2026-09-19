@@ -824,7 +824,30 @@ async def dispatch_once(monitor) -> int:
                     )
                 batch["last_dispatched_at"] = time.time()
                 busy_studios.add(studio["id"])
-                _save(batch)
+                try:
+                    _save(batch)
+                except Exception as exc:
+                    # The durable write is what makes a dispatch real. Without it the item stays
+                    # "running" in memory with no task to finish it and the Mac leased to a job
+                    # nothing will ever complete: the item can never be retried (it is not queued),
+                    # never be failed (no task is watching it), and the Mac reads as busy until the
+                    # Hub restarts. Both are rolled back so the next pass can try again, and the
+                    # retry count is put back because nothing was attempted.
+                    broker.release_external_machine(machine, owner)
+                    busy_studios.discard(studio["id"])
+                    item.update(
+                        state="queued", studio=None, machine=None, started_at=None,
+                        studio_task_id=None, error=f"dispatch could not be recorded: {exc}",
+                        error_code="DISPATCH_PERSIST_FAILED",
+                        tries=max(0, item.get("tries", 1) - 1),
+                    )
+                    batch["governor_note"] = ("A job could not be recorded when it was handed to a "
+                                              "Mac, so it is queued again.")
+                    try:
+                        _save(batch)
+                    except Exception:
+                        pass
+                    continue
                 task = asyncio.create_task(_run_item(
                     monitor, batch, item, studio, owner, generation,
                 ))
