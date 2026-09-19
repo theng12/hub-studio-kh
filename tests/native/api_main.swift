@@ -208,7 +208,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
         case ("GET", "/api/hub/settings"):
             Self.lock.lock(); Self.storageCalls.append("get"); Self.lock.unlock()
             result = (200, "application/json", Self.settingsFixture)
@@ -562,6 +562,19 @@ struct NativeAPITests {
         await store.setRole("standalone")
         require(store.controllerIdentity?.settings.role == "standalone", "the role must be settable back")
         store.error = nil
+
+        // A model this Mac cannot run has to say which gate is shut. The Hub sends five of them -
+        // files, runtime, the macOS floor, the chip, the studio process - and the app decoded four
+        // fields of the package row and dropped the rest, so every refusal read "unavailable".
+        await store.refresh()
+        let gated = store.models.first { $0.repo == "mlx-community/VoxCPM2-4bit" }
+        require(gated?.blockReason?.contains("macOS 14.5") == true
+                && gated?.blockReason?.contains("15.0") == true,
+                "an unsupported macOS must name both versions, got: \(gated?.blockReason ?? "nil")")
+        require(gated?.pickerSuffix.contains("not available") == true,
+                "an unusable model must be marked in the picker")
+        let healthy = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
+        require(healthy?.blockReason == nil, "a model that can run must carry no reason")
 
         // How long a generation took, shown in the generator and in Jobs. The Hub writes
         // `runtime_s` when an item finishes and `elapsed_s` while it runs; the app showed neither,

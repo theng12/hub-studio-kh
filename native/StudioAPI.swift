@@ -63,6 +63,10 @@ struct NativeModel: Identifiable, Equatable {
     /// Set when this Mac is below the tier the model is qualified at. It is advice, not a
     /// refusal: the model still runs, and the operator is told what they are trading.
     var memoryWarning: String? = nil
+    /// Why this model cannot run here, in the operator's words, or nil when it can.
+    var blockReason: String? = nil
+    /// Short marker for a picker, where a whole sentence will not fit.
+    var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
 }
 
 /// The three ways a local voice model can be told what to sound like.
@@ -2667,7 +2671,9 @@ final class NativeWorkspaceStore: ObservableObject {
             let package = packages[item.repo]
             let supported = formCompatible && package != nil
             let cached = item.cache?.state == "cached"
-            let ready = (item.runtimeReady ?? false) && item.memoryEligible != false
+            let block = Self.blockReason(memoryWarning: item.memoryWarning,
+                                         memoryEligible: item.memoryEligible, package: package)
+            let ready = (item.runtimeReady ?? false) && block == nil
                 && package?.dispatchState == "eligible"
             let qualified = item.repo == qwenCustomVoice || Self.qwenBaseRepos.contains(item.repo)
             let note = supported
@@ -2690,7 +2696,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 // Without this every model kept the struct's default of `.cloning`, so the preset
                 // and design tabs were empty and a CustomVoice model was sent down the clone path -
                 // which asked for a reference voice it does not have.
-                voiceMode: mode, requiresTranscript: transcriptRequired
+                voiceMode: mode, requiresTranscript: transcriptRequired, blockReason: block
             )
         }
         let transcriptionModels = transcription.map { item in
@@ -2700,7 +2706,10 @@ final class NativeWorkspaceStore: ObservableObject {
             // model even though the worker reports it ready.
             let engine = (item.engine ?? "").lowercased()
             let supported = (engine.contains("whisper") || engine.contains("subtitle")) && package != nil
-            let ready = transcriptionAvailable && item.cached == true && package?.dispatchState == "eligible"
+            // The transcription catalog carries no memory tier, so its only gates are the ones
+            // the package row reports.
+            let block = Self.blockReason(memoryWarning: nil, memoryEligible: nil, package: package)
+            let ready = transcriptionAvailable && item.cached == true && block == nil
             let qualified = item.repo == whisperTurbo
             let note = supported
                 ? (ready
@@ -2712,18 +2721,22 @@ final class NativeWorkspaceStore: ObservableObject {
                 id: "transcription:\(item.repo)", repo: item.repo, label: item.label, family: item.engine ?? "Transcription",
                 function: .transcription, cached: item.cached ?? false, supported: supported, supportNote: note,
                 sizeGB: item.sizeGb, capabilities: ["transcription"], languages: item.languageList,
-                runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: []
+                runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: [],
+                blockReason: block
             )
         }
         let imageModels = audio.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
             let package = packages[item.repo]
             let supported = item.imageConfiguration != nil && package != nil
-            let ready = item.runtimeReady == true && item.memoryEligible != false && package?.dispatchState == "eligible"
+            let block = Self.blockReason(memoryWarning: item.memoryWarning,
+                                         memoryEligible: item.memoryEligible, package: package)
+            let ready = item.runtimeReady == true && block == nil
             return NativeModel(id: "image:\(item.repo)", repo: item.repo, label: item.label,
                 family: item.family ?? "Image", function: .image, cached: item.cache?.state == "cached",
                 supported: supported, supportNote: ready && supported ? "Ready for local image generation." : "Verify the image model files and runtime in Models.",
                 sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
-                supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning)
+                supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
+                blockReason: block)
         }
         return audioModels + transcriptionModels + imageModels
     }
@@ -2735,6 +2748,40 @@ final class NativeWorkspaceStore: ObservableObject {
             outputURL: wire.state == "done" ? wire.outputUrl : nil, error: wire.error
         )
     }
+    /// Why a model cannot run on this Mac, from the gates the Hub reports.
+    ///
+    /// The Hub refuses a job when any gate is shut, and until now the app showed only the shadow of
+    /// that refusal: a model reading "unavailable" with no reason, which the owner read as "because
+    /// of RAM pressure or something". The gates are independent - files, runtime, the macOS floor,
+    /// the chip, the studio process - and each has a different fix, so each gets its own sentence.
+    private static func blockReason(memoryWarning: String?, memoryEligible: Bool?,
+                                    package: HubModelPackage?) -> String? {
+        // The one an operator cannot fix by clicking anything: this Mac is below the model's tier.
+        if let warning = memoryWarning, !warning.isEmpty { return warning }
+        if memoryEligible == false { return "This Mac does not have enough memory for this model." }
+        guard let package else { return "This model is not part of the packaged catalog." }
+        if let detail = package.reason, !detail.isEmpty { return detail }
+        if let files = package.filesState, files != "files_verified" {
+            return "Its files are not verified. Open Models and press Verify Files."
+        }
+        if package.runtimeState == "incompatible" {
+            return "The local runtime for this model is not available in this build."
+        }
+        if package.osState == "unsupported" {
+            let needs = package.minimumMacos ?? ""
+            let has = package.macosVersion ?? ""
+            return needs.isEmpty
+                ? "This Mac's version of macOS is older than this model needs."
+                : "This Mac is on macOS \(has); this model needs \(needs) or later."
+        }
+        if package.chipState == "unsupported" { return "This model needs an Apple Silicon Mac." }
+        if package.workerState == "unavailable" {
+            return "Its Studio is not running. Restart the local services."
+        }
+        if package.dispatchState == "ineligible" { return "This Mac cannot run this model right now." }
+        return nil
+    }
+
     private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
         let item = wire.items.first
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
@@ -3048,6 +3095,17 @@ private struct HubModelPackage: Decodable {
     let modelId: String
     let state: String
     let dispatchState: String
+    /// The gates the Hub checks before it accepts a job for this model. `/api/hub/model-packages`
+    /// has always sent them; this struct decoded four fields and dropped the rest, which is why a
+    /// model this Mac cannot run showed as "unavailable" with no reason anywhere in the app.
+    let filesState: String?
+    let runtimeState: String?
+    let osState: String?
+    let chipState: String?
+    let workerState: String?
+    let minimumMacos: String?
+    let macosVersion: String?
+    let reason: String?
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
@@ -3089,6 +3147,16 @@ private struct HubModelState: Decodable {
     let state: String
     let dispatchState: String?
     let reason: String?
+    /// The gates the Hub checks before it will accept a job for this model. They were parsed as far
+    /// as `dispatchState` and no further, which is why a model this Mac cannot run showed as
+    /// "unavailable" and nothing said which gate was shut.
+    let filesState: String?
+    let runtimeState: String?
+    let osState: String?
+    let chipState: String?
+    let workerState: String?
+    let minimumMacos: String?
+    let macosVersion: String?
 }
 private struct EmptyBody: Encodable {}
 private struct CatalogReferenceAudio: Decodable {

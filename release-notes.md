@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.7 — 2026-09-19
+
+### A model that cannot run now says why
+
+Somewhere in the app a model would just read **unavailable**, and nothing said what was wrong — so
+the only way to guess was to wonder about memory. The Hub knows exactly which of five things is
+missing, and checks all of them before it will accept a job: the model's **files**, its **runtime**,
+your **version of macOS**, the **chip**, and whether its **Studio is running**. It has always sent
+all five. The app was reading one of them and throwing the rest away.
+
+Each reason now appears in orange, where you are looking: under the model list on Audio, Image and
+Subtitle, on the Generate button's own explanation, and on the **Models** page. For example:
+
+- *This Mac is on macOS 14.5; this model needs 15.0 or later.*
+- *This Mac does not have enough memory for this model.*
+- *Its files are not verified. Open Models and press Verify Files.*
+- *Its Studio is not running. Restart the local services.*
+- *This model needs an Apple Silicon Mac.*
+
+A model that cannot run is also marked in the list itself (*"… — not available here"*) so it is
+obvious before you pick it, rather than after you press Generate.
+
 ## 0.5.6 — 2026-09-19
 
 ### Name your Mac, and one button for settings that need a restart

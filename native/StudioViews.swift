@@ -725,6 +725,7 @@ struct StudioContent: View {
             return "Write the script you want spoken."
         }
         guard let model = selectedAudioModel else { return "Choose a model." }
+        if let reason = model.blockReason { return reason }
         if model.supported != true { return model.supportNote }
         if model.cached != true { return "Download \(model.label) on the Models page first." }
         if model.runtimeReady != true {
@@ -852,11 +853,22 @@ struct StudioContent: View {
             Text("Model").font(.callout)
             Picker("Model", selection: selection) {
                 Text("Choose a model").tag("")
-                ForEach(models) { model in Text(model.label + (model.cached ? "" : " · Not installed")).tag(model.repo) }
+                ForEach(models) { model in
+                    Text(model.label + (model.cached ? "" : " · Not installed") + model.pickerSuffix)
+                        .tag(model.repo)
+                }
             }.labelsHidden().frame(maxWidth: .infinity)
             if let model = models.first(where: { $0.repo == selection.wrappedValue }) {
                 Label(model.cached ? "Installed" : "Download in Models", systemImage: model.cached ? "checkmark.circle" : "arrow.down.circle")
                     .font(.caption).foregroundStyle(model.cached ? Color.secondary : Color.orange)
+                // Why this model will not run here, when it will not. The Hub has always checked
+                // five gates before accepting a job - files, runtime, the macOS floor, the chip and
+                // the studio process - and the app used to show only that something was unavailable.
+                if let reason = model.blockReason {
+                    Label(reason, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if models.isEmpty {
                 Text(function == .audio
@@ -1013,7 +1025,15 @@ struct StudioContent: View {
                             LabeledContent("Storage", value: model.cached ? "Installed" : "Not installed")
                             if let size = model.sizeGB { LabeledContent("Estimated size", value: String(format: "%.2f GB", size)) }
                             Divider()
-                            Text(model.supportNote).font(.callout).foregroundStyle(.secondary)
+                            // The Models page is where an operator comes to find out why something
+                            // will not run, so the gate that is shut is named here as well.
+                            if let reason = model.blockReason {
+                                Label(reason, systemImage: "exclamationmark.triangle")
+                                    .font(.callout).foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text(model.supportNote).font(.callout).foregroundStyle(.secondary)
+                            }
                             if model.cached {
                                 if model.supported { Button("Use in \(model.function.rawValue)") { if model.function == .audio { workspace.audioModel = model.repo; studio.select(.audio) } else { workspace.transcriptionModel = model.repo; studio.select(.transcription) } }.buttonStyle(.borderedProminent) }
                                 HStack {

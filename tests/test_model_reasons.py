@@ -1,0 +1,69 @@
+"""Why a model will not run here, said out loud.
+
+The owner reported that the app "just shows unavailable with no proper reason" and guessed at RAM
+pressure. He was guessing because the app told him nothing: the Hub checks five independent gates
+before it will accept a job - the model's files, the studio runtime, the macOS floor, the chip, and
+whether the studio process is running - and `/api/hub/model-packages` has always sent all of them.
+`HubModelPackage` decoded four fields and dropped the gates, so the app could only say that
+something was unavailable.
+
+Each gate has a different fix, so each gets its own sentence, and the reason is shown where the
+operator is: the generator's model picker, the Generate button's own explanation, and the Models
+page.
+"""
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+API = (ROOT / "native" / "StudioAPI.swift").read_text()
+VIEWS = (ROOT / "native" / "StudioViews.swift").read_text()
+
+
+class ModelReasonTests(unittest.TestCase):
+    def test_the_package_row_decodes_every_gate_the_hub_sends(self) -> None:
+        """The bug, pinned at its source: four fields decoded where the Hub sends eleven."""
+        package = API[API.index("private struct HubModelPackage: Decodable"):]
+        package = package[:package.index("private struct HubModelDownload")]
+        for field in ("filesState", "runtimeState", "osState", "chipState", "workerState",
+                      "minimumMacos", "macosVersion", "reason"):
+            self.assertIn(f"let {field}", package, f"{field} must be decoded, not discarded")
+
+    def test_every_gate_has_its_own_sentence(self) -> None:
+        builder = API[API.index("private static func blockReason("):]
+        builder = builder[:builder.index("private static func mapHubJob")]
+        for phrase in ("not verified", "runtime for this model", "macOS", "Apple Silicon",
+                       "Studio is not running", "cannot run this model right now",
+                       "not have enough memory"):
+            self.assertIn(phrase, builder, f"no sentence for the {phrase!r} gate")
+        # The memory tier wins when the catalog knows it: it is the one gate an operator cannot fix
+        # by clicking anything, so it must not be buried under a generic "ineligible".
+        self.assertLess(builder.index("memoryWarning"), builder.index("runtimeState"),
+                        "the memory reason must be checked before the generic gates")
+
+    def test_an_unusable_model_is_marked_and_explained_where_it_is_chosen(self) -> None:
+        picker = VIEWS[VIEWS.index("private func modelPicker("):]
+        picker = picker[:picker.index("\n    private func", 10)]
+        self.assertIn("model.pickerSuffix", picker, "the picker must mark a model it cannot run")
+        self.assertIn("model.blockReason", picker, "and say why underneath")
+
+    def test_generate_says_the_reason_rather_than_staying_disabled(self) -> None:
+        blocked = VIEWS[VIEWS.index("private var audioBlockedReason"):]
+        blocked = blocked[:blocked.index("private var voiceLibraryLoadKey")]
+        self.assertIn("if let reason = model.blockReason { return reason }", blocked)
+
+    def test_the_models_page_names_the_gate_too(self) -> None:
+        """The page an operator opens to ask exactly this question."""
+        models = VIEWS[VIEWS.index("private var modelsWorkspace"):]
+        models = models[:models.index("private var ", 10)]
+        self.assertIn("model.blockReason", models)
+
+    def test_readiness_is_no_longer_computed_from_a_subset(self) -> None:
+        """`ready` used to ignore the gates entirely for audio and subtitle."""
+        for function in ("voiceMode(repo", "blockReason(memoryWarning"):
+            self.assertIn(function, API)
+        self.assertNotIn("item.memoryEligible != false && package?.dispatchState == \"eligible\"", API,
+                         "one of the three mappers still uses a hand-rolled readiness rule")
+
+
+if __name__ == "__main__":
+    unittest.main()

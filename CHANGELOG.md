@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.7 — 2026-09-19 · a refusal with no reason
+
+- **The gates were sent and discarded.** `/api/hub/model-packages` returns, per model,
+  `files_state`, `runtime_state`, `os_state`, `chip_state`, `worker_state`, `minimum_macos`,
+  `macos_version`, `dispatch_state` and a `reason` when there is one. `HubModelPackage` decoded
+  `package_id`, `model_id`, `state` and `dispatch_state` - so the app could tell that a model was
+  unavailable and never which of the five independent gates was shut. The owner reported it as "just
+  shows unavailable with no proper reason" and guessed at RAM pressure, which is exactly what a UI
+  forces an operator to do when it withholds the reason it already has.
+- `HubModelPackage` now decodes every gate, and one `blockReason` turns the first shut gate into a
+  sentence: files not verified, runtime unavailable in this build, macOS floor (naming both
+  versions), Apple Silicon required, studio not running, or the memory tier when the catalog knows it
+  (`memory_warning` / `memory_eligible == false`, checked first because it is the one gate an
+  operator cannot fix by clicking).
+- Readiness is no longer computed by hand in three places with three different rules: the audio,
+  subtitle and image mappers all ask the same function, so a model cannot be "ready" in the picker
+  and refused by the Hub.
+- It is shown in the generator's model list (a `— not available here` marker), under the selected
+  model, in the Generate button's explanation, and on the Models page. Evidence: the native fixture
+  now serves a package gated on macOS and asserts the sentence names both versions, that the picker
+  marks it, and that a healthy model carries no reason; `tests/test_model_reasons.py` (6 checks)
+  covers the decode, every gate's sentence, the precedence of the memory reason, and the three places
+  it is shown.
+
 ## 0.5.6 — 2026-09-19 · naming a Mac, and the restart nobody knew about
 
 - **The name was never editable.** `registry.set_label` has written `machine_labels.json` since the
