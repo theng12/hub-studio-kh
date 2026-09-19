@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "package_id": "moss-tts-nano-100m",
+  "model_id": "mlx-community/MOSS-TTS-Nano-100M",
+  "revision": "229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/MOSS-TTS-Nano-100M",
+        "revision": "229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/MOSS-TTS-Nano-100M",
+        "revision": "229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 5238,
+      "sha256": "f947eb159bd7a2dfd3b8bad73cc0d2e33de6064b2610f6591d8be1aab540e869",
+      "urls": [
+        "https://huggingface.co/mlx-community/MOSS-TTS-Nano-100M/resolve/229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 284973717,
+      "sha256": "0f095f69dc16b42ddfe4d56d925b454b0acd77df63fec274edceaade69154817",
+      "urls": [
+        "https://huggingface.co/mlx-community/MOSS-TTS-Nano-100M/resolve/229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "source_path": "special_tokens_map.json",
+      "size": 552,
+      "sha256": "358c249e2fb29060c6b73157d428853b0c48710deffc8ee670ab1013880946c9",
+      "urls": [
+        "https://huggingface.co/mlx-community/MOSS-TTS-Nano-100M/resolve/229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.model",
+      "source_path": "tokenizer.model",
+      "size": 470897,
+      "sha256": "c353ee1479b536bf414c1b247f5542b6607fb8ae91320e5af1781fee200fddff",
+      "urls": [
+        "https://huggingface.co/mlx-community/MOSS-TTS-Nano-100M/resolve/229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79/tokenizer.model"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "source_path": "tokenizer_config.json",
+      "size": 1140,
+      "sha256": "2e00db82fd2ba8020e7263a25f31bb8ec6c5cefbfe0b5e0bbd4723ae874d1be1",
+      "urls": [
+        "https://huggingface.co/mlx-community/MOSS-TTS-Nano-100M/resolve/229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79/tokenizer_config.json"
+      ]
+    }
+  ],
+  "dependencies": [
+    "moss-audio-tokenizer-nano"
+  ]
+}

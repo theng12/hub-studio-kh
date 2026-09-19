@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "package_id": "chatterbox-4bit",
+  "model_id": "mlx-community/chatterbox-4bit",
+  "revision": "f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/chatterbox-4bit",
+        "revision": "f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/chatterbox-4bit",
+        "revision": "f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/Cangjie5_TC.json"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/Cangjie5_TC.json",
+      "source_path": "Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/conds.safetensors",
+      "source_path": "conds.safetensors",
+      "size": 105316,
+      "sha256": "709e5a7fa80e010a011c8244f553853aed7a49c106fff54008fbd89a0f5a6148",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/conds.safetensors"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 336,
+      "sha256": "f263efaa538f4409a2f65661bef99fb435030ff0e2dc05481d7936f2019c7f9e",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/config.json"
+      ]
+    },
+    {
+      "path": "model/ko.wav",
+      "source_path": "ko.wav",
+      "size": 326478,
+      "sha256": "7f841587b1f264b8a3183ee7e1cf06e74d50c9ecb8711af282e9c9e8c34ca2f0",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/ko.wav"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 607246626,
+      "sha256": "85fae2e4b09100e942c1c59481b8e8707916b49e58473fbe0a5cca281dbbadc4",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "source_path": "model.safetensors.index.json",
+      "size": 355942,
+      "sha256": "f013ba172336581d1637d4b66a91d2d78385f8dc0c376965a3dd1a301722916c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json",
+      "source_path": "models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "source_path": "tokenizer.json",
+      "size": 70011,
+      "sha256": "df81a7ca7c31796cbe97f7a7142d5a53b12e88e12417ebe98f66602cafaf0461",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-4bit/resolve/f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8/tokenizer.json"
+      ]
+    }
+  ],
+  "dependencies": [
+    "s3tokenizerv2"
+  ]
+}

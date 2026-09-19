@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "package_id": "snac-24khz",
+  "model_id": "mlx-community/snac_24khz",
+  "revision": "556af1cd3b1c5f2d294f6aa9bb886245d7b716ac",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/snac_24khz",
+        "revision": "556af1cd3b1c5f2d294f6aa9bb886245d7b716ac"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/snac_24khz",
+        "revision": "556af1cd3b1c5f2d294f6aa9bb886245d7b716ac",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 300,
+      "sha256": "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be",
+      "urls": [
+        "https://huggingface.co/mlx-community/snac_24khz/resolve/556af1cd3b1c5f2d294f6aa9bb886245d7b716ac/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 79404951,
+      "sha256": "e61ae2f638f56ee07a37592cd5a6a9e7d642560ddc78a76ee4a7f96d6922f1be",
+      "urls": [
+        "https://huggingface.co/mlx-community/snac_24khz/resolve/556af1cd3b1c5f2d294f6aa9bb886245d7b716ac/model.safetensors"
+      ]
+    }
+  ],
+  "dependencies": null
+}

@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "package_id": "fish-audio-s2-pro-8bit",
+  "model_id": "mlx-community/fish-audio-s2-pro-8bit",
+  "revision": "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/fish-audio-s2-pro-8bit",
+        "revision": "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/fish-audio-s2-pro-8bit",
+        "revision": "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/codec.safetensors"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 24,
+    "recommended_unified_memory_gb": 24,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/codec.safetensors",
+      "source_path": "codec.safetensors",
+      "size": 1870921167,
+      "sha256": "c2096e27a1bb69a05151ccb502649a88744712270d9b029a68a3c9305f2b1edf",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/codec.safetensors"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 2315,
+      "sha256": "363895eff17c1f15a18e9bbc8ffddf3d5546219378cc37d96862892d4f93aace",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 4847260185,
+      "sha256": "bf31b4e5fb713a565750e120ebadd54de245eb1214e46d14fc5108f1e79171a1",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "source_path": "model.safetensors.index.json",
+      "size": 53694,
+      "sha256": "8cbd2420af13f5f43738d86ad072be982dc4e36e6081aacd6a5549d4b635bc7d",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "source_path": "special_tokens_map.json",
+      "size": 101864,
+      "sha256": "c2ff18fde6e43b7408435bc8ed079af74531befba549358a97cbc59ce606bc6b",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "source_path": "tokenizer.json",
+      "size": 12217872,
+      "sha256": "f24e08099d45a8adf3f52f5f0b03276e433bb9d689bb15fcbcc48ce58744588b",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "source_path": "tokenizer_config.json",
+      "size": 860832,
+      "sha256": "b8d149343ae425b0da67e6708686aceb51be7815d9792f265fc12ff04d5e9856",
+      "urls": [
+        "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/tokenizer_config.json"
+      ]
+    }
+  ],
+  "dependencies": null
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "package_id": "s3tokenizerv2",
+  "model_id": "mlx-community/S3TokenizerV2",
+  "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/S3TokenizerV2",
+        "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/S3TokenizerV2",
+        "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 126,
+      "sha256": "8591fcc0eaae8c2bbfc69cf9d439933ecdf2d58cb9be63d00ce88736c4f2aa9d",
+      "urls": [
+        "https://huggingface.co/mlx-community/S3TokenizerV2/resolve/e0c9886f0e1c35ae85b1f27277416fb19fc72bec/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 494868984,
+      "sha256": "928726bc1f206a613d36b8f49e297eae9c5593a21bf9b92ddfe2c23f85eb92cc",
+      "urls": [
+        "https://huggingface.co/mlx-community/S3TokenizerV2/resolve/e0c9886f0e1c35ae85b1f27277416fb19fc72bec/model.safetensors"
+      ]
+    }
+  ],
+  "dependencies": null
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "package_id": "f5-tts",
+  "model_id": "SWivid/F5-TTS",
+  "revision": "84e5a410d9cead4de2f847e7c9369a6440bdfaca",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "SWivid/F5-TTS",
+        "revision": "84e5a410d9cead4de2f847e7c9369a6440bdfaca"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "SWivid/F5-TTS",
+        "revision": "84e5a410d9cead4de2f847e7c9369a6440bdfaca",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/F5TTS_v1_Base/model_1250000.safetensors"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/F5TTS_v1_Base/model_1250000.safetensors",
+      "source_path": "F5TTS_v1_Base/model_1250000.safetensors",
+      "size": 1348435761,
+      "sha256": "670900fd14e6c458b95da6e9ed317cdb20dbaf7a1c02ac06a05475a9d32b6a38",
+      "urls": [
+        "https://huggingface.co/SWivid/F5-TTS/resolve/84e5a410d9cead4de2f847e7c9369a6440bdfaca/F5TTS_v1_Base/model_1250000.safetensors"
+      ]
+    },
+    {
+      "path": "model/F5TTS_v1_Base/vocab.txt",
+      "source_path": "F5TTS_v1_Base/vocab.txt",
+      "size": 13800,
+      "sha256": "2a05f992e00af9b0bd3800a8d23e78d520dbd705284ed2eedb5f4bd29398fa3c",
+      "urls": [
+        "https://huggingface.co/SWivid/F5-TTS/resolve/84e5a410d9cead4de2f847e7c9369a6440bdfaca/F5TTS_v1_Base/vocab.txt"
+      ]
+    }
+  ],
+  "dependencies": null
+}

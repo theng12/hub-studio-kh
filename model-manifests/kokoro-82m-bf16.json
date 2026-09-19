@@ -1,0 +1,632 @@
+{
+  "schema_version": 1,
+  "package_id": "kokoro-82m-bf16",
+  "model_id": "mlx-community/Kokoro-82M-bf16",
+  "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/Kokoro-82M-bf16",
+        "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/Kokoro-82M-bf16",
+        "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/DONATE.md"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/DONATE.md",
+      "source_path": "DONATE.md",
+      "size": 2562,
+      "sha256": "cf31b6b09359786af5ec0de74b59b026b1fdaa0f575c8f64f221a74274ce433b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/DONATE.md"
+      ]
+    },
+    {
+      "path": "model/SAMPLES.md",
+      "source_path": "SAMPLES.md",
+      "size": 5956,
+      "sha256": "96b7cc1978491ae89097367952c563d1f7110ae15473a7f5353a0f84b39cc6d1",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/SAMPLES.md"
+      ]
+    },
+    {
+      "path": "model/VOICES.md",
+      "source_path": "VOICES.md",
+      "size": 7625,
+      "sha256": "ec7e4941ad7e194af61e3455928528a9ff5360c7c505e412efab27d6a69ea106",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/VOICES.md"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 2351,
+      "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/config.json"
+      ]
+    },
+    {
+      "path": "model/kokoro-v1_0.safetensors",
+      "source_path": "kokoro-v1_0.safetensors",
+      "size": 327115152,
+      "sha256": "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/kokoro-v1_0.safetensors"
+      ]
+    },
+    {
+      "path": "model/samples/HEARME.wav",
+      "source_path": "samples/HEARME.wav",
+      "size": 996044,
+      "sha256": "aad38e96fa60c91c995ac820ce6e86c28b0df7300177c0d3ca0766b9dc78feec",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/HEARME.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_0.wav",
+      "source_path": "samples/af_heart_0.wav",
+      "size": 237644,
+      "sha256": "dd7999ebbc8369779d5d3f504399ea466c909339f90231143416a7819a2047fc",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_0.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_1.wav",
+      "source_path": "samples/af_heart_1.wav",
+      "size": 517244,
+      "sha256": "2fe4f363b785fdc233f94dd1885c94a2267f7ceeea8c7fb5cce6bfcf0f7b273d",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_1.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_2.wav",
+      "source_path": "samples/af_heart_2.wav",
+      "size": 496844,
+      "sha256": "68ee75b2d503415a5b6edbd5230c823fbeb6b430d546b8c37e2284efcf280be8",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_2.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_3.wav",
+      "source_path": "samples/af_heart_3.wav",
+      "size": 1407644,
+      "sha256": "e758efcd852e77569772ee5a424df724695903db61a323a6021ee1c6a50ca616",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_3.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_4.wav",
+      "source_path": "samples/af_heart_4.wav",
+      "size": 1116044,
+      "sha256": "d50c90f447686200052f4375dee55a3406ec0aa140473cf946e98fdfe860989b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_4.wav"
+      ]
+    },
+    {
+      "path": "model/samples/af_heart_5.wav",
+      "source_path": "samples/af_heart_5.wav",
+      "size": 1033244,
+      "sha256": "bc4515b9479c219e4e9347463a859ea6716dd0eb45a520f5f42825a7662b5054",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/samples/af_heart_5.wav"
+      ]
+    },
+    {
+      "path": "model/voices/af_alloy.safetensors",
+      "source_path": "voices/af_alloy.safetensors",
+      "size": 522320,
+      "sha256": "5bb848d02ade7e37981809acad52a1761ef7a586ff9f30d02d65fd71c4af95f9",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_alloy.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_aoede.safetensors",
+      "source_path": "voices/af_aoede.safetensors",
+      "size": 522320,
+      "sha256": "23809148777f2a2378983dd856bc14b9c261018279f916f98c23d86e844409a5",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_aoede.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_bella.safetensors",
+      "source_path": "voices/af_bella.safetensors",
+      "size": 522320,
+      "sha256": "112d310468cbb3cf23404d3d0b50ad3adf017b87bf38bf9edd15f4ad572df6a3",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_bella.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_heart.safetensors",
+      "source_path": "voices/af_heart.safetensors",
+      "size": 522320,
+      "sha256": "2c1c733b0e6576c810e268d3e440c21dea4e0f0131a3ba4cfc98d7fe6136d094",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_heart.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_jessica.safetensors",
+      "source_path": "voices/af_jessica.safetensors",
+      "size": 522320,
+      "sha256": "c358448e4277b79e8b13b92033711660a1a2205c3940c2dfb16698b99fed58a8",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_jessica.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_kore.safetensors",
+      "source_path": "voices/af_kore.safetensors",
+      "size": 522320,
+      "sha256": "c491174280cb1ad25210a842f2f34b46a9ef904ec6f6a8e784839531795fa278",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_kore.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_nicole.safetensors",
+      "source_path": "voices/af_nicole.safetensors",
+      "size": 522320,
+      "sha256": "574656386022c81a029e9a72558191925f44c3de2dad2fa2e45751938557d062",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_nicole.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_nova.safetensors",
+      "source_path": "voices/af_nova.safetensors",
+      "size": 522320,
+      "sha256": "242b9a0a01eac1ac2865c69fc617a756b20d86df82d5fae3970533e2312ca50e",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_nova.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_river.safetensors",
+      "source_path": "voices/af_river.safetensors",
+      "size": 522320,
+      "sha256": "82c866b0b976d50e82cbd781ac7bc771471ce5bd21decf05ab92812a08fb1c04",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_river.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_sarah.safetensors",
+      "source_path": "voices/af_sarah.safetensors",
+      "size": 522320,
+      "sha256": "4940072182542f54c1035d1daf4c1cf3136ca9baa9ac57c8e006b4befcc50be6",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_sarah.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/af_sky.safetensors",
+      "source_path": "voices/af_sky.safetensors",
+      "size": 522320,
+      "sha256": "957af332330db8e9bd7f9dc449475a946cb0d7d689afef64b91007bbbf20eaa0",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_sky.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_adam.safetensors",
+      "source_path": "voices/am_adam.safetensors",
+      "size": 522320,
+      "sha256": "a4f60a3b9c20353c2604a17485ba53260502a758681a84d41e8af53cc559d929",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_adam.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_echo.safetensors",
+      "source_path": "voices/am_echo.safetensors",
+      "size": 522320,
+      "sha256": "031fc608a900332c4e1a29bd0884f5d0e84bd0348261fa79981e5cbd138c950d",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_echo.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_eric.safetensors",
+      "source_path": "voices/am_eric.safetensors",
+      "size": 522320,
+      "sha256": "1fb4a61dcee1f114f90886ecf29bc2feed05e29eed9caa6ddb109f1934d73274",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_eric.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_fenrir.safetensors",
+      "source_path": "voices/am_fenrir.safetensors",
+      "size": 522320,
+      "sha256": "9abed964b906c4cae6f404d9849e76260689aea862bc6ca85fc3f5207ba96538",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_fenrir.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_liam.safetensors",
+      "source_path": "voices/am_liam.safetensors",
+      "size": 522320,
+      "sha256": "66b65a96e16c3d91035a6e9019d9986ed524d27ce35b487270cdf61c99e3ebad",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_liam.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_michael.safetensors",
+      "source_path": "voices/am_michael.safetensors",
+      "size": 522320,
+      "sha256": "3940147ded35deba0bb52e8132f89b719298e0520258c34584358aa5a24da2ea",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_michael.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_onyx.safetensors",
+      "source_path": "voices/am_onyx.safetensors",
+      "size": 522320,
+      "sha256": "b5d6132a5747648d98c82c9c4aaa9cf52d7230e63e403c1cb9c12858446ca5f5",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_onyx.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_puck.safetensors",
+      "source_path": "voices/am_puck.safetensors",
+      "size": 522320,
+      "sha256": "9a8c2e56413bd2063f814cb4c3885fc425876157369117c3f8258d03c8a9ad89",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_puck.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/am_santa.safetensors",
+      "source_path": "voices/am_santa.safetensors",
+      "size": 522320,
+      "sha256": "d1f433b57ffccf105ea9e434ea19af6c2a8a7916ba6d1a73c34f0046bd226084",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/am_santa.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bf_alice.safetensors",
+      "source_path": "voices/bf_alice.safetensors",
+      "size": 522320,
+      "sha256": "9c77e390d93d9db7c4a7526c3b1f393290a2be46f233b89a00b8188e850c20a8",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bf_alice.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bf_emma.safetensors",
+      "source_path": "voices/bf_emma.safetensors",
+      "size": 522320,
+      "sha256": "8878a75a6661305849eeb1d6293a7177250193616e161b4c3100636434dfe69f",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bf_emma.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bf_isabella.safetensors",
+      "source_path": "voices/bf_isabella.safetensors",
+      "size": 522320,
+      "sha256": "f7b6076f025649699fcfed1a6debf13049a87afdc7aafc8c72b7d81246db6ead",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bf_isabella.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bf_lily.safetensors",
+      "source_path": "voices/bf_lily.safetensors",
+      "size": 522320,
+      "sha256": "ee77a419046a765420ac82cb46e8b8cf5754a0b9d20c340fece1d4b18be7ecdb",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bf_lily.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bm_daniel.safetensors",
+      "source_path": "voices/bm_daniel.safetensors",
+      "size": 522320,
+      "sha256": "b195dec592ee024f57ddc5bf481464596082ba60998a2a295eba90bfc1064f4b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bm_daniel.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bm_fable.safetensors",
+      "source_path": "voices/bm_fable.safetensors",
+      "size": 522320,
+      "sha256": "9fa80184e96d016a744bc13b0b2e7695e55d6b855556fa003325cb1e5ebf2c2b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bm_fable.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bm_george.safetensors",
+      "source_path": "voices/bm_george.safetensors",
+      "size": 522320,
+      "sha256": "a3d9b8995cbbe5536f954b6be2a0f1f312f077118ba0d4d2178fc41dc8306672",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bm_george.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/bm_lewis.safetensors",
+      "source_path": "voices/bm_lewis.safetensors",
+      "size": 522320,
+      "sha256": "e1e68013c21a141efe527aaec561e1174c2f5a6951b3bcecc8396adab315b247",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/bm_lewis.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/ef_dora.safetensors",
+      "source_path": "voices/ef_dora.safetensors",
+      "size": 522320,
+      "sha256": "13f6dfe8a498ce97a384186af045b586db6292869acbfde123a0fa2798229351",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/ef_dora.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/em_alex.safetensors",
+      "source_path": "voices/em_alex.safetensors",
+      "size": 522320,
+      "sha256": "e3bc4bf56ab47f0d52074cd3f84cd4f1713187285fdd85a545c6e167dfa3ab77",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/em_alex.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/em_santa.safetensors",
+      "source_path": "voices/em_santa.safetensors",
+      "size": 522320,
+      "sha256": "37c44211b77b3f29512f420bd5a2e146c7769a5ad3d904b3455cccd55055db62",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/em_santa.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/ff_siwis.safetensors",
+      "source_path": "voices/ff_siwis.safetensors",
+      "size": 522320,
+      "sha256": "5c659c9b9e12be28b98a4aa0cd6b1e66f359b6381ba5680264e9072945ac32b8",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/ff_siwis.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/hf_alpha.safetensors",
+      "source_path": "voices/hf_alpha.safetensors",
+      "size": 522320,
+      "sha256": "e93355a43e6f57e8cfde96874008c858f1fb7fd8b65dd043114d451882cad3f6",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/hf_alpha.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/hf_beta.safetensors",
+      "source_path": "voices/hf_beta.safetensors",
+      "size": 522320,
+      "sha256": "976ea52ba7edce5da049c41ef06a663f3807fd470d2ea5c359245dfc2fb00d66",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/hf_beta.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/hm_omega.safetensors",
+      "source_path": "voices/hm_omega.safetensors",
+      "size": 522320,
+      "sha256": "227f0c710d1169686bf617fac486e8496982e96cc01617a3acd3579db75dd126",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/hm_omega.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/hm_psi.safetensors",
+      "source_path": "voices/hm_psi.safetensors",
+      "size": 522320,
+      "sha256": "03efb26b99e78c8d40ade3217f9c9905f8f84bbad7f21f921e270c036b01144e",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/hm_psi.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/if_sara.safetensors",
+      "source_path": "voices/if_sara.safetensors",
+      "size": 522320,
+      "sha256": "2f3d092c8ba16f2007e8b234c9a55bdebec614a1e50143e41b39dd7f89fdb45b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/if_sara.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/im_nicola.safetensors",
+      "source_path": "voices/im_nicola.safetensors",
+      "size": 522320,
+      "sha256": "96b62f7d25c3e7efce4f2506beeaa9f63bcc73524c7b2862738c65433fe9ba16",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/im_nicola.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/jf_alpha.safetensors",
+      "source_path": "voices/jf_alpha.safetensors",
+      "size": 522320,
+      "sha256": "455f78a6ebe633929cf314ce7c4a6b595ad1fb0ec7de6de7bc1d62d37e5264d2",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/jf_alpha.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/jf_gongitsune.safetensors",
+      "source_path": "voices/jf_gongitsune.safetensors",
+      "size": 522320,
+      "sha256": "30d744337db7a7a91185b129dfd24ca86c19f7d46acadf2daf077ba78edaba81",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/jf_gongitsune.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/jf_nezumi.safetensors",
+      "source_path": "voices/jf_nezumi.safetensors",
+      "size": 522320,
+      "sha256": "65743c88fa1c8d30d7f41e402ce30a6ce461e2b0f8095c252e51905eb0c0754a",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/jf_nezumi.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/jf_tebukuro.safetensors",
+      "source_path": "voices/jf_tebukuro.safetensors",
+      "size": 522320,
+      "sha256": "0cc28d928ce14b2ba4586b4c552edba36828a0961a37649530f80b3ad809bdec",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/jf_tebukuro.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/jm_kumo.safetensors",
+      "source_path": "voices/jm_kumo.safetensors",
+      "size": 522320,
+      "sha256": "9f6b9d85ae099c409193924add0f1c478d7c9b6904ef181f2297154bfe05cc2c",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/jm_kumo.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/pf_dora.safetensors",
+      "source_path": "voices/pf_dora.safetensors",
+      "size": 522320,
+      "sha256": "9a8d587d60d0e041f593f7e7488943e7a6821f0136961bf0e554572e12c91c77",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/pf_dora.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/pm_alex.safetensors",
+      "source_path": "voices/pm_alex.safetensors",
+      "size": 522320,
+      "sha256": "bec864eaeb05cc1a6fa12777ad31faaae1b2ed6d5eb2a6f7370fb9cdc48e3e2f",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/pm_alex.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/pm_santa.safetensors",
+      "source_path": "voices/pm_santa.safetensors",
+      "size": 522320,
+      "sha256": "5009747fd93841c0865830be0f577ed50800b41b2122c469dedf51bb8311f78d",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/pm_santa.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zf_xiaobei.safetensors",
+      "source_path": "voices/zf_xiaobei.safetensors",
+      "size": 522320,
+      "sha256": "cbda378bbe266c735aa13c94c20b6224f2f8d0e16cf3abe612a4e6d93ebeab51",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zf_xiaobei.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zf_xiaoni.safetensors",
+      "source_path": "voices/zf_xiaoni.safetensors",
+      "size": 522320,
+      "sha256": "ef37a82850e10eb15f18a4549c76707a8eebd682e61facdda6ee4a4dc4eb0bf0",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zf_xiaoni.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zf_xiaoxiao.safetensors",
+      "source_path": "voices/zf_xiaoxiao.safetensors",
+      "size": 522320,
+      "sha256": "cf507ad2319c50121aca4755cd3b9793bde10eea9aa9caca6cb3b5914d5f258f",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zf_xiaoxiao.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zf_xiaoyi.safetensors",
+      "source_path": "voices/zf_xiaoyi.safetensors",
+      "size": 522320,
+      "sha256": "1f2b7ce315a84870170ca83b2e4c0a072242bacbbd869f8a3b22377cc7d59e0b",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zf_xiaoyi.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zm_yunjian.safetensors",
+      "source_path": "voices/zm_yunjian.safetensors",
+      "size": 522320,
+      "sha256": "a08940c5dd3d8aadfda8a5576aa0f688a184ccbd5e4408d7a2a8144ab1fb3040",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zm_yunjian.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zm_yunxi.safetensors",
+      "source_path": "voices/zm_yunxi.safetensors",
+      "size": 522320,
+      "sha256": "78d8bb5ba4a2ea75a7f22c6148214a7434b436db85dc791a2ddf2aa7f6cc6fab",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zm_yunxi.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zm_yunxia.safetensors",
+      "source_path": "voices/zm_yunxia.safetensors",
+      "size": 522320,
+      "sha256": "59a4ba431ffa7165b95d5b953097affb71110b3039f81c4439cf0f7464bcb2ee",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zm_yunxia.safetensors"
+      ]
+    },
+    {
+      "path": "model/voices/zm_yunyang.safetensors",
+      "source_path": "voices/zm_yunyang.safetensors",
+      "size": 522320,
+      "sha256": "8ad45c1077ab0d973ebb85ebb84f797caf6c6b188255c1178511a6feba3a0611",
+      "urls": [
+        "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/zm_yunyang.safetensors"
+      ]
+    }
+  ],
+  "dependencies": null
+}

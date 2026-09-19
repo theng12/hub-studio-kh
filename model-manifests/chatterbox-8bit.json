@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "package_id": "chatterbox-8bit",
+  "model_id": "mlx-community/chatterbox-8bit",
+  "revision": "9617d61b596a03d1bed766a28c341680e993a1b9",
+  "engine": "voice-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "mlx-community/chatterbox-8bit",
+        "revision": "9617d61b596a03d1bed766a28c341680e993a1b9"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "mlx-community/chatterbox-8bit",
+        "revision": "9617d61b596a03d1bed766a28c341680e993a1b9",
+        "destination": "model"
+      }
+    }
+  },
+  "defaults": {
+    "parameters_source": "model/CACHEDIR.TAG"
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Generated from the model files already on disk; local inference is unmeasured.",
+    "memory_evidence": "Memory floor taken from the Voice catalogue's declared minimum."
+  },
+  "files": [
+    {
+      "path": "model/CACHEDIR.TAG",
+      "source_path": "CACHEDIR.TAG",
+      "size": 191,
+      "sha256": "f6572428f6d5e1575e73a1502895a8731f10757dfbb634909c6e154b849af91d",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/CACHEDIR.TAG"
+      ]
+    },
+    {
+      "path": "model/Cangjie5_TC.json",
+      "source_path": "Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/conds.safetensors",
+      "source_path": "conds.safetensors",
+      "size": 105316,
+      "sha256": "709e5a7fa80e010a011c8244f553853aed7a49c106fff54008fbd89a0f5a6148",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/conds.safetensors"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "size": 336,
+      "sha256": "b52886e6c0d2c9f32bda2507c5154742c359eed20b7cacffac1c57aa45328251",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/config.json"
+      ]
+    },
+    {
+      "path": "model/ko.wav",
+      "source_path": "ko.wav",
+      "size": 326478,
+      "sha256": "7f841587b1f264b8a3183ee7e1cf06e74d50c9ecb8711af282e9c9e8c34ca2f0",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/ko.wav"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "source_path": "model.safetensors",
+      "size": 928163417,
+      "sha256": "ca3de1b7592d6c00850e9b81a93b5a130135fa52250c5649671dd1df30a0aab2",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "source_path": "model.safetensors.index.json",
+      "size": 355942,
+      "sha256": "bc865294257de937442a2634b263fc5d0ac8fcd0ca100e25d82c83ae60ed1aea",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/blobs/d77891f84ca1db0d6f7058a4ee081d4bb0bfe88e",
+      "source_path": "models--ResembleAI--chatterbox/blobs/d77891f84ca1db0d6f7058a4ee081d4bb0bfe88e",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/models--ResembleAI--chatterbox/blobs/d77891f84ca1db0d6f7058a4ee081d4bb0bfe88e"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/refs/main",
+      "source_path": "models--ResembleAI--chatterbox/refs/main",
+      "size": 40,
+      "sha256": "fa1be205f53895cd606847a04a388419055a1626fd1ce34a8f04ee5360ca91a4",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/models--ResembleAI--chatterbox/refs/main"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json",
+      "source_path": "models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/models--ResembleAI--chatterbox/snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/snapshots/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/Cangjie5_TC.json",
+      "source_path": "models--ResembleAI--chatterbox/snapshots/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/models--ResembleAI--chatterbox/snapshots/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/models--ResembleAI--chatterbox/snapshots/ef85ce7bef2f3f1a74d0d837d379d2fcb68203cd/Cangjie5_TC.json",
+      "source_path": "models--ResembleAI--chatterbox/snapshots/ef85ce7bef2f3f1a74d0d837d379d2fcb68203cd/Cangjie5_TC.json",
+      "size": 1920163,
+      "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/models--ResembleAI--chatterbox/snapshots/ef85ce7bef2f3f1a74d0d837d379d2fcb68203cd/Cangjie5_TC.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "source_path": "tokenizer.json",
+      "size": 70011,
+      "sha256": "df81a7ca7c31796cbe97f7a7142d5a53b12e88e12417ebe98f66602cafaf0461",
+      "urls": [
+        "https://huggingface.co/mlx-community/chatterbox-8bit/resolve/9617d61b596a03d1bed766a28c341680e993a1b9/tokenizer.json"
+      ]
+    }
+  ],
+  "dependencies": [
+    "s3tokenizerv2"
+  ]
+}
