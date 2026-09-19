@@ -227,6 +227,11 @@ class GenerationManager:
                 if event.is_set():
                     job.update(state='cancelled', finished_at=time.time())
                     self._persist()
+                    # This is the job's own thread finishing, so nothing will look the event up
+                    # again. A job cancelled while it was still queued - before it ever reached this
+                    # lock - returned here without this line and left one threading.Event in the
+                    # dictionary for every such cancellation, for the life of the process.
+                    self.cancel_events.pop(job_id, None)
                     return
                 job.update(state='running', progress=0.05, started_at=time.time())
                 try:

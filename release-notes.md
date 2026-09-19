@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.6 — 2026-09-19
+
+### A slow leak from cancelled image jobs
+
+Cancelling an image job **while it was still waiting** left a small piece of bookkeeping behind, and
+nothing ever removed it — the app runs for weeks, so a Mac that had cancelled a few hundred queued
+image jobs held all of them in memory for as long as it stayed open. Cancelling a job now cleans up
+after itself, whether it was already generating or still in the queue.
+
 ## 0.6.5 — 2026-09-19
 
 ### The ready-made voices were unreachable

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.6 — 2026-09-19 · a cancel Event per queued image job leaked
+
+- **`GenerationManager._run` returned without releasing the cancel event.** When a job was cancelled
+  while queued, the job's thread reached the top of `_run`, saw the event set, marked the job
+  cancelled and returned - skipping the only two paths that remove the entry from `cancel_events`
+  (a failed running-state persist, and the `finally` of the inference block, both of which come
+  later). One `threading.Event` was therefore retained for every such cancellation, for the life of
+  the process. The early-cancel path releases it now.
+  Evidence: `tests/test_image_cancel_event_release.py` (3 checks) drives the real method - a
+  cancelled-while-queued job, twenty-five of them in a row leaving the dictionary empty, and that
+  `cancel()` still marks a queued job cancelled. Mutation-verified: removing the release fails two.
+
 ## 0.6.5 — 2026-09-19 · the seed catalog route was shadowed
 
 - **`GET /api/voices/seed-catalog` was declared after `GET /api/voices/{voice_id}`.** FastAPI matches
