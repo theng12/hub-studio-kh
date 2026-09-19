@@ -21,6 +21,7 @@ of Voice's private Hugging Face cache.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import importlib
@@ -32,6 +33,7 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable, Optional
@@ -160,6 +162,58 @@ def normalize_segments(raw_segments: list[dict], *, word_timestamps: bool,
     module = voice_export_module(voice_app_dir)
     return module._normalize_segments(
         raw_segments, word_timestamps=word_timestamps, audio_duration=audio_duration)
+
+
+# Containers whose *video* the decoder cannot open. `.mp4` and `.mov` were accepted by the upload
+# validation, dispatched, and then always failed: the Whisper decoder reads audio through miniaudio,
+# which does not open those containers, so a screen recording produced nothing and the operator saw
+# a failed job with no way to know the file was the reason. The kit already ships ffmpeg, so the
+# audio track is extracted and transcribed like any other file.
+VIDEO_CONTAINER_EXTENSIONS = {'.mp4', '.mov', '.m4v', '.mkv', '.avi', '.webm'}
+
+
+def find_ffmpeg(voice_app_dir: str | Path | None = None) -> Optional[Path]:
+    """The bundled ffmpeg, or one on PATH.
+
+    Same priority as the Voice service: the tools directory the packaged worker sets
+    (`STUDIOHUB_TOOLS_DIR`), then the Voice app's own tools folder, then PATH.
+    """
+    candidates = []
+    configured = os.environ.get('STUDIOHUB_TOOLS_DIR')
+    if configured:
+        candidates.append(Path(configured) / 'ffmpeg')
+    if voice_app_dir:
+        candidates.append(Path(voice_app_dir) / 'tools' / 'ffmpeg')
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which('ffmpeg')
+    return Path(found) if found else None
+
+
+@contextmanager
+def decodable_audio(path: Path, voice_app_dir: str | Path | None = None):
+    """Yield a file the decoder can read, extracting the audio track of a video when needed."""
+    if path.suffix.lower() not in VIDEO_CONTAINER_EXTENSIONS:
+        yield path
+        return
+    ffmpeg = find_ffmpeg(voice_app_dir)
+    if ffmpeg is None:
+        raise RuntimeError(
+            f'{path.name} is a video and its audio cannot be extracted: the bundled ffmpeg was '
+            'not found. Copy the model library and tools again from the kit.')
+    with tempfile.TemporaryDirectory(prefix='studiohub-subtitle-') as workspace:
+        extracted = Path(workspace) / 'audio.wav'
+        completed = subprocess.run(
+            [str(ffmpeg), '-nostdin', '-y', '-i', str(path), '-vn', '-ac', '1', '-ar', '16000',
+             '-f', 'wav', str(extracted)],
+            capture_output=True)
+        if completed.returncode != 0 or not extracted.is_file():
+            detail = (completed.stderr or b'').decode('utf-8', 'replace').strip().splitlines()
+            raise RuntimeError(
+                f'could not read the audio track from {path.name}'
+                + (f': {detail[-1]}' if detail else ''))
+        yield extracted
 
 
 def audio_duration_seconds(path: Path, voice_app_dir: str | Path | None = None) -> Optional[float]:
@@ -532,14 +586,15 @@ class SubtitleEngine:
             model, load_receipt = self.load(package_id)
             if progress is not None:
                 progress(0.2)
-            duration = audio_duration_seconds(path, self.voice_app_dir)
-            result = model.generate(
-                str(path),
-                language=(language or '').strip() or None,
-                word_timestamps=bool(word_timestamps),
-                return_timestamps=True,
-                condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
-            )
+            with decodable_audio(path, self.voice_app_dir) as media:
+                duration = audio_duration_seconds(media, self.voice_app_dir)
+                result = model.generate(
+                    str(media),
+                    language=(language or '').strip() or None,
+                    word_timestamps=bool(word_timestamps),
+                    return_timestamps=True,
+                    condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
+                )
             if cancelled is not None and cancelled():
                 raise _Cancelled()
             if progress is not None:

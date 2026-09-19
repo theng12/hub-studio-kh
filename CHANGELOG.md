@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.2 — 2026-09-19 · mp4/mov audio extraction
+
+- **Subtitle accepted .mp4/.mov and always failed.** Both the upload validation
+  (`manager.ALLOWED_EXTENSIONS`) and the Hub (`transcription_jobs`) allow them; `engine.transcribe`
+  handed the path to a Whisper decoder that reads audio through miniaudio, which does not open those
+  containers, so a screen recording was accepted, dispatched and produced nothing. New
+  `engine.decodable_audio(path)` context manager + `find_ffmpeg(voice_app_dir)`: a video container's
+  audio track is extracted by the bundled ffmpeg (mono, 16 kHz, WAV, `-vn`) into a temporary
+  directory that is removed afterwards, and ordinary audio passes straight through. ffmpeg is located
+  the same way the Voice service does it - `STUDIOHUB_TOOLS_DIR` (set by the packaged worker, see
+  0.5.8), then the Voice app's tools folder, then PATH - and a genuinely missing ffmpeg raises a
+  message naming the file and the reason instead of a decoder error. The duration probe and the
+  model both read the extracted file, so the timing clamp still applies.
+  `tests/test_subtitle_video_audio.py` (5 checks, mutation-verified: disabling the extraction fails
+  four).
+- This closes the owner's three audit decisions: storage enforcement (0.6.1), uncertain-transcription
+  recovery (0.6.1) and video input (0.6.2).
+
 ## 0.6.1 — 2026-09-19 · the owner's storage and recovery rules
 
 - **The storage budget (50 GB / 30 days) was enforced only in development.** `job_storage.

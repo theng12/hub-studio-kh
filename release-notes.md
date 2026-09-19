@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.2 — 2026-09-19
+
+### Video files work now
+
+**You can hand Subtitle a screen recording.** The app offered .mp4 and .mov and then always failed:
+the transcription decoder reads audio through a library that cannot open those containers, so the
+file was accepted, queued, dispatched, and produced nothing — with no way to tell that the file was
+the reason. The audio track is now extracted with the ffmpeg that already ships in the app, and the
+recording is transcribed like any other file. A file whose audio genuinely cannot be read says so,
+in the job, instead of failing silently.
+
+That completes your three answers from the audit — storage now follows your 50 GB / 30 day rule, an
+uncertain transcription recovers on its own after 15 minutes instead of holding its Mac, and video
+files are transcribed.
+
 ## 0.6.1 — 2026-09-19
 
 ### Your three rules, two of them built
