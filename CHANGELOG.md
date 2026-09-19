@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.13 — 2026-09-19 · the download row drew a hardcoded zero
+
+- **The Downloads row drew `ProgressView(value: percent)` unconditionally** for an active download.
+  `model_downloads` runs the downloader as a child process and records only `{"id", "package_id",
+  "state", "started_at", "pid"}` - there are no byte counts anywhere in the Hub - and the app filled
+  the gap with `percent: 0, downloadedBytes: 0, totalBytes: 0`, so a 12 GB model read "0 bytes" and
+  the bar never moved for the whole download. The row now draws a bar only when there are real
+  numbers (`percent > 0 || totalBytes > 0`) and otherwise shows a spinner with the model's own size,
+  looked up from the catalog - the same figure the Models page displays.
+- Note: the Models page already showed a real size per model (`Estimated size`); the misleading
+  figure was in the transfers list.
+- Evidence: `tests/test_download_progress_honesty.py` (4 checks) - the unconditional bar is gone, a
+  bar is still drawn when numbers exist, the caption names the model's size, and the Hub's run record
+  genuinely carries no progress (so the honest thing is a caption, not a percentage).
+
 ## 0.6.12 — 2026-09-19 · `cleanup_expired` had no caller
 
 - **`execution_assets.cleanup_expired` existed and was called from nowhere.** Staged voice-reference

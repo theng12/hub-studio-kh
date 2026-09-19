@@ -1200,10 +1200,35 @@ struct StudioContent: View {
                 Text(stateLabel(download.state)).font(.caption).foregroundStyle(.secondary)
                 if active(download.state) { Button("Cancel") { Task { await workspace.cancelDownload(download) } }.disabled(!connected) }
             }
-            if active(download.state) { ProgressView(value: min(100, max(0, download.percent)), total: 100) }
+            if active(download.state) {
+                if download.percent > 0 || download.totalBytes > 0 {
+                    ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                } else {
+                    // A Hub model download runs in the Hub's own child process, which reports its
+                    // state but not its byte counts - so there is no honest percentage to draw, and
+                    // a bar pinned at zero reads as "stuck" for the whole download. The size comes
+                    // from the model itself, which is the same figure the Models page shows.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(sizeCaption(for: download))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             if let error = download.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
         }
     }
+    /// What is known about a download's size, without inventing progress.
+    ///
+    /// The Hub does not report byte counts for a model download, so the honest line is the model's
+    /// own size ("downloading a 12.4 GB model") rather than "0 bytes" or a bar that never moves.
+    private func sizeCaption(for download: NativeDownload) -> String {
+        if let size = workspace.models.first(where: { $0.repo == download.repo })?.sizeGB {
+            return String(format: "Downloading in the background · %.1f GB model", size)
+        }
+        return "Downloading in the background"
+    }
+
     private var transcriptionActivity: some View {
         HStack(spacing: 12) { ProgressView().controlSize(.small); VStack(alignment: .leading, spacing: 4) { Text("Transcribing recording").font(.headline); Text("You can use other pages while this finishes.").foregroundStyle(.secondary).font(.callout) }; Spacer() }
     }

@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.13 — 2026-09-19
+
+### A downloading model no longer looks stuck
+
+The Downloads row drew a progress bar for anything in progress. For a model the Hub downloads, there
+is no percentage to draw — the Hub hands that job to a separate process and only reports whether it
+is running, and the app filled the gap with a zero. So the bar sat at **0%** for the entire download,
+and the size read **0 bytes** for a 12 GB model: the row looked broken while everything was fine.
+
+It now shows a spinner and the model's own size — *"Downloading in the background · 12.4 GB model"* —
+which is the same figure the Models page shows. Downloads whose progress the app *does* know (the ones
+a Studio reports) still show their real bar.
+
 ## 0.6.12 — 2026-09-19
 
 ### The duplicate voice clips were never cleaned up
