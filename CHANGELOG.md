@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — 2026-09-19 · stale timings and unbounded memory
+
+- **An edited transcript kept timings measured from the previous words.** `voices.update()` rewrote
+  or removed `transcript.txt` and never touched `transcript.timed.json`, so the aligned timings a
+  cloning model uses to pick its window described different words - the failure mode is a
+  wrong-sounding clone with nothing to explain it. Editing the words (or clearing them) now removes
+  the timed file; an unchanged transcript and every other field leave it alone. Four checks in
+  `tests/test_voice_timings_invalidation.py`, mutation-verified (removing the invalidation fails two).
+- **`broker.batches` was never pruned.** It holds every batch the process has been told about; the
+  durable record is the ledger and the listings merge both, so the in-memory copy of a finished job
+  is pure cost once it is old. `evict_finished_batches(keep_recent=20, older_than_s=900)` drops them,
+  called once a minute from the dispatch loop; the most recent twenty stay because the per-model ETA
+  is measured from them. Tested against a long-finished, a just-finished, a running and a half-done
+  batch so a running job can never be evicted.
+- Note on the test file: `tests/test_hub_jobs.py` has a region whose indentation made an inserted
+  class land inside an existing block - the new class is at the end of the file now, and the module's
+  seven tests run.
+
 ## 0.5.9 — 2026-09-19 · one failure is not the whole screen
 
 - **`refresh()` aborted on any single sub-request.** Eight reads per two-second poll were awaited as

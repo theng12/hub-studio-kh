@@ -85,6 +85,10 @@ _AUDIO = _wav()
 _AUDIO_SHA = hashlib.sha256(_AUDIO).hexdigest()
 
 
+
+
+
+
 class FixtureWorker:
     def __init__(self) -> None:
         self.jobs: dict[str, dict] = {}
@@ -715,6 +719,43 @@ class VoiceChoiceLiftingTests(unittest.TestCase):
         self.assertEqual(self._lift({}), {})
         self.assertEqual(self._lift({"voice_library_id": "   "}), {})
 
+
+
+class FinishedBatchMemoryTests(unittest.TestCase):
+    """A Hub that runs for weeks must not hold every job it has ever seen.
+
+    `broker.batches` is the in-memory copy that a running dispatch is polled through; the durable
+    record is the ledger, and the listings merge the two. Nothing ever removed a finished batch, so
+    the dict - and every walk of it, on every status read - grew without bound.
+    """
+
+    def test_old_finished_batches_leave_memory_but_recent_and_running_ones_stay(self):
+        import time as _time
+        from components.hub.backend import broker
+        saved = dict(broker.batches)
+        try:
+            broker.batches.clear()
+            now = _time.time()
+            broker.batches.update({
+                "long-done": {"id": "long-done", "modality": "voice", "created_at": now - 7200,
+                              "finished_at": now - 7200, "items": [{"state": "done"}]},
+                "just-finished": {"id": "just-finished", "modality": "voice", "created_at": now,
+                                  "finished_at": now, "items": [{"state": "done"}]},
+                "still-running": {"id": "still-running", "modality": "voice", "created_at": now - 9000,
+                                  "items": [{"state": "running"}]},
+                "half-done": {"id": "half-done", "modality": "voice", "created_at": now - 9000,
+                              "finished_at": now - 9000,
+                              "items": [{"state": "done"}, {"state": "queued"}]},
+            })
+            removed = broker.evict_finished_batches(keep_recent=1, older_than_s=900)
+            self.assertEqual(removed, 1)
+            self.assertNotIn("long-done", broker.batches, "an old finished batch is pure memory")
+            self.assertIn("just-finished", broker.batches, "the recent ones are the ETA basis")
+            self.assertIn("still-running", broker.batches, "a running job is not history")
+            self.assertIn("half-done", broker.batches, "half a batch is not finished")
+        finally:
+            broker.batches.clear()
+            broker.batches.update(saved)
 
 
 if __name__ == "__main__":

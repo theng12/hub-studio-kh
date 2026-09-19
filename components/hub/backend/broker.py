@@ -2163,11 +2163,45 @@ def _log_audio_priority(batch: dict, item: dict, studio: dict, now: float) -> No
         waiting["id"], waiting["model"])
 
 
+def evict_finished_batches(*, keep_recent: int = 20, older_than_s: float = 900.0) -> int:
+    """Drop finished batches from memory. The ledger keeps them; nothing an operator sees is lost.
+
+    `batches` holds every batch this process has been told about and nothing ever removed one, so a
+    Hub that runs for weeks grew without bound - and every status read, every listing and every
+    stalled-job check walked the lot. The durable record is the ledger
+    (`ledger.load_finished_batches`), and the listings merge ledger + memory, so the in-memory copy
+    of a finished job is pure cost once it is old. The most recent `keep_recent` terminal batches
+    stay, because the per-model ETA is measured from them.
+    """
+    terminal = {"done", "error", "cancelled"}
+    finished: list[tuple[float, str]] = []
+    for batch_id, batch in batches.items():
+        items = batch.get("items") or []
+        if not items or any(item.get("state") not in terminal for item in items):
+            continue
+        stamp = batch.get("finished_at") or batch.get("created_at") or 0
+        finished.append((float(stamp), batch_id))
+    finished.sort(reverse=True)
+    now = time.time()
+    removed = 0
+    for stamp, batch_id in finished[keep_recent:]:
+        if now - stamp < older_than_s:
+            continue
+        batches.pop(batch_id, None)
+        removed += 1
+    return removed
+
+
 async def _dispatch_loop():
     """The scheduler: match queued items to free studios, forever."""
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=30, pool=5))
+    last_sweep = 0.0
     while True:
         try:
+            sweep_now = time.time()
+            if sweep_now - last_sweep >= 60:
+                last_sweep = sweep_now
+                evict_finished_batches()
             assigned = False
             for batch in list(batches.values()):
                 if batch.get("modality") == "image" and batch.get("cancelled"):

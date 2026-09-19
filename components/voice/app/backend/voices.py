@@ -545,6 +545,10 @@ class VoiceLibrary:
             has_transcript = current.has_transcript
             if transcript is not None:
                 cleaned = transcript.strip()
+                previous = (
+                    transcript_path.read_text(encoding="utf-8").strip()
+                    if transcript_path.exists() and not transcript_path.is_symlink() else ""
+                )
                 if cleaned:
                     transcript_path.write_text(cleaned)
                     has_transcript = True
@@ -553,6 +557,16 @@ class VoiceLibrary:
                     if transcript_path.exists():
                         transcript_path.unlink()
                     has_transcript = False
+                # The timings belong to the words they were measured against. Editing the
+                # transcript left `transcript.timed.json` describing the *old* words, and a clone
+                # then picked its window from timings that do not match the audio - a
+                # wrong-sounding result with nothing on screen to explain it. Correcting the words
+                # invalidates them; transcribing again measures them anew.
+                if cleaned != previous:
+                    timed_path = d / TIMED_FILENAME
+                    if timed_path.is_symlink():
+                        raise FleetVoiceConflict("managed transcript timing path is unsafe")
+                    timed_path.unlink(missing_ok=True)
 
             # Build the updated voice. Apply only the fields the caller passed.
             updated = Voice(

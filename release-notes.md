@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.0 — 2026-09-19
+
+### Two more from the audit, both silent
+
+- **Correcting a voice's words left the old timings behind.** A long reference clip needs its
+  transcript *and* the timings that say which part of the clip each word is in. Editing the words in
+  **Voices** rewrote the transcript and kept the timings measured from the old words, so a clone then
+  chose its window from timings that no longer matched the audio — a wrong-sounding result with
+  nothing on screen to explain it. Correcting the words now drops the timings; **Transcribe Clip**
+  measures them again. Renaming a voice, or saving without changing the words, leaves them alone.
+- **The Hub kept every job it had ever seen in memory.** Not on disk — those records are kept — but
+  the in-memory copy a running job is polled through was never cleared, so a controller left running
+  for weeks grew without bound and every status read walked all of it. Finished jobs now leave memory
+  once they are a quarter of an hour old, keeping the twenty most recent (they are what the
+  "about N seconds" estimate is measured from). Nothing in **Jobs** changes: the listing reads the
+  saved record as well.
+
 ## 0.5.9 — 2026-09-19
 
 ### The app no longer gives up on the whole screen
