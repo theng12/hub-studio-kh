@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.21 — 2026-09-19 · unguarded bookkeeping writes aborted the dispatch pass
+
+- **Five `_save(batch)` calls in the transcription dispatch loop were unwrapped** - the governor-note
+  writes and the other bookkeeping the scheduler records as it goes. A raising `_save` there
+  propagated out of `dispatch_once`, so a full disk or an unreadable database did not merely lose a
+  note: the pass ended before any other job could be dispatched, and the failure appeared as a
+  scheduler error rather than as a write failure. New `_save_quietly(batch) -> bool` logs the failure
+  and returns False; the five bookkeeping writes use it. The lease-path write keeps its own
+  try/except with the rollback from 0.6.19, because that one has state to undo.
+- Found by instrumenting the reproduction of the 0.6.19 rollback: the trace showed `dispatch_once`
+  raising from line 771 (a governor-note write) rather than reaching the lease at all.
+- Evidence: `tests/test_dispatch_bookkeeping_writes.py` (3 checks) - a failing write is reported and
+  survived, a good write still reports success, and every bookkeeping write in the loop goes through
+  the helper. `tests/test_hub_jobs.py` still passes.
+
 ## 0.6.20 — 2026-09-19 · a Mac's health came from one arbitrary Studio
 
 - **`fleet_overview` iterated `monitor.registry`, skipped machines it had already seen, and reported

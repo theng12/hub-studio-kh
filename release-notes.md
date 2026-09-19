@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.21 — 2026-09-19
+
+### A disk that filled up could stop the whole scheduler
+
+While chasing something else I found that the Hub writes its own bookkeeping — which Studio was
+tried, why it was refused, a note for you — with no protection. If one of those writes failed (a full
+disk, an unreadable database), the failure escaped the scheduler entirely: **no other job could be
+dispatched**, and what you would have seen is the Hub appearing to stall rather than anything saying
+"this Mac cannot write". Those writes now fail on their own, log why, and the scheduler carries on
+with the work it can still do.
+
+This is a fix that came out of the last piece of unfinished work: I was trying to reproduce a
+different write-failure bug and the trace pointed here instead. Both are the same family — a durable
+write failing somewhere it was assumed to succeed.
+
 ## 0.6.20 — 2026-09-19
 
 ### A Mac's health is now all of its Studios, not whichever one is listed first

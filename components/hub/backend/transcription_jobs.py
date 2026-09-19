@@ -67,6 +67,24 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _save_quietly(batch: dict) -> bool:
+    """Persist a batch, and never let a failing write abort a dispatch pass.
+
+    The dispatch loop writes bookkeeping as it goes - which studio was tried and why it was
+    refused, a lease that expired, a note for the operator. An unwrapped write there raised out of
+    `dispatch_once`, so a full disk or an unreadable database did not merely lose the note: it
+    stopped the pass before any other job could be dispatched, and the exception surfaced as a
+    scheduler failure rather than as "this Mac cannot write". Returns whether the write landed.
+    """
+    try:
+        _save(batch)
+        return True
+    except Exception:
+        logging.getLogger("studiohub.transcription").exception(
+            "Could not persist batch %s; continuing", batch.get("id"))
+        return False
+
+
 def _save(batch: dict) -> None:
     batch["updated_at"] = time.time()
     finished = int(all(i["state"] in TERMINAL_STATES for i in batch["items"]))
@@ -748,7 +766,7 @@ async def dispatch_once(monitor) -> int:
                 note = str(refusal.get("detail") or "model is not ready")
                 if batch.get("governor_note") != note:
                     batch["governor_note"] = note
-                    _save(batch)
+                    _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                 continue
             item = next((i for i in batch["items"] if i["state"] == "queued"), None)
             if not item:
@@ -768,7 +786,7 @@ async def dispatch_once(monitor) -> int:
                     "; ".join(reasons) if reasons else "no transcription studio is registered")
                 if batch.get("governor_note") != reason:
                     batch["governor_note"] = reason
-                    _save(batch)
+                    _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                 continue
             for studio in eligible:
                 machine = studio.get("machine", "local")
@@ -789,7 +807,7 @@ async def dispatch_once(monitor) -> int:
                     blocked = f"memory admission on {machine} returned {decision}: {note or 'no detail'}"
                     if batch.get("governor_note") != blocked:
                         batch["governor_note"] = blocked
-                        _save(batch)
+                        _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                     continue
                 generation = peers.dispatch_generation(studio)
                 if not peers.dispatch_ready(studio, generation):
@@ -825,7 +843,7 @@ async def dispatch_once(monitor) -> int:
                 batch["last_dispatched_at"] = time.time()
                 busy_studios.add(studio["id"])
                 try:
-                    _save(batch)
+                    _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                 except Exception as exc:
                     # The durable write is what makes a dispatch real. Without it the item stays
                     # "running" in memory with no task to finish it and the Mac leased to a job
@@ -844,7 +862,7 @@ async def dispatch_once(monitor) -> int:
                     batch["governor_note"] = ("A job could not be recorded when it was handed to a "
                                               "Mac, so it is queued again.")
                     try:
-                        _save(batch)
+                        _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                     except Exception:
                         pass
                     continue
