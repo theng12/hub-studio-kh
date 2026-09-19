@@ -442,7 +442,11 @@ struct StudioContent: View {
                     HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
                     ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.imageJobs.prefix(5)) { imageJobRow($0) } } }
                         .frame(minHeight: 80, maxHeight: 150)
-                }.padding(.leading, 20).frame(minWidth: 320)
+                }
+                .padding(.leading, 20)
+                // The same house frame as Audio and Subtitle, so the three workspace pages cannot
+                // drift apart one fix at a time.
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
         .task(id: previewImageJob?.id) {
@@ -519,36 +523,35 @@ struct StudioContent: View {
             heading("Audio", "Write a script, choose a voice and generate spoken audio.")
             if !connected { setup }
             HSplitView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Script").font(.headline).fixedSize()
-                    TextEditor(text: $workspace.audioText)
-                        .font(.body).padding(8).background(Color(nsColor: .textBackgroundColor))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
-                        .accessibilityLabel("Audio script").frame(minHeight: 180)
-                    HStack {
-                        Text("\(workspace.audioText.count) characters").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if workspace.submittingAudio { ProgressView().controlSize(.small) }
-                        Button("Generate Audio") { Task { await workspace.generateAudio() } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(audioBlockedReason != nil)
-                    }
-                    // A disabled prominent button with no explanation is the worst state a form can
-                    // be in: the operator can see the control, cannot use it, and has nothing to act
-                    // on. Whatever is holding it up is named here, in the order it has to be fixed.
-                    if let reason = audioBlockedReason {
-                        Label(reason, systemImage: "exclamationmark.circle")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Divider().padding(.top, 8)
-                    HStack { Text("Recent audio").font(.headline); Spacer(); if player.playing { Button("Stop Playback") { player.stop() } }; Button("All Jobs") { studio.select(.jobs) } }
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.audioJobs.prefix(5)) { jobRow($0, compact: true) } } }
-                        .frame(minHeight: 110, maxHeight: 220)
-                    if workspace.audioJobs.isEmpty { Text("Your generated audio will appear here.").foregroundStyle(.secondary).font(.callout) }
-                }.padding(.trailing, 20).frame(minWidth: 410)
+                // The form, on the left, in the same shape as the Image page: everything you set
+                // up, packed from the top, scrolling if it is taller than the window. The Script
+                // box used to be its own column with the controls opposite it, which is why every
+                // control on this page was once clipped and why the page never matched the others.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        Text("Script").font(.headline)
+                        TextEditor(text: $workspace.audioText)
+                            .font(.body).padding(8).frame(height: 155)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            .accessibilityLabel("Audio script")
+                        HStack {
+                            Text("\(workspace.audioText.count) characters").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if workspace.submittingAudio { ProgressView().controlSize(.small) }
+                            Button("Generate Audio") { Task { await workspace.generateAudio() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(audioBlockedReason != nil)
+                        }
+                        // A disabled prominent button with no explanation is the worst state a form
+                        // can be in: the operator can see the control, cannot use it, and has
+                        // nothing to act on. Whatever holds it up is named here, first thing first.
+                        if let reason = audioBlockedReason {
+                            Label(reason, systemImage: "exclamationmark.circle")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider().padding(.top, 8)
                         Text("Generation").font(.headline)
                         voiceModeTabs
                         modelPicker(.audio)
@@ -570,7 +573,9 @@ struct StudioContent: View {
                                         Text(workspace.audioReferencePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
                                             .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                                     }
-                                    Text("A short, clean recording of the voice you want to reuse.").font(.caption).foregroundStyle(.secondary)
+                                    Text("A short, clean recording of the voice you want to reuse.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
@@ -585,7 +590,9 @@ struct StudioContent: View {
                                     TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
                                         .textFieldStyle(.roundedBorder)
                                     Text(selectedAudioModel?.requiresTranscript == false
-                                         ? "Optional for this model." : "Required: this model matches the clip to these words.").font(.caption).foregroundStyle(.secondary)
+                                         ? "Optional for this model." : "Required: this model matches the clip to these words.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 HStack(spacing: 8) {
                                     Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
@@ -635,11 +642,36 @@ struct StudioContent: View {
                             TextField("Language code, e.g. en", text: $workspace.audioLanguage).textFieldStyle(.roundedBorder)
                         }
                         speedControl
-                        Spacer(minLength: 12)
+                        Divider().padding(.top, 8)
                         Text("Model installation and storage are managed centrally.").font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
-                    }.padding(.leading, 20).padding(.bottom, 20)
-                }.frame(minWidth: 245, idealWidth: 280, maxWidth: 330)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 20).padding(.bottom, 20)
+                }
+                .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                // What you made, on the right, exactly as the Image page shows its preview.
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Recent audio").font(.headline)
+                        Spacer()
+                        if player.playing { Button("Stop Playback") { player.stop() } }
+                        Button("All Jobs") { studio.select(.jobs) }
+                    }
+                    if workspace.audioJobs.isEmpty {
+                        empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(workspace.audioJobs.prefix(5)) { jobRow($0, compact: true) }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                }
+                .padding(.leading, 20)
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
     }
@@ -655,7 +687,8 @@ struct StudioContent: View {
             HStack {
                 Text("Voice").font(.callout)
                 Spacer()
-                Button("Manage Voices") { studio.select(.voices) }.font(.caption)
+                Button("Manage Voices") { studio.select(.voices) }
+                    .font(.caption).fixedSize()
             }
             Picker("Voice", selection: Binding(
                 get: { workspace.audioVoiceLibraryID ?? "" },
@@ -666,8 +699,10 @@ struct StudioContent: View {
                 }
             }
             .labelsHidden()
+            .frame(maxWidth: .infinity)
             .disabled(workspace.selectableVoices.isEmpty)
             Text(workspace.voicePickerDetail).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -778,11 +813,17 @@ struct StudioContent: View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("Voice", selection: $workspace.audioMode) {
                 ForEach(VoiceMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+                    // Short labels, because a segmented control's minimum width is the sum of its
+                    // labels and three long ones could not fit the column - which clipped the tabs
+                    // themselves. The full name is in the line underneath and in the accessibility
+                    // label, so nothing is lost.
+                    Text(mode.shortTitle).tag(mode)
+                        .accessibilityLabel(mode.title)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .frame(maxWidth: .infinity)
             .onChange(of: workspace.audioMode) { _, mode in
                 // Keep the selected model consistent with the tab: a model from another tab would
                 // leave the controls below describing a different job than the one on screen.
@@ -828,18 +869,58 @@ struct StudioContent: View {
             heading("Subtitle Studio", "Import a recording, review its transcript and export text or subtitles.")
             if !connected { setup }
             HSplitView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "waveform").font(.title2).foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(workspace.transcriptionFile?.lastPathComponent ?? "No recording selected").font(.headline).lineLimit(2).textSelection(.enabled)
-                            Text("Audio or video file").font(.caption).foregroundStyle(.secondary)
+                // The form, on the left, in the same shape as the Audio and Image pages. The
+                // primary action used to sit at the foot of a flexible column, a long way from the
+                // file and format it acts on, with the transcript placeholder floating in between.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "waveform").font(.title2).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(workspace.transcriptionFile?.lastPathComponent ?? "No recording selected").font(.headline).lineLimit(2).textSelection(.enabled)
+                                Text("Audio or video file").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Choose File…", action: chooseTranscriptionFile).disabled(workspace.transcribing)
+                        }.padding(16).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        // The label sits above the control rather than beside it: in a form this
+                        // narrow a leading label wrapped in half ("Result / format").
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Result format").font(.callout)
+                            HStack {
+                                Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
+                                Spacer()
+                                if workspace.transcribing { ProgressView().controlSize(.small) }
+                                Button("Transcribe") { Task { await workspace.transcribe() } }.buttonStyle(.borderedProminent)
+                                    .disabled(!connected || workspace.transcribing || workspace.transcriptionFile == nil || selectedTranscriptionModel?.cached != true || selectedTranscriptionModel?.supported != true || selectedTranscriptionModel?.runtimeReady != true)
+                            }
                         }
-                        Spacer()
-                        Button("Choose File…", action: chooseTranscriptionFile).disabled(workspace.transcribing)
-                    }.padding(16).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        if workspace.transcribing { transcriptionActivity }
+                        Divider().padding(.top, 8)
+                        Text("Recognition").font(.headline)
+                        modelPicker(.transcription)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Language").font(.callout)
+                            TextField("Auto-detect", text: $workspace.transcriptionLanguage).textFieldStyle(.roundedBorder)
+                            Text("Leave blank to detect the language, or enter a code such as en.").font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider().padding(.top, 8)
+                        Text("This workspace keeps its recording, model and transcript separate from Audio.").font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Manage Subtitle Models") { modelFilter = "Transcription"; studio.select(.models) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 20).padding(.bottom, 20)
+                }
+                .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                // What you made, on the right: the transcript itself, then its history underneath.
+                VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).frame(maxWidth: 240)
+                        Text("Transcript").font(.headline)
+                        if let result = workspace.transcriptionResult {
+                            Text("\(result.language) · \(result.duration, specifier: "%.1f") seconds").font(.caption).foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Button("Export…", action: exportTranscript).disabled(workspace.transcriptionResult == nil)
                     }
@@ -849,35 +930,28 @@ struct StudioContent: View {
                                 .font(transcriptFormat == "Text" ? .body : .system(.body, design: .monospaced))
                                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(18)
                         } else { empty("Your transcript", "Choose a recording and transcribe it. Text and subtitle exports will appear here.", symbol: "text.alignleft") }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                    if workspace.transcribing { transcriptionActivity }
-                    HStack {
-                        if let result = workspace.transcriptionResult { Text("\(result.language) · \(result.duration, specifier: "%.1f") seconds").font(.caption).foregroundStyle(.secondary) }
-                        Spacer()
-                        Button("Transcribe") { Task { await workspace.transcribe() } }.buttonStyle(.borderedProminent)
-                            .disabled(!connected || workspace.transcribing || workspace.transcriptionFile == nil || selectedTranscriptionModel?.cached != true || selectedTranscriptionModel?.supported != true || selectedTranscriptionModel?.runtimeReady != true)
                     }
-                }.padding(.trailing, 20).frame(minWidth: 410)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("Recognition").font(.headline)
-                        modelPicker(.transcription)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Language").font(.callout)
-                            TextField("Auto-detect", text: $workspace.transcriptionLanguage).textFieldStyle(.roundedBorder)
-                            Text("Leave blank to detect the language, or enter a code such as en.").font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    Divider()
+                    HStack { Text("Recent subtitles").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
+                    if workspace.subtitleJobs.isEmpty {
+                        Text("Completed subtitles will appear here.").foregroundStyle(.secondary).font(.callout)
+                        Spacer(minLength: 0)
+                    } else {
+                        // The subtitle row, not the audio one: this panel once drew Play and Save
+                        // for a transcript, while the Jobs page correctly offered Open Transcript
+                        // for the very same job.
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(workspace.subtitleJobs.prefix(5)) { job in subtitleJobRow(job) }
+                            }
                         }
-                        Divider().padding(.top, 8)
-                        HStack { Text("Recent subtitles").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
-                        if workspace.subtitleJobs.isEmpty { Text("Completed subtitles will appear here.").foregroundStyle(.secondary).font(.callout) }
-                        // The subtitle row, not the audio one. This panel drew Play and Save for a
-                        // transcript, so the Subtitle page offered to play a text file while the
-                        // Jobs page correctly offered "Open Transcript" for the very same job.
-                        ForEach(workspace.subtitleJobs.prefix(5)) { job in subtitleJobRow(job) }
-                        Text("This workspace keeps its recording, model and transcript separate from Audio.").font(.callout).foregroundStyle(.secondary)
-                        Button("Manage Subtitle Models") { modelFilter = "Transcription"; studio.select(.models) }
-                    }.padding(.leading, 20).padding(.bottom, 20)
-                }.frame(minWidth: 245, idealWidth: 280, maxWidth: 330)
+                        .frame(minHeight: 60, maxHeight: 170)
+                    }
+                }
+                .padding(.leading, 20)
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
         // The Audio page reads the voice library itself. Loading it only on the Voices page meant a
@@ -907,6 +981,14 @@ struct StudioContent: View {
                     .disabled(!connected || workspace.updatingModels)
                 Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
+
+            // Above the list, not below the split: a flexible split pushes anything after it to the
+            // foot of the window, where a line about the library reads as a stray footer.
+            if let note = workspace.modelNote, workspace.modelNoteRepo == nil {
+                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if workspace.refreshing && workspace.models.isEmpty { ProgressView("Reading model library…").controlSize(.small) }
+            else if filteredModels.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(.callout).foregroundStyle(.secondary) }
             HSplitView {
                 List(filteredModels, selection: $selectedModel) { model in
                     HStack(spacing: 12) {
@@ -973,11 +1055,6 @@ struct StudioContent: View {
                     } else { empty("Model details", "Select a model to inspect its status and available actions.", symbol: "externaldrive") }
                 }.frame(minWidth: 260, idealWidth: 320, maxWidth: 380)
             }
-            if let note = workspace.modelNote, workspace.modelNoteRepo == nil {
-                Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if workspace.refreshing && workspace.models.isEmpty { ProgressView("Reading model library…").controlSize(.small) }
-            else if filteredModels.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(.callout).foregroundStyle(.secondary) }
             if !activeDownloads.isEmpty {
                 Divider()
                 Text("Downloads").font(.headline)
@@ -1585,7 +1662,9 @@ struct StudioContent: View {
     private var fleetSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Fleet")
-            LabeledContent("This Mac is a", value: roleTitle(workspace.controllerIdentity?.settings.role))
+            // "This Mac is a Not reporting" was what the operator read when the Hub had not
+            // answered yet: the article was hard-coded beside a label that is sometimes a phrase.
+            LabeledContent("This Mac is", value: roleTitle(workspace.controllerIdentity?.settings.role))
             Text(roleExplanation(workspace.controllerIdentity?.settings.role))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Picker("Role", selection: Binding(

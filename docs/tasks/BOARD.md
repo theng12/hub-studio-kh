@@ -25,6 +25,22 @@ are current; the longer narrative under it is historical and is kept for provena
   page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
+- **One house layout, the Image page's (`9a2e059`, 0.5.4).** The owner asked twice for the Image
+  generator's left-aligned form on every page, and for the fix to be applied rather than described.
+  Audio and Subtitle were restructured to that shape - **form on the left** (script and voice
+  settings; file, format, Transcribe and recognition), **result on the right** (recent audio;
+  transcript plus recent subtitles) - and Image was brought onto the identical frame so the three
+  cannot drift. Subtitle's primary action moved off the foot of a flexible column to sit with the
+  file and format it acts on; its "Result format" label moved above its control instead of wrapping
+  in half; the Models page's library note moved above its list (below a flexible split it landed at
+  the foot of the window); "This Mac is a Not reporting" became "This Mac is Not reporting".
+  **`native/render-page.sh` is why this could be done at all**: nothing in this environment can see
+  the window (`screencapture` is refused, the sidebar cannot be driven), so three earlier UI fixes
+  went out blind and one of them three times. It compiles the real views with its own entry point,
+  hosts a page in an offscreen window and writes PNGs at any size, several pages per compile
+  (`all` renders every page). Renders at 1920x1053, 1100x700 and 980x620 were inspected before
+  this was handed over, and `tests/test_audio_layout.py` (8 checks) pins the arithmetic, the shared
+  column widths, the form/result placement and the top alignment.
 - **Shared voices: one push per controller, installed on its nodes (`a914d82` + the fleet-token
   read, 0.5.3, 2026-09-19).** The gateway asked for a door to create/update/delete a voice on a
   controller, with the controller fanning out to its own nodes, and for two decisions. Both are

@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.4 — 2026-09-19
+
+### The Audio page's controls can be read and clicked now
+
+The **Generation** column on the right of Audio was narrower than the controls inside it, so macOS
+cut them off at the column's edge: the tabs read "Design a Voi…", the buttons came out as "Manage
+Voice", "Transcribe Cl…", part of every explanation was missing, and the Speed row ran into itself.
+The Script box was the other half of the problem — it grew as wide as the window would let it,
+which left the controls even less room.
+
+Every workspace now has the same shape as the Image generator: **what you set up on the left, what
+you made on the right**, both starting at the top. Audio puts the script and all the voice settings
+in that left column with the recent audio on the right; Subtitle puts the file, format, **Transcribe**
+and its settings there with the transcript on the right; Image already worked this way. The three
+voice tabs say **Clone**, **Ready-Made** and **Design** so they fit, labels sit above their controls
+instead of wrapping, and the Models page no longer pushes its note to the foot of the window.
+
+Nothing about generating audio, images or transcripts changed — only where things sit.
+
 ## 0.5.3 — 2026-09-19
 
 ### A voice added once can now be shared with every Mac in a group

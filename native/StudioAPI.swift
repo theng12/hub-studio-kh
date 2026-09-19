@@ -81,6 +81,15 @@ enum VoiceMode: String, CaseIterable, Identifiable {
         case .design: return "Design a Voice"
         }
     }
+    /// What fits in a segmented control. The full `title` is shown in the line below the tabs and
+    /// read out by VoiceOver, so the label can be short where short is what fits.
+    var shortTitle: String {
+        switch self {
+        case .cloning: return "Clone"
+        case .preset: return "Ready-Made"
+        case .design: return "Design"
+        }
+    }
     var symbol: String {
         switch self {
         case .cloning: return "waveform.badge.mic"

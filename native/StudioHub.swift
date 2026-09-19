@@ -483,7 +483,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Matches the SwiftUI floor. It used to be 1040 while the content asked for more than
         // that in fixed columns, and a Split View can go below any minimum anyway - so the
         // layout had to learn to compress rather than rely on this number.
-        window.contentMinSize = NSSize(width: 720, height: 520)
+        // The floor is arithmetic, not taste: the sidebar takes ~260, the page padding 56, and a
+        // split page needs ~300 for its list column and ~330 for its controls column. At 720 - the
+        // old value - the controls column was narrower than its own contents and they were clipped
+        // at its edge, so a control the operator could see could not be read or clicked. 980 leaves
+        // a little slack; the split itself may still be dragged below it.
+        window.contentMinSize = NSSize(width: 980, height: 620)
         window.setFrameAutosaveName("StudioHubMain")
         let content = NSHostingView(rootView: StudioWindow(studio: controller))
         content.sizingOptions = []

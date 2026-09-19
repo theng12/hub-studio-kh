@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.4 — 2026-09-19 · the Generation column was clipping its own controls
+
+- **The layout, not the logic.** `audioWorkspace` put a `TextEditor` with only a `minHeight` beside
+  a fixed-width column. An unbounded editor takes every pixel the split will give, so the
+  Generation column was squeezed to its floor of 280 pt while its contents - a segmented control
+  with three long titles, a picker, wrapping captions - needed about 380, and SwiftUI clips content
+  that overflows a frame. The result was a panel whose every control was cut off at the right edge
+  and could not be clicked: the owner reported it three times, and each earlier fix changed copy
+  rather than the layout.
+- Fixed: the editor is bounded (`minHeight: 96, idealHeight: 150, maxHeight: 230`); the column asks
+  for `minWidth: 330, idealWidth: 370, maxWidth: 460`; the tabs use short titles with the full name
+  kept as an accessibility label and in the line below; captions that must wrap say so; the
+  window's floor is now the arithmetic the columns need (`980x620`, was `720x520`, which could not
+  hold a split page at all).
+- **A way to look at the window.** `screencapture` is refused in this environment ("could not create
+  image from display"), so three UI fixes were written blind. `native/render-page.sh` compiles the
+  real views with its own entry point, hosts the page in an offscreen window and writes PNGs at the
+  sizes that matter. It uses `NSHostingView` + `cacheDisplay` rather than `ImageRenderer`, which
+  draws a yellow "unsupported" placeholder for AppKit-backed controls. Verified at 1920x1053,
+  1100x700 and 980x620 before shipping.
+- Second half, seen only after the first was rendered: with the editor bounded, the column became
+  shorter than the split, and a split view **centres** a child shorter than itself - so the Script
+  box floated a third of the way down the page with empty space above and below it. The column now
+  fills the height and aligns `.topLeading`, and the recent-audio list takes the slack instead of
+  stopping at a fixed maximum.
+- **One house shape for the workspace pages, the Image page's.** The owner asked for the Image
+  generator's left-aligned form on every page. Audio and Subtitle were restructured to match it -
+  form on the left (script/voice; file/format/Transcribe/recognition), result on the right (recent
+  audio; transcript plus recent subtitles) - and Image was brought onto the identical frame so the
+  three cannot drift apart. Subtitle's primary action moved off the foot of a flexible column to
+  sit with the file and format it acts on, and its "Result format" label moved above its control
+  instead of wrapping in half. The Models page's library note was below a flexible split, so it
+  appeared at the very bottom of the window; it now sits above the list. "This Mac is a Not
+  reporting" became "This Mac is Not reporting".
+- `tests/test_audio_layout.py` pins the arithmetic, the bounded editor, the shared column widths
+  across all three workspace pages, the primary action/result placement, the short tab labels, the
+  wrapping captions and the top alignment, so a revert fails the suite instead of the owner's
+  screen. Both halves were found by rendering the page and looking at it - the second one only
+  because the first fix was rendered before being handed over.
+
 ## 0.5.3 — 2026-09-19 · shared voices reach a node, measured rather than assumed
 
 - **The Hub's shared-voice door exists.** `POST /api/hub/shared-voices` (create or refresh, then fan
