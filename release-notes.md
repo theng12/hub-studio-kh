@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.7 — 2026-09-19
+
+### A Mac can no longer forget who it is
+
+The small file that holds this Mac's identity — its name, its role, the settings that keep it
+contained — was written by overwriting it in place. Overwriting starts by emptying the file, so a
+crash, a forced quit, or a disk that filled at the wrong moment left it half-written; the next start
+reads that as unreadable and falls back to the defaults, and the Mac quietly lost its identity. It is
+now written beside itself and swapped in one step, so either the new settings are there or the old
+ones still are, and the file is private to your account (it holds identity, not just preferences).
+
 ## 0.6.6 — 2026-09-19
 
 ### A slow leak from cancelled image jobs

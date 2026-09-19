@@ -24,6 +24,28 @@ from .controller_settings_lock import settings_writer_lock
 from .resources import host_stats
 
 SETTINGS_FILE = DATA_DIR / "controller_settings.json"
+
+
+def _write_private_file(path: Path, payload: str) -> None:
+    """Write a small file atomically, and privately.
+
+    `write_text` truncates the target first, so a crash - or a full disk - between the truncation and
+    the write left a partial `controller_settings.json`. The next start reads it as unreadable and
+    falls back to the defaults, which is how this Mac's identity (and the settings that keep it
+    contained) silently reset. A temporary file in the same directory plus `os.replace` makes the
+    change atomic: either the new content is there, or the old content still is. Mode 0600 because
+    the file holds this Mac's identity, not just preferences.
+    """
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 DATABASE_URL_FILE = DATA_DIR / ".controller_database_url"
 MIGRATION_FILE = Path(__file__).resolve().parent / "migrations" / "001_controller_foundation.sql"
 BOUNDARY_MIGRATION_FILE = (
@@ -217,14 +239,13 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
         elif updated["parent_controller_url"] is not None:
             updated["parent_controller_url"] = str(updated["parent_controller_url"]).strip() or None
 
-        SETTINGS_FILE.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+        _write_private_file(SETTINGS_FILE, json.dumps(updated, indent=2) + "\n")
         with _settings_lock:
             _settings_cache = updated
         if clear_database_url:
             DATABASE_URL_FILE.unlink(missing_ok=True)
         elif candidate_url:
-            DATABASE_URL_FILE.write_text(candidate_url + "\n", encoding="utf-8")
-            os.chmod(DATABASE_URL_FILE, 0o600)
+            _write_private_file(DATABASE_URL_FILE, candidate_url + "\n")
         runtime.wake()
         return public_settings()
 

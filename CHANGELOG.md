@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.7 — 2026-09-19 · the identity file was written in place
+
+- **`control_plane` wrote `controller_settings.json` with `write_text`**, which truncates first: a
+  crash, kill or full disk between the truncate and the write left a partial file, and the loader
+  treats unreadable as "no settings" - this Mac's identity and containment settings silently returned
+  to defaults. Same for `database_url.txt`. New `_write_private_file(path, payload)`: temporary file
+  in the same directory, `flush` + `fsync`, mode 0600, then `os.replace`. The rename either happened
+  or it did not; there is no third state.
+  Evidence: `tests/test_atomic_settings_write.py` (4 checks) - a failing `os.replace` leaves the
+  previous content byte-identical and still parseable, a successful write is whole and 0600, no
+  temporary file is left behind, and neither file is written directly any more. Mutation-verified
+  (a direct write fails two of them).
+
 ## 0.6.6 — 2026-09-19 · a cancel Event per queued image job leaked
 
 - **`GenerationManager._run` returned without releasing the cancel event.** When a job was cancelled
