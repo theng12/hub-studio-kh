@@ -73,7 +73,7 @@ echo "  -- this is where the real message appears --"
   --data-dir "$DATA" \
   --models-dir "${MODELS:-$DATA/models}" \
   --ready-file "$DATA/hub-ready.json" \
-  --listen-host "$LISTEN" \
+  --host "$LISTEN" \
   --check
 echo "  exit code: $?"
 
@@ -84,7 +84,7 @@ echo "  (this does start the services, then stops them)"
   --data-dir "$DATA" \
   --models-dir "${MODELS:-$DATA/models}" \
   --ready-file "$DATA/hub-ready.json" \
-  --listen-host "$LISTEN" >/tmp/studiohub-manual.log 2>&1 &
+  --host "$LISTEN" >/tmp/studiohub-manual.log 2>&1 &
 manual=$!
 sleep 6
 if kill -0 "$manual" 2>/dev/null; then

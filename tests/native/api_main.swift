@@ -639,12 +639,12 @@ struct NativeAPITests {
         // And a restart must re-join without anyone retyping anything: the controller may have a
         // new address and the node certainly has one, so the stored call is the repair.
         FixtureProtocol.setCredentialOrigin("adopted")
-        await store.refreshConnection()
         FixtureProtocol.resetFleetRequests()
-        store.storedMembership = NativeWorkspaceStore.FleetMembership(
+        // Exactly what a launch calls, with no `refreshConnection()` first: the identity fetch is
+        // part of the startup step, or the re-join guard sees nil and this never happens.
+        await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
             controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
-            boundHosts: LocalAddresses.current().map(\.address))
-        await store.rejoinControllerIfNeeded()
+            boundHosts: LocalAddresses.current().map(\.address)))
         require(FixtureProtocol.fleetRequests().contains("join"),
                 "a node must re-join its controller on start: \(FixtureProtocol.fleetRequests())")
         require(store.fleetNote?.contains("Joined") == true,
@@ -652,9 +652,10 @@ struct NativeAPITests {
 
         // A Mac running its own group has no controller to re-join, and must not call one.
         FixtureProtocol.setCredentialOrigin("minted")
-        await store.refreshConnection()
         FixtureProtocol.resetFleetRequests()
-        await store.rejoinControllerIfNeeded()
+        await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address)))
         require(FixtureProtocol.fleetRequests().isEmpty,
                 "a Mac with its own credential must not re-join anyone: \(FixtureProtocol.fleetRequests())")
 

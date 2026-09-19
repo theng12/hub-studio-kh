@@ -52,6 +52,14 @@ class SharedVoiceTests(unittest.TestCase):
 
     def push(self, *, audio=AUDIO, transcript=TRANSCRIPT, segments=SEGMENTS, voice_id=None,
              name="Todd", **overrides):
+        # `transcript`/`transcript_segments` may arrive either as the named parameters or in
+        # **overrides, and the tests need to say "not mentioned" (None) as distinct from "empty".
+        for key in ("transcript", "transcript_segments"):
+            if key in overrides:
+                if key == "transcript":
+                    transcript = overrides.pop(key)
+                else:
+                    segments = overrides.pop(key)
         values = {"name": name, "language": "en", "gender": "m", "license": "self-owned",
                   "permission_acknowledged": True, "filename": "reference.wav"}
         values.update(overrides)
@@ -97,6 +105,40 @@ class SharedVoiceTests(unittest.TestCase):
                              name=voice["name"])
         self.assertEqual(again["transcript"], "A corrected line.")
         self.assertEqual(self.module.get(voice["id"])["transcript_segments"], corrected)
+
+    def test_a_voice_pushed_again_after_removal_comes_back(self):
+        """A removal must not be permanent. The gateway names a clip by its content hash, so the
+        voice it re-pushes has exactly the id the tombstone remembers - and `start_sync` refuses any
+        voice with a tombstone, so the push answered 201 and installed nowhere, with no way back
+        except the manual sync route. A push is the operator asking for it back."""
+        # The gateway names a clip by its own content hash, so the id survives the removal.
+        digest = hashlib.sha256(AUDIO).hexdigest()[:12]
+        voice, _ = self.push(voice_id=digest)
+        self.module.prepare_delete(voice["id"])
+        self.assertIsNotNone(self.module.get_deletion(voice["id"]))
+
+        again, created = self.push(voice_id=digest)
+        self.assertEqual(again["id"], voice["id"], "the same bytes are the same voice")
+        self.assertIsNone(self.module.get_deletion(voice["id"]),
+                          "the tombstone must be gone, or every node is told to delete it again")
+        self.assertIsNotNone(self.module.get(voice["id"]))
+
+    def test_a_metadata_only_push_keeps_the_transcript_and_timings(self):
+        """Omitted is 'keep', not 'clear'. The gateway re-pushes on every edit, so a rename used to
+        wipe the words and the timings on every controller and then on every node."""
+        voice, _ = self.push()
+        again, _ = self.push(name="Todd Renamed", transcript=None, transcript_segments=None)
+        stored = self.module.get(voice["id"])
+        self.assertEqual(again["name"], "Todd Renamed")
+        self.assertEqual(stored["transcript"], TRANSCRIPT, "the words were kept")
+        self.assertEqual(stored["transcript_segments"], SEGMENTS, "the timings were kept")
+
+    def test_an_explicit_empty_transcript_still_clears_it(self):
+        voice, _ = self.push()
+        self.push(transcript="", transcript_segments=None)
+        stored = self.module.get(voice["id"])
+        self.assertEqual(stored["transcript"], "")
+        self.assertEqual(stored["transcript_segments"], [])
 
     def test_malformed_timings_are_refused(self):
         for bad in ([{"start_seconds": 2, "end_seconds": 1, "text": "backwards"}],

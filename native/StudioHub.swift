@@ -193,11 +193,10 @@ final class StudioController: ObservableObject {
                         // address changes when it restarts and the controller needs to be told;
                         // a controller that had to be restarted is found again at the same
                         // address because the port is pinned.
-                        self.workspace.storedMembership = NativeWorkspaceStore.FleetMembership(
+                        await self.workspace.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
                             controllerAddress: self.configuration.controllerAddress ?? "",
                             token: self.fleetToken,
-                            boundHosts: self.configuration.listenHosts)
-                        await self.workspace.rejoinControllerIfNeeded()
+                            boundHosts: self.configuration.listenHosts))
                         let session = URLSession(configuration: .ephemeral)
                         defer { session.invalidateAndCancel() }
                         while !Task.isCancelled && process.isRunning && !self.stopping {

@@ -2,6 +2,38 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.8 — 2026-09-19
+
+### Fixes found by auditing the whole app
+
+I went through every part of the app looking for things that are wrong rather than things that look
+untidy, and checked each one against the code before touching it. This release is the first batch.
+
+- **A restarted node never told its controller where it was.** The automatic re-join — the thing that
+  makes a group survive a restart — silently did nothing on every Mac: the code that re-joins asks
+  the Hub what kind of credential this Mac holds, and on the startup path nobody had asked the Hub
+  yet, so it always saw "nothing" and stopped. Now fixed, and the test that used to hide it fails
+  without the fix.
+- **A voice you removed could not be added again.** Removing a shared voice leaves a marker so every
+  node drops it, and that marker also refused the voice when it was pushed again — so a re-add
+  reported success and installed nowhere. Pushing a voice again now clears the marker, which is what
+  pushing it again means.
+- **Re-pushing a voice could wipe its words and timings.** The gateway re-pushes a voice whenever it
+  is edited, and a push that did not repeat the transcript was treated as "clear it" — which would
+  have removed the transcript and the timing from every controller and then every node. A field that
+  is not mentioned is now kept; sending an empty one still clears it.
+- **Updating the app could leave a Mac with no app at all.** The installer deleted the working copy
+  before copying the new one, so cancelling the password prompt left nothing behind. It now copies
+  beside the old one and swaps only after the copy is complete and has a runtime in it.
+- **Subtitle could not find ffprobe**, so it could not read the duration of a recording — the check
+  that keeps transcript timings inside the file was skipped for m4a, aac and webm. The voice worker
+  was told where the bundled tools are; the subtitle worker was not.
+- **The startup diagnostic always printed a false error**: it passed a flag the Hub does not accept,
+  so "see the real error" showed an argument error instead.
+- **A test that could not fail.** The test that was supposed to protect the voice-reference key only
+  matched a comment in the app's own source; I checked by breaking the key deliberately and the test
+  still passed. It now fails, as it should.
+
 ## 0.5.7 — 2026-09-19
 
 ### A model that cannot run now says why

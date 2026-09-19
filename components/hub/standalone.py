@@ -636,8 +636,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         license: str = Form(...),
         notes: str = Form(""),
         source_url: str = Form(""),
-        transcript: str = Form(""),
-        transcript_segments: str = Form(""),
+        transcript: str | None = Form(None),
+        transcript_segments: str | None = Form(None),
         voice_id: str = Form(""),
         permission_acknowledged: bool = Form(False),
     ) -> dict[str, Any]:
@@ -662,7 +662,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         finally:
             await audio.close()
         segments: object = []
-        if transcript_segments.strip():
+        if (transcript_segments or "").strip():
             try:
                 segments = json.loads(transcript_segments)
             except ValueError as exc:
@@ -675,7 +675,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 audio_bytes=audio_bytes, filename=audio.filename or "reference.wav",
                 name=name, language=language, gender=gender, license=license,
                 notes=notes, source_url=source_url or None,
-                transcript=transcript or None, transcript_segments=segments,
+                transcript=transcript, transcript_segments=segments or None,
                 permission_acknowledged=permission_acknowledged,
                 voice_id=voice_id.strip() or None,
             )

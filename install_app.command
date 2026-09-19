@@ -61,42 +61,52 @@ echo "  Copying... (this takes a few seconds)"
 # half-lands - the old process keeps serving from deleted files while the folder on disk changes.
 osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
 sleep 2
-rm -rf "$TARGET/$NAME" 2>/dev/null
+# Copy beside the target and only swap once the copy is complete and has a runtime in it. This used
+# to delete the installed app first, so cancelling the password prompt - or a copy that failed with
+# the disk full - left the Mac with no Studio Hub at all, and said only "the copy failed".
+STAGING="$TARGET/.studiohub-incoming"
+rm -rf "$STAGING" 2>/dev/null
+REPLACE="rm -rf '$TARGET/$NAME' && mv '$STAGING' '$TARGET/$NAME'"
 if [ "$NEEDS_ADMIN" = "1" ]; then
   # One administrator prompt, the normal macOS way.
-  if ! osascript -e "do shell script \"/bin/cp -Rp '$APP' '$TARGET/'\" with administrator privileges" 2>/dev/null; then
+  if ! osascript -e "do shell script \"rm -rf '$STAGING' && /bin/cp -Rp '$APP' '$STAGING' && test -x '$STAGING/Contents/Resources/runtimes/voice/bin/python3' && $REPLACE\" with administrator privileges" 2>/dev/null; then
     echo
-    echo "  That did not work. Try again and enter your password, or run this file again and"
-    echo "  answer 'n' to install into your own Applications folder."
+    echo "  That did not work, and nothing was changed: the copy is made beside the installed app"
+    echo "  and only swapped in once it is complete."
+    echo
+    echo "  Try again and enter your password, or run this file again and answer 'n' to install"
+    echo "  into your own Applications folder."
     echo
     echo "  Press Return to close."
     read _ || true
     exit 1
   fi
 else
-  if ! /bin/cp -Rp "$APP" "$TARGET/"; then
-    echo "  The copy failed."
+  if ! /bin/cp -Rp "$APP" "$STAGING" \
+     || [ ! -x "$STAGING/Contents/Resources/runtimes/voice/bin/python3" ]; then
+    echo
+    echo "  The copy failed or arrived incomplete. This Mac still has whatever was installed"
+    echo "  before; nothing was replaced."
+    echo
+    echo "  Check free space, then run this file again."
     echo
     echo "  Press Return to close."
+    rm -rf "$STAGING" 2>/dev/null
     read _ || true
     exit 1
   fi
+  rm -rf "$TARGET/$NAME" 2>/dev/null
+  mv "$STAGING" "$TARGET/$NAME" || {
+    echo "  Could not move the new copy into place. The previous app is gone; run this again."
+    read _ || true
+    exit 1
+  }
 fi
 
 # macOS blocks an unsigned app the first time. Clear the flag so a double-click just works.
 xattr -cr "$TARGET/$NAME" 2>/dev/null || true
 
-# An install that copied a folder but not its runtime looks fine in the Dock and fails on first
-# start, so the one thing worth checking here is that the runtime arrived.
-if [ ! -x "$TARGET/$NAME/Contents/Resources/runtimes/voice/bin/python3" ]; then
-  echo
-  echo "  The copy did not finish: the app has no runtime inside it."
-  echo "  Copy the whole kit folder to this Mac, then run this file again."
-  echo
-  echo "  Press Return to close."
-  read _ || true
-  exit 1
-fi
+# The runtime was checked before the swap, so this only reads what arrived.
 VERSION=$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
           "$TARGET/$NAME/Contents/Info.plist" 2>/dev/null || echo "unknown")
 

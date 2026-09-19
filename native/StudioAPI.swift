@@ -2257,6 +2257,21 @@ final class NativeWorkspaceStore: ObservableObject {
                              boundHosts: membership.boundHosts, quiet: true)
     }
 
+    /// What a launch does once the Hub is ready: learn who this Mac is, then re-join its group.
+    ///
+    /// One entry point, because splitting it is how the re-join became inert: the launch called
+    /// `rejoinControllerIfNeeded()` directly, that function reads
+    /// `controllerIdentity?.settings.fleetCredentialOrigin`, and nothing on the startup path had
+    /// fetched the identity yet - so the guard saw nil and returned silently on every Mac. The test
+    /// passed only because it called `refreshConnection()` by hand first.
+    func adoptStartupMembership(_ membership: FleetMembership) async {
+        storedMembership = membership
+        // Read the identity before deciding: the credential origin is what says whether this Mac
+        // borrowed somebody else's token and therefore belongs to a group.
+        await refreshConnection()
+        await rejoinControllerIfNeeded()
+    }
+
     /// Leave the group this Mac belongs to: stop carrying its token and run on this Mac's own.
     ///
     /// This is the action for a Mac that is being retired, sold or moved, and the only one that

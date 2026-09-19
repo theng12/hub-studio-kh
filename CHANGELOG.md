@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.8 — 2026-09-19 · first batch from a full audit
+
+A full audit of every component (hub backend, the three workers, the native shell, the kit and the
+tests), with each finding verified against the source by a second pass before it was acted on.
+
+- **The automatic fleet re-join never ran.** `StudioHub.start` called `rejoinControllerIfNeeded()`,
+  which guards on `controllerIdentity?.settings.fleetCredentialOrigin`, and nothing on the startup
+  path had called `refreshConnection()` — so the guard saw nil and returned on every Mac. The test
+  passed only because it refreshed the identity by hand first. The launch step is now one function
+  (`adoptStartupMembership`) that both the app and the test call, and the test fails without the
+  identity fetch (verified by mutation).
+- **A removed shared voice could never be re-added.** `upsert` recreated the voice (201) but the
+  tombstone survived, and `start_sync` refuses any voice with a tombstone, so `reconcile_once`
+  deleted it from the targets again. `upsert` now clears the tombstone for the id it is re-creating.
+- **A metadata-only push cleared the transcript and its timings.** The route defaulted absent
+  `transcript`/`transcript_segments` to `""`, and `upsert` wrote a full replacement, so a rename
+  wiped the words and timings everywhere. Absent is now `None` = keep; `""` still clears.
+- **`install_app.command` deleted the installed app before copying the new one**, so a cancelled
+  password prompt or a full disk left the Mac with nothing. It copies to a staging folder in the
+  target, checks the runtime there, and only then swaps.
+- **`packaging/subtitle_worker.py` never set `STUDIOHUB_TOOLS_DIR`**, so `find_executable('ffprobe')`
+  searched `Resources/voice/tools`, which the bundle does not contain; the media-duration guard was
+  silently off for m4a/aac/webm. The voice worker set it all along.
+- **`qualification/studiohub-start.sh` passed `--listen-host`** to a worker that defines `--host`, so
+  the runbook's "see the real error" step printed an argparse error instead.
+- **`WireEncodingTests` could not fail**: it searched the app's raw source plus quoted strings, and an
+  app *comment* naming the Hub's key satisfied it (the Hub's own key is written in backticks, so the
+  regex found nothing). A hand-written `CodingKeys` mapping to a wrong key - the exact mistake the
+  file exists to prevent - left all three tests green. It now strips comments, forbids the literal in
+  the app, and forbids `CodingKeys`; verified by mutation.
+
+Still open from the audit, with the owner for decisions or queued next: subtitle retention (nothing
+ever deletes an upload or an artifact, and the packaged Hub's cleanup loop is off), .mp4/.mov
+accepted by Subtitle and then refused by the decoder, an uncertain Subtitle item that holds its Mac
+out of every lane forever, finished broker batches never evicted, the output-storage sweep hashing on
+the event loop, worker liveness missing from readiness, and the app's refresh aborting everything on
+one failed sub-request.
+
 ## 0.5.7 — 2026-09-19 · a refusal with no reason
 
 - **The gates were sent and discarded.** `/api/hub/model-packages` returns, per model,

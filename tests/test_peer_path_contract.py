@@ -226,8 +226,32 @@ class WireEncodingTests(unittest.TestCase):
         # `convertToSnakeCase` on `voiceReferenceAssetId` produces exactly this key, which is the
         # one `_shared_params_with_local_reference` looks for in the Hub.
         self.assertIn("voiceReferenceAssetId", fields)
-        quoted = re.findall(r'"([a-z_]+)"', HUB.read_text())
-        self.assertIn("voice_reference_asset_id", text + " ".join(quoted))
+        # This assertion used to read `text + quoted`, where the app's own source contains the key
+        # only inside comments - and where the Hub's key is written in backticks, so the regex found
+        # nothing. It therefore passed no matter what the app did: a hand-written CodingKeys mapping
+        # to the wrong key - the exact mistake the file's docstring exists to prevent - left all
+        # three wire tests green. Now the app must not spell the wire key at all, and the Hub's real
+        # reader must.
+        self.assertNotIn("voice_reference_asset_id", without_comments(text),
+                         "the app must rely on convertToSnakeCase, not on a literal key")
+        self.assertNotIn("CodingKeys", without_comments(declaration.group(1)),
+                         "a hand-written mapping overrides convertToSnakeCase silently")
+        self.assertIn("voice_reference_asset_id", HUB.read_text(),
+                      "the Hub is the side that reads this key")
+
+
+def without_comments(swift: str) -> str:
+    """Swift source with `//` comments removed, so a key mentioned only in prose cannot pass a test.
+
+    The previous version of the wire-key test searched the raw file plus a set of quoted strings,
+    and an app comment mentioning the Hub's key satisfied it.
+    """
+    lines = []
+    for line in swift.splitlines():
+        if line.strip().startswith("//"):
+            continue
+        lines.append(line.split("//", 1)[0])
+    return "\n".join(lines)
 
 
 class JobRowContractTests(unittest.TestCase):

@@ -97,6 +97,11 @@ def main() -> None:
         'STUDIOHUB_RELEASE_MANIFEST': str(release_path),
         'STUDIOHUB_FLEET_TOKEN': token,
         'HF_HUB_DISABLE_TELEMETRY': '1', 'PYTHONNOUSERSITE': '1',
+        # The shared media helpers look here and nowhere else (`paths.tools_dir()`), and the
+        # bundle puts ffmpeg/ffprobe in the runtime's bin. The voice worker sets this; the
+        # subtitle worker did not, so ffprobe was never found and a job could not read the
+        # duration of the file it was transcribing.
+        'STUDIOHUB_TOOLS_DIR': str(runtime / 'bin'),
         'PYTHONDONTWRITEBYTECODE': '1',
         'HF_HOME': str(models), 'HF_HUB_CACHE': str(models / 'hub'),
         'XDG_CACHE_HOME': str(subtitle_data / 'cache'),

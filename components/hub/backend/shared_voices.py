@@ -164,6 +164,23 @@ def _load(voice_id: str) -> dict | None:
     return metadata
 
 
+def clear_tombstone(voice_id: str) -> bool:
+    """Forget that this voice was deleted, because it has just been pushed again.
+
+    A removal leaves a tombstone so every node still drops the voice; the tombstone is what the
+    reconciler looks at, so a voice that is pushed again after a removal was recreated on disk and
+    then refused by `start_sync` (`if ... _load_tombstone(voice_id): return False`) and deleted from
+    every target again. From the caller's side the push answered 201 and nothing installed, with no
+    way back except the manual sync route. Returns whether a tombstone was there.
+    """
+    path = _tombstone_path(voice_id)
+    _load_tombstone(voice_id)  # validates the id
+    if path.is_symlink() or not path.is_file():
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
 def get(voice_id: str) -> dict | None:
     """One shared voice as stored, or None. The id is the Hub's, never the caller's."""
     try:
@@ -263,6 +280,8 @@ def upsert(
     whichever id it arrived under.
     """
     digest = hashlib.sha256(audio_bytes).hexdigest()
+    if voice_id:
+        clear_tombstone(voice_id)
     existing = _load(voice_id) if voice_id else None
     if existing and existing.get("audio_sha256") != digest:
         raise SharedVoiceConflict(
@@ -278,9 +297,15 @@ def upsert(
         ), True
     changes = {
         "name": name, "language": language, "gender": gender, "license": license,
-        "notes": notes or "", "source_url": source_url or "", "transcript": transcript or "",
-        "transcript_segments": _segments(transcript_segments),
+        "notes": notes or "", "source_url": source_url or "",
     }
+    # `None` means "this push does not mention it, keep what is stored"; an empty string is an
+    # explicit clear. Treating an omitted transcript as empty deleted the voice's words and its
+    # timings - and the gateway re-pushes a voice on every edit, so a rename would have wiped the
+    # transcript on every controller and then on every node.
+    if transcript is not None:
+        changes["transcript"] = transcript
+        changes["transcript_segments"] = _segments(transcript_segments)
     return update(existing["id"], changes), False
 
 
