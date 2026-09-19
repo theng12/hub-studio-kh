@@ -47,6 +47,11 @@ final class FixtureProtocol: URLProtocol {
     /// sub-request - the case that used to blank the whole page and mark the Hub unreachable.
     static var failJobDetail = false
     static func setFailJobDetail(_ value: Bool) { lock.lock(); defer { lock.unlock() }; failJobDetail = value }
+    static var jobDetailReads = 0
+    private static let detailLock = NSLock()
+    static func resetJobDetailCount() { detailLock.lock(); defer { detailLock.unlock() }; jobDetailReads = 0 }
+    static func jobDetailCount() -> Int { detailLock.lock(); defer { detailLock.unlock() }; return jobDetailReads }
+    static func noteJobDetail() { detailLock.lock(); defer { detailLock.unlock() }; jobDetailReads += 1 }
     static var currentRole = "standalone"
     /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
     /// The app re-joins on start only for the second kind, so the fixture has to be able to be both.
@@ -208,6 +213,7 @@ final class FixtureProtocol: URLProtocol {
             }
         }
         let result: (Int, String, Data)
+        if method == "GET", path.hasPrefix("/api/hub/jobs/") { Self.noteJobDetail() }
         switch (method, path) {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
@@ -402,7 +408,15 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
         case ("GET", "/api/hub/jobs"):
-            result = (200, "application/json", Data(#"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"}]}"#.utf8))
+            Self.lock.lock(); let pendingUncertain = Self.uncertainImage; Self.lock.unlock()
+            // The unresolved request is a *different* batch (older, so it does not become the most
+            // recent job). It used to be the same id flipping from done to uncertain, which cannot
+            // happen now that a finished job's detail is fetched once - and cannot happen in
+            // production either, where nothing can re-open a finished job.
+            let listed = pendingUncertain
+                ? #"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"},{"id":"image-uncertain","modality":"image"}]}"#
+                : #"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"}]}"#
+            result = (200, "application/json", Data(listed.utf8))
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
             if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
@@ -425,6 +439,11 @@ final class FixtureProtocol: URLProtocol {
             result = rejects
                 ? (502, "application/json", Data(#"{"detail":"voice worker did not acknowledge receipt"}"#.utf8))
                 : (200, "application/json", Data(#"{"ok":true}"#.utf8))
+        case ("GET", "/api/hub/jobs/image-uncertain"):
+            let uncertainSHA = SHA256.hash(data: Self.png).map { String(format: "%02x", $0) }.joined()
+            let pending: [String: Any] = ["id": "image-uncertain", "modality": "image", "model": "fixture/flux", "created_at": 20,
+                "items": [["index": 0, "state": "uncertain", "prompt": "A quiet garden", "artifact_url": "/api/hub/jobs/image-uncertain/items/0/artifact", "bytes": Self.png.count, "sha256": uncertainSHA]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: pending))
         case ("GET", "/api/hub/jobs/image-job"):
             let sha = SHA256.hash(data: Self.png).map { String(format: "%02x", $0) }.joined()
             Self.lock.lock(); let uncertain = Self.uncertainImage; Self.lock.unlock()
@@ -600,14 +619,30 @@ struct NativeAPITests {
 
         // One batch whose detail will not load is one row, not the whole page. This used to abort
         // the refresh and mark the Hub unreachable, so a pruned job blanked the models and the jobs.
+        // A fresh store with its own data directory: a finished job's detail is fetched once and
+        // remembered now, so the failure has to land on a first read - and a second store sharing
+        // this directory would clear the pending records the identity assertions below are about.
         FixtureProtocol.setFailJobDetail(true)
-        await store.refresh()
-        require(store.isReachable, "an unreadable batch must not mark the Hub unreachable")
-        require(store.startupNote?.contains("could not be read") == true,
-                "the unreadable batch must be reported, got: \(store.startupNote ?? "nil")")
-        require(!store.imageJobs.isEmpty || !store.audioJobs.isEmpty,
-                "the jobs that could be read must still be shown")
+        let degradedHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("studiohub-degraded-\(UUID().uuidString)")
+        let degraded = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await degraded.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                               dataDirectory: degradedHome, token: "native-test-token")
         FixtureProtocol.setFailJobDetail(false)
+        require(degraded.isReachable, "an unreadable batch must not mark the Hub unreachable")
+        require(degraded.startupNote?.contains("could not be read") == true,
+                "the unreadable batch must be reported, got: \(degraded.startupNote ?? "nil")")
+        require(!degraded.imageJobs.isEmpty || !degraded.audioJobs.isEmpty,
+                "the jobs that could be read must still be shown")
+
+        // And a finished job is not asked about twice: the poll is every two seconds, for ever.
+        FixtureProtocol.resetJobDetailCount()
+        await degraded.refresh()
+        let firstPass = FixtureProtocol.jobDetailCount()
+        await degraded.refresh()
+        let secondPass = FixtureProtocol.jobDetailCount()
+        require(secondPass == firstPass,
+                "a finished job must be fetched once, not on every poll: \(firstPass) then \(secondPass)")
 
         // How long a generation took, shown in the generator and in Jobs. The Hub writes
         // `runtime_s` when an item finishes and `elapsed_s` while it runs; the app showed neither,

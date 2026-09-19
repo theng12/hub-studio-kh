@@ -754,6 +754,18 @@ final class NativeWorkspaceStore: ObservableObject {
     private var hubToken: String?
     private var connectionID: UUID?
     private var dataDirectory: URL?
+    /// Job details that are already final, keyed by batch id.
+    ///
+    /// A finished job cannot change... while nothing can re-open one. The two-second poll asked the
+    /// Hub for the detail of *every* batch it has ever recorded - one request per historical job,
+    /// every two seconds, for the life of the app - and re-read records that will never differ.
+    /// Checked before relying on it: the app has no retry action, and the Hub's `retry_batch`,
+    /// `remove_batch` and `clear_terminal` have no route, so no finished job can come back. The
+    /// states that *do* come back (`uncertain`, re-queued by the Hub) are not final and are never
+    /// cached. If a retry route is ever added, invalidate this cache there -
+    /// `tests/test_job_detail_cache_is_safe.py` fails when that route appears.
+    private var finishedJobCache: [String: NativeJob] = [:]
+
     private var pollTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
     private var loadingState = false
@@ -820,6 +832,7 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func disconnect() {
+        finishedJobCache.removeAll()
         pollTask?.cancel()
         pollTask = nil
         saveTask?.cancel()
@@ -897,12 +910,20 @@ final class NativeWorkspaceStore: ObservableObject {
             var history: [NativeJob] = []
             var images: [NativeJob] = []
             var unreadable = 0
+            var finished: [String: NativeJob] = [:]
             for batch in (jobsValue?.batches ?? []) where ["voice", "image"].contains(batch.modality) {
+                if let known = finishedJobCache[batch.id] {
+                    finished[batch.id] = known
+                    if batch.modality == "image" { images.append(known) } else { history.append(known) }
+                    continue
+                }
                 do {
                     let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
                     guard connectionID == requestConnection else { return }
-                    if batch.modality == "image" { images.append(Self.mapHubJob(detail)) }
-                    else { history.append(Self.mapHubJob(detail)) }
+                    let job = Self.mapHubJob(detail)
+                    if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
+                    if batch.modality == "image" { images.append(job) }
+                    else { history.append(job) }
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
                     // is a convenience over the Hub's history, and losing it should not read as the
@@ -913,6 +934,8 @@ final class NativeWorkspaceStore: ObservableObject {
             if unreadable > 0 {
                 startupNote = "\(unreadable) finished job(s) could not be read; the rest are shown."
             }
+            // Only what the Hub still lists is remembered; anything it forgets leaves with it.
+            finishedJobCache = finished
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var subtitles: [NativeJob] = []

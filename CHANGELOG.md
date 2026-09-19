@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.18 — 2026-09-19 · the app re-read every historical job every two seconds
+
+- **`refresh()` fetched one job detail per batch, every two seconds, for ever.** History does not
+  change, so `finishedJobCache` now remembers a job whose state is final (`done`, `cancelled`) and
+  the poll reuses it; the cache is rebuilt each pass from the batches the Hub still lists, so it
+  stays as small as the listing, and cleared on `disconnect()`.
+- **The safety condition was checked, not assumed.** The reason this was deferred twice is that a job
+  you retry could become live again and be shown as permanently finished. Traced: the app has no
+  retry action (its only mention of the word is a message), and `broker.retry_batch`,
+  `remove_batch` and `clear_terminal` have no HTTP route and no caller outside tests. The states that
+  do come back - `uncertain`, re-queued by the Hub - are not final and are never cached.
+- Evidence: the native fixture gained a job-detail read counter and asserts a finished job is not
+  fetched on a second poll (and that the failed-detail path still reports, from an isolated store);
+  `tests/test_job_detail_cache_is_safe.py` (5 checks) pins that only final states are cached, that a
+  reconnect drops the cache, and **that no route can re-open a finished job** - so adding one fails
+  the test with instructions rather than silently hiding a retried job. The fixture's unresolved-image
+  case now uses its own batch id instead of flipping a finished job's state, which is what a retry
+  would look like and cannot happen today.
+
 ## 0.6.17 — 2026-09-19 · the voice loader could run a different revision than the job recorded
 
 - **`GenerationManager._mlx_audio_snapshot_path` returned `candidates[0]`** from

@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.18 — 2026-09-19
+
+### The app stopped re-reading its entire job history every two seconds
+
+Every two seconds the app asked the Hub for the full detail of **every job it had ever recorded** —
+one request per job, over and over, for records that could not have changed. On a controller with
+months of history that is the app working against itself, and against the Hub, all day.
+
+A job that has finished is now read once and remembered. Before relying on that I checked the fear
+that had held this back: that a job you retry could come back to life and be shown as permanently
+finished. **The app has no retry button**, and the Hub's retry, remove and clear functions have **no
+route** — nothing can re-open a finished job today. The states that *do* come back (an uncertain
+transcript that gets re-queued) are not finished states, so they are never remembered. A test now
+fails the moment a retry route is added, pointing at the cache, so this cannot rot into hiding a job
+you restarted.
+
 ## 0.6.17 — 2026-09-19
 
 ### The model files loaded are now the ones the job says they are
