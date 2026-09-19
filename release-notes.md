@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.20 — 2026-09-19
+
+### A Mac's health is now all of its Studios, not whichever one is listed first
+
+The Fleet page reports one row per Mac, and it was taking that Mac's health from the **first** Studio
+it happened to list. So a Mac running Voice and Image, with **Image down**, read as healthy because
+Voice was fine — and a Mac with one stubborn Studio could read as down while everything else on it
+was working. Nobody is asking "is Voice up" when they look at that row; they are asking whether the
+Mac is well.
+
+It now reads **degraded** when part of the Mac is broken, **down** only when nothing on it answers,
+and says which Studio is the problem:
+
+> Subtitle is not answering
+
 ## 0.6.19 — 2026-09-19
 
 ### A job that could not be recorded no longer sticks as "running"

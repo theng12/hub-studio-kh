@@ -82,6 +82,33 @@ def _app_version() -> str:
         return "unknown"
 
 
+def machine_health(states: list[tuple[str, str]]) -> tuple[str, str | None]:
+    """One Mac's health from all of its Studios, not from whichever one is listed first.
+
+    `fleet_overview` took the first studio on a machine and reported that studio's status as the
+    machine's health, so a Mac running Voice and Image with Image down was reported as "up" if Voice
+    happened to come first in the registry - and as "down" while Voice was working fine if it did not.
+    A person reading the Fleet page is asking about the Mac.
+
+    Returns the health and, when something is wrong, a sentence naming what.
+    """
+    up = [name for name, status in states if status == "up"]
+    down = [name for name, status in states if status not in ("up", "unknown")]
+    if down and not up:
+        health = "down"
+    elif down:
+        health = "degraded"
+    elif up:
+        health = "up"
+    else:
+        health = "unknown"
+    detail = None
+    if down:
+        listed = ", ".join(sorted(down))
+        detail = f"{listed} is not answering" if len(down) == 1 else f"{listed} are not answering"
+    return health, detail
+
+
 def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> dict[str, Any] | None:
     """Return an explicit refusal when this packaged model cannot run here.
 
@@ -427,18 +454,28 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             if machine in seen:
                 continue
             seen.add(machine)
+            on_this_machine = [item for item in monitor.registry
+                               if str(item.get("machine") or "local") == machine]
             if peers.is_local_studio(studio):
-                state = monitor.status.get(studio["id"]) or {}
                 try:
                     host = resource_stats.host_stats()
                 except Exception:
                     host = {}
+                health, detail = machine_health([
+                    (str(item.get("title") or item.get("modality") or item["id"]),
+                     (monitor.status.get(item["id"]) or {}).get("status", "unknown"))
+                    for item in on_this_machine
+                ])
                 row = {
                     "machine": machine,
                     "label": "This Mac",
                     "reachable": True,
                     "version": _app_version(),
-                    "health": state.get("status", "unknown"),
+                    "health": health,
+                    "detail": detail,
+                    "studios": {"total": len(on_this_machine),
+                                "up": sum((monitor.status.get(item["id"]) or {}).get("status") == "up"
+                                          for item in on_this_machine)},
                 }
             else:
                 snapshot = peers.cached(machine) or {}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.20 — 2026-09-19 · a Mac's health came from one arbitrary Studio
+
+- **`fleet_overview` iterated `monitor.registry`, skipped machines it had already seen, and reported
+  the first studio's status as the machine's.** A Mac running Voice and Image with Image down read
+  "up" if Voice came first, and read "down" while Voice was healthy if it did not. New module-level
+  `machine_health(states)` summarises every Studio on that machine: `up` when all answer, `degraded`
+  when some do, `down` only when none do, `unknown` when no status is known yet (a Hub that has not
+  run its first poll must not report a Mac as sick), with a sentence naming the Studios that are not
+  answering; the row also carries `studios: {total, up}`.
+- Evidence: `tests/test_machine_health_summary.py` (6 checks) covers all five outcomes, that a Studio
+  still starting does not make the Mac look down, and that the route no longer reads a single
+  studio's status.
+
 ## 0.6.19 — 2026-09-19 · a failed dispatch write stranded the job and the Mac
 
 - **`transcription_jobs`' dispatch loop leased the Mac, marked the item running in memory, then
