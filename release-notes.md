@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.9 — 2026-09-19
+
+### The app no longer gives up on the whole screen
+
+Two more from the audit, both about one small failure looking like a big one.
+
+- **One unreadable job used to blank everything.** The app refreshes eight things every two seconds,
+  and if any one of them failed — a dead Subtitle worker, a finished download the Hub has forgotten,
+  one job whose record will not load — it abandoned the entire refresh and marked the Hub
+  unreachable. The models, the jobs, the voices and the connections all went to their empty states
+  with no explanation, and only pressing something else brought them back. Each piece now stands on
+  its own: the Hub is only "unreachable" if the Hub itself does not answer, and anything that could
+  not be read is said in one line at the top.
+- **A damaged file of the app's own stopped it connecting at all.** If one of the app's saved files
+  in Application Support was truncated or in an unexpected shape, starting the app cleared the Hub
+  address and left every page on "Choose where your models live" — and it never recovered, because
+  the same file was read again on every attempt. The only way out was to find and delete it in
+  Finder. A file that will not parse is now set aside (nothing is lost, it is renamed with
+  `.corrupt` at the end) and the app starts without it, saying what it did.
+
 ## 0.5.8 — 2026-09-19
 
 ### Fixes found by auditing the whole app

@@ -43,6 +43,10 @@ final class FixtureProtocol: URLProtocol {
     static var fleetCalls: [String] = []
     static var joinBody: [String: Any]?
     static var adoptBody: [String: Any]?
+    /// One job detail that cannot be read, so a refresh is exercised with a single failing
+    /// sub-request - the case that used to blank the whole page and mark the Hub unreachable.
+    static var failJobDetail = false
+    static func setFailJobDetail(_ value: Bool) { lock.lock(); defer { lock.unlock() }; failJobDetail = value }
     static var currentRole = "standalone"
     /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
     /// The app re-joins on start only for the second kind, so the fixture has to be able to be both.
@@ -400,7 +404,9 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs"):
             result = (200, "application/json", Data(#"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"}]}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job"):
-            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact"}]}"#.utf8))
+            Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
+            if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
+            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact","runtime_s":31.0}]}"#.utf8))
         case ("GET", "/api/hub/jobs/new-job"):
             // `created_at` matters: history is sorted by it, and the assertions below take the
             // most recent job, which is this one.
@@ -575,6 +581,33 @@ struct NativeAPITests {
                 "an unusable model must be marked in the picker")
         let healthy = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
         require(healthy?.blockReason == nil, "a model that can run must carry no reason")
+
+        // A damaged file of the app's own must not stop it connecting. This used to throw out of
+        // `connect()`, which cleared the Hub address and left every page on the setup screen, with
+        // no way back except deleting the file in Finder.
+        let corruptState = state.appendingPathComponent("native-workspaces.json")
+        try Data("{ this is not json".utf8).write(to: corruptState)
+        // The fixture's session, like every other store in this test: a bare store would talk to
+        // the real network and fail for a reason that has nothing to do with the damaged file.
+        let recoveredStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await recoveredStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                     dataDirectory: state, token: "native-test-token")
+        require(recoveredStore.isReachable, "a damaged workspace file must not stop the app connecting")
+        require(recoveredStore.startupNote?.contains("set aside") == true,
+                "and it must say so, got: \(recoveredStore.startupNote ?? "nil")")
+        require(FileManager.default.fileExists(atPath: corruptState.path + ".corrupt"),
+                "the unreadable file must be kept, not deleted")
+
+        // One batch whose detail will not load is one row, not the whole page. This used to abort
+        // the refresh and mark the Hub unreachable, so a pruned job blanked the models and the jobs.
+        FixtureProtocol.setFailJobDetail(true)
+        await store.refresh()
+        require(store.isReachable, "an unreadable batch must not mark the Hub unreachable")
+        require(store.startupNote?.contains("could not be read") == true,
+                "the unreadable batch must be reported, got: \(store.startupNote ?? "nil")")
+        require(!store.imageJobs.isEmpty || !store.audioJobs.isEmpty,
+                "the jobs that could be read must still be shown")
+        FixtureProtocol.setFailJobDetail(false)
 
         // How long a generation took, shown in the generator and in Jobs. The Hub writes
         // `runtime_s` when an item finishes and `elapsed_s` while it runs; the app showed neither,

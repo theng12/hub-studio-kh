@@ -140,12 +140,12 @@ struct StudioContent: View {
             .frame(minWidth: 150, idealWidth: 210, maxWidth: 260)
             Divider()
             VStack(spacing: 0) {
-                if let error = studio.failure ?? workspace.error ?? fileActionError {
+                if let error = studio.failure ?? workspace.error ?? workspace.startupNote ?? fileActionError {
                     HStack(alignment: .top) {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                         Text(error).textSelection(.enabled)
                         Spacer()
-                        Button("Dismiss") { studio.failure = nil; workspace.error = nil; fileActionError = nil }
+                        Button("Dismiss") { studio.failure = nil; workspace.error = nil; workspace.clearStartupNote(); fileActionError = nil }
                     }.font(.callout).padding(14).background(Color(nsColor: .controlBackgroundColor))
                     Divider()
                 }

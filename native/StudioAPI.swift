@@ -742,6 +742,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
     @Published private(set) var fleetNote: String?
+    /// A note about a file the app had to set aside at startup, or a part of a refresh that could
+    /// not be read. Shown with the other messages rather than failing silently.
+    @Published private(set) var startupNote: String?
     @Published private(set) var joiningFleet = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
@@ -785,11 +788,16 @@ final class NativeWorkspaceStore: ObservableObject {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try loadState()
-            try loadPendingAudio()
-            try loadPendingImage()
-            try loadPendingTranscription()
-            try loadHubDownloadRuns()
+            // Best-effort: these are the app's own drafts and records. One unreadable file used to
+            // throw out of `connect()`, which cleared the Hub address and left every page showing
+            // the setup screen with no models, jobs or voices - recoverable only by finding and
+            // deleting the file in Finder. A file that will not parse is set aside so nothing is
+            // lost, and the app connects with empty state.
+            loadBestEffort(dataDirectory.appendingPathComponent("native-workspaces.json"), "your saved workspaces") { try loadState() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-pending-audio.json"), "a pending audio request") { try loadPendingAudio() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-pending-image.json"), "a pending image request") { try loadPendingImage() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-pending-transcription.json"), "a pending transcription") { try loadPendingTranscription() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-model-downloads.json"), "the model-download list") { try loadHubDownloadRuns() }
             await refresh()
             guard self.connectionID == requestConnection else { return }
             await refreshMemoryPolicy()
@@ -848,28 +856,35 @@ final class NativeWorkspaceStore: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         do {
+            // The catalog and the package list are the Hub itself: if they fail, the Hub is not
+            // answering. Everything else is a studio or a list, and one of those failing used to
+            // abort the whole refresh and mark the Hub unreachable - so a dead Subtitle worker
+            // blanked the models, the jobs and the connections with no explanation.
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
             async let packages: HubModelPackagesResponse = get(["api", "hub", "model-packages"])
-            async let transcription: TranscriptionAvailability = get(["studio", "transcription", "api", "transcribe", "availability"])
-            async let generation: GenerationAvailability = get(["studio", "voice", "api", "generate", "availability"])
-            async let jobs: HubJobsResponse = get(["api", "hub", "jobs"])
-            async let transfers: DownloadsResponse = get(["studio", "voice", "api", "downloads"])
-            async let settings: TokenStatusWire = get(["studio", "voice", "api", "settings"])
-            async let subtitleHistory: HubTranscriptionList = get(["api", "hub", "transcription", "jobs"])
+            async let transcription: TranscriptionAvailability? = try? get(["studio", "transcription", "api", "transcribe", "availability"])
+            async let generation: GenerationAvailability? = try? get(["studio", "voice", "api", "generate", "availability"])
+            async let jobs: HubJobsResponse? = try? get(["api", "hub", "jobs"])
+            async let transfers: DownloadsResponse? = try? get(["studio", "voice", "api", "downloads"])
+            async let settings: TokenStatusWire? = try? get(["studio", "voice", "api", "settings"])
+            async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
                 try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
+            if transcriptionValue == nil || generationValue == nil {
+                startupNote = "A studio did not answer; the rest of this page is up to date."
+            }
             guard connectionID == requestConnection else { return }
             // Built by merging, not uniqueKeysWithValues: a repeated id in a Hub payload would
             // trap the app on every refresh and on the two-second poll. Last one wins instead.
             modelPackages = packagesValue.models.reduce(into: [:]) { $0[$1.modelId] = $1 }
-            audioSpeakers = (generationValue.qwen3PresetSpeakers ?? []).map(\.id)
+            audioSpeakers = (generationValue?.qwen3PresetSpeakers ?? []).map(\.id)
             if audioSpeaker.isEmpty || (!audioSpeakers.isEmpty && !audioSpeakers.contains(audioSpeaker)) {
                 audioSpeaker = audioSpeakers.first ?? "Ryan"
             }
             models = Self.combineModels(
                 catalogValue.models,
-                transcriptionValue.models,
-                transcriptionAvailable: transcriptionValue.available ?? false,
+                transcriptionValue?.models ?? [],
+                transcriptionAvailable: transcriptionValue?.available ?? false,
                 speakers: audioSpeakers,
                 packages: modelPackages
             )
@@ -881,16 +896,27 @@ final class NativeWorkspaceStore: ObservableObject {
             if imageSettings == nil { imageSettings = imageConfiguration?.defaults }
             var history: [NativeJob] = []
             var images: [NativeJob] = []
-            for batch in jobsValue.batches where ["voice", "image"].contains(batch.modality) {
-                let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
-                guard connectionID == requestConnection else { return }
-                if batch.modality == "image" { images.append(Self.mapHubJob(detail)) }
-                else { history.append(Self.mapHubJob(detail)) }
+            var unreadable = 0
+            for batch in (jobsValue?.batches ?? []) where ["voice", "image"].contains(batch.modality) {
+                do {
+                    let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
+                    guard connectionID == requestConnection else { return }
+                    if batch.modality == "image" { images.append(Self.mapHubJob(detail)) }
+                    else { history.append(Self.mapHubJob(detail)) }
+                } catch {
+                    // A batch whose detail will not load is one row, not the whole page: the listing
+                    // is a convenience over the Hub's history, and losing it should not read as the
+                    // Hub being down.
+                    unreadable += 1
+                }
+            }
+            if unreadable > 0 {
+                startupNote = "\(unreadable) finished job(s) could not be read; the rest are shown."
             }
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var subtitles: [NativeJob] = []
-            for batch in subtitleValue.batches {
+            for batch in (subtitleValue?.batches ?? []) {
                 let batchState = batch.status ?? "unknown"
                 subtitles.append(NativeJob(
                     id: batch.id,
@@ -905,14 +931,19 @@ final class NativeWorkspaceStore: ObservableObject {
             subtitleJobs = subtitles.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
             for (runID, repo) in hubDownloadRuns {
-                let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
+                // A download that has finished and been forgotten by the Hub is not a reason to
+                // stop showing everything else.
+                guard let run: HubModelDownload = try? await get(["api", "hub", "model-downloads", runID]) else {
+                    hubDownloadRuns.removeValue(forKey: runID)
+                    continue
+                }
                 hubTransfers.append(NativeDownload(id: run.id, repo: repo, state: run.state,
                     percent: 0, downloadedBytes: 0, totalBytes: 0,
                     error: run.state == "error" || run.state == "interrupted" ? "Hub model download \(run.state)." : nil))
             }
-            downloads = hubTransfers + transfersValue.jobs.map(Self.mapDownload)
-            tokenStatus = settingsValue.value
-            reconcileSelections(defaultTranscription: transcriptionValue.defaultModel)
+            downloads = hubTransfers + (transfersValue?.jobs ?? []).map(Self.mapDownload)
+            tokenStatus = settingsValue?.value ?? NativeTokenStatus(isSet: false, masked: "")
+            reconcileSelections(defaultTranscription: transcriptionValue?.defaultModel)
             await reconcileTranscription()
             isReachable = true
             if reportErrors { error = nil }
@@ -2095,6 +2126,21 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Change this Hub's role. Standalone creates locally; Controller serves other Macs and
     /// reports their work; Node does local work only and defers customer jobs to a controller.
+    func clearStartupNote() { startupNote = nil }
+
+    /// Run one file load, and never let a damaged file stop the app.
+    ///
+    /// The unreadable file is moved aside rather than deleted, so an operator can send it on, and
+    /// the reason is kept in `startupNote` for the banner on the main screen.
+    private func loadBestEffort(_ url: URL, _ name: String, _ load: () throws -> Void) {
+        do { try load() } catch {
+            let aside = url.appendingPathExtension("corrupt")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: url, to: aside)
+            startupNote = "\(name.capitalized) could not be read, so it was set aside as \(aside.lastPathComponent) and the app started without it."
+        }
+    }
+
     /// Name this Mac. A label for people, not an identity: routing and fleet membership are
     /// unaffected, which is why it can be changed at any time.
     func renameThisMachine(_ name: String) async {

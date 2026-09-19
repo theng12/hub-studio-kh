@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.9 — 2026-09-19 · one failure is not the whole screen
+
+- **`refresh()` aborted on any single sub-request.** Eight reads per two-second poll were awaited as
+  one tuple, and each batch detail and each Hub download run was read with a throwing `try` inside
+  the loop, so one 500 - a pruned job, a dead Subtitle worker, a forgotten download - threw out of
+  the whole function, and the catch set `isReachable = false`. Because the poll passes
+  `reportErrors: false`, it also showed no banner: the models, jobs, voices and connections all
+  emptied and nothing said why. The studio-level reads are now optional (with defaults), and a batch
+  detail or download that fails is skipped and counted, with the count shown in one line; only the
+  catalog and the package list - the Hub itself - can mark it unreachable.
+- **A corrupt file of the app's own blocked `connect()`.** `loadState`, `loadPending*` and
+  `loadHubDownloadRuns` were throwing calls inside the same `do` as the Hub handshake, so a
+  truncated `native-workspaces.json` cleared `baseURL`/`hubToken` and set `isReachable = false`; the
+  file was then re-read on every reconnect, so the app could not recover without finding it in
+  Finder. They are best-effort now: an unreadable file is renamed with a `.corrupt` suffix (kept, not
+  deleted) and named in `startupNote`, which the main banner shows and can dismiss.
+- Evidence: the native fixture gained one unreadable batch detail; the test asserts `isReachable`
+  stays true, the readable jobs survive and the skip is reported. A second assertion writes invalid
+  JSON into the app's own state file and asserts the app still connects, keeps the file as
+  `.corrupt`, and says so. Both were checked by mutation: reverting the best-effort load fails the
+  test with "a damaged workspace file must not stop the app connecting".
+
 ## 0.5.8 — 2026-09-19 · first batch from a full audit
 
 A full audit of every component (hub backend, the three workers, the native shell, the kit and the
