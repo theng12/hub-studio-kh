@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.14 — 2026-09-19
+
+### Cancelling a Subtitle job now always cancels it
+
+There was a small window — the moment a job finishes and the files are being written — where pressing
+**Cancel** did nothing: the worker had already decided the job was finished, and it recorded "done"
+over your cancel. The app then showed a completed job you had cancelled, with its files kept. The
+window is the one you are most likely to hit, because it is exactly when a job *looks* finished. A
+cancel that lands in it now wins, and the files written at that moment are removed with it.
+
 ## 0.6.13 — 2026-09-19
 
 ### A downloading model no longer looks stuck

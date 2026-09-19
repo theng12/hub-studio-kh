@@ -404,6 +404,24 @@ class SubtitleManager:
                 raise _Cancelled()
             receipts = self._publish(job_id, result, params['formats'], staged)
             with self.lock:
+                if event.is_set():
+                    # The cancel landed while the artifacts were being written - after the check
+                    # above and before this commit. It is still a cancel: the operator asked to
+                    # stop, and recording "done" afterwards is how a job they cancelled came back
+                    # finished, with the Hub's lifecycle treating it as completed work. The
+                    # artifacts this call just wrote are removed with it.
+                    published = [Path(entry['path']) for entry in receipts.values()
+                                 if isinstance(entry, dict) and entry.get('path')]
+                    job.update(state='cancelled', error=None, error_code=None,
+                               finished_at=time.time(), artifacts={}, output_path=None,
+                               output_url=None, sha256=None, bytes=None)
+                    self._persist()
+                    for path in published:
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    return
                 now = time.time()
                 job.update(
                     state='done', progress=1.0, finished_at=now, generated_at=now,

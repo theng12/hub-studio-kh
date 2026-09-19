@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.14 — 2026-09-19 · a cancel during publishing was overwritten by "done"
+
+- **`SubtitleManager._run` checked the cancel event after decoding, then published artifacts and
+  committed `state='done'`.** A cancel arriving between those two points - after the check, before
+  the commit - was silently overwritten: the app showed a finished job the operator had cancelled,
+  with artifacts kept, and the Hub's lifecycle treated it as completed work. The commit now re-checks
+  the event inside the lock, marks the job cancelled, drops the artifact references, removes the
+  files this call just wrote, and returns.
+- Evidence: `tests/test_subtitle_cancel_wins.py` (3 checks) drives the real `_run` with a stub
+  decoder and a `_publish` that sets the cancel event mid-write - the job ends cancelled, no
+  artifacts are advertised and the written file is gone - plus two controls: an uncancelled job still
+  finishes and keeps its file, and a cancel before decoding still cancels. Mutation-verified
+  (removing the guard fails the first).
+
 ## 0.6.13 — 2026-09-19 · the download row drew a hardcoded zero
 
 - **The Downloads row drew `ProgressView(value: percent)` unconditionally** for an active download.
