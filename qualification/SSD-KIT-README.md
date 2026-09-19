@@ -227,7 +227,7 @@ the network address it should answer on (a Tailscale address if you have one) â†
 services when prompted. It answers on port **47873** every time, so the address below it stays
 true. On the other Mac, turn on one of its own network addresses the same way - a node has to be
 reachable too, or the controller can never send it work - then paste this controller's
-**address:port** and the **Hub token** shown under **Connections** into the Join form. **Fleet
+**address:port** and the **Fleet token** shown under **Connections** into the Join form. **Fleet
 overview** should then show both Macs, with the jobs each has run and its measured average time.
 A node keeps that address and **re-joins by itself** whenever its services start, so restarting
 either Mac does not mean retyping anything. Retiring, replacing or selling a Mac â€” including the

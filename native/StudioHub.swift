@@ -178,6 +178,10 @@ final class StudioController: ObservableObject {
                                                      dataDirectory: self.configuration.dataDirectory,
                                                      token: ready.token,
                                                      allowedHost: self.configuration.clientHost)
+                        // Read again now that the Hub has answered: the fleet credential is minted
+                        // by the first authenticated request, so the earlier read could predate it.
+                        // Connections offers this value to a joining Mac, and it has to be on screen.
+                        self.readFleetToken()
                         // Re-join the group this Mac belongs to, once per start. A node's own
                         // address changes when it restarts and the controller needs to be told;
                         // a controller that had to be restarted is found again at the same
@@ -348,13 +352,20 @@ final class StudioController: ObservableObject {
     }
     func select(_ value: StudioPage) { selection = value }
 
-    /// Read this Mac's fleet credential from its own data directory.
+    /// Read this Mac's fleet credential from the Hub's own state directory.
     ///
     /// It is not fetched over HTTP: a Hub does not serve its credentials, so the app reads the
     /// file it already owns, through the same safe reader the readiness record uses.
+    ///
+    /// The Hub keeps its state under `hub/`, so this read used to look one level too high and
+    /// answer nil on every Mac - invisible while the token was only ever typed by hand, and fatal
+    /// the moment Connections had to hand it to a joining Mac.
     func readFleetToken() {
-        let url = configuration.dataDirectory.appendingPathComponent(".fleet_token")
-        guard let data = readPrivateRegularFile(url) else { fleetToken = nil; return }
+        let hubState = configuration.dataDirectory.appendingPathComponent("hub")
+        let candidates = [hubState.appendingPathComponent(".fleet_token"),
+                          configuration.dataDirectory.appendingPathComponent(".fleet_token")]
+        guard let url = candidates.first(where: { readPrivateRegularFile($0) != nil }),
+              let data = readPrivateRegularFile(url) else { fleetToken = nil; return }
         let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         fleetToken = value.isEmpty ? nil : value
     }

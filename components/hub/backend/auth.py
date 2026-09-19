@@ -425,6 +425,13 @@ FLEET_ALLOWED = (
     # Editing a saved voice changes metadata only - never the stored clip - and it is how an
     # operator fixes a transcript typo that would otherwise produce a wrong-sounding clone.
     ("PATCH", r"^/studio/(voice|subtitle|image|transcription)/api/[A-Za-z0-9_./-]*$"),
+    # Installing and removing a shared voice. This is fleet state rather than this Mac's own
+    # library: the voice is namespaced by an id the fleet minted, a node's own voice can never be
+    # overwritten (the receiver refuses an id that holds other audio, and refuses a local voice),
+    # and installing it is what makes "add a voice once, use it on a hundred nodes" possible. The
+    # gateway pushes to controllers only; the controller then installs it on the Macs it owns.
+    ("PUT", r"^/studio/voice/api/voices/[0-9a-f]{12}/fleet-sync$"),
+    ("DELETE", r"^/studio/voice/api/voices/[0-9a-f]{12}/fleet-sync$"),
     # Sending work to a node and calling it off is the whole point of a fleet credential, and
     # these are the only studio paths that do it. The worker's own settings, storage and model
     # routes are deliberately absent: they are reachable over the same proxy, so a blanket

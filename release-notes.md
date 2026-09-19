@@ -2,6 +2,30 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.3 — 2026-09-19
+
+### A voice added once can now be shared with every Mac in a group
+
+Adding a voice in the gateway can now put it on every Mac its controller owns, instead of copying
+the clip from machine to machine. The controller does the distributing; the gateway only ever talks
+to controllers, so it is one action per group rather than one per Mac.
+
+A shared voice carries its **timings** as well as its words. That matters more than it sounds: a
+long clip cannot be cloned without them, so a voice that arrived without them would look installed
+on a hundred Macs and then refuse to clone on every one. The push is refused instead, at the moment
+somebody can still fix it.
+
+Two things were broken on the way to a node, and both were found by pushing a real voice to a real
+joined Mac rather than by reading the code:
+
+- A controller was not allowed to install a voice on a node at all — the request was refused, so
+  nothing would ever have arrived.
+- **Connections shows two tokens again, and they are not interchangeable.** *Hub token* is this
+  Mac's own, for the gateway and your own tools. *Fleet token* is the one to give a Mac when it
+  joins. Handing a node the Hub token would give whoever owns that Mac full authority over the
+  controller; the Fleet token can send work and read results and nothing else. The join screen says
+  which one it asks for.
+
 ## 0.5.2 — 2026-09-19
 
 ### A group of Macs now survives a restart

@@ -3712,12 +3712,20 @@ class GenerationManager:
         transcript = str(params.get("ref_transcript") or "").strip()
         if not transcript:
             transcript = str(voices_module.library.transcript(voice_id) or "").strip()
+        # The timings stored with the voice travel with it. Without them a clip longer than the
+        # model's window is refused outright (`REFERENCE_TRANSCRIPT_ALIGNMENT_REQUIRED`), so a voice
+        # shared across the fleet - or one prepared here from a long clip - would install correctly
+        # and then fail to clone on every machine. `reference_audio` picks the window the transcript
+        # describes, which is the whole reason the alignment is required.
+        stored_segments = (voices_module.library.segments(voice_id)
+                           if hasattr(voices_module.library, "segments") else [])
         try:
             prepared = reference_audio.prepare(
                 audio_bytes=source_bytes,
                 filename=source_path.name,
                 model_id=repo,
                 transcript=transcript,
+                transcript_segments=stored_segments,
             )
         except reference_audio.ReferenceAudioError as exc:
             raise ValueError(exc.detail) from exc

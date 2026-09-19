@@ -353,3 +353,34 @@ class AudioBlockageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class FleetCredentialWiringTests(unittest.TestCase):
+    """Which token the app hands the operator. The two are not interchangeable.
+
+    A Mac that joins adopts the value it is given, and the controller then presents that same value
+    back to it. Handing over the Hub token would give every node's owner full authority over the
+    controller, so the screen has to offer the fleet token and the join form has to name it. Proved
+    against two real Hubs in `tests/test_standalone_connections.py`; pinned here so the screen cannot
+    quietly start offering the wrong one.
+    """
+
+    def test_the_connections_screen_offers_the_fleet_token_for_joining(self) -> None:
+        source = (NATIVE / "StudioViews.swift").read_text()
+        credential = source[source.index("private var hubCredential"):]
+        credential = credential[:credential.index("private var controllerSection")]
+        self.assertIn("studio.fleetToken", credential,
+                      "the credential offered for joining must be the fleet token")
+        self.assertIn("Copy Fleet Token", credential)
+        self.assertIn("studio.connectionToken", credential,
+                      "the Hub token stays visible: the gateway uses it")
+        join = source[source.index("private var joinController"):]
+        self.assertIn("Fleet token", join, "the join form must ask for the token it needs")
+
+    def test_the_fleet_credential_is_read_from_its_own_file(self) -> None:
+        """Two tokens means two files, and reading the wrong one is invisible until a node joins."""
+        hub = (NATIVE / "StudioHub.swift").read_text()
+        reader = hub[hub.index("func readFleetToken()"):]
+        reader = reader[:reader.index("func setListenHosts")]
+        self.assertIn('appendingPathComponent("hub")', reader,
+                      "the Hub keeps its state under hub/, so that is where its credential is")
+        self.assertIn('.appendingPathComponent(".fleet_token")', reader)

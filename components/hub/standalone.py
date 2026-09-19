@@ -22,7 +22,7 @@ from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, routing as routing_rule
-from .backend import transcription_jobs
+from .backend import shared_voices, transcription_jobs
 from .backend.monitor import StudioMonitor
 
 
@@ -147,13 +147,24 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 standalone_config.load_device_settings,
             )
             monitor.start()
+            # Mint the fleet credential at startup, rather than lazily on the first request that
+            # presents a foreign token. Connections offers this value to a Mac that joins, and a
+            # lazily minted one does not exist yet when the app reads the file - so the operator
+            # saw "Unavailable" on the one screen that has to hand it out.
+            from .backend import peers as peer_credentials
+            peer_credentials.fleet_token()
             broker.start_dispatcher()
             transcription_jobs.start_dispatcher(monitor)
+            # A shared voice has to survive a node being off, so the reconciler is what retries it.
+            # The module was complete and nothing started it, which is the same shape of miss as a
+            # route with no caller: the machinery existed and no voice could ever move.
+            shared_voices.start_reconciler(monitor)
             await control_plane.runtime.start(monitor, _app_version())
         try:
             yield
         finally:
             if start_background:
+                await shared_voices.stop()
                 await broker.stop_dispatcher()
                 await transcription_jobs.stop()
                 await control_plane.runtime.stop()
@@ -586,6 +597,127 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown model package") from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/hub/shared-voices")
+    def shared_voice_list() -> dict[str, Any]:
+        """What this controller holds and how far each voice has reached its nodes.
+
+        The push is to six controllers, not a hundred Macs: the gateway never talks to a node. This
+        is the read that lets it report what actually happened per location instead of assuming.
+        """
+        return {"voices": shared_voices.list_voices(monitor),
+                "deletions": shared_voices.list_deletions(monitor),
+                "targets": shared_voices.targets(monitor)}
+
+    @app.post("/api/hub/shared-voices", status_code=201)
+    async def shared_voice_push(
+        request: Request,
+        response: Response,
+        audio: UploadFile = File(...),
+        name: str = Form(...),
+        language: str = Form(...),
+        gender: str = Form(...),
+        license: str = Form(...),
+        notes: str = Form(""),
+        source_url: str = Form(""),
+        transcript: str = Form(""),
+        transcript_segments: str = Form(""),
+        voice_id: str = Form(""),
+        permission_acknowledged: bool = Form(False),
+    ) -> dict[str, Any]:
+        """Create or refresh one fleet-wide voice, then fan it out to every joined node.
+
+        The id may be supplied or left to the Hub: a caller that already names a clip by its own
+        content hash can send that (12 lowercase hex) and the same voice then carries one id on
+        every controller, which is easier to reconcile than six. A caller that does not gets one.
+        Either way the bytes decide identity - identical audio refreshes the voice already holding
+        it rather than adding a second copy, and answers 200 instead of 201.
+
+        ``?wait=true`` runs one fan-out pass before answering, for a caller that wants to report per
+        location from this response; without it the reconciler finishes the job and retries whatever
+        a node was not ready for. It is read from the query string rather than the multipart body,
+        so a caller does not have to mix a control flag into the voice's own fields.
+        """
+        try:
+            audio_bytes = await audio.read()
+        except Exception as exc:
+            raise HTTPException(400, {"code": "SHARED_VOICE_AUDIO_UNREADABLE",
+                                      "detail": f"The uploaded reference could not be read: {exc}"}) from exc
+        finally:
+            await audio.close()
+        segments: object = []
+        if transcript_segments.strip():
+            try:
+                segments = json.loads(transcript_segments)
+            except ValueError as exc:
+                raise HTTPException(400, {
+                    "code": "SHARED_VOICE_SEGMENTS_INVALID",
+                    "detail": "transcript_segments must be a JSON array of ordered segments.",
+                }) from exc
+        try:
+            voice, created = shared_voices.upsert(
+                audio_bytes=audio_bytes, filename=audio.filename or "reference.wav",
+                name=name, language=language, gender=gender, license=license,
+                notes=notes, source_url=source_url or None,
+                transcript=transcript or None, transcript_segments=segments,
+                permission_acknowledged=permission_acknowledged,
+                voice_id=voice_id.strip() or None,
+            )
+        except shared_voices.SharedVoiceConflict as exc:
+            raise HTTPException(409, {"code": "SHARED_VOICE_CONFLICT", "detail": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(400, {"code": "SHARED_VOICE_REFUSED", "detail": str(exc)}) from exc
+        wait = str(request.query_params.get("wait", "")).strip().lower() in {"1", "true", "yes"}
+        if wait:
+            await shared_voices.sync_voice(monitor, voice["id"])
+        else:
+            shared_voices.start_sync(monitor, voice["id"])
+        if not created:
+            # A refresh changed nothing about the bytes, so "already there" is a 200. A caller
+            # reporting per location should not read that as a new voice.
+            response.status_code = 200
+        return {"voice": shared_voices.serialize(shared_voices.get(voice["id"]) or voice, monitor),
+                "created": created,
+                "status": "created" if created else "refreshed"}
+
+    @app.get("/api/hub/shared-voices/{voice_id}")
+    def shared_voice_read(voice_id: str) -> dict[str, Any]:
+        voice = shared_voices.get(voice_id)
+        if not voice:
+            raise HTTPException(404, "unknown shared voice")
+        return {"voice": shared_voices.serialize(voice, monitor)}
+
+    @app.get("/api/hub/shared-voices/{voice_id}/audio")
+    def shared_voice_audio(voice_id: str) -> FileResponse:
+        path = shared_voices.audio_path(voice_id)
+        if path is None:
+            raise HTTPException(404, "unknown shared voice audio")
+        return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+    @app.delete("/api/hub/shared-voices/{voice_id}")
+    async def shared_voice_delete(voice_id: str) -> dict[str, Any]:
+        """Tombstone one voice across the fleet: a removal on six controllers, not a hundred Macs.
+
+        Awaited rather than queued: a caller removing a voice wants to know whether it came off the
+        nodes, and the per-node work is already parallel with a short timeout.
+        """
+        try:
+            shared_voices.prepare_delete(voice_id)
+        except KeyError as exc:
+            raise HTTPException(404, "unknown shared voice") from exc
+        except shared_voices.SharedVoiceConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"deletion": await shared_voices.delete_voice(monitor, voice_id)}
+
+    @app.post("/api/hub/shared-voices/{voice_id}/sync")
+    async def shared_voice_sync(voice_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Ask again now, for a node that was off during the push."""
+        voice = shared_voices.get(voice_id)
+        if not voice:
+            raise HTTPException(404, "unknown shared voice")
+        targets = (body or {}).get("studio_ids")
+        target_ids = {str(value) for value in targets} if isinstance(targets, list) else None
+        return {"voice": await shared_voices.sync_voice(monitor, voice_id, target_ids)}
 
     @app.post("/api/hub/jobs")
     def submit_jobs(envelope: dict[str, Any]) -> dict[str, Any]:

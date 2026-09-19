@@ -95,13 +95,15 @@ never runs on the old group's credential. Its nodes then re-register with the ne
 ### Setting up a group
 
 1. On the controller: **Connections** → turn on the network address a node will use → restart the
-   services → **Hub token → Copy**, and note the address and port shown there (**47873** unless it
-   was changed).
+   services → **Copy Fleet Token**, and note the address and port shown there (**47873** unless it
+   was changed). Give a node the **Fleet token**, never the **Hub token**: the Hub token is full
+   authority over the controller, and the Fleet token is the narrow credential this arrangement
+   rests on.
 2. On each node: turn on one of its own network addresses the same way and restart the services. A
    node must be reachable, or the controller can never send it work; the Join form refuses and says
    so if it is not.
-3. Then **Connections → Join** on the node with the controller's `address:port` and that token. The
-   node registers and takes the token on. The controller should then list it as reachable.
+3. Then **Connections → Join** on the node with the controller's `address:port` and the Fleet
+   token. The node registers and takes that token on. The controller should then list it as reachable.
 4. Nothing else to remember: a node keeps the controller's address and re-joins by itself every
    time its services start. Only if the controller's address genuinely changes - a new network, or
    a different port because 47873 was already taken on that Mac - press Join again on each node.

@@ -808,6 +808,10 @@ class StubVoiceWorker:
         self.raw_bodies: list[str] = []
         # The clip bytes this worker stored, keyed by voice id.
         self.voice_audio: dict[str, bytes] = {}
+        # Voices installed by a controller's shared-voice fan-out, with the timings they carried.
+        self.fleet_syncs: list[dict] = []
+        # A worker that ignores the timings field, to prove the controller notices.
+        self.drop_timings = False
         outer = self
 
         def voice_payload() -> dict:
@@ -930,6 +934,59 @@ class StubVoiceWorker:
                 else:
                     self._send(200, {"ok": True})
 
+            def do_PUT(self):
+                """A controller installing one shared voice: the receive end of the fan-out."""
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                outer.seen.append(self.path)
+                if "/fleet-sync" not in self.path:
+                    self._send(404, {"detail": "not found"})
+                    return
+                body = raw.decode("utf-8", "replace")
+                identifier = self.path.split("/api/voices/", 1)[1].split("/", 1)[0]
+
+                def field(name: str) -> str:
+                    marker = f'name="{name}"'
+                    if marker not in body:
+                        return ""
+                    after = body.split(marker, 1)[1]
+                    return after.split("\r\n\r\n", 1)[-1].split("\r\n--", 1)[0].strip()
+
+                clip = b""
+                if b'filename="' in raw:
+                    head = raw.split(b'filename="', 1)[1]
+                    if b"\r\n\r\n" in head:
+                        clip = head.split(b"\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0]
+                segments = json.loads(field("transcript_segments_json") or "[]")
+                transcript = field("transcript")
+                sha = field("audio_sha256")
+                outer.fleet_syncs.append({
+                    "id": identifier, "sha256": sha, "segments": segments,
+                    "transcript": transcript, "name": field("name"),
+                    "clip": clip or VOICE_WAV,
+                })
+                row = {
+                    "id": identifier, "name": field("name"), "language": field("language"),
+                    "gender": field("gender"), "notes": "", "license": field("license"),
+                    "source_url": None, "permission_acknowledged": True,
+                    "has_transcript": bool(transcript), "transcript": transcript,
+                    "audio_extension": ".wav", "duration_seconds": 1.0,
+                    "sample_rate": 16000, "channels": 1, "fleet_managed": True,
+                    "audio_sha256": sha, "created_at": time.time(),
+                    "audio_url": f"/api/voices/{identifier}/audio",
+                    "audio_filename": "reference.wav",
+                }
+                outer.voices[identifier] = row
+                outer.voice_audio[identifier] = clip or VOICE_WAV
+                # The count is answered back on purpose: a node that silently drops the timings
+                # accepts the voice and cannot clone with it, and only this number catches that.
+                stored = 0 if outer.drop_timings else len(segments)
+                previous = outer.fleet_syncs[-1] if len(outer.fleet_syncs) > 1 else None
+                unchanged = previous is not None and previous["sha256"] == sha
+                self._send(200, {"voice": row, "sync": {
+                    "status": "current" if unchanged else "created",
+                    "sha256": sha, "segments": stored}})
+
             def do_PATCH(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length)
@@ -950,14 +1007,21 @@ class StubVoiceWorker:
 
             def do_DELETE(self):
                 outer.seen.append(self.path)
-                identifier = self.path.rsplit("/", 1)[-1]
+                # The removal carries the expected hash as a query string, and the identifier has
+                # to be read from the path without it.
+                path, _, query = self.path.partition("?")
+                identifier = path.split("/api/voices/", 1)[1].split("/", 1)[0]
+                expected = urllib.parse.parse_qs(query).get("audio_sha256", [""])[0]
                 outer.voice_deletes.append(identifier)
                 removed = outer.voices.pop(identifier, None)
                 outer.voice_audio.pop(identifier, None)
                 if removed is None:
-                    self._send(404, {"detail": "not found"})
+                    self._send(404, {"detail": f"managed voice {identifier} not found"})
                 else:
-                    self._send(200, {"deleted": True})
+                    # The real worker answers with the id and the hash it removed, and the
+                    # controller verifies both rather than trusting a 200.
+                    self._send(200, {"deleted": identifier,
+                                     "sha256": expected or removed.get("audio_sha256")})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -1268,6 +1332,185 @@ class FleetVoiceDispatchTests(unittest.TestCase):
             return f"(unreadable: {status})"
         return (f"note={payload.get('governor_note')!r} "
                 f"items={payload.get('items')!r}")
+
+
+class FleetSharedVoiceTests(unittest.TestCase):
+    """Adding a voice once has to put it on every Mac the controller owns.
+
+    The owner asked for exactly this: fifty to a hundred nodes, no hand-copying, a default-on
+    toggle in the gateway. The gateway talks only to controllers, so this fan-out is the Hub's
+    half - and the failure that matters is not a push that fails, it is a push that succeeds
+    everywhere and produces a voice that cannot clone on any of them.
+    """
+
+    TRANSCRIPT = "A short line that was transcribed."
+    SEGMENTS = [{"start_seconds": 0.0, "end_seconds": 1.4, "text": "A short line"},
+                {"start_seconds": 1.4, "end_seconds": 3.1, "text": "that was transcribed."}]
+
+    def _fleet(self):
+        worker = StubVoiceWorker(machine="node-a")
+        self.addCleanup(worker.stop)
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-shared-voice-")
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-shared-token-0123456789ab",
+                          workers=[{"id": "voice", "modality": "voice", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        controller_worker = StubVoiceWorker()
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-shared-token-0123456789",
+            workers=[{"id": "voice", "modality": "voice", "port": controller_worker.port}],
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "voice", "modality": "voice"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        # Adopting the credential the app hands the operator: the controller's FLEET token, not its
+        # Hub token. The distinction is the whole point - it is the value the controller presents
+        # back to this Mac, and it is narrow, so a node's owner cannot administer the controller.
+        controller_fleet = (controller.data / ".fleet_token").read_text().strip()
+        self.assertNotEqual(controller_fleet, controller.token,
+                            "the credential a node adopts must not be the controller's own token")
+        status, adopted, _ = node.post_json("/api/hub/fleet/adopt",
+                                            {"token": controller_fleet}, token=node.token)
+        self.assertEqual(status, 200, adopted)
+        # A node that has registered is not yet a node the controller will push to: the peer
+        # status poll has to see it first, or the fan-out correctly reports it as offline.
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            status, listing, _ = controller.request("/api/hub/shared-voices", token=controller.token)
+            if status == 200 and any(row["machine"] == "node-a" and row["reachable"]
+                                     for row in listing.get("targets", [])):
+                break
+            time.sleep(0.5)
+        else:
+            self.fail("the controller never saw the joined node as reachable")
+        return worker, controller_worker, controller
+
+    @staticmethod
+    def _push(hub, *, audio=VOICE_WAV, transcript=TRANSCRIPT, segments=SEGMENTS,
+              voice_id="", wait="true"):
+        digest = sha256(audio).hexdigest()
+        segments = [] if segments is None else segments
+        return hub.post_multipart(
+            f"/api/hub/shared-voices?wait={wait}",
+            {"name": "Todd", "language": "en", "gender": "m", "license": "self-owned",
+             "transcript": transcript, "transcript_segments": json.dumps(segments),
+             "voice_id": voice_id or digest[:12], "permission_acknowledged": "true"},
+            {"audio": ("reference.wav", audio, "audio/wav")}, token=hub.token)
+
+    def test_a_pushed_voice_arrives_on_the_node_with_its_timings(self) -> None:
+        worker, controller_worker, controller = self._fleet()
+        expected_id = sha256(VOICE_WAV).hexdigest()[:12]
+
+        status, pushed, _ = self._push(controller)
+        self.assertEqual(status, 201, pushed)
+        self.assertEqual(pushed["status"], "created")
+        self.assertEqual(pushed["voice"]["id"], expected_id,
+                         "a caller that names the clip by its hash keeps that id")
+        self.assertTrue(pushed["voice"]["has_segments"])
+        self.assertEqual(pushed["voice"]["segment_count"], 2)
+        self.assertNotIn("transcript_segments", pushed["voice"],
+                         "status reads must not carry every voice's timings")
+
+        # The node's own Voice studio got the clip, the transcript and the timings.
+        self.assertEqual(len(worker.fleet_syncs), 1, f"node saw: {worker.seen[:8]}")
+        delivered = worker.fleet_syncs[0]
+        self.assertEqual(delivered["id"], expected_id)
+        self.assertEqual(delivered["segments"], self.SEGMENTS)
+        self.assertEqual(delivered["transcript"], self.TRANSCRIPT)
+        self.assertEqual(delivered["clip"], VOICE_WAV)
+        # And the controller's own studio got it too: the fleet includes the Mac you are on.
+        self.assertEqual(len(controller_worker.fleet_syncs), 1)
+
+        # Every target is reported, which is what lets the gateway tell the truth per location.
+        by_machine = {row["machine"]: row for row in pushed["voice"]["targets"]}
+        self.assertEqual(sorted(by_machine), ["local", "node-a"])
+        self.assertEqual(by_machine["node-a"]["status"], "synced")
+        self.assertEqual(by_machine["node-a"]["segments"], 2)
+
+    def test_re_pushing_the_same_clip_refreshes_it_rather_than_adding_one(self) -> None:
+        worker, _controller_worker, controller = self._fleet()
+        first_status, first, _ = self._push(controller)
+        second_status, second, _ = self._push(controller)
+        self.assertEqual(first_status, 201, first)
+        self.assertEqual(second_status, 200, second)
+        self.assertFalse(second["created"])
+        self.assertEqual(second["voice"]["id"], first["voice"]["id"])
+        status, listing, _ = controller.request("/api/hub/shared-voices", token=controller.token)
+        self.assertEqual(status, 200, listing)
+        self.assertEqual(len(listing["voices"]), 1, "a re-push must not fork the voice")
+        # The node is told again - that is how a node that missed the first push catches up - and
+        # the install is idempotent, so the same id and bytes come back as "current".
+        self.assertEqual([row["remote_action"] for row in second["voice"]["targets"]
+                          if row["machine"] == "node-a"], ["current"])
+
+    def test_a_transcript_without_timings_is_refused_before_it_reaches_a_node(self) -> None:
+        """The whole point: a voice that would install everywhere and clone nowhere is not stored."""
+        worker, _controller_worker, controller = self._fleet()
+        status, refused, _ = self._push(controller, segments=None)
+        self.assertEqual(status, 400, refused)
+        self.assertIn("transcript_segments", json.dumps(refused))
+        self.assertEqual(worker.fleet_syncs, [], "nothing may be pushed")
+        status, listing, _ = controller.request("/api/hub/shared-voices", token=controller.token)
+        self.assertEqual(listing["voices"], [])
+
+    def test_removing_a_voice_tombstones_it_across_the_fleet(self) -> None:
+        worker, controller_worker, controller = self._fleet()
+        _status, pushed, _ = self._push(controller)
+        voice_id = pushed["voice"]["id"]
+
+        status, deleted, _ = controller.request(f"/api/hub/shared-voices/{voice_id}",
+                                                method="DELETE", token=controller.token)
+        self.assertEqual(status, 200, deleted)
+        self.assertEqual(deleted["deletion"]["id"], voice_id)
+        self.assertEqual(deleted["deletion"]["sync"]["deleted"], 2,
+                         "both the controller's own studio and the node must drop it")
+        self.assertEqual(worker.voice_deletes, [voice_id])
+        self.assertEqual(controller_worker.voice_deletes, [voice_id])
+        status, listing, _ = controller.request("/api/hub/shared-voices", token=controller.token)
+        self.assertEqual(listing["voices"], [], "the voice itself is gone")
+        # A finished removal is not an outstanding one, so the listing has nothing left to report.
+        self.assertEqual(listing["deletions"], [])
+
+    def test_a_node_that_drops_the_timings_is_reported_as_a_failure(self) -> None:
+        """A node that answers 200 after losing the timings must not read as synchronized.
+
+        Nothing else catches this shape: the clip and the transcript are both there, the node is
+        healthy, and the refusal only appears when somebody tries to clone with that voice.
+        """
+        worker, _controller_worker, controller = self._fleet()
+        # The exact behaviour of a worker that ignores the field: it accepts the voice, keeps the
+        # clip and the transcript, and reports that it stored no timings.
+        worker.drop_timings = True
+        status, pushed, _ = self._push(controller)
+        self.assertEqual(status, 201, pushed)
+        by_machine = {row["machine"]: row for row in pushed["voice"]["targets"]}
+        self.assertEqual(by_machine["node-a"]["status"], "failed")
+        self.assertIn("timings", by_machine["node-a"]["message"])
+        self.assertEqual(worker.fleet_syncs[0]["segments"], self.SEGMENTS,
+                         "the controller sent them; the node is what dropped them")
+
+    def test_a_credential_this_controller_does_not_know_is_refused(self) -> None:
+        """Pushing a voice is fleet administration, and only a credential this Mac issued may do it.
+
+        Note what this does *not* claim: with one token per controller - the owner's decision - a
+        node holds the same value the controller shows, so a node's owner can administer the
+        controller. The allowlist narrows what the controller may do to a node, not the reverse.
+        """
+        _worker, _controller_worker, controller = self._fleet()
+        digest = sha256(VOICE_WAV).hexdigest()
+        status, refused, _ = controller.post_multipart(
+            "/api/hub/shared-voices",
+            {"name": "Todd", "language": "en", "gender": "m", "license": "self-owned",
+             "transcript": self.TRANSCRIPT, "transcript_segments": json.dumps(self.SEGMENTS),
+             "voice_id": digest[:12], "permission_acknowledged": "true"},
+            {"audio": ("reference.wav", VOICE_WAV, "audio/wav")},
+            token="a-credential-this-mac-never-issued-0123456789")
+        self.assertIn(status, (401, 403), refused)
 
 
 class FleetNodeDeathTests(unittest.TestCase):

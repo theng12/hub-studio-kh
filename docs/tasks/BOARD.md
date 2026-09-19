@@ -25,6 +25,26 @@ are current; the longer narrative under it is historical and is kept for provena
   page is tabbed with All plus one tab per studio. See ST-08.HISTORY.
 - **DONE:** ST-00 planning · ST-01 runtime/model contracts · ST-02 bundled Hub ·
   ST-07 output storage · ST-09 startup/recovery.
+- **Shared voices: one push per controller, installed on its nodes (`a914d82` + the fleet-token
+  read, 0.5.3, 2026-09-19).** The gateway asked for a door to create/update/delete a voice on a
+  controller, with the controller fanning out to its own nodes, and for two decisions. Both are
+  answered and built: `POST/GET/DELETE /api/hub/shared-voices` (+ `/{id}`, `/audio`, `/{id}/sync`),
+  the reconciler is started, and `shared_voices` - complete and uncalled - is now wired. The caller
+  may keep its content-hash id (one id across all six controllers, bytes decide identity, re-push
+  refreshes rather than forks, conflicting id is a 409). **Timings are required with a transcript**:
+  a transcript without aligned segments installs everywhere and then refuses to clone on the models
+  that need them, so it is refused at the door, carried in the fan-out, stored by the receiver, and
+  its stored count is checked before a target reads `synced`. The 1.7B Qwen reference path now
+  passes those segments into `reference_audio.prepare` - otherwise storing them was decorative, and
+  a locally prepared voice had the same gap. **Two blockers, both found by pushing a real voice to a
+  real joined node:** the fleet credential was not allowed on the `fleet-sync` receiver at all (403,
+  so nothing could ever arrive), and Connections offered the **Hub** token for joining while
+  `fleet_nodes` presents the **fleet** token - a Mac that joined correctly would have answered 401 to
+  its own controller. The one-token "fix" for the second was caught by two suite tests and reverted:
+  it hands full controller authority to every node. The screen now shows both tokens, and the app
+  reads the fleet credential from the Hub's own `hub/` state dir (it looked one level too high and
+  answered nil on every Mac). Evidence: `tests/test_shared_voices.py` (17) and
+  `FleetSharedVoiceTests` (6, two real Hubs).
 - **A restart no longer breaks a group (`6588a34` + this, 0.5.2, 2026-09-19).** The Hub took its
   port from the operating system on every start, so both directions of a join were perishable: a
   node's stored controller address died when the controller restarted, and the controller's stored

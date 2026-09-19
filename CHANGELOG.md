@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.3 — 2026-09-19 · shared voices reach a node, measured rather than assumed
+
+- **The Hub's shared-voice door exists.** `POST /api/hub/shared-voices` (create or refresh, then fan
+  out), `GET /api/hub/shared-voices` (what is stored and how far each voice has reached),
+  `GET /api/hub/shared-voices/{id}` and `/audio`, `POST /{id}/sync`, `DELETE /{id}` (tombstone, then
+  remove on every node, awaited). `shared_voices` was complete with nothing calling it, and nothing
+  started its reconciler either; both are wired now. `?wait=true` runs one fan-out pass before the
+  answer, for a caller reporting per location.
+- **The id may be the caller's.** A gateway that names a clip by its own content hash
+  (`audio_sha256[:12]`) keeps that id, so the same bytes carry one id on all six controllers; the
+  bytes decide identity, so a re-push refreshes that voice (200) rather than adding a copy, and an
+  id already holding other audio is a 409. Without a `voice_id` the Hub mints one.
+- **Timings are required with a transcript.** `PUT /api/voices/{id}/fleet-sync` takes
+  `transcript_segments_json` and answers the count it stored, and the fan-out compares that count
+  with what it sent: a node that drops them is `failed`, not `synchronized`. The 1.7B Qwen reference
+  path passes the stored segments into `reference_audio.prepare`, which is what makes storing them
+  anything other than decorative - it had the same gap for a voice prepared locally from a long clip.
+- **Two blockers found by pushing a real voice to a real joined node:**
+  - `PUT /studio/voice/api/voices/{id}/fleet-sync` was not on the fleet allowlist, so every install
+    on a node answered 403 and nothing could ever reach a second Mac. Added narrowly, beside the
+    voice `PATCH` it belongs with.
+  - The Connections screen offered the **Hub** token for joining while `fleet_nodes` presents the
+    **fleet** token to nodes: a Mac that joined correctly would have answered 401 to the controller
+    it had just joined. I first "fixed" this by making a controller's fleet credential its Hub token;
+    two tests in the suite caught it and it was the wrong answer - it hands full authority over a
+    controller to every node it owns. Reverted: the screen offers the Fleet token, the join text and
+    the kit say so, and the live fleet tests adopt the fleet token for the same reason.
+- Tests: `tests/test_shared_voices.py` (17, unit) and `FleetSharedVoiceTests` (6, two real Hubs) -
+  the timings travelling, a re-push not forking, a transcript without timings refused, removal
+  tombstoned across controller and node, a node that drops the timings reported failed, and an
+  unknown credential refused. 412 tests, 5 skips.
+
 ## 0.5.2 — 2026-09-19 · a restart no longer breaks the group
 
 - **Pin the Hub's port.** `packaging/hub_worker.py` takes `--port` and the app never passed one, so

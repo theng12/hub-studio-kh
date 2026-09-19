@@ -1524,7 +1524,7 @@ struct StudioContent: View {
             HStack {
                 Button(revealedToken ? "Hide Token" : "Reveal Token") { revealedToken.toggle() }
                     .disabled(studio.connectionToken == nil)
-                Button("Copy Token") {
+                Button("Copy Hub Token") {
                     if let token = studio.connectionToken {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(token, forType: .string)
@@ -1533,10 +1533,31 @@ struct StudioContent: View {
                 }.disabled(studio.connectionToken == nil)
                 if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
             }
-            Text("This Mac's token. Use it here, give it to the gateway so it can reach this Hub, and give it to a node so it can register with this Mac as its controller. One token covers all three.")
+            Text("This Mac's own token. Use it here, or give it to the gateway so it can reach this Hub and manage what is shared from it.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("Anyone who holds it can send work to this Mac. Keep it private, and share it only with a controller or the gateway you run.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).fixedSize(horizontal: false, vertical: true)
+            // Two values, and the difference is the safety property: this one is what a joining Mac
+            // adopts and what this Mac then presents back to it. Handing a node the Hub token
+            // instead would give every node's owner full authority over this Mac.
+            Divider()
+            LabeledContent("Fleet token") {
+                Text(revealedToken ? (studio.fleetToken ?? "Unavailable")
+                                   : (studio.fleetToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
+                    .textSelection(.enabled).multilineTextAlignment(.trailing)
+                    .font(.system(.body, design: .monospaced))
+            }
+            HStack {
+                Button("Copy Fleet Token") {
+                    if let token = studio.fleetToken {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(token, forType: .string)
+                        connectionNote = "Fleet token copied"
+                    }
+                }.disabled(studio.fleetToken == nil)
+                Text("Give this one to each Mac that joins this controller.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("It lets this controller send work to a Mac and read the results. It cannot change a Mac's settings, delete its output or manage its models — and a node that holds it cannot administer this Mac.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1792,7 +1813,7 @@ struct StudioContent: View {
     @ViewBuilder private var joinController: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Join a controller").font(.headline)
-            Text("Enter the controller's address and its token, from Connections on that Mac. This Mac registers with it, takes on its token, and the controller then reports whether this Mac is reachable.")
+            Text("Enter the controller's address and its Fleet token, from Connections on that Mac. This Mac registers with it, takes that token on, and the controller then reports whether this Mac is reachable.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 TextField("192.168.1.21:8080 or 100.x.y.z:8080", text: $controllerDraft)

@@ -37,6 +37,30 @@ VOICES_DIR = paths.data_path("voices")
 METADATA_FILENAME = "metadata.json"
 REFERENCE_BASENAME = "reference"            # actual file: reference.<ext>
 TRANSCRIPT_FILENAME = "transcript.txt"
+# Aligned transcript timings beside the transcript. The kit ships a file of this name with a
+# reference clip and the app reads it, so a voice stores its timings the same way however it
+# arrived: by hand, from the kit, or pushed from a controller.
+TIMED_FILENAME = "transcript.timed.json"
+
+
+def _clean_segments(value: object) -> list[dict]:
+    """Keep the segments a cloning model can actually use, in the shape it is given them."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            start = float(raw.get("start_seconds", raw.get("start")))
+            end = float(raw.get("end_seconds", raw.get("end")))
+        except (TypeError, ValueError):
+            continue
+        text = str(raw.get("text") or "").strip()
+        if not text or end <= start or start < 0:
+            continue
+        result.append({"start_seconds": start, "end_seconds": end, "text": text})
+    return result
 
 # Audio formats we accept on upload. soundfile reads everything except mp3
 # (which still uploads/plays/saves fine, we just can't probe its metadata).
@@ -253,6 +277,7 @@ class VoiceLibrary:
         notes: str = "",
         source_url: Optional[str] = None,
         transcript: Optional[str] = None,
+        transcript_segments: object = None,
         permission_acknowledged: bool = False,
     ) -> tuple[Voice, str]:
         """Install or refresh one Hub-owned voice under a stable fleet ID.
@@ -260,6 +285,10 @@ class VoiceLibrary:
         Audio is immutable once an ID exists. Repeating the same request is
         idempotent and may refresh metadata/transcript, while an ID or hash
         collision is refused so a local voice can never be overwritten.
+
+        The aligned timings arrive with the transcript and are stored beside it. A voice installed
+        without them is a voice that fails to clone on the models that need the alignment, and that
+        failure would appear on each node, one at a time, long after the push looked successful.
         """
         if not re.fullmatch(r"[0-9a-f]{12}", voice_id or ""):
             raise ValueError("voice_id must be exactly 12 lowercase hex characters")
@@ -279,6 +308,7 @@ class VoiceLibrary:
         )
         ext = Path(original_filename).suffix.lower()
         cleaned_transcript = (transcript or "").strip()
+        cleaned_segments = _clean_segments(transcript_segments)
 
         with self._lock:
             VOICES_DIR.mkdir(parents=True, exist_ok=True)
@@ -330,9 +360,22 @@ class VoiceLibrary:
                     transcript_path.write_text(cleaned_transcript, encoding="utf-8")
                 elif transcript_path.exists():
                     transcript_path.unlink()
+                timed_path = target / TIMED_FILENAME
+                if timed_path.is_symlink():
+                    raise FleetVoiceConflict("managed transcript timing path is unsafe")
+                previous_segments = self.segments(voice_id)
+                if cleaned_segments:
+                    timed_path.write_text(json.dumps(
+                        {"transcript": cleaned_transcript, "segments": cleaned_segments},
+                        indent=2), encoding="utf-8")
+                elif timed_path.exists():
+                    # A voice whose transcript was cleared must not keep timings that describe a
+                    # transcript nobody has any more.
+                    timed_path.unlink()
                 changed = (
                     asdict(updated) != asdict(current)
                     or previous_transcript != cleaned_transcript
+                    or previous_segments != cleaned_segments
                 )
                 (target / METADATA_FILENAME).write_text(
                     json.dumps(asdict(updated), indent=2, default=str), encoding="utf-8"
@@ -349,6 +392,10 @@ class VoiceLibrary:
                     (temporary / TRANSCRIPT_FILENAME).write_text(
                         cleaned_transcript, encoding="utf-8"
                     )
+                if cleaned_segments:
+                    (temporary / TIMED_FILENAME).write_text(json.dumps(
+                        {"transcript": cleaned_transcript, "segments": cleaned_segments},
+                        indent=2), encoding="utf-8")
                 voice = Voice(
                     id=voice_id,
                     name=name.strip(),
@@ -560,6 +607,26 @@ class VoiceLibrary:
             return p.read_text()
         except OSError:
             return None
+
+    def segments(self, voice_id: str) -> list[dict]:
+        """The aligned timings stored beside this voice's transcript, if it has any.
+
+        Same file and shape as the kit ships beside a reference clip and the app reads
+        (`transcript.timed.json`), so a voice's timings do not depend on how it got here. A
+        reference longer than the model's window cannot be cloned without them: the model has to be
+        told which window of the clip the transcript describes.
+        """
+        if not voice_id:
+            return []
+        path = VOICES_DIR / voice_id / TIMED_FILENAME
+        if path.is_symlink() or not path.is_file():
+            return []
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return []
+        raw = value.get("segments") if isinstance(value, dict) else value
+        return _clean_segments(raw)
 
     # ── internals ──────────────────────────────────────────────────
 

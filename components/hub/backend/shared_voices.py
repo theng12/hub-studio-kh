@@ -21,11 +21,13 @@ from .registry import DATA_DIR
 ROOT = DATA_DIR / "shared_voices"
 METADATA = "metadata.json"
 TRANSCRIPT = "transcript.txt"
+SEGMENTS = "segments.json"
 SYNC_STATE = "sync.json"
 REFERENCE = "reference"
 TOMBSTONES = ".deleted"
 MAX_BYTES = 25_000_000
 MAX_TRANSCRIPT_CHARS = 200_000
+MAX_SEGMENTS = 20_000
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
 ALLOWED_LICENSES = {"self-owned", "public-domain", "permission", "unknown"}
 ALLOWED_GENDERS = {"m", "f", "n"}
@@ -66,10 +68,45 @@ def _read_json(path: Path, default: dict | None = None) -> dict:
         return default or {}
 
 
+def _segments(value: object) -> list[dict]:
+    """Normalise the aligned transcript a cloning model needs for a long reference.
+
+    Qwen3-Base refuses a reference longer than the model's window unless the request carries
+    timestamped segments: it has to choose which window of the clip the transcript describes. The
+    Hub cannot know the clip length against every model a node might use, so a transcript and the
+    segments it belongs to travel together - see `_validate`.
+    """
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("transcript_segments must be a list of {start_seconds, end_seconds, text}")
+    if len(value) > MAX_SEGMENTS:
+        raise ValueError(f"transcript_segments may hold at most {MAX_SEGMENTS} entries")
+    segments: list[dict] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ValueError(f"transcript_segments[{index}] must be an object")
+        try:
+            start = float(raw.get("start_seconds"))
+            end = float(raw.get("end_seconds"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"transcript_segments[{index}] needs numeric start_seconds and end_seconds") from exc
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            raise ValueError(f"transcript_segments[{index}] has no text")
+        if end <= start:
+            raise ValueError(f"transcript_segments[{index}] ends before it starts")
+        if start < 0:
+            raise ValueError(f"transcript_segments[{index}] starts before zero")
+        segments.append({"start_seconds": start, "end_seconds": end, "text": text})
+    return segments
+
+
 def _validate(
     *, audio_bytes: bytes | None, filename: str | None, name: str,
     language: str, gender: str, license: str, source_url: str | None,
-    transcript: str | None, permission_acknowledged: bool,
+    transcript: str | None, transcript_segments: object = None,
+    permission_acknowledged: bool,
 ) -> str | None:
     if not name or not name.strip() or len(name.strip()) > 200:
         raise ValueError("name is required and must be at most 200 characters")
@@ -83,6 +120,16 @@ def _validate(
         raise ValueError("confirm that you have permission to clone and distribute this voice")
     if len(transcript or "") > MAX_TRANSCRIPT_CHARS:
         raise ValueError("transcript is too long")
+    # A transcript without its timings is the one shape that must never be stored: it installs on
+    # every node and then fails to clone on the models that need the alignment, which looks like a
+    # successful sync. Refusing it here names the missing field on the push that caused it.
+    segments = _segments(transcript_segments)
+    if (transcript or "").strip() and not segments:
+        raise ValueError(
+            "transcript_segments are required with a transcript: a reference longer than the "
+            "model's window cannot be cloned without them, and the failure would only appear on "
+            "each node at generation time"
+        )
     if source_url:
         parsed = urlparse(source_url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -113,7 +160,30 @@ def _load(voice_id: str) -> dict | None:
         if (directory / TRANSCRIPT).is_file() and not (directory / TRANSCRIPT).is_symlink()
         else ""
     )
+    metadata["transcript_segments"] = _read_json(directory / SEGMENTS, {"segments": []}).get("segments") or []
     return metadata
+
+
+def get(voice_id: str) -> dict | None:
+    """One shared voice as stored, or None. The id is the Hub's, never the caller's."""
+    try:
+        return _load(voice_id)
+    except ValueError:
+        return None
+
+
+def find_by_audio_sha256(digest: str) -> dict | None:
+    """The voice already holding these exact bytes, if there is one."""
+    directory = ROOT
+    if not directory.is_dir() or directory.is_symlink():
+        return None
+    for child in directory.iterdir():
+        if child.name.startswith(".") or not child.is_dir() or child.is_symlink():
+            continue
+        voice = _load(child.name)
+        if voice and voice.get("audio_sha256") == digest:
+            return voice
+    return None
 
 
 def audio_path(voice_id: str) -> Path | None:
@@ -127,19 +197,28 @@ def audio_path(voice_id: str) -> Path | None:
 def create(
     *, audio_bytes: bytes, filename: str, name: str, language: str,
     gender: str, license: str, notes: str = "", source_url: str | None = None,
-    transcript: str | None = None, permission_acknowledged: bool = False,
+    transcript: str | None = None, transcript_segments: object = None,
+    permission_acknowledged: bool = False, voice_id: str | None = None,
 ) -> dict:
     ext = _validate(
         audio_bytes=audio_bytes, filename=filename, name=name, language=language,
         gender=gender, license=license, source_url=source_url,
-        transcript=transcript, permission_acknowledged=permission_acknowledged,
+        transcript=transcript, transcript_segments=transcript_segments,
+        permission_acknowledged=permission_acknowledged,
     )
+    segments = _segments(transcript_segments)
     ROOT.mkdir(parents=True, exist_ok=True)
     if ROOT.is_symlink():
         raise ValueError("shared voice root may not be a symbolic link")
-    voice_id = uuid.uuid4().hex[:12]
-    while (ROOT / voice_id).exists():
+    # A caller that already names the clip by its own hash may keep that name: the same bytes then
+    # carry one id on every controller, which is easier to reconcile than six. A caller that does
+    # not is given one. Either way the id is 12 hex, because that is what a node stores.
+    if voice_id is None:
         voice_id = uuid.uuid4().hex[:12]
+    else:
+        voice_id = _voice_id(voice_id)
+    if (ROOT / voice_id).exists():
+        raise SharedVoiceConflict(f"voice {voice_id} already exists with different audio")
     target = ROOT / voice_id
     temporary = ROOT / f".{voice_id}.{uuid.uuid4().hex}.tmp"
     temporary.mkdir(mode=0o700, exist_ok=False)
@@ -152,11 +231,14 @@ def create(
         "permission_acknowledged": True, "audio_extension": ext,
         "audio_sha256": digest, "created_at": now, "updated_at": now,
         "has_transcript": bool((transcript or "").strip()),
+        "segment_count": len(segments),
     }
     try:
         (temporary / f"{REFERENCE}{ext}").write_bytes(audio_bytes)
         if (transcript or "").strip():
             (temporary / TRANSCRIPT).write_text(transcript.strip(), encoding="utf-8")
+        if segments:
+            _atomic_json(temporary / SEGMENTS, {"segments": segments})
         _atomic_json(temporary / METADATA, metadata)
         _atomic_json(temporary / SYNC_STATE, {"targets": {}, "updated_at": now})
         os.replace(temporary, target)
@@ -166,11 +248,48 @@ def create(
     return _load(voice_id) or metadata
 
 
+def upsert(
+    *, audio_bytes: bytes, filename: str, name: str, language: str,
+    gender: str, license: str, notes: str = "", source_url: str | None = None,
+    transcript: str | None = None, transcript_segments: object = None,
+    permission_acknowledged: bool = False, voice_id: str | None = None,
+) -> tuple[dict, bool]:
+    """Create a shared voice, or refresh the one already holding these exact bytes.
+
+    The caller is a gateway that may push the same voice to a controller on every edit, so
+    "identical bytes" has to mean "the same voice" - otherwise a hundred nodes accumulate a
+    hundred copies of one clip. The bytes decide identity: a push that names an id already in use
+    by other audio is refused, and a push whose audio is already stored is refreshed in place,
+    whichever id it arrived under.
+    """
+    digest = hashlib.sha256(audio_bytes).hexdigest()
+    existing = _load(voice_id) if voice_id else None
+    if existing and existing.get("audio_sha256") != digest:
+        raise SharedVoiceConflict(
+            f"voice {voice_id} already holds different audio; the id is not reusable"
+        )
+    existing = existing or find_by_audio_sha256(digest)
+    if existing is None:
+        return create(
+            audio_bytes=audio_bytes, filename=filename, name=name, language=language,
+            gender=gender, license=license, notes=notes, source_url=source_url,
+            transcript=transcript, transcript_segments=transcript_segments,
+            permission_acknowledged=permission_acknowledged, voice_id=voice_id,
+        ), True
+    changes = {
+        "name": name, "language": language, "gender": gender, "license": license,
+        "notes": notes or "", "source_url": source_url or "", "transcript": transcript or "",
+        "transcript_segments": _segments(transcript_segments),
+    }
+    return update(existing["id"], changes), False
+
+
 def update(voice_id: str, changes: dict) -> dict:
     voice = _load(voice_id)
     if not voice:
         raise KeyError(voice_id)
-    allowed = {"name", "language", "gender", "license", "notes", "source_url", "transcript"}
+    allowed = {"name", "language", "gender", "license", "notes", "source_url", "transcript",
+               "transcript_segments"}
     unknown = set(changes) - allowed
     if unknown:
         raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
@@ -179,10 +298,13 @@ def update(voice_id: str, changes: dict) -> dict:
         audio_bytes=None, filename=None, name=str(merged.get("name") or ""),
         language=str(merged.get("language") or ""), gender=str(merged.get("gender") or ""),
         license=str(merged.get("license") or ""), source_url=merged.get("source_url"),
-        transcript=merged.get("transcript"), permission_acknowledged=True,
+        transcript=merged.get("transcript"),
+        transcript_segments=merged.get("transcript_segments"),
+        permission_acknowledged=True,
     )
     directory = _voice_dir(voice_id)
     transcript = str(merged.pop("transcript", "") or "").strip()
+    segments = _segments(merged.pop("transcript_segments", None))
     transcript_path = directory / TRANSCRIPT
     if transcript_path.is_symlink():
         raise SharedVoiceConflict("transcript path is unsafe")
@@ -190,7 +312,15 @@ def update(voice_id: str, changes: dict) -> dict:
         transcript_path.write_text(transcript, encoding="utf-8")
     elif transcript_path.exists():
         transcript_path.unlink()
+    segments_path = directory / SEGMENTS
+    if segments_path.is_symlink():
+        raise SharedVoiceConflict("segment path is unsafe")
+    if segments:
+        _atomic_json(segments_path, {"segments": segments})
+    elif segments_path.exists():
+        segments_path.unlink()
     merged["has_transcript"] = bool(transcript)
+    merged["segment_count"] = len(segments)
     merged["updated_at"] = time.time()
     _atomic_json(directory / METADATA, merged)
     return _load(voice_id) or merged
@@ -204,6 +334,17 @@ def _targets(monitor) -> list[dict]:
         machine = studio.get("machine", "local")
         by_machine.setdefault(machine, studio)
     return list(by_machine.values())
+
+
+def targets(monitor) -> list[dict]:
+    """Every Voice Studio a shared voice is pushed to: this Mac's, and each joined node's.
+
+    `monitor.registry` is this Mac's workers plus one entry per studio on every joined node, so a
+    controller's fan-out is the same loop whether the target is local or across the network.
+    """
+    return [{"studio_id": studio["id"], "machine": studio.get("machine", "local"),
+             "reachable": monitor.status.get(studio["id"], {}).get("status") == "up"}
+            for studio in _targets(monitor)]
 
 
 def _state(voice_id: str) -> dict:
@@ -337,6 +478,11 @@ def get_deletion(voice_id: str, monitor=None) -> dict | None:
 
 def serialize(voice: dict, monitor=None) -> dict:
     result = dict(voice)
+    # The segments are the reference's timings, not a listing field: a hundred voices' worth would
+    # dominate every status read. Their presence is what a caller needs to know.
+    segments = result.pop("transcript_segments", None) or []
+    result["has_segments"] = bool(segments)
+    result["segment_count"] = int(result.get("segment_count") or len(segments))
     result["audio_url"] = f"/api/hub/shared-voices/{voice['id']}/audio"
     state = _state(voice["id"])
     saved = state.get("targets") or {}
@@ -421,6 +567,12 @@ async def _sync_target(monitor, voice: dict, studio: dict) -> dict:
         "transcript": voice.get("transcript") or "",
         "permission_acknowledged": "true",
     }
+    # The aligned timings travel with the transcript. Without them a node installs the voice and
+    # then refuses to clone with it on every model that needs the alignment, which is a sync that
+    # looks correct and is not.
+    segments = voice.get("transcript_segments") or []
+    if segments:
+        data["transcript_segments_json"] = json.dumps(segments)
     try:
         with path.open("rb") as handle:
             response = await monitor._client.put(
@@ -445,9 +597,19 @@ async def _sync_target(monitor, voice: dict, studio: dict) -> dict:
         sync = payload.get("sync") or {}
         if remote.get("id") != voice["id"] or sync.get("sha256") != voice["audio_sha256"]:
             return {**base, "status": "failed", "message": "Voice Studio returned an unverifiable ID or audio hash"}
+        # A node that took the clip and dropped the timings answers 200 and cannot clone, so the
+        # count is checked rather than assumed. This is the difference between "the push worked"
+        # and "the push will be discovered on a hundred machines at generation time".
+        sent = len(segments)
+        stored = sync.get("segments")
+        if sent and stored != sent:
+            return {**base, "status": "failed",
+                    "message": f"Voice Studio stored {stored if stored is not None else 0} of "
+                               f"{sent} transcript timings; cloning would refuse this reference"}
         return {
             **base, "status": "synced", "message": "Synchronized",
             "completed_at": time.time(), "remote_action": sync.get("status"),
+            "segments": stored if stored is not None else sent,
         }
     except (httpx.HTTPError, OSError) as exc:
         return {

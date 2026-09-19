@@ -1088,9 +1088,23 @@ async def sync_fleet_voice(
     notes: str = Form(""),
     source_url: str = Form(""),
     transcript: str = Form(""),
+    transcript_segments_json: str = Form(""),
     permission_acknowledged: bool = Form(False),
 ) -> dict:
-    """Idempotently install one authenticated, Hub-owned shared voice."""
+    """Idempotently install one authenticated, Hub-owned shared voice.
+
+    `transcript_segments_json` carries the aligned timings that belong to the transcript. A
+    transcript longer than the model's window is unusable without them, so the count that was
+    stored is answered back: the Hub compares it with what it sent and reports a mismatch as a
+    failed sync rather than a successful install that cannot clone.
+    """
+    segments: object = []
+    if transcript_segments_json.strip():
+        try:
+            segments = json.loads(transcript_segments_json)
+        except ValueError as exc:
+            raise HTTPException(status_code=400,
+                                detail="transcript_segments_json must be a JSON array") from exc
     try:
         data = await audio.read()
         voice, status = voice_library.sync_from_hub(
@@ -1105,6 +1119,7 @@ async def sync_fleet_voice(
             notes=notes,
             source_url=source_url or None,
             transcript=transcript or None,
+            transcript_segments=segments,
             permission_acknowledged=permission_acknowledged,
         )
     except FleetVoiceConflict as exc:
@@ -1113,7 +1128,8 @@ async def sync_fleet_voice(
         raise HTTPException(status_code=400, detail=str(exc))
     return {
         "voice": _serialize_voice(voice),
-        "sync": {"status": status, "sha256": voice.audio_sha256},
+        "sync": {"status": status, "sha256": voice.audio_sha256,
+                 "segments": len(voice_library.segments(voice_id))},
     }
 
 

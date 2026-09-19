@@ -61,10 +61,10 @@ def fleet_token() -> str | None:
         t = FLEET_TOKEN_FILE.read_text().strip()
         if t:
             return t
-    # A packaged Hub is a fleet member like any other, so it owns a fleet credential of its
-    # own. This used to return None on the reasoning that nothing would use one. A controller
-    # now does, and giving it this instead of the node's Hub token is the entire point: the
-    # Hub token can delete that Mac's output and change its settings, and this cannot.
+    # A packaged Hub owns a fleet credential of its own, distinct from its Hub token. The
+    # separation is the point: this value is what a joining Mac adopts and what a controller then
+    # presents back to it, so it has to be a value the node has seen - and it is also the whole
+    # reason a node's owner cannot administer the controller that owns them.
     token = secrets.token_urlsafe(24)
     set_fleet_token(token)
     return token
