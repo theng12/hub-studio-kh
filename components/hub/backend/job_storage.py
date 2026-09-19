@@ -7,6 +7,7 @@ worker Studios' own protected cleanup APIs.
 """
 
 import json
+import asyncio
 import threading
 from pathlib import Path
 
@@ -111,6 +112,32 @@ def save(enabled: object, max_gb: object, retention_days: object = None) -> dict
         from . import transcription_jobs
         transcription_jobs.set_retention(retention_days)
         return status()
+
+
+async def budget_loop(interval_seconds: float) -> None:
+    """Enforce the storage budget on a timer, for as long as the Hub runs.
+
+    The policy (50 GB and 30 days by default, whichever comes first) has existed all along and was
+    enforced only outside the packaged app: `transcription_jobs.start_dispatcher` starts its legacy
+    cleanup loop `if not _packaged()`, and `enforce_budget` - the shared sweep the runtime contract
+    says supersedes it - had no caller at all. So a Mac that had been running for months kept every
+    recording, every transcript and every generated file until its disk filled and it began refusing
+    work it could not free.
+    """
+    while True:
+        try:
+            await asyncio.sleep(max(5.0, float(interval_seconds)))
+            await sweep_once()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # A sweep that fails must not take the Hub with it; the next one tries again.
+            await asyncio.sleep(30)
+
+
+async def sweep_once() -> dict:
+    """One enforcement pass, off the event loop: it walks and deletes files."""
+    return await asyncio.to_thread(enforce_budget)
 
 
 def enforce_budget(target_bytes: int | None = None) -> dict:

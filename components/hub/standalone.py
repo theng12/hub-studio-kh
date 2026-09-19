@@ -141,7 +141,14 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         output_storage.recover_process_leases()
         broker.restore_batches()
         transcription_jobs.restore_batches()
+        storage_sweep = None
         if start_background:
+            # 50 GB or 30 days, whichever comes first, enforced for every studio - not only in
+            # development. See job_storage.budget_loop.
+            import asyncio as _asyncio
+            from .backend import job_storage
+            storage_sweep = _asyncio.create_task(
+                job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
@@ -164,6 +171,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             yield
         finally:
             if start_background:
+                if storage_sweep is not None:
+                    storage_sweep.cancel()
+                    try:
+                        await storage_sweep
+                    except Exception:
+                        pass
                 await shared_voices.stop()
                 await broker.stop_dispatcher()
                 await transcription_jobs.stop()

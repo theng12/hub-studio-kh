@@ -130,6 +130,15 @@ def _settings_path() -> Path:
     return data_dir() / _SETTINGS_FILE
 
 
+def cleanup_interval_seconds() -> float:
+    """How often the storage budget is enforced, honouring the operator's setting."""
+    try:
+        value = float(_settings().get("cleanup_interval_seconds") or DEFAULT_CLEANUP_INTERVAL_SECONDS)
+    except (TypeError, ValueError):
+        return float(DEFAULT_CLEANUP_INTERVAL_SECONDS)
+    return value if value > 0 else float(DEFAULT_CLEANUP_INTERVAL_SECONDS)
+
+
 def _settings() -> dict[str, int | bool]:
     try:
         value = json.loads(_settings_path().read_text(encoding="utf-8"))

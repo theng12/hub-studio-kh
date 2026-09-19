@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.1 — 2026-09-19
+
+### Your three rules, two of them built
+
+**Storage: 50 GB or 30 days, whichever comes first — now actually enforced.** The rule existed in the
+app all along, at exactly those numbers, and was switched off in the version that ships: the cleanup
+that runs it was only started in development. So a Mac left running kept every recording, every
+transcript and every generated file until its disk filled and it began refusing work it could not
+free. It now runs every five minutes, for every studio's files, and the saved recordings and
+artifacts are removed as the rule says. Nothing disappears from **Jobs** — only the files.
+
+**An uncertain transcription no longer holds its Mac.** When a response is lost, the Hub cannot tell
+whether the worker is still transcribing, so it fences the item — and nothing ever released it: the
+retry, remove and clear paths all refused it, and the Mac that held it was excluded from image, voice
+*and* subtitle work, permanently. Now it is re-queued automatically after **15 minutes** and
+transcribed again from the original recording, which is what you asked for. Transcripts are cheap to
+repeat; a Mac out of the fleet is not.
+
+**Video files: next release.** You approved extracting the audio track with the bundled ffmpeg, so
+.mp4 and .mov work instead of always failing. That is a change to the subtitle worker's decoder path
+rather than a switch, so it goes in next with its own test rather than at the end of a long day.
+
 ## 0.6.0 — 2026-09-19
 
 ### Two more from the audit, both silent

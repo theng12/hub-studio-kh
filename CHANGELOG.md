@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.1 — 2026-09-19 · the owner's storage and recovery rules
+
+- **The storage budget (50 GB / 30 days) was enforced only in development.** `job_storage.
+  enforce_budget` - the shared sweep the runtime contract says supersedes the legacy timer - had no
+  caller at all, and `transcription_jobs.start_dispatcher` starts its own cleanup loop only
+  `if not _packaged()`. Nothing ever deleted an uploaded recording or a transcript in the shipped
+  app, and the Hub's own storage figures never counted them. New `job_storage.budget_loop(interval)`
+  + `sweep_once()`, started by the Hub's lifespan at `standalone_config.cleanup_interval_seconds()`
+  (300 s by default, honouring the operator's setting) and cancelled on shutdown; the sweep runs off
+  the event loop because it walks and deletes files. `tests/test_storage_budget_loop.py` (4 checks)
+  pins the pass, the timer, that a failing sweep cannot kill the loop, and that the policy constants
+  are the owner's numbers.
+- **An uncertain transcription removed its machine from every lane, permanently.**
+  `_mark_uncertain` sets `manual_action_required`; `retry_batch` skips such an item; `remove_batch`
+  and `clear_terminal` refuse a non-terminal batch; no route exposes any of the three; and
+  `_eligible_studios` excludes the machine for image, voice and subtitle alike. New
+  `UNCERTAIN_RECOVERY_SECONDS = 900` + `recover_stale_uncertain(now)`, called at the top of
+  `dispatch_once`: a stale fence is re-queued, its partial output deleted, the flag cleared and the
+  reason written to the batch note. The busy-check comment now records that a fence is temporary by
+  design: transcription is cheap enough to repeat. `tests/test_uncertain_recovery.py` (4 checks).
+
 ## 0.6.0 — 2026-09-19 · stale timings and unbounded memory
 
 - **An edited transcript kept timings measured from the previous words.** `voices.update()` rewrote

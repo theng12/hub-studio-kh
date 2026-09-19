@@ -217,6 +217,54 @@ def _packaged() -> bool:
     return os.environ.get("STUDIOHUB_PACKAGED") == "1"
 
 
+# How long a possibly-accepted transcription is left fenced before it is simply redone.
+#
+# "Uncertain" exists because a lost response might mean the worker is still transcribing, and two
+# transcripts of the same audio would be wasteful. But nothing ever resolved it: retry skipped the
+# item, remove and clear refused a non-terminal batch, no route exposed any of the three, and the
+# machine that held it was excluded from every lane - image, voice and subtitle - for good. The owner
+# asked for exactly this: "make it recover after a set time frame so it doesn't block the app.
+# transcription isn't expensive. redo it if it fails."
+UNCERTAIN_RECOVERY_SECONDS = 15 * 60
+
+
+def recover_stale_uncertain(now: float | None = None) -> list[str]:
+    """Re-queue transcriptions that have been fenced for longer than the recovery window.
+
+    Returns the batch ids that changed. Called from the dispatch loop, so a Mac always recovers on
+    its own; nothing has to be pressed and no route has to exist.
+    """
+    now = time.time() if now is None else now
+    touched: list[str] = []
+    for batch in batches.values():
+        changed = False
+        for item in batch.get("items") or []:
+            if item.get("state") != "uncertain" or not item.get("manual_action_required"):
+                continue
+            since = (item.get("finished_at") or item.get("last_progress_at")
+                     or batch.get("created_at") or 0)
+            if now - float(since) < UNCERTAIN_RECOVERY_SECONDS:
+                continue
+            # Redo it. The previous attempt left no trustworthy output, so anything it wrote goes.
+            for key in ("output_path", "partial_output_path"):
+                if item.get(key):
+                    try:
+                        Path(item[key]).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    item[key] = None
+            item.update(state="queued", manual_action_required=False, interrupted=False,
+                        studio_job_id=None, error=None, retry_at=0,
+                        recovered_from_uncertain=True)
+            changed = True
+        if changed:
+            batch["governor_note"] = ("A transcription was uncertain; it is being transcribed "
+                                      "again from the original recording.")
+            _save(batch)
+            touched.append(batch["id"])
+    return touched
+
+
 def _mark_uncertain(item: dict, reason: str) -> None:
     """Fence a possibly accepted HTTP inference until worker reconciliation exists."""
     item.update(state="uncertain", error=reason, interrupted=True,
@@ -548,6 +596,9 @@ async def _eligible_studios(monitor, model: str, item: dict | None = None,
             if reasons is not None:
                 reasons.append(f"{sid}: studio is disabled on {machine}")
             continue
+        # An uncertain transcription no longer holds its machine: it will be redone on its own
+        # timer, and until then the Mac is free to take other work (the owner's call - transcription
+        # is cheap enough to repeat). `broker.busy_machines()` covers leases and image fences.
         if machine in broker.busy_machines():
             if reasons is not None:
                 reasons.append(f"{sid}: machine {machine} is busy with other work")
@@ -680,6 +731,7 @@ def renew_execution_lease(renewal: dict) -> bool:
 
 
 async def dispatch_once(monitor) -> int:
+    recover_stale_uncertain()
     assigned = 0
     while True:
         made_progress = False
