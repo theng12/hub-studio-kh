@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.15 — 2026-09-19
+
+### The Fleet page no longer waits for every silent Mac in turn
+
+Listing the joined Macs asked each one in sequence, and each silent one holds the line until it times
+out. So a controller with several switched-off Macs took that many timeouts to answer a single page -
+which the app reports as the Hub not answering at all. Every Mac is now asked at the same time, so the
+wait is one timeout in total, however many are asleep.
+
 ## 0.6.14 — 2026-09-19
 
 ### Cancelling a Subtitle job now always cancels it

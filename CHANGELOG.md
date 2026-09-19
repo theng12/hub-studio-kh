@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.15 — 2026-09-19 · the fleet inventory probed nodes one at a time
+
+- **`fleet_nodes.inventory` awaited `probe` in a loop.** Each probe waits out `PROBE_TIMEOUT` for a
+  silent node, so the page cost one timeout per switched-off Mac - ten of them meant ten timeouts
+  before the app's own 30-second read gave up and called the Hub unresponsive. The probes now run
+  under `asyncio.gather` with the order preserved; `probe` itself is unchanged and its per-node errors
+  were already swallowed.
+- Caught while doing it: the change needed `import asyncio`, which the module did not have - the
+  syntax check passed and the call would have failed at runtime, so the module was imported and
+  `inventory` called directly before trusting it.
+- Evidence: `tests/test_fleet_inventory_concurrent.py` (3 checks) - four nodes that each take 0.15 s
+  finish well inside half the sequential time, every probe starts before the first finishes, and the
+  per-node state is still reported.
+
 ## 0.6.14 — 2026-09-19 · a cancel during publishing was overwritten by "done"
 
 - **`SubtitleManager._run` checked the cancel event after decoding, then published artifacts and

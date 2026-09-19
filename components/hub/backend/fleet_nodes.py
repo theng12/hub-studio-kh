@@ -10,6 +10,7 @@ next step and is not claimed here.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -245,9 +246,11 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
 async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Every joined node with its live state, plus a count of what answered."""
     nodes = _read()
-    rows = []
-    for node_id in sorted(nodes):
-        rows.append(await probe(nodes[node_id], client))
+    node_ids = sorted(nodes)
+    # Probed together, not one after another. Each probe waits out its own timeout, so a fleet read
+    # used to cost one timeout per silent node: ten switched-off Macs turned the Fleet page into a
+    # ten-timeout stall, which the app sees as the Hub not answering at all. Order is preserved.
+    rows = list(await asyncio.gather(*(probe(nodes[node_id], client) for node_id in node_ids)))
     # The role this Hub is actually in, not a constant.
     #
     # This was hardcoded to "controller", so a standalone Mac answered "controller" here while
