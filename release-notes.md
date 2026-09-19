@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.9 — 2026-09-19
+
+### A huge upload can no longer exhaust the Mac's memory
+
+Subtitle's per-file limit is 2 GB. The worker read the **entire** upload into memory first and
+checked the size afterwards — so a file that was far too large was held in RAM before being refused,
+on a Mac that is usually also holding a model in unified memory. That is an out-of-memory kill rather
+than a clean refusal. The body is now read in pieces and refused the moment it passes the limit, so
+the cost of refusing is one piece instead of the whole file.
+
 ## 0.6.8 — 2026-09-19
 
 ### An alert can no longer take the health check down with it

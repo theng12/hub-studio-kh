@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.9 — 2026-09-19 · the Subtitle upload limit was applied after buffering
+
+- **`data = await file.read()` in both Subtitle upload handlers** returned the whole body before
+  `manager.MAX_INPUT_BYTES` (2 GiB) was checked in `manager.store_input`. An oversized upload was
+  therefore buffered in the worker process first; on a Mac holding a model in unified memory that is
+  an OOM kill rather than a 413. New `read_upload_limited(file, limit)` reads in 1 MiB pieces and
+  raises 413 at the first byte past the limit; both handlers use it.
+  Evidence: `tests/test_subtitle_upload_limit.py` (5 checks) - a body within the limit comes back
+  whole, an oversized one is refused with 413, **the refusal stops reading** (four reads of a
+  thousand-piece body, the rest untouched), an empty body is fine, and no handler reads the body
+  directly any more. Mutation-verified (reading the whole body per call fails three).
+- Still open from the audit, and unchanged by this: a *legitimate* upload up to the 2 GiB limit is
+  still held in memory before being written to the store, which wants the store API to accept a
+  stream rather than bytes.
+
 ## 0.6.8 — 2026-09-19 · an alert failure aborted the health poll
 
 - **`_note_transition` and `_note_restart_health` called `alerts.emit` unguarded**, inside the poll

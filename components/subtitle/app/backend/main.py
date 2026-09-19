@@ -22,6 +22,32 @@ from .engine import ModelPackageError, host_eligibility
 from .manager import SubtitleManager, safe_input_name, validate_request
 
 
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def read_upload_limited(file, limit: int) -> bytes:
+    """Read an upload, refusing the moment it passes the limit.
+
+    `await file.read()` returned the entire body first and the size was checked on the result, so an
+    oversized upload was buffered in this process before being refused - and this worker's limit is
+    2 GiB, on a Mac that is also holding a model in unified memory. Reading in chunks stops at the
+    first byte past the limit, so the refusal costs one chunk instead of the whole file.
+    """
+    from fastapi import HTTPException as _HTTPException
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise _HTTPException(
+                413, f'upload exceeds the {limit // (1024 * 1024)} MB per-file limit')
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def create_app(manager: SubtitleManager, token: str) -> FastAPI:
     if not token:
         raise ValueError('Private Subtitle worker requires its owning Hub credential')
@@ -111,7 +137,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
             name = safe_input_name(file.filename or '')
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        data = await file.read()
+        data = await read_upload_limited(file, manager.MAX_INPUT_BYTES)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),
@@ -172,7 +198,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
             name = safe_input_name(file.filename or '')
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        data = await file.read()
+        data = await read_upload_limited(file, manager.MAX_INPUT_BYTES)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),
