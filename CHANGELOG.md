@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.25 — 2026-09-19 · manifests for the 14 adopted cache models
+
+- **19 manifests generated from the cache** by `qualification/generate_manifests_from_cache.py`:
+  the 11 staged models that fit this 16 GB Mac plus the three giants (echo-tts-base 24 GB,
+  fish-audio-s2-pro-8bit 24 GB, -bf16 32 GB), and the five companions those families require
+  (`s3tokenizerv2`, `snac-24khz`, `fish-s1-dac-min`, `moss-audio-tokenizer-nano`, `umt5-base`).
+  `dependencies` is what `model_packages.preflight` checks, which is why a MOSS-TTS import stayed
+  `partial` until its audio tokenizer was registered.
+- File selection honours the catalogue's `ignore_patterns`: F5-TTS is 1.35 GB of the 2.70 GB present,
+  because the alternate checkpoints stay out. Total 39 GB, all already on disk — no downloads.
+- Memory floors come from the catalogue's declared `min_unified_memory_gb` and are written to
+  `qualification.minimum_unified_memory_gb`, the same field `copy_models_for_this_mac.py` reads, so
+  the drive kit copies the giants only onto a Mac that can run them.
+- Note on the import: the flat-folder importer refuses symlinked sources, and HuggingFace snapshots
+  are symlink trees into `blobs/` (some nested or broken in that old cache), so all 19 imports were
+  refused atomically and the library stayed at 15 packages. The link-based route the gateway used
+  (`POST /api/imports`, `mode: "link"`) is the one that handles this layout.
+
 ## 0.6.24 — 2026-09-19 · the storage families and the memory verdict reach the app
 
 - **The app now reads `/studio/voice/api/model-storage`** (the payload the worker has always served,

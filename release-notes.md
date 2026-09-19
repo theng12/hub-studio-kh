@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.25 — 2026-09-19
+
+### Fourteen more models, adopted from what was already on disk
+
+The old launcher's cache is now described to Studio Hub: fourteen models, each with a manifest naming
+its exact revision, every file it needs with its size and checksum, and the memory it requires. Five of
+them also bring the companion files they depend on, so a model like Chatterbox or MOSS-TTS can finish
+loading instead of sitting half-installed.
+
+Nothing was downloaded. All of it was already on this Mac, and three of the models — Echo-TTS and both
+Fish Audio S2 Pro builds — declare more memory than this Mac has. They are stored for a bigger Mac and
+skipped here automatically: the copy step leaves behind anything that does not fit.
+
 ## 0.6.24 — 2026-09-19
 
 ### "This Mac cannot run that" is now something you see

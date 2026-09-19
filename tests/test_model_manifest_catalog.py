@@ -30,6 +30,28 @@ EXPECTED = {
     "qwen3-tts-12hz-0-6b-customvoice-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "049ef77fe8816b536193c0c25f9a214d17921282", "voice-mlx"),
     "qwen3-tts-12hz-1-7b-customvoice-8bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit", "41d3337e8b7f2843a75841595fc14e4b9a7a4b96", "voice-mlx"),
     "qwen3-tts-12hz-1-7b-voicedesign-8bit": ("mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", "f90d617701d9f7f4ca499291e0b57f2b3c2fd2ee", "voice-mlx"),
+    # ── Adopted from the Voice Studio cache (owner's instruction) ──
+    # Revisions pinned from that cache's refs/main, every file digest computed from the bytes
+    # on disk; the memory floors come from the Voice catalogue's declared minimums.
+    "audio8-tts-preview-0-6b-bf16": ("mlx-community/Audio8-TTS-Preview-0.6b-bf16", "e59b26ec0ad753ea5441a6439424e305ccc93800", "voice-mlx"),
+    "chatterbox-4bit": ("mlx-community/chatterbox-4bit", "f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8", "voice-mlx"),
+    "chatterbox-8bit": ("mlx-community/chatterbox-8bit", "9617d61b596a03d1bed766a28c341680e993a1b9", "voice-mlx"),
+    "chatterbox-turbo-4bit": ("mlx-community/chatterbox-turbo-4bit", "c63817725071d7b5269c7b558772d6e8cbf59cec", "voice-mlx"),
+    "echo-tts-base": ("mlx-community/echo-tts-base", "882ed93d9d5ec1e9c084b22902f4871049fae995", "voice-mlx"),
+    "f5-tts": ("SWivid/F5-TTS", "84e5a410d9cead4de2f847e7c9369a6440bdfaca", "voice-mlx"),
+    "fish-audio-s2-pro-8bit": ("mlx-community/fish-audio-s2-pro-8bit", "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff", "voice-mlx"),
+    "fish-audio-s2-pro-bf16": ("mlx-community/fish-audio-s2-pro-bf16", "eccd57bf5c1ebc13cb2f993df867f4e49931a36a", "voice-mlx"),
+    "fish-s1-dac-min": ("jordand/fish-s1-dac-min", "18b770e5b62b1a58ebd7423401a937cc063d8729", "voice-mlx"),
+    "kokoro-82m-bf16": ("mlx-community/Kokoro-82M-bf16", "a71e4d38b236d968966a2002c4c895dbd12b1c3c", "voice-mlx"),
+    "longcat-audiodit-1b-4bit": ("mlx-community/LongCat-AudioDiT-1B-4bit", "37d0247191d1f464cebd102de63e1e04907612e2", "voice-mlx"),
+    "moss-audio-tokenizer-nano": ("OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano", "6aa02b01e445cc585582cf0ba480bc3ea6c8dd68", "voice-mlx"),
+    "moss-tts-nano-100m": ("mlx-community/MOSS-TTS-Nano-100M", "229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79", "voice-mlx"),
+    "orpheus-3b-0-1-ft-4bit": ("mlx-community/orpheus-3b-0.1-ft-4bit", "b30aed4ecfa03c0177a5419b51919d14a105f183", "voice-mlx"),
+    "s3tokenizerv2": ("mlx-community/S3TokenizerV2", "e0c9886f0e1c35ae85b1f27277416fb19fc72bec", "voice-mlx"),
+    "snac-24khz": ("mlx-community/snac_24khz", "556af1cd3b1c5f2d294f6aa9bb886245d7b716ac", "voice-mlx"),
+    "umt5-base": ("google/umt5-base", "0de9394d54f8975e71838d309de1cb496c894ab9", "voice-mlx"),
+    "vibevoice-realtime-0-5b-4bit": ("mlx-community/VibeVoice-Realtime-0.5B-4bit", "550877a15358642c1e062aa38ce1fe0623beaa1b", "voice-mlx"),
+    "voxtral-4b-tts-2603-mlx-4bit": ("mlx-community/Voxtral-4B-TTS-2603-mlx-4bit", "f98fc91b9cb5adc7dab56102c690458276c14c6a", "voice-mlx"),
 }
 PROCESSOR_FILES = {
     "added_tokens.json", "merges.txt", "normalizer.json", "special_tokens_map.json",
@@ -78,6 +100,27 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "qwen3-tts-12hz-0-6b-customvoice-8bit": "cdefed4cdccf52a52c1858c39ab87d77811a8508e23c45d796b80b6469518a8c",
             "qwen3-tts-12hz-1-7b-customvoice-8bit": "2690316310dfbc75249645bd7bcd021ebbb3ef7b114b0c9aa5ec2e4f24ecd18f",
             "qwen3-tts-12hz-1-7b-voicedesign-8bit": "d4d7eddb9b9a3e17957389c1d685be1104ec933c2df5ee552eda784af223f990",
+            # Adopted from the local Voice Studio cache rather than recaptured over the
+            # network: the same pinned revisions, digests of the canonical manifests.
+            "audio8-tts-preview-0-6b-bf16": "5fc895875568a1a4d3d51749b52b0e9fd1bc5d70d5ef9ad5425dc47b98ed29fd",
+            "chatterbox-4bit": "0c068c53e7c0517c5a642947a4f451a6fc034544e2d6142ca5eb4586c336bd74",
+            "chatterbox-8bit": "7f5b16346f56d87a1db05634583ed64bf18e3216563a939c7714ead6c225d693",
+            "chatterbox-turbo-4bit": "9826f5bfd9f26b66950c0750d31f7732b943953c2680d23a088a8d03cc8d03d1",
+            "echo-tts-base": "1ab15f4a3dbb6a314c7025a11c4f5f325ca486f7b67c15c953faf2b81e505aad",
+            "f5-tts": "f811a09772356b2e88ce5484003bfe52112f079facd0710f1de2e62366a39b41",
+            "fish-audio-s2-pro-8bit": "290829227d765d29c7da863e31f745468e4c36fb081fa3cc83c5d10122ca115a",
+            "fish-audio-s2-pro-bf16": "b7924d5dcfaeaceaf9a6a7ecc1843e22de72afec6ee0bce180081a9a276aded6",
+            "fish-s1-dac-min": "ed7381574537d6b80b19c92d84aeb7a03692f068d73c5c2bbbfcf05e0ed00fd7",
+            "kokoro-82m-bf16": "8d38864668cd2683f8203423b20b3aae36a3e0550abdb58a2d9b47d87e9f33e2",
+            "longcat-audiodit-1b-4bit": "cc2ab7f27020fdb5991e9a707206055576bd36df451d58ef13cf828edc977d90",
+            "moss-audio-tokenizer-nano": "62623a6ab2c64c87459cbe5e57f42294a59c9b6b523c81a942ec1e8666050cbe",
+            "moss-tts-nano-100m": "6ddefec42fb778c022a843323d6b262166c6b393afedfe0165abf4f3351da57f",
+            "orpheus-3b-0-1-ft-4bit": "ce7d2ef9f9019ec3ebea55e3e61b344fb5a5688413a54f0bd4c7c13fd03092c6",
+            "s3tokenizerv2": "d351fbde041c2e321f0fc7d9b0e1399a8e7605a187a5bd3f9edf6c3f09e171f2",
+            "snac-24khz": "3de0f7d84631694abed5d30ab0f785d2d0df4fc2fd4076a93da56c61d6e7b260",
+            "umt5-base": "8036296138d919d330b63f5c1d7803c4f4da7baab9ce10ec41dd699bb692cf1e",
+            "vibevoice-realtime-0-5b-4bit": "b0b65edbe472c76ea9c39251cf26505589d75308b21616340faf845152c6d3d9",
+            "voxtral-4b-tts-2603-mlx-4bit": "2216037cd62d29e5723f7b104419c3cccbbb3e771d7056fd9b6cc129f04f3a53",
         }
         self.assertEqual(set(expected_digests), set(EXPECTED))
         for package_id, manifest in self.manifests.items():
