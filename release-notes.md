@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.17 — 2026-09-19
+
+### The model files loaded are now the ones the job says they are
+
+When a voice model is loaded, the app can have more than one revision of it on disk: the one it
+verified and the job records, and an older one left behind in the download cache. The loader used to
+take whichever the filesystem happened to list first — so a job could run the **older** files while
+writing the **newer** revision into its record. The record is what you'd trust when a result looks
+wrong or needs reproducing, and it was describing files that were not used. The verified revision is
+now loaded first, and when there is no verified package the newest cached one is chosen
+deterministically instead of by chance.
+
 ## 0.6.16 — 2026-09-19
 
 ### A Mac that was switched off, and a Mac that was told no

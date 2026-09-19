@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.17 — 2026-09-19 · the voice loader could run a different revision than the job recorded
+
+- **`GenerationManager._mlx_audio_snapshot_path` returned `candidates[0]`** from
+  `models--<repo>/snapshots/`, and consulted `cache.package_snapshot` (the verified-package library,
+  which resolves the manifest's exact revision) only when the cache had no `snapshots` folder at all.
+  With both present, the arbitrary cache folder won: a Mac holding the verified revision *and* an
+  older leftover could load the older files while the job wrote the verified revision into its record
+  as immutable evidence - wrong evidence, and a result that cannot be reproduced from the record.
+  The verified package is now resolved first, and the cache fallback sorts by modification time
+  (newest first) instead of trusting filesystem order.
+- Evidence: `tests/test_voice_snapshot_revision.py` (4 checks) - the verified revision wins over the
+  cache, the cache fallback picks the newest and is stable across calls, a missing cache still names
+  the fix, and a single revision needs no choice.
+
 ## 0.6.16 — 2026-09-19 · a refused credential looked like a switched-off Mac
 
 - **`fleet_nodes.probe` treated every non-success answer as a generic error**, and the Fleet page's

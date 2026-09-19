@@ -3127,21 +3127,22 @@ class GenerationManager:
     # ──────────────────────────────────────────────────────────────────────
 
     def _mlx_audio_snapshot_path(self, repo: str) -> Path:
-        """Find the actual on-disk snapshot folder for a cached repo.
+        """Find the snapshot folder to load for a cached repo.
 
-        Our HF cache has `models--<owner>--<repo>/snapshots/<rev>/...`. The rev
-        is either a real commit SHA (downloaded via huggingface_hub) or our
-        synthetic 'main' (from the flat-folder import path). We just take the
-        first non-hidden subfolder."""
+        The verified package's revision comes first: it is the revision the manifest names, the one
+        the app verified, and the one the job writes into its record as immutable evidence. The
+        Hugging Face cache is only a fallback for repos that arrived another way, because it can hold
+        several revisions at once - and this used to return `candidates[0]`, whichever folder the
+        filesystem happened to list first. A Mac that had a newer revision verified but an older one
+        lying in the cache could therefore load the older files while recording the newer revision,
+        which makes the job's evidence wrong and the result irreproducible.
+        """
+        package = cache.package_snapshot(repo)
+        if package is not None and package[1].is_dir():
+            return package[1]
         repo_dir = cache.repo_cache_dir(repo)
         snapshots = repo_dir / "snapshots"
         if not snapshots.exists():
-            # Verified Studio Hub package install: <library>/<package>/<revision>/ holds the
-            # model files directly, so that revision folder is the snapshot folder. Without
-            # this fallback a model the app installed and verified looked uncached here.
-            package = cache.package_snapshot(repo)
-            if package is not None and package[1].is_dir():
-                return package[1]
             raise RuntimeError(
                 f"No snapshots folder for {repo} at {snapshots}. "
                 "Re-download from the Models tab or re-import."
@@ -3150,6 +3151,9 @@ class GenerationManager:
                       if s.is_dir() and not s.name.startswith(".")]
         if not candidates:
             raise RuntimeError(f"No snapshot subfolder under {snapshots}")
+        if len(candidates) > 1:
+            # Deterministic, and the best guess available: the most recently written revision.
+            candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return candidates[0]
 
     def _mlx_audio_get_model(self, repo: str):
