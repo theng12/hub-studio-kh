@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.22 — 2026-09-19 · a rolled-back dispatch retried the same Studio at once
+
+- After the rollback added in 0.6.19, the loop `continue`d to the next candidate Studio - with a
+  single Studio that meant retrying the machine whose write had just failed, in the same pass. The
+  trace shows what that produced: the write fails, the Mac is released, the item is requeued, and then
+  a second attempt runs the job and fails for an unrelated reason (`'input_path'`), which is exactly
+  the "stuck job that fails for the wrong reason" shape this work set out to remove. It `break`s now,
+  leaving the batch for the next pass.
+- The rollback itself is verified by an instrumented live run of the real dispatch path
+  (`/tmp/diag2.py`), which prints: `acquire_external_machine -> True`, `_save called: state=running`,
+  `release_external_machine`, i.e. the Mac is given back and the item requeued rather than left
+  running with no task. Its automated regression test is not landed yet (see the changelog entry for
+  0.6.19): the harness needs the packaged modality, the monitor binding, a peer snapshot, a Studio
+  that advertises the model, and the monitor's client, all of which are now written down.
+
 ## 0.6.21 — 2026-09-19 · unguarded bookkeeping writes aborted the dispatch pass
 
 - **Five `_save(batch)` calls in the transcription dispatch loop were unwrapped** - the governor-note

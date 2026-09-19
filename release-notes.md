@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.22 — 2026-09-19
+
+### A rolled-back dispatch is left for the next pass
+
+When a job cannot be written down as it is handed to a Mac, the Hub undoes it — releases the Mac and
+puts the job back in the queue with its attempt returned. It then used to try that same Mac again
+immediately, which fails the same way and produces a second, differently-broken attempt. It now
+leaves the job for the next pass.
+
 ## 0.6.21 — 2026-09-19
 
 ### A disk that filled up could stop the whole scheduler
