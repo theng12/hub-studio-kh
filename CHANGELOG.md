@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.12 — 2026-09-19 · `cleanup_expired` had no caller
+
+- **`execution_assets.cleanup_expired` existed and was called from nowhere.** Staged voice-reference
+  copies carry an `expires_at` (24 h default, 48 h maximum), and the deadline was only honoured by
+  `resolve_voice_reference`, which *refuses* an expired asset - so the file stayed. Every duplicate
+  clip the Hub ever made for a worker was retained for the life of the Mac. `job_storage.
+  _enforce_budget` now calls it alongside `transcription_jobs.cleanup`, so the five-minute sweep
+  deletes them. The library and shared voices are unaffected: they are not staged assets.
+- Evidence: `tests/test_execution_asset_purge.py` (4 checks) - an expired copy is deleted, a live one
+  is kept, a folder whose metadata cannot say when it expires is cleared out (the store's existing
+  behaviour, now pinned so the sweep cannot quietly start keeping junk), and the sweep is what calls
+  it.
+
 ## 0.6.11 — 2026-09-19 · the voice transcribe upload was unbounded in memory
 
 - **`main.py:1602` did `data = await file.read()`** in the transcribe-by-upload handler: the whole

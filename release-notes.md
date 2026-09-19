@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.12 — 2026-09-19
+
+### The duplicate voice clips were never cleaned up
+
+When a voice is sent to a Studio to clone from, the Hub makes a **duplicate working copy** of that one
+audio clip so the worker can read it. Those copies were given a 24-hour deadline, and the deadline was
+only ever used to *refuse* the copy afterwards — nothing deleted it. So every duplicate ever made
+stayed on disk for the life of the Mac. They are now swept up with everything else.
+
+Your voices are untouched by this and always were: a voice in your library, and a voice shared across
+the fleet, is permanent. This is only about the throwaway duplicate of a clip, which the Hub can make
+again in a second.
+
 ## 0.6.11 — 2026-09-19
 
 ### A recording read into memory whole, with no ceiling

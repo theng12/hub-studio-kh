@@ -79,7 +79,7 @@ def _bytes_under(root: Path) -> int:
 
 
 def storage_bytes() -> int:
-    from . import transcription_jobs
+    from . import execution_assets, transcription_jobs
     return _bytes_under(transcription_jobs.ROOT)
 
 
@@ -168,6 +168,12 @@ def _enforce_budget(target_bytes: int | None = None) -> dict:
         aged = transcription_jobs.cleanup()
         result["cleared"] += aged["cleaned"]
         result["reclaimed_bytes"] += aged["reclaimed_bytes"]
+        # Staged voice-reference copies (the duplicate clip the Hub hands a worker when a voice is
+        # sent to it) have had a TTL all along, and `execution_assets.cleanup_expired` has always
+        # existed to enforce it - with no caller anywhere. Expiry only *blocked reuse*, so every
+        # staged copy ever made stayed on disk for the life of the Mac. Purged with the rest.
+        staged = execution_assets.cleanup_expired()
+        result["cleared"] += staged if isinstance(staged, int) else 0
     if storage_bytes() <= maximum:
         result["used_bytes"] = storage_bytes()
         return result
