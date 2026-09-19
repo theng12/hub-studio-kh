@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.5 — 2026-09-19
+
+### The ready-made voices were unreachable
+
+**Voices → Ready-Made was always empty, and nothing said why.** The route that lists the curated
+clips was registered *after* the route that fetches one voice by its id, and the framework picks the
+first one that matches — so asking for the catalog was answered by "fetch the voice called
+`seed-catalog`", which does not exist. The list was never wrong; it was never asked. Fixed, and the
+test fails if the order is ever reversed again (checked by putting it back).
+
 ## 0.6.4 — 2026-09-19
 
 ### The Hub stops re-reading every file several times a second

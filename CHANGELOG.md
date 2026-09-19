@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.5 — 2026-09-19 · the seed catalog route was shadowed
+
+- **`GET /api/voices/seed-catalog` was declared after `GET /api/voices/{voice_id}`.** FastAPI matches
+  in declaration order, so the parameterised route answered first and the single-voice handler ran
+  with `voice_id="seed-catalog"` - "voice not found". The ready-made catalog (`voices.seed_catalog`)
+  was therefore unreachable from the app and the tab was permanently empty. The literal route is now
+  registered before the parameterised one.
+  Evidence: `tests/test_seed_catalog_route.py` (4 checks) asserts the declaration order, resolves the
+  URL through the router (so it names the handler that actually answers), checks a single-voice URL
+  still reaches the voice handler, and calls the handler. Mutation-verified: declaring the route last
+  again fails two of them.
+
 ## 0.6.4 — 2026-09-19 · the admission sweep no longer runs in the scheduler's inner loop
 
 - **`output_storage.admission` calls `enforce`**, which walks and hashes the managed output roots.

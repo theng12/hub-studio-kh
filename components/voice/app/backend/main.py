@@ -1004,6 +1004,13 @@ def _serialize_voice(voice) -> dict:
     return item
 
 
+@app.get("/api/voices/seed-catalog")
+def get_seed_catalog() -> dict:
+    """Curated list of public-domain voice clips users can one-click add."""
+    from .voices import seed_catalog
+    return {"entries": seed_catalog()}
+
+
 @app.get("/api/voices")
 def list_voices() -> dict:
     return {"voices": [_serialize_voice(voice) for voice in voice_library.list()]}
@@ -1189,13 +1196,6 @@ def update_voice(voice_id: str, body: UpdateVoiceBody) -> dict:
 
 
 # ──── public-domain seed catalog ────
-
-@app.get("/api/voices/seed-catalog")
-def get_seed_catalog() -> dict:
-    """Curated list of public-domain voice clips users can one-click add."""
-    from .voices import seed_catalog
-    return {"entries": seed_catalog()}
-
 
 class AddSeedBody(BaseModel):
     seed_id: str
