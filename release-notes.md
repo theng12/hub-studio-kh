@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.3 — 2026-09-19
+
+### A job that nothing can run is refused, with the reason
+
+If a Studio was not running — Voice, Image or Subtitle — a job sent to the Hub was still **accepted**.
+The checks before acceptance covered the model's files, its runtime, your version of macOS, the chip
+and the storage budget, and stopped there; nothing asked whether anything was running to do the work.
+The job then sat in the queue for ever, shown in the app as accepted work, because dispatch needs a
+live Studio and there was none. It is refused now, by name:
+
+> no voice Studio is running on this Mac
+
+or, when a Studio has stopped answering:
+
+> the voice Studio is not answering; restart the local services
+
+A Studio that is registered but has not been health-checked yet (the first moments after the app
+starts) still accepts work, so nothing is refused while the checks are warming up. Another machine's
+Studio still counts, so a controller with no local Studio can keep sending work to its nodes.
+
 ## 0.6.2 — 2026-09-19
 
 ### Video files work now

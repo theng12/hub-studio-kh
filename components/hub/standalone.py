@@ -107,9 +107,26 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     if state["dispatch_state"] != "eligible":
         return {"code": "MODEL_NOT_READY", "detail": "model files, runtime, OS, or chip are not ready",
                 "readiness": state}
+    # A Studio that is not running cannot be given work. Without this the job was accepted - the
+    # gates below only refuse for storage, and the readiness gate above only covers files, runtime,
+    # macOS and chip - and then queued for ever, because dispatch needs a live studio and nothing
+    # ever said why none came. A worker that dies is never removed from `monitor.registry` (there is
+    # no deregistration), so liveness is the monitor's own status for it; "unknown" means it has not
+    # been checked yet, which must not refuse a job on a Hub that has just started.
+    capable = [worker for worker in monitor.registry
+               if worker.get("modality") == expected_modality]
+    if not capable:
+        return {"code": "STUDIO_NOT_RUNNING",
+                "detail": f"no {expected_modality} Studio is running on this Mac",
+                "readiness": state}
+    statuses = [monitor.status.get(worker.get("id"), {}).get("status") for worker in capable]
+    if all(status not in (None, "unknown", "up") for status in statuses):
+        return {"code": "STUDIO_NOT_RUNNING",
+                "detail": f"the {expected_modality} Studio is not answering; restart the local services",
+                "readiness": state}
+
     settings = standalone_config.load_device_settings()["effective"]
-    workers = [worker for worker in monitor.registry
-               if worker.get("modality") == expected_modality and worker.get("local") is True]
+    workers = [worker for worker in capable if worker.get("local") is True]
     blocked = [output_storage.admission(machine=worker.get("machine", "local"), max_bytes=settings["max_bytes"],
                retention_days=settings["retention_days"], enabled=settings["cleanup_enabled"],
                minimum_free_bytes=settings["minimum_free_bytes"],

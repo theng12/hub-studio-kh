@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.3 — 2026-09-19 · no Studio, no acceptance
+
+- **The submission guard never asked whether a Studio was running.** `_submission_readiness` checked
+  the packaged model gates and the storage budget; with no live Voice worker, `_eligible_studios`
+  found nothing to dispatch to, so the batch sat in `queued` for ever while the app showed accepted
+  work. There is no deregistration either - a dead worker stays in `monitor.registry` - so liveness
+  is `monitor.status[id]["status"]`. The guard now refuses with `STUDIO_NOT_RUNNING` when the
+  modality has no worker at all, or when every worker for it is explicitly not answering
+  (`unknown` is left alone, so a Hub that has not run a health check yet does not refuse work at
+  startup). Remote studios count, so a controller can still route to its nodes.
+  `tests/test_admission_requires_a_studio.py` (5 checks) pins each branch, including that another
+  modality's Studio does not count and that a node's does.
+- This is the Hub-side half of the reason work in 0.5.7 (the app already named the reason; the Hub
+  went on accepting the job).
+
 ## 0.6.2 — 2026-09-19 · mp4/mov audio extraction
 
 - **Subtitle accepted .mp4/.mov and always failed.** Both the upload validation
