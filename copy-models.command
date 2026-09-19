@@ -1,12 +1,18 @@
 #!/bin/sh
 # 2 - COPY THE MODELS
 #
-# Double-click this file. It looks at how much memory this Mac has, copies the models
-# that fit into your Downloads folder, leaves the ones that do not, and adds the voice
-# clips the kit carries. Running it again adds anything new and never overwrites a voice
-# already on this Mac.
+# Double-click this file. It looks at how much memory this Mac has, copies the models that fit
+# into a folder in your own home folder (~/StudioHubModels), leaves the ones that do not fit, and
+# adds the voice clips the kit carries.
 #
-# Nothing else is needed: the app finds this folder by itself the first time it opens.
+# It is safe to run again, and running it again is how you fix a model that reads as "not
+# installed": anything missing, or present at the wrong size, is copied over. Models already
+# correct are left alone, so a second run takes seconds rather than minutes. A voice already on
+# this Mac is never overwritten.
+#
+# Nothing else is needed: the app finds this folder by itself the first time it opens, and the
+# folder belongs to whichever account is signed in, so a different account name on another Mac
+# needs nothing special.
 
 set -u
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"

@@ -310,6 +310,46 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("Nothing to copy", output)
             self.assertIn("Already up to date: 1", output)
 
+    def test_a_copy_that_stopped_early_is_repaired_by_running_it_again(self):
+        """The repair path the owner asked for: a model folder that is *missing files*, not changed.
+
+        This is what an interrupted copy leaves behind - the folder is there, some of its files are
+        there, and the app reads the model as "not installed" with nothing on screen saying why.
+        Running the copy step again has to notice and fill it in, without re-copying the models that
+        are already correct.
+        """
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit, _library, _manifests = self._build(root, {
+                "half-model": (self.REVISION, {"weights.bin": "weights",
+                                               "config.json": "{}",
+                                               "tokenizer/vocab.txt": "a b c"}),
+                "whole-model": ("c" * 40, {"weights.bin": "weights"}),
+            })
+            destination = root / "StudioHubModels"
+            first, output = self._run(root, kit)
+            self.assertEqual(first, 0, output)
+            self.assertIn("Copied 2 new", output)
+
+            # An interrupted copy: a whole file gone, and another one truncated.
+            (destination / "half-model" / self.REVISION / "config.json").unlink()
+            (destination / "half-model" / self.REVISION / "weights.bin").write_text("wei")
+            before = (destination / "whole-model" / ("c" * 40) / "weights.bin").stat().st_mtime_ns
+
+            second, output = self._run(root, kit)
+            self.assertEqual(second, 0, output)
+            self.assertEqual(
+                (destination / "half-model" / self.REVISION / "config.json").read_text(), "{}")
+            self.assertEqual(
+                (destination / "half-model" / self.REVISION / "weights.bin").read_text(), "weights")
+            self.assertEqual(
+                (destination / "half-model" / self.REVISION / "tokenizer/vocab.txt").read_text(),
+                "a b c")
+            # The model that was already right was not touched: re-running stays cheap.
+            self.assertEqual(
+                (destination / "whole-model" / ("c" * 40) / "weights.bin").stat().st_mtime_ns, before)
+            self.assertEqual(self._receipt(destination, "half-model")["revision"], self.REVISION)
+
     def test_a_model_too_big_for_this_mac_is_never_copied(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

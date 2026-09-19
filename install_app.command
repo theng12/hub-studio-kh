@@ -57,6 +57,10 @@ esac
 
 echo
 echo "  Copying... (this takes a few seconds)"
+# A running copy holds its own files open, and replacing one underneath itself is how an install
+# half-lands - the old process keeps serving from deleted files while the folder on disk changes.
+osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
+sleep 2
 rm -rf "$TARGET/$NAME" 2>/dev/null
 if [ "$NEEDS_ADMIN" = "1" ]; then
   # One administrator prompt, the normal macOS way.
@@ -82,11 +86,30 @@ fi
 # macOS blocks an unsigned app the first time. Clear the flag so a double-click just works.
 xattr -cr "$TARGET/$NAME" 2>/dev/null || true
 
+# An install that copied a folder but not its runtime looks fine in the Dock and fails on first
+# start, so the one thing worth checking here is that the runtime arrived.
+if [ ! -x "$TARGET/$NAME/Contents/Resources/runtimes/voice/bin/python3" ]; then
+  echo
+  echo "  The copy did not finish: the app has no runtime inside it."
+  echo "  Copy the whole kit folder to this Mac, then run this file again."
+  echo
+  echo "  Press Return to close."
+  read _ || true
+  exit 1
+fi
+VERSION=$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
+          "$TARGET/$NAME/Contents/Info.plist" 2>/dev/null || echo "unknown")
+
 echo
+echo "  Installed Studio Hub $VERSION"
 echo "  Installed to:  $TARGET/$NAME"
 echo
 echo "  NEXT:  open it once (right-click it and choose Open), then double-click"
 echo "         '2 - Copy the models.command' to bring over the models."
+echo
+echo "  Running this file again replaces the installed copy with the one in this kit, which is"
+echo "  how an update is applied. Your models, settings and output are not touched."
+echo "  If anything looks wrong later, 'Technical/verify-kit.sh' checks this kit is complete."
 echo
 echo "  Press Return to close."
 read _ || true

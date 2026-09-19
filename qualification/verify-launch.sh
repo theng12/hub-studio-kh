@@ -28,7 +28,11 @@ if [ -z "${APP:-}" ]; then
   APP="${APP:-$KIT/Studio Hub.app}"
 fi
 if [ -z "${LIB:-}" ]; then
-  for candidate in "$KIT/model-library" "$HOME/model-library" "/Volumes/Models/model-library"; do
+  # `$KIT/../model-library` is the kit's own library when this script is run from `Technical/`,
+  # which is where it sits in the kit and therefore how it is actually used: someone who has just
+  # copied the folder wants `sh Technical/check-everything.sh` to work with no arguments.
+  for candidate in "$KIT/model-library" "$KIT/../model-library" "$HOME/model-library" \
+                   "/Volumes/Models/model-library"; do
     [ -d "$candidate" ] && { LIB="$candidate"; break; }
   done
 fi
