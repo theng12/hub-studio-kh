@@ -161,6 +161,11 @@ APP_COMMIT = _read_app_commit()
 
 # ───────────── FastAPI setup ─────────────
 
+# Streaming read of a transcribe-by-upload body: one piece in memory at a time, and a cap that
+# matches the Hub's per-file limit so a direct caller cannot fill the disk either.
+TRANSCRIBE_UPLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_TRANSCRIBE_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+
 app = FastAPI(title="Voice Studio KH", version="0.1.0")
 reference_audio.cleanup_expired()
 model_storage.ensure_cache_notice()
@@ -1598,16 +1603,33 @@ async def transcribe(
                 raise HTTPException(status_code=425, detail="job audio not ready yet")
             audio_path = job.output_path
         elif file is not None:
-            try:
-                data = await file.read()
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"failed to read upload: {e}")
-            if not data:
-                raise HTTPException(status_code=400, detail="uploaded audio is empty")
+            # Streamed to the temporary file a piece at a time. Reading the whole body first held an
+            # entire recording in this process's memory, with no cap on how large one could be, and
+            # this worker is usually sharing unified memory with a loaded model. The Hub's own
+            # per-file limit is the cap here, and a refusal costs one piece instead of the file.
             suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
             fd, tmp_path = tempfile.mkstemp(prefix="stt-", suffix=suffix)
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(data)
+            written = 0
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    while True:
+                        chunk = await file.read(TRANSCRIBE_UPLOAD_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > MAX_TRANSCRIBE_UPLOAD_BYTES:
+                            raise HTTPException(status_code=413,
+                                                detail="uploaded audio is too large")
+                        fh.write(chunk)
+            except HTTPException:
+                os.unlink(tmp_path)
+                raise
+            except Exception as e:
+                os.unlink(tmp_path)
+                raise HTTPException(status_code=400, detail=f"failed to read upload: {e}")
+            if not written:
+                os.unlink(tmp_path)
+                raise HTTPException(status_code=400, detail="uploaded audio is empty")
             audio_path = tmp_path
         else:
             raise HTTPException(

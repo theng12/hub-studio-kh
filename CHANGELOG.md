@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.11 — 2026-09-19 · the voice transcribe upload was unbounded in memory
+
+- **`main.py:1602` did `data = await file.read()`** in the transcribe-by-upload handler: the whole
+  recording in memory before it reached the temporary file, with no cap on its size. (The audit said
+  "voice upload endpoints apply the 25 MB limit after buffering" - that half is wrong: the
+  reference-audio path already reads `reference_audio.MAX_BYTES + 1` at `main.py:1316`. Verified
+  against the source before changing anything, which is why only this route was touched.) Now
+  streamed in 1 MiB pieces to the temp file with `MAX_TRANSCRIBE_UPLOAD_BYTES` (matching the Hub's
+  2 GiB per-file limit), the temp file removed on every failure path, and the existing empty-upload
+  and read-failure responses kept. Gated on the full suite rather than on a unit test of a helper -
+  the lesson from 0.6.9, where a helper test passed while the route was broken.
+
 ## 0.6.10 — 2026-09-19 · fix for a regression in 0.6.9
 
 - **0.6.9 referenced `manager.MAX_INPUT_BYTES`**, but `manager` in that module is the *instance* and

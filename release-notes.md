@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.11 — 2026-09-19
+
+### A recording read into memory whole, with no ceiling
+
+Transcribing a recording you upload — as opposed to one this Mac already generated — read the entire
+file into the worker's memory before writing it to a temporary file. There was no limit on it at all:
+a large enough upload, or a direct caller that ignores the app, could take the machine down by
+exhausting memory while it was holding a model. It is now streamed to disk a piece at a time, with the
+same per-file ceiling the Hub uses, and a refused upload costs one piece rather than the whole file.
+
 ## 0.6.10 — 2026-09-19
 
 ### A correction to 0.6.9
