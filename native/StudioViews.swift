@@ -74,6 +74,8 @@ struct StudioContent: View {
     @State private var revealedToken = false
     @State private var connectionNote: String?
     @State private var controllerDraft = ""
+    /// The name being typed. Kept apart from the Hub's answer so the field does not fight the poll.
+    @State private var machineNameDraft = ""
     @State private var controllerToken = ""
     /// 0 means all time; otherwise the window in hours.
     @State private var statisticsWindow = 0
@@ -1640,6 +1642,32 @@ struct StudioContent: View {
         }
     }
 
+    /// "This needs a restart", and the button that restarts.
+    ///
+    /// The network addresses and the port are read when the Hub starts, so their controls are
+    /// disabled while it runs. That left a new operator to work out on their own that they had to
+    /// stop the services, change the setting and start them again - and the owner watched exactly
+    /// that happen. Anything that waits for a restart now says so here, next to the control, with
+    /// the one press that applies it.
+    @ViewBuilder private var restartNotice: some View {
+        if studio.restartPending || (!studio.canConfigure && studio.hasPendingRestartSetting) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.clockwise.circle").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This change takes effect when the local services restart.")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Button("Restart Services") { studio.restartServices() }
+                        .disabled(studio.stopping || studio.starting)
+                    Text("They stop and start again on their own; nothing else on this Mac is affected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
     private var controllerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Studio Hub & GenStudio")
@@ -1666,6 +1694,29 @@ struct StudioContent: View {
             sectionTitle("Fleet")
             // "This Mac is a Not reporting" was what the operator read when the Hub had not
             // answered yet: the article was hard-coded beside a label that is sometimes a phrase.
+            // Naming this Mac. The Hub has kept a label for it all along - `machine_name` is what
+            // every other Mac and the gateway show - but no control ever offered it, so the only
+            // name an operator could have was their hostname.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.callout)
+                HStack {
+                    TextField("This Mac's name, e.g. Studio Mini 01", text: $machineNameDraft)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                    Button("Rename") {
+                        Task { await workspace.renameThisMachine(machineNameDraft) }
+                    }
+                    .disabled(!connected || machineNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                              == (workspace.controllerIdentity?.settings.machineName ?? ""))
+                }
+                Text("What this Mac is called in the fleet, in Jobs and to the gateway. It is a label, not an identity: renaming it never changes routing or a node's registration.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onAppear { machineNameDraft = workspace.controllerIdentity?.settings.machineName ?? "" }
+            .onChange(of: workspace.controllerIdentity?.settings.machineName) { _, value in
+                machineNameDraft = value ?? ""
+            }
+
             LabeledContent("This Mac is", value: roleTitle(workspace.controllerIdentity?.settings.role))
             Text(roleExplanation(workspace.controllerIdentity?.settings.role))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1681,9 +1732,15 @@ struct StudioContent: View {
             .disabled(!connected || workspace.controllerIdentity == nil)
             if let note = workspace.roleNote {
                 Text(note).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Text("A **Controller** runs its own group and sends work to nodes; a **Node** is sent work by a controller; **Standalone** is a Mac on its own. The role applies immediately.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider()
+
+            restartNotice
 
             LabeledContent("Listening on", value: listenTitle(studio.configuration.listenHost))
             Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private.")

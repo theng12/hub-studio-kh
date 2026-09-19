@@ -598,6 +598,22 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    @app.post("/api/hub/machine-label")
+    def set_machine_label(body: dict[str, Any]) -> dict[str, Any]:
+        """Name this Mac the way the operator wants it shown.
+
+        The name is a label, not an identity: the Hub's machine key stays "local", routing and fleet
+        registration never depend on it, and renaming a Mac after nodes have joined does not orphan
+        anything. `registry.set_label` has existed for this the whole time; no route exposed it, so
+        the only name an operator could ever have was their hostname.
+        """
+        from .backend import registry
+        name = str(body.get("name") or "").strip()
+        if len(name) > 120:
+            raise HTTPException(400, "the name must be at most 120 characters")
+        registry.set_label("local", name)
+        return {"settings": control_plane.public_settings()}
+
     @app.get("/api/hub/shared-voices")
     def shared_voice_list() -> dict[str, Any]:
         """What this controller holds and how far each voice has reached its nodes.

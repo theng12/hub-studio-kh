@@ -20,6 +20,11 @@ final class StudioController: ObservableObject {
     @Published private(set) var fleetToken: String?
     @Published var starting = false
     @Published var stopping = false
+    /// Set when the operator asked for the services to come back up after a stop, so the settings
+    /// they just changed take effect without them having to find Start afterwards.
+    private var restartAfterStop = false
+    /// True while a change that needs a restart is waiting for one.
+    @Published var restartPending = false
     @Published var canForceStop = false
     @Published var configuration: ShellConfiguration
     @Published var loginStatus = SMAppService.mainApp.status
@@ -118,6 +123,8 @@ final class StudioController: ObservableObject {
     }
     private func start(automaticRecovery: Bool) {
         guard canConfigure, let models = configuration.modelsDirectory else { return }
+        // Starting is what applies a saved change, so the notice goes as soon as it does.
+        restartPending = false
         do {
             try ShellConfiguration.requireDirectory(models)
             // Before anything is spawned: a port another program is holding would otherwise cost
@@ -261,6 +268,10 @@ final class StudioController: ObservableObject {
             scheduleRecovery()
         }
         onStopped?()
+        if restartAfterStop {
+            restartAfterStop = false
+            start()
+        }
     }
     private func scheduleRecovery() {
         guard restartTask == nil else { return }
@@ -289,6 +300,24 @@ final class StudioController: ObservableObject {
             }
         }
     }
+    /// Stop and start again, applying the role, the network addresses, the port or the name.
+    ///
+    /// Every one of these is read when the Hub starts, and the controls that change them are
+    /// disabled while it runs - which left the operator to work out on their own that they had to
+    /// stop the services first, change the setting, and start them again. Three steps, two of them
+    /// invisible. This is the one button.
+    func restartServices() {
+        guard canConfigure else { return }
+        restartPending = false
+        guard running || starting else {
+            start()
+            return
+        }
+        restartAfterStop = true
+        status = "Restarting to apply the change…"
+        stop()
+    }
+
     func stop() {
         let cancelledRecovery = restartTask != nil
         restartTask?.cancel()
@@ -369,6 +398,26 @@ final class StudioController: ObservableObject {
         let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         fleetToken = value.isEmpty ? nil : value
     }
+    /// Whether the Hub is running on something other than what is saved.
+    ///
+    /// Asked of the Hub rather than remembered in the view: the operator can quit the app mid-edit,
+    /// and a notice that only exists while a screen is open is a notice that lies.
+    var hasPendingRestartSetting: Bool {
+        guard running || starting, let bound = readyURL?.port else { return false }
+        // The port is the one setting the running Hub tells us about. The addresses are covered by
+        // `restartPending`, which the controls that change them set.
+        return bound != configuration.port
+    }
+
+    /// Mark that a saved change will only take effect at the next start.
+    ///
+    /// Shown next to the control that made it, with the button that applies it, rather than as a
+    /// line at the bottom of the page.
+    private func noteRestartNeeded() {
+        guard running || starting else { return }
+        restartPending = true
+    }
+
     /// Set every network this Hub should answer on. Loopback is implied and added by the Hub.
     func setListenHosts(_ hosts: [String]) {
         guard canConfigure else { return }
@@ -377,6 +426,7 @@ final class StudioController: ObservableObject {
         }
         configuration.listenHost = unique.isEmpty ? "127.0.0.1" : unique.joined(separator: ",")
         saveConfiguration()
+        noteRestartNeeded()
     }
 
     /// Set the port the Hub binds. Fixed rather than chosen by the operating system, because a
@@ -385,7 +435,8 @@ final class StudioController: ObservableObject {
         guard canConfigure, (1024...65535).contains(port), port != configuration.port else { return }
         configuration.port = port
         saveConfiguration()
-        fleetNote = "Port set to \(port). Stop and start the services to use it, then tell every node the new address."
+        noteRestartNeeded()
+        fleetNote = "Port set to \(port). Restart the services to use it, then tell every node the new address."
     }
 
     /// The address a node should be given, when this Mac answers on more than itself.
@@ -410,7 +461,7 @@ final class StudioController: ObservableObject {
         guard canConfigure else { return }
         do {
             try configuration.save()
-            fleetNote = "Saved. Stop and start the services to use this address."
+            fleetNote = "Saved. Restart the services to use this address."
         } catch { failure = error.localizedDescription }
     }
 

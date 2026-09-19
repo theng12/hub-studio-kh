@@ -69,6 +69,12 @@ struct PageRenderHarness {
             }
         }
 
+        // `STUDIOHUB_RENDER_RESTART=1` pretends a change is waiting for a restart, so the notice
+        // that only appears while the services run can still be looked at.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_RESTART"] == "1" {
+            studio.restartPending = true
+        }
+
         for page in pages {
         studio.selection = page
         for size in sizes {

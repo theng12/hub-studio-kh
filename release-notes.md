@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.5.6 — 2026-09-19
+
+### Name your Mac, and one button for settings that need a restart
+
+**You can name this Mac now.** Connections → **Name** → *Rename*: that is what this Mac is called in
+the fleet, in Jobs and to the gateway. It is a label, not an identity — renaming it never changes
+routing, and never affects a node that has already joined.
+
+**Changing the role, the network addresses or the port needs the services restarted**, and the
+controls are switched off until they are — which quietly expected you to know to stop the services,
+change the setting, and start them again. Those settings now say so, right above them, with one
+button:
+
+> ⟳ This change takes effect when the local services restart.
+> **Restart Services** — they stop and start again on their own.
+
+The role picker also explains itself in plain words: **Controller** runs its own group and sends
+work to nodes, **Node** is sent work by a controller, **Standalone** is a Mac on its own.
+
 ## 0.5.5 — 2026-09-19
 
 ### You can see how long a generation takes

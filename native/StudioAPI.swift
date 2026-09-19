@@ -2091,6 +2091,23 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Change this Hub's role. Standalone creates locally; Controller serves other Macs and
     /// reports their work; Node does local work only and defers customer jobs to a controller.
+    /// Name this Mac. A label for people, not an identity: routing and fleet membership are
+    /// unaffected, which is why it can be changed at any time.
+    func renameThisMachine(_ name: String) async {
+        guard let requestConnection = connectionID else { return }
+        roleNote = nil
+        do {
+            let _: EmptyResponse = try await sendJSON(
+                ["api", "hub", "machine-label"], method: "POST", body: RenameRequest(name: name))
+            guard connectionID == requestConnection else { return }
+            await refreshConnection()
+            roleNote = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Name cleared; this Mac shows its hostname again."
+                : "This Mac is now called \(name.trimmingCharacters(in: .whitespacesAndNewlines))."
+            error = nil
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Rename this Mac") } }
+    }
+
     func setRole(_ role: String) async {
         guard let requestConnection = connectionID else { return }
         roleNote = nil
@@ -3034,6 +3051,8 @@ private struct HubModelPackage: Decodable {
 }
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
+private struct RenameRequest: Codable { let name: String }
+
 private struct RoleChange: Encodable { let role: String }
 private struct JoinRequest: Encodable {
     let nodeId: String

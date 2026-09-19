@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.6 — 2026-09-19 · naming a Mac, and the restart nobody knew about
+
+- **The name was never editable.** `registry.set_label` has written `machine_labels.json` since the
+  beginning and `machine_name` - what every other Mac and the gateway read - comes from it, but no
+  route and no control exposed it, so the only name an operator could have was the hostname. New:
+  `POST /api/hub/machine-label` (Hub token only; a fleet credential is refused, checked against a
+  live Hub), and a **Name** field with a Rename button in Connections. Empty clears back to the
+  hostname. It is a label, never an identity: routing and fleet membership do not read it.
+- **The restart was implied, not stated.** Role, network addresses and port are read when the Hub
+  starts, so their controls are disabled while it runs - leaving a new operator to discover the
+  stop/change/start dance. `StudioController.restartServices()` now stops and starts again in one
+  press (`restartAfterStop`, honoured in `workerExited`), a notice appears above those controls while
+  a change is waiting, and `hasPendingRestartSetting` compares the port the Hub actually bound with
+  the saved one so the notice tells the truth rather than remembering an edit. The role picker also
+  gained a line saying what Controller / Node / Standalone mean.
+- Evidence: `tests/test_machine_name_and_restart.py` (6 checks) - including a live Hub rename that is
+  read back through `/api/hub/controller`, a cleared name falling back to the hostname, and a fleet
+  credential being refused. Both halves were rendered before shipping with the new
+  `STUDIOHUB_RENDER_RESTART=1` mode, which shows the notice that only appears while services run.
+
 ## 0.5.5 — 2026-09-19 · how long a generation took, which the app never said
 
 - **The number existed and was not read.** The Hub writes `runtime_s` on an item when it finishes
