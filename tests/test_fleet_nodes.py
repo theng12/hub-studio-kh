@@ -214,8 +214,10 @@ class FleetNodeStoreTests(unittest.TestCase):
         # Joined but switched off must read as unreachable, never as available.
         self.assertEqual(rows["gone"]["state"], "unreachable")
         self.assertIn("connection refused", rows["gone"]["detail"])
+        # `unauthorized` is counted separately from `unreachable`: a node that answers and refuses
+        # this controller is a credential problem, not a silent Mac (0.6.16).
         self.assertEqual(inventory["summary"],
-                         {"total": 2, "reachable": 1, "unreachable": 1, "error": 0})
+                         {"total": 2, "reachable": 1, "unreachable": 1, "unauthorized": 0, "error": 0})
 
     def test_a_node_that_answers_nonsense_is_an_error_not_a_success(self) -> None:
         fleet_nodes.join({"node_id": "odd", "name": "Odd",

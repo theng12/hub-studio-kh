@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.16 — 2026-09-19
+
+### A Mac that was switched off, and a Mac that was told no
+
+The Fleet page had one way of saying "no answer": unreachable. So a node that *replied* and refused
+this controller — which happens when a node is re-joined with its own token, or a controller's fleet
+token is replaced — looked exactly like a Mac that was switched off. That sends you to the network,
+and to the wrong Mac, when the fix is a token. It now says so plainly:
+
+> the node answered but rejected this controller's credential (HTTP 401) — re-join it with the
+> current Fleet Token
+
+and it is counted separately from the Macs that are simply not answering.
+
 ## 0.6.15 — 2026-09-19
 
 ### The Fleet page no longer waits for every silent Mac in turn

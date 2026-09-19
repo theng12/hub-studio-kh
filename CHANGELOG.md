@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.16 — 2026-09-19 · a refused credential looked like a switched-off Mac
+
+- **`fleet_nodes.probe` treated every non-success answer as a generic error**, and the Fleet page's
+  reading of a node that does not answer is "unreachable". A 401/403 means the opposite: the Mac is
+  up and refused *this controller* - the state you get when a node was re-joined with its own token,
+  or the controller's fleet token was replaced. The probe now returns `state="unauthorized"` with an
+  actionable detail naming the status and the fix, and `inventory`'s summary counts it separately
+  from `unreachable`, so it cannot hide inside a total.
+- Evidence: `tests/test_fleet_credential_refusal.py` (5 checks) - a 401 and a 403 are their own state
+  with the Fleet Token named, other failures stay errors, a healthy node still reads reachable, and
+  the summary counts a refusal separately from a silent Mac.
+
 ## 0.6.15 — 2026-09-19 · the fleet inventory probed nodes one at a time
 
 - **`fleet_nodes.inventory` awaited `probe` in a loop.** Each probe waits out `PROBE_TIMEOUT` for a

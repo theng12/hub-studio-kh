@@ -226,6 +226,16 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         client = httpx.AsyncClient(follow_redirects=False)
     try:
         response = await client.get(f"{node['address']}/api/version", timeout=PROBE_TIMEOUT)
+        if response.status_code in (401, 403):
+            # The node answered, so it is up - it refused *this controller*. Reported as plain
+            # "unreachable", the operator goes looking at the network and at the wrong Mac, when the
+            # fix is the credential: a node re-joined with its own token, or a controller whose
+            # fleet token was replaced. The state is its own so the Fleet page can say so and the
+            # counts do not hide it.
+            return {**row, "state": "unauthorized",
+                    "detail": (f"the node answered but rejected this controller's credential "
+                               f"(HTTP {response.status_code}) - re-join it with the current "
+                               f"Fleet Token")}
         if not response.is_success:
             return {**row, "state": "error", "detail": f"node answered HTTP {response.status_code}"}
         try:
@@ -266,6 +276,7 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
             "total": len(rows),
             "reachable": sum(row["state"] == "reachable" for row in rows),
             "unreachable": sum(row["state"] == "unreachable" for row in rows),
+            "unauthorized": sum(row["state"] == "unauthorized" for row in rows),
             "error": sum(row["state"] == "error" for row in rows),
         },
     }
