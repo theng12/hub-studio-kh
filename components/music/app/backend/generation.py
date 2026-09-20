@@ -183,6 +183,27 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def source_tree_digest(root: Path) -> str:
+    """Content identity for a staged ACE-Step source tree."""
+    root = Path(root)
+    digest = sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative == "studiohub-engine.json":
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"ACE-Step source contains a non-regular file: {relative}")
+        size = path.stat().st_size
+        digest.update(relative.encode() + b"\0" + str(size).encode() + b"\0")
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def engine_contract_reason(engine_root: str) -> str | None:
     """Return why the supplied checkout is not the exact runnable engine."""
     root = Path(engine_root)
@@ -194,23 +215,40 @@ def engine_contract_reason(engine_root: str) -> str | None:
     )
     if not all(path.is_file() and not path.is_symlink() for path in required):
         return "pinned ACE-Step source is incomplete"
-    git = Path("/usr/bin/git")
-    if not git.is_file():
-        return "system Git is unavailable for ACE-Step source verification"
-    try:
-        revision = subprocess.run(
-            [str(git), "-C", str(root), "rev-parse", "HEAD"],
-            text=True, capture_output=True, timeout=10, check=True).stdout.strip()
-        changed = subprocess.run(
-            [str(git), "-C", str(root), "status", "--porcelain",
-             "--untracked-files=all", "--", "acestep"],
-            text=True, capture_output=True, timeout=10, check=True).stdout.strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"ACE-Step source revision could not be verified: {exc}"
-    if revision != catalog.ENGINE_REVISION:
-        return f"ACE-Step source revision is {revision or 'unknown'}, not the pinned revision"
-    if changed:
-        return "ACE-Step source has tracked or untracked changes"
+    provenance = root / "studiohub-engine.json"
+    if provenance.is_file() and not provenance.is_symlink():
+        try:
+            identity = json.loads(provenance.read_text())
+            observed_source = source_tree_digest(root)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return f"bundled ACE-Step source could not be verified: {exc}"
+        expected_identity = {
+            "schema": "studiohub.music-engine-source", "schema_version": 1,
+            "repo": catalog.ENGINE_REPO, "revision": catalog.ENGINE_REVISION,
+            "source_sha256": catalog.ENGINE_SOURCE_SHA256,
+        }
+        if identity != expected_identity:
+            return "bundled ACE-Step provenance does not match the pinned source"
+        if observed_source != catalog.ENGINE_SOURCE_SHA256:
+            return "bundled ACE-Step source digest does not match its pinned identity"
+    else:
+        git = Path("/usr/bin/git")
+        if not git.is_file():
+            return "system Git is unavailable for ACE-Step source verification"
+        try:
+            revision = subprocess.run(
+                [str(git), "-C", str(root), "rev-parse", "HEAD"],
+                text=True, capture_output=True, timeout=10, check=True).stdout.strip()
+            changed = subprocess.run(
+                [str(git), "-C", str(root), "status", "--porcelain",
+                 "--untracked-files=all", "--", "acestep"],
+                text=True, capture_output=True, timeout=10, check=True).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"ACE-Step source revision could not be verified: {exc}"
+        if revision != catalog.ENGINE_REVISION:
+            return f"ACE-Step source revision is {revision or 'unknown'}, not the pinned revision"
+        if changed:
+            return "ACE-Step source has tracked or untracked changes"
     for relative, expected in catalog.ENGINE_MODEL_CODE_SHA256.items():
         try:
             observed = _file_sha256(root / relative)
@@ -537,6 +575,10 @@ class GenerationManager:
             raise ValueError("Music output directory cannot be a symlink")
         self.staging = self.outputs / ".staging"
         self.staging.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.engine_state = self.data / "engine-state"
+        if self.engine_state.is_symlink():
+            raise ValueError("Music engine state cannot be a symlink")
+        self.engine_state.mkdir(exist_ok=True, mode=0o700)
         self.state_file = self.data / "jobs.json"
         self.machine = machine
         env_root = os.environ.get("STUDIOHUB_MUSIC_ENGINE_ROOT")
@@ -547,11 +589,13 @@ class GenerationManager:
         self.runtime_sha256 = runtime_sha256 or runtime_identity()
         self.executor = EngineExecutor({
             "engine_root": self.engine_root,
+            "state_root": str(self.engine_state),
             "checkpoints_dir": package.get("checkpoints_root", ""),
             "dit_model": DIT_MODEL,
             "lm_model": LM_MODEL,
             "backend": os.environ.get("STUDIOHUB_MUSIC_BACKEND", "mlx"),
             "device": os.environ.get("STUDIOHUB_MUSIC_DEVICE", "auto"),
+            "parent_pid": os.getpid(),
         })
         self.jobs: dict[str, dict] = {}
         self.cancel_events: dict[str, threading.Event] = {}

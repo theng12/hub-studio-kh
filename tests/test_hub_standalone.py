@@ -18,7 +18,7 @@ class StandaloneHubConfigTests(unittest.TestCase):
         self.data_dir = self.root / "Node State"
         self.workers_file = self.root / "private-workers.json"
         self.output_roots = [self.root / "image-output", self.root / "voice-output",
-                             self.root / "subtitle-output"]
+                             self.root / "subtitle-output", self.root / "music-output"]
         for root in self.output_roots:
             root.mkdir()
         self.workers_file.write_text(json.dumps([
@@ -42,6 +42,13 @@ class StandaloneHubConfigTests(unittest.TestCase):
                 "local": True, "runtime_identity": {"id": "subtitle-runtime"},
                 "hub_token": "same-existing-hub-token",
                 "managed_output_roots": [str(self.output_roots[2])],
+            },
+            {
+                "id": "music", "title": "Music Studio", "modality": "music",
+                "host": "127.0.0.1", "port": 51104, "machine": "node-a",
+                "local": True, "runtime_identity": {"id": "music-runtime"},
+                "hub_token": "same-existing-hub-token",
+                "managed_output_roots": [str(self.output_roots[3])],
             },
         ]))
         os.chmod(self.workers_file, 0o600)
@@ -67,13 +74,15 @@ class StandaloneHubConfigTests(unittest.TestCase):
 
         return importlib.reload(standalone_config)
 
-    def test_loads_three_private_dynamic_workers_without_pinokio_defaults(self) -> None:
+    def test_loads_four_private_dynamic_workers_without_pinokio_defaults(self) -> None:
         config = self._fresh_config()
 
         workers = config.load_workers()
 
-        self.assertEqual([worker["id"] for worker in workers], ["image", "voice", "subtitle"])
-        self.assertEqual([worker["modality"] for worker in workers], ["image", "voice", "transcription"])
+        self.assertEqual([worker["id"] for worker in workers],
+                         ["image", "voice", "subtitle", "music"])
+        self.assertEqual([worker["modality"] for worker in workers],
+                         ["image", "voice", "transcription", "music"])
         self.assertTrue(all(worker["host"] == "127.0.0.1" for worker in workers))
         self.assertTrue(all(worker["runtime_identity"]["id"].endswith("runtime") for worker in workers))
 

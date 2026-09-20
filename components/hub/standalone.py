@@ -918,8 +918,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 return await broker.reconcile_voice_item(
                     batch_id, item_index, client=monitor._client
                 )
-            # Preserve the existing Image/unknown-batch behavior and error text;
-            # Voice is the only new dispatch introduced by this route.
+            if batch is not None and batch.get("modality") == "music":
+                return await broker.reconcile_music_item(
+                    batch_id, item_index, client=monitor._client
+                )
             return await broker.reconcile_image_item(
                 batch_id, item_index, client=monitor._client
             )
@@ -1171,7 +1173,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # as this Hub talks to its own workers. Serving that surface is what makes a packaged app a
     # valid fleet member: the rest of the fleet logic already exists on the controller side and
     # only ever needed somewhere to point.
-    WORKER_FOR_MODALITY = {"image": "image", "voice": "voice", "transcription": "subtitle"}
+    WORKER_FOR_MODALITY = {
+        "image": "image", "voice": "voice", "transcription": "subtitle", "music": "music",
+    }
 
     def _proxy_target(path: str) -> tuple[str, str]:
         """Resolve a peer path to a local worker, or refuse it.

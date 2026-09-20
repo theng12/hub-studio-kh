@@ -3,6 +3,17 @@
 Prepared 2026-09-20. Start with this file and [the current board](tasks/BOARD.md).
 This is the continuation guide for the existing canonical plan, not a second plan.
 
+## Current continuation — 2026-09-21
+
+[MEASURED] The audit repairs H-01 through H-05 are integrated, followed by the
+reviewed Music package/engine contract through
+[PR #10](https://github.com/theng12/Studio-Hub-KH/pull/10) at `9f25c03`.
+The active bounded continuation is `codex/music-package-runtime`; consult the
+[Music recovery card](tasks/MUSIC-RECOVERY.md) for its runtime, staged-source,
+supervision, routing, and no-model startup evidence. The older baseline and
+transfer inventory below remain provenance and setup reference, not a request to
+restart the recovery from the preserved draft.
+
 ## What is safe to continue from
 
 [MEASURED] The private GitHub repository is **https://github.com/theng12/Studio-Hub-KH**.

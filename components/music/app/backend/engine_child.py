@@ -28,7 +28,9 @@ than through its Gradio UI or HTTP server.
 from __future__ import annotations
 
 import os
+import signal
 import sys
+import threading
 import time
 import traceback
 
@@ -45,13 +47,20 @@ class EngineCancelled(RuntimeError):
     """Raised inside the engine callback when the parent asks for a stop."""
 
 
+def _monitor_parent(parent_pid: int, *, poll_seconds: float = 0.25) -> None:
+    """Kill the isolated engine group if its owning Music worker disappears."""
+    while os.getppid() == parent_pid:
+        time.sleep(poll_seconds)
+    if os.getpgrp() == os.getpid():
+        os.killpg(os.getpid(), signal.SIGKILL)
+
+
 def _configure_environment(config: dict) -> None:
     """Point the pinned engine source at the installer-owned checkpoint layout."""
-    engine_root = str(config["engine_root"])
     checkpoints = str(config["checkpoints_dir"])
-    # The engine resolves ``<project_root>/checkpoints`` and its progress cache
-    # from this variable when no explicit path is passed.
-    os.environ["ACESTEP_PROJECT_ROOT"] = engine_root
+    # ACE-Step writes progress estimates below its project root. Keep that
+    # mutable machine state outside both immutable source and verified models.
+    os.environ["ACESTEP_PROJECT_ROOT"] = str(config["state_root"])
     os.environ["ACESTEP_CHECKPOINTS_DIR"] = checkpoints
     # Never let an inherited proxy or telemetry variable reach the engine.
     for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
@@ -186,9 +195,21 @@ def main(commands, events, cancel_event, config) -> None:
     # group and cannot leave a helper child of the engine behind.
     if os.name == "posix":
         try:
-            os.setsid()
-        except OSError:
-            pass
+            if os.getpgrp() != os.getpid():
+                os.setsid()
+        except OSError as exc:
+            events.put({"kind": "error", "job_id": None,
+                        "error": f"engine process isolation failed: {exc}"})
+            return
+        parent_pid = int(config.get("parent_pid") or 0)
+        if (parent_pid <= 1 or os.getppid() != parent_pid
+                or os.getpgrp() != os.getpid()):
+            events.put({"kind": "error", "job_id": None,
+                        "error": "engine process owner or process group is invalid"})
+            return
+        threading.Thread(
+            target=_monitor_parent, args=(parent_pid,), daemon=True,
+            name="music-engine-parent-monitor").start()
     _configure_environment(config)
     try:
         dit, llm = _load_handlers(config, events)

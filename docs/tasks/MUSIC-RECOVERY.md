@@ -9,10 +9,16 @@ implementation found lifecycle and upstream-initialization blockers. The
 hardened commit `3a11c6f` passed exact-commit re-review with no remaining
 findings and was approved for this bounded merge.
 
+[MEASURED] The package/engine contract is integrated through reviewed
+[PR #10](https://github.com/theng12/Studio-Hub-KH/pull/10) at `9f25c03`.
+The next bounded segment is implemented on `codex/music-package-runtime`: pinned
+runtime-overlay construction, content-only engine-source staging, private Hub
+supervision, closed peer routing, and a staged startup/shutdown proof.
+
 [MEASURED] No model payload was downloaded, copied, or modified. The protected
 legacy library at `~/Downloads/model-library` was not inspected. No Music
-inference, package staging, supervisor launch, peer routing, native workflow,
-or deployment was performed.
+inference, native workflow, installed-app replacement, deployment, or fleet
+enrollment was performed.
 
 ## Recovered boundary
 
@@ -27,17 +33,26 @@ or deployment was performed.
   worker loads only its `model/` child and accepts no external checkpoint-root
   override.
 - The engine is a separate explicit contract at Git revision
-  `ca1e85fe9430179831e6bc6be790c332190a3866`: the launcher must be run by a
-  pinned runtime and must receive that exact clean ACE-Step checkout. Runtime
-  imports must resolve inside it, and the model-code files are checked against
-  their immutable digests.
+  `ca1e85fe9430179831e6bc6be790c332190a3866`. Staging accepts only that clean
+  checkout, copies a 618-file allowlisted source tree without `.git`, and records
+  the canonical content digest
+  `a55b4bf166464a690e967b4a31862e39efc6bd954ef0214ac91030d99e97cb33`.
+  Runtime verification checks that digest and the two immutable model-code
+  digests before accepting imports from the bundled tree.
 - Studio Hub overrides ACE-Step's initialization hooks with read-only bounded
   checks. It neither runs the upstream whole-repository downloader (whose gate
   incorrectly requires the excluded 1.7B planner) nor lets upstream synchronize
   executable files into the verified package.
-- Hub model-package readiness understands `music-mlx`, but the Music worker is
-  not staged or supervised yet and therefore remains unavailable in packaged
-  builds.
+- The Music dependency overlay is a 1.7 MB, seven-package, hash-locked layer over
+  the existing immutable Voice Python. Torch and MLX are not duplicated. The
+  complete staged overlay is pinned as
+  `5f79f4de4856e370d8984e7fdd86cf418f31f731c5092e923264f03718bcbc3e`;
+  both staging and worker startup reject added, removed, or changed files. The
+  staged Hub owns Music as an independent process, publishes its output root,
+  carries one composite runtime identity through release/registry/worker health,
+  and routes the explicit Music health/catalog/job/generation surface. The
+  worker remains unavailable for generation until the manifest-defined model
+  package is installed.
 
 ## Safeguards retained
 
@@ -74,18 +89,43 @@ or Minor findings; it independently passed all 66 focused tests, seven executor
 fault reproductions, four adapter reproductions, and a two-file installer
 download/receipt proof.
 
-[MEASURED] Broad discovery reran 618 tests: 603 passed and 11 skipped. Its four
-non-passes are the intake baseline rather than Music failures: no worktree-local
-Image runtime, no `espeak-ng` on the shell PATH, and two stale staged 0.5.4
-release checks while source is 0.6.38. The isolated Hub and Voice product gates
-both passed with the existing shared test-dependency path.
+[MEASURED] The resumed final root gate passed 631 tests (7 skips) in 442.126
+seconds, including the restored Hub bridge (85 passes) and Voice product suite
+(722 passes/19 skips). The earlier baseline failures were resolved by restoring
+verified runtime paths, testing the real library-backed phonemizer and selecting
+the current staged artifact explicitly. Native build and five original audit
+probes passed. See `qualification/new-computer-resume-2026-09-21.md` for the
+complete evidence and test-harness warning/qualification boundaries.
+
+[REPORTED] Final independent review found no remaining findings after fixing
+normalized Music request recovery and terminal-persistence rollback. Exact accepted
+parameters are durable before polling; failed terminal publication retains the
+machine fence and permits exact-job recovery without another generation POST.
+Callbacks follow durable publication and recovered assets keep their existing ID.
 
 [MEASURED] Graphify was unavailable in this environment. Callers and impact
 were checked directly; no graph consultation is claimed.
 
+[MEASURED] The real overlay builder installed exactly the seven locked packages
+and imported the pinned ACE-Step inference modules against the shared Voice
+runtime. A content-staged worker then published private loopback readiness,
+accepted only the owner token, reported `checkpoints: missing`, and kept
+`engine_loaded: false`. A complete 1.7 GB local proof bundle subsequently
+started Hub, Voice, Subtitle, and Music, proxied authenticated Music health,
+matched the Music runtime identity at all three boundaries, and removed its
+readiness and owned-worker descriptors on shutdown.
+
+[MEASURED] The first complete-bundle proof found three omitted closed maps:
+packaged worker validation, fleet-safe route authorization, and the Hub peer
+router. Test-first fixes added Music to those maps without widening settings,
+storage, model-management, or other owner-only routes.
+
 ## Next bounded task
 
-Package the pinned Music runtime and ACE-Step source, stage the Music component
-and launcher, add the supervisor/storage spec, and prove private worker startup
-without touching native UI or fleet routing. Real-model qualification remains
-a later explicit step.
+First reproduce/repair the native lifecycle audit findings and reference validation
+candidates recorded in the resume receipt. Then build the native Music workflow
+against the existing durable Hub job contract:
+navigation, request form, readiness/blocking reason, per-studio history, artifact
+open/save, and focused rendered-layout/accessibility review. Keep real-model
+inference, installed-app replacement, and physical fleet qualification as later
+explicit steps.

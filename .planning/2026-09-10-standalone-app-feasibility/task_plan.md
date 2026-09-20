@@ -2,6 +2,26 @@
 
 ## Active takeover — new computer, 2026-09-20
 
+[MEASURED] **Resumed 2026-09-21:** integration and GitHub match `9f25c03`
+(reviewed Music contract PR #10); the runtime continuation is preserved on
+`codex/music-package-runtime`. The single active task is integrating that reviewed
+segment. Root owns the board and integration. The bounded worker completed
+normalized accepted-parameter recovery and rollback of terminal publication on
+failed persistence. Final independent review found no remaining findings.
+
+[MEASURED] This resume verified native build and the selected SDK 26.5, the pinned
+Voice runtime, and the matching Image runtime already available in the installed app.
+The Image runtime was copied separately and reverified in the main `.build` tree;
+no model library or installed app was changed. Affected tests (111 plus 122 subtests),
+five original audit probes, two Image process tests and a model-free assembled Music
+service proof pass. Final root gate: 631 tests OK (7 skips), nested Voice 722
+passes/19 skips and Hub 85 passes. Native lifecycle and reference-validation work
+precede native Music UI; model and physical qualification remain open. Exact
+artifact evidence is in `qualification/new-computer-resume-2026-09-21.md`.
+
+The following September 20 entries describe the prior checkpoint and are superseded
+by this resume note and the current board where they differ.
+
 [MEASURED] Codex `/root` owns the current continuation. The integration/default branch
 is `implementation/voice-runtime`. Reviewed PRs #6 through #8 are integrated at `47e7e1c`,
 `ea1e622`, and `a012c0a`; reviewed PR #9 carries the H-05 fix. Read `docs/tasks/BOARD.md`,

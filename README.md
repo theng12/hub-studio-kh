@@ -9,6 +9,11 @@ Independent native macOS application project for local creation on Apple Silicon
 version observed during takeover is 0.6.38. The 0.4.0 instructions below are historical;
 unfinished Music work is preserved separately on `codex/recovered-music-draft`.
 
+Music recovery has since advanced beyond that preserved draft: its reviewed package/engine
+contract is integrated, and the bounded runtime/staging/supervision continuation is tracked in
+[the Music recovery card](docs/tasks/MUSIC-RECOVERY.md). Music is not yet exposed in the native
+workflow and no real Music model inference is claimed.
+
 ## Current direction — 2026-09-15
 
 The focused release is **Hub + Image Studio + Voice Studio + Subtitle Studio**.

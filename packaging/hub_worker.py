@@ -93,6 +93,70 @@ def _bind_host(value: object) -> str:
     return ','.join(entries)
 
 
+def _runtime_id(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(ch in '0123456789abcdef' for ch in value))
+
+
+def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> list[dict]:
+    specs = [{
+        'id': 'voice', 'modality': 'voice', 'python': runtime / 'bin/python3',
+        'runtime_id': release['runtime_sha256'], 'outputs': data / 'voice/output',
+        'extra_args': [],
+    }]
+    if 'image' in release.get('components', {}):
+        image_runtime = resources / 'runtimes/image'
+        image_id = release['components']['image'].get('runtime_sha256')
+        if (not (image_runtime / 'bin/python3').is_file()
+                or not (resources / 'image_worker.py').is_file()
+                or not _runtime_id(image_id)):
+            raise ValueError('Incomplete Image runtime or release identity')
+        specs.append({
+            'id': 'image', 'modality': 'image', 'python': image_runtime / 'bin/python3',
+            'runtime_id': image_id, 'outputs': data / 'image/outputs', 'extra_args': [],
+        })
+    if 'subtitle' in release.get('components', {}):
+        subtitle_id = release['components']['subtitle'].get('runtime_sha256')
+        if (not (resources / 'subtitle_worker.py').is_file()
+                or not (resources / 'components/subtitle/app/backend/main.py').is_file()
+                or not _runtime_id(subtitle_id)):
+            raise ValueError('Incomplete Subtitle worker or release identity')
+        specs.append({
+            'id': 'subtitle', 'modality': 'transcription',
+            'python': runtime / 'bin/python3', 'runtime_id': subtitle_id,
+            'outputs': data / 'subtitle', 'extra_args': [],
+        })
+    if 'music' in release.get('components', {}):
+        music_id = release['components']['music'].get('runtime_sha256')
+        engine = resources / 'engines/ace-step-1-5'
+        if (not (resources / 'music_worker.py').is_file()
+                or not (resources / 'components/music/app/backend/main.py').is_file()
+                or not (resources / 'runtimes/music/manifest/music-runtime.json').is_file()
+                or not (engine / 'studiohub-engine.json').is_file()
+                or not _runtime_id(music_id)):
+            raise ValueError('Incomplete Music worker or release identity')
+        specs.append({
+            'id': 'music', 'modality': 'music', 'python': runtime / 'bin/python3',
+            'runtime_id': music_id, 'outputs': data / 'music/outputs',
+            'extra_args': ['--engine-root', str(engine)],
+        })
+    return specs
+
+
+def worker_command(spec: dict, resources: Path, data: Path, models: Path,
+                   token_file: Path, ready_file: Path, parent_pid: int,
+                   *, offline: bool) -> list[str]:
+    command = [
+        str(spec['python']), '-I', '-B', str(resources / f"{spec['id']}_worker.py"),
+        '--data-dir', str(data), '--models-dir', str(models),
+        '--ready-file', str(ready_file), '--parent-pid', str(parent_pid),
+        '--hub-token-file', str(token_file), *spec.get('extra_args', []),
+    ]
+    if offline:
+        command.append('--offline')
+    return command
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', type=Path, required=True)
@@ -168,27 +232,10 @@ def main():
     from components.hub.backend.auth import load_token
     load_token()
     token = read_private_token(token_file, data)
-    specs = [('voice', 'voice', runtime, release['runtime_sha256'], data / 'voice/output')]
-    if 'image' in release.get('components', {}):
-        image_runtime = RESOURCES / 'runtimes/image'
-        image_id = release['components']['image'].get('runtime_sha256')
-        if (not (image_runtime / 'bin/python3').is_file()
-                or not (RESOURCES / 'image_worker.py').is_file()
-                or not isinstance(image_id, str) or len(image_id) != 64
-                or any(ch not in '0123456789abcdef' for ch in image_id)):
-            parser.error('Incomplete Image runtime or release identity')
-        specs.append(('image', 'image', image_runtime, image_id, data / 'image/outputs'))
-    if 'subtitle' in release.get('components', {}):
-        # Subtitle reuses the shared Voice runtime bytes but is its own process and state root.
-        # It advertises modality 'transcription' so the packaged public scheduler routes public
-        # Subtitle jobs here; the Voice worker keeps its Whisper quality check internal.
-        subtitle_id = release['components']['subtitle'].get('runtime_sha256')
-        if (not (RESOURCES / 'subtitle_worker.py').is_file()
-                or not (RESOURCES / 'components/subtitle/app/backend/main.py').is_file()
-                or not isinstance(subtitle_id, str) or len(subtitle_id) != 64
-                or any(ch not in '0123456789abcdef' for ch in subtitle_id)):
-            parser.error('Incomplete Subtitle worker or release identity')
-        specs.append(('subtitle', 'transcription', runtime, subtitle_id, data / 'subtitle'))
+    try:
+        specs = worker_specs(release, data, runtime, RESOURCES)
+    except ValueError as exc:
+        parser.error(str(exc))
     children = []
     child_watch_stop = threading.Event()
 
@@ -207,7 +254,8 @@ def main():
         for child in children:
             _, port = await_child(child['process'], child['ready'], label=child['id'].title())
             workers.append({
-                'id': child['id'], 'modality': child['modality'], 'title': f"{child['id'].title()} Studio",
+                'id': child['id'], 'modality': child['modality'],
+                'title': f"{child['id'].title()} Studio",
                 'host': '127.0.0.1', 'port': port, 'machine': 'local', 'local': True,
                 'hub_token': token, 'studio_token': token, 'pid': child['process'].pid,
                 'runtime_identity': {'id': child['runtime_id'], 'compatible': True},
@@ -228,18 +276,20 @@ def main():
         workers_file.unlink(missing_ok=True)
 
     try:
-        for worker_id, modality, worker_runtime, runtime_id, outputs in specs:
+        for spec in specs:
+            worker_id = spec['id']
             child_ready = hub_data / f'{worker_id}-ready.json'
             child_ready.unlink(missing_ok=True)
-            command = [str(worker_runtime / 'bin/python3'), '-I', '-B', str(RESOURCES / f'{worker_id}_worker.py'),
-                '--data-dir', str(data), '--models-dir', str(models), '--ready-file', str(child_ready),
-                '--parent-pid', str(os.getpid()), '--hub-token-file', str(token_file)]
-            if args.offline:
-                command.append('--offline')
+            command = worker_command(
+                spec, RESOURCES, data, models, token_file, child_ready,
+                os.getpid(), offline=args.offline)
             child = subprocess.Popen(command, cwd=data,
                 env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
-            children.append({'id': worker_id, 'modality': modality, 'process': child, 'ready': child_ready,
-                             'runtime_id': runtime_id, 'outputs': outputs})
+            children.append({
+                'id': worker_id, 'modality': spec['modality'], 'process': child,
+                'ready': child_ready, 'runtime_id': spec['runtime_id'],
+                'outputs': spec['outputs'],
+            })
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
                    token=token, factory=True, shutdown_callback=cleanup, host=_bind_host(args.host))
     finally:

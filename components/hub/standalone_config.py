@@ -20,6 +20,7 @@ _REQUIRED_WORKERS = {
     "image": "image",
     "voice": "voice",
     "subtitle": "transcription",
+    "music": "music",
 }
 _SETTINGS_FILE = "device_settings.json"
 

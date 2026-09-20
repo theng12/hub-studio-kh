@@ -2,7 +2,7 @@
 
 ## ▶ TAKE OVER HERE
 
-### Active takeover — new computer, 2026-09-20
+### Active takeover — new computer, resumed 2026-09-21
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.
@@ -10,7 +10,9 @@ This takeover started from `ca7928a`. H-02 through H-04 are integrated through r
 [PR #6](https://github.com/theng12/Studio-Hub-KH/pull/6) at `47e7e1c` and
 [PR #7](https://github.com/theng12/Studio-Hub-KH/pull/7) at `ea1e622`, and
 [PR #8](https://github.com/theng12/Studio-Hub-KH/pull/8) at `a012c0a`; H-05 is fixed
-by reviewed [PR #9](https://github.com/theng12/Studio-Hub-KH/pull/9). GitHub reports zero
+by reviewed [PR #9](https://github.com/theng12/Studio-Hub-KH/pull/9), and the recovered
+Music package/engine contract is integrated through reviewed
+[PR #10](https://github.com/theng12/Studio-Hub-KH/pull/10) at `9f25c03`. GitHub reports zero
 Actions workflows and the tree contains no workflow directory; keep hosted compute disabled.
 
 **START:** [new-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
@@ -33,22 +35,45 @@ evidence, not physical macOS 14 qualification.
 [#9](https://github.com/theng12/Studio-Hub-KH/pull/9). All five original probes pass.
 H-05 verification passed 106 affected Subtitle/Hub tests with seven real-model skips,
 73 Hub regressions, and independent fault-injection/restart review. The recovered Music
-package/engine contract is now in review on `codex/music-package-contract`; only its bounded
-source, manifest, worker launcher and focused tests were recovered, not the stale Hub draft.
+package/engine contract is integrated. Its next bounded runtime/staging/supervision segment is
+implemented on `codex/music-package-runtime`: a hash-locked 1.7 MB overlay reuses the Voice
+runtime, 618 pinned ACE-Step source files stage without Git metadata, and a complete local proof
+bundle owns and routes Music without loading a model. Native Music workflow and real-model
+qualification remain incomplete.
 
-[MEASURED] **Current gate boundary:** root discovery before H-02/H-03 ran 591 tests:
-the H-01 tests passed, but the checkout was not globally green. Remaining failures are an absent
-`espeak-ng` command in the freshly built Voice runtime and a stale staged 0.5.4 app
-being selected while source is 0.6.38; an isolated worktree also lacked its own ignored
-`.build` tree. Record those as migration/baseline work, not H-01 regressions.
+[MEASURED] **Single active task:** integrate the reviewed and verified
+`codex/music-package-runtime`, based on `9f25c0310dcbe1223f323da94e845d174e043960`,
+at `/build/.codex/worktrees/music-package-runtime/studio-hub-kh`.
+The coordinator owns packaging, canonical records and integration. The bounded
+worker finished canonical accepted-parameter recovery and terminal-save rollback.
+Independent review found no remaining findings. Next: native lifecycle audit
+reproductions and reference validation fixes before extending native Music UI.
+
+[MEASURED] Resumed checks: 111 affected tests plus 122 subtests, all five original
+audit probes, native boundary/API/full build, and a model-free assembled
+Hub/Voice/Subtitle/Music startup/authentication/identity/shutdown probe pass.
+The installed app's Image runtime has the exact tracked dependency lock and passes
+its manifest verifier. A separate copy at the main checkout's
+`.build/st03-image-runtime-worker` also verifies; two Image process tests pass.
+Only this immutable runtime was copied; installed app state and models were not copied.
+
+[MEASURED] **Current gate:** final root discovery passed 631 tests in 442.126 seconds
+(7 skipped), including the restored Hub bridge (85 passes) and Voice product suite
+(722 passes, 19 skips). Native build and all five original audit probes passed.
+The phonemizer test now checks the actual bundled-library path; release checks
+explicitly select the candidate and verify its source commit. The full log includes
+test-fixture socket/process ResourceWarnings; the warned process exited and the
+separate packaged smoke proved owned shutdown. See the
+[resume receipt](../../qualification/new-computer-resume-2026-09-21.md) for exact
+artifact identity, commands, remaining audit findings and qualification limits.
 
 [MEASURED] **Preserved inputs:** the protected legacy library remains at
 `~/Downloads/model-library` (about 38 GiB) and has not been scanned, adopted, moved, or
 modified. `~/StudioHubModels`, `dist`, and a staged build are absent at intake. The Music
 draft remains unintegrated at `0eebc42` on `codex/recovered-music-draft`; its read-only
 audit worktree is `/build/.codex/worktrees/music-recovery-audit/studio-hub-kh`.
-Do not merge it wholesale: the package/engine contract is unresolved and packaged
-worker, supervisor, peer-routing, and native workflow integration are incomplete.
+Do not merge it wholesale: its package/engine contract was recovered separately;
+the current runtime integration is under review and native workflow integration remains open.
 
 ### Historical handoff (superseded where the current takeover differs)
 

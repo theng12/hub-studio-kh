@@ -33,6 +33,9 @@ _WORKERS.write_text(json.dumps([
     {"id": "subtitle", "modality": "transcription", "host": "127.0.0.1", "port": 51203,
      "machine": "local", "local": True, "runtime_identity": {"id": "subtitle-runtime", "compatible": True},
      "hub_token": _TOKEN},
+    {"id": "music", "modality": "music", "host": "127.0.0.1", "port": 51204,
+     "machine": "local", "local": True, "runtime_identity": {"id": "music-runtime", "compatible": True},
+     "hub_token": _TOKEN},
 ]))
 _WORKERS.chmod(0o600)
 (_DATA / ".hub_token").write_text(_TOKEN + "\n")

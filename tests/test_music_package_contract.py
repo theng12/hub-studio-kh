@@ -202,6 +202,32 @@ class MusicWorkerContractTests(unittest.TestCase):
                 ]):
             self.assertIn("outside", manager._engine_contract_reason())
 
+    def test_bundled_engine_source_is_content_verified_without_git_metadata(self):
+        for relative in ("acestep/__init__.py", "acestep/handler.py",
+                         "acestep/inference.py", "acestep/llm_inference.py",
+                         "acestep/models/turbo/configuration_acestep_v15.py",
+                         "acestep/models/turbo/modeling_acestep_v15_turbo.py",
+                         "LICENSE", "pyproject.toml"):
+            path = self.engine / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative)
+        digest = self.generation.source_tree_digest(self.engine)
+        (self.engine / "studiohub-engine.json").write_text(json.dumps({
+            "schema": "studiohub.music-engine-source", "schema_version": 1,
+            "repo": self.generation.catalog.ENGINE_REPO,
+            "revision": self.generation.catalog.ENGINE_REVISION,
+            "source_sha256": digest,
+        }))
+        spec = mock.Mock(origin=str(self.engine / "acestep/__init__.py"),
+                         submodule_search_locations=[str(self.engine / "acestep")])
+        with mock.patch.object(self.generation.catalog, "ENGINE_SOURCE_SHA256", digest), \
+                mock.patch.object(self.generation.importlib.util, "find_spec", return_value=spec), \
+                mock.patch.object(self.generation, "_file_sha256",
+                                  side_effect=self.generation.catalog.ENGINE_MODEL_CODE_SHA256.values()):
+            self.assertIsNone(self.generation.engine_contract_reason(str(self.engine)))
+            (self.engine / "acestep/handler.py").write_text("changed")
+            self.assertIn("digest", self.generation.engine_contract_reason(str(self.engine)))
+
     def test_bounded_engine_precheck_never_requires_the_excluded_17b_planner(self):
         from components.music.app.backend import engine_child
 
@@ -215,7 +241,7 @@ class MusicWorkerContractTests(unittest.TestCase):
             checkpoint_path=checkpoints, config_path="acestep-v15-turbo"))
         self.assertFalse((checkpoints / "acestep-5Hz-lm-1.7B").exists())
 
-    def test_engine_environment_cannot_override_the_verified_checkpoint_root(self):
+    def test_engine_environment_separates_mutable_state_from_verified_inputs(self):
         from components.music.app.backend import engine_child
 
         with mock.patch.dict("os.environ", {
@@ -225,10 +251,32 @@ class MusicWorkerContractTests(unittest.TestCase):
             engine_child._configure_environment({
                 "engine_root": "/pinned/source",
                 "checkpoints_dir": "/verified/package/model",
+                "state_root": "/private/music/engine-state",
             })
-            self.assertEqual(os.environ["ACESTEP_PROJECT_ROOT"], "/pinned/source")
+            self.assertEqual(os.environ["ACESTEP_PROJECT_ROOT"],
+                             "/private/music/engine-state")
             self.assertEqual(os.environ["ACESTEP_CHECKPOINTS_DIR"],
                              "/verified/package/model")
+
+    def test_engine_parent_monitor_kills_its_isolated_group_on_owner_loss(self):
+        from components.music.app.backend import engine_child
+
+        with mock.patch.object(engine_child.os, "getppid", return_value=1), \
+                mock.patch.object(engine_child.os, "getpgrp", return_value=4321), \
+                mock.patch.object(engine_child.os, "getpid", return_value=4321), \
+                mock.patch.object(engine_child.os, "killpg") as kill_group:
+            engine_child._monitor_parent(1234, poll_seconds=0)
+        kill_group.assert_called_once_with(4321, engine_child.signal.SIGKILL)
+
+    def test_engine_executor_records_the_worker_owner(self):
+        with mock.patch.object(self.generation.cache_module, "MusicCache", _VerifiedCache):
+            manager = self.generation.GenerationManager(
+                self.data, engine_root=str(self.engine), library_dir=str(self.models),
+                runtime_sha256="f" * 64)
+        self.addCleanup(manager.close)
+        self.assertEqual(manager.executor.engine["parent_pid"], os.getpid())
+        self.assertEqual(Path(manager.executor.engine["state_root"]),
+                         self.data / "engine-state")
 
     def test_zero_guidance_and_shift_are_forwarded_without_defaulting(self):
         from components.music.app.backend import engine_child
