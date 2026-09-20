@@ -1,5 +1,264 @@
 # Standalone Studio App Planning
 
+## Ordered completion plan — owner authorized 2026-09-21
+
+**Goal:** Finish the remaining handoff in priority order, retaining a usable,
+truthful standalone Hub/Image/Voice/Subtitle app and the accepted Music extension.
+**Architecture:** Keep native client → Hub → private workers. Reuse existing
+identity, job receipts, model manifests, runtime isolation and output policy.
+**Spec:** `docs/standalone-plan.md`, `docs/implementation-plan.md`, current board,
+and `qualification/new-computer-resume-2026-09-21.md`; historical checklists are
+evidence inputs, not instructions to rebuild already-working functionality.
+**Execution:** Subagent-driven implementation; coordinator owns planning, design,
+independent review, verification, canonical records and all Git integration.
+**Base:** `1267a51170503a7801786c021a16b6a6a3d3b8af`, clean local/origin integration.
+**Worktree:** `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
+branch `codex/handoff-completion`. Existing worktrees remain preserved.
+
+### Global constraints and completion rule
+
+- Local builds/tests only; no GitHub-hosted compute or paid calls. Check workflows
+  before every push. Reviewed, verified, mergeable changes may use feature PRs and
+  merge into `implementation/voice-runtime`, then fast-forward local integration.
+- Never change installed apps, production nodes, Pinokio, credentials/live job
+  stores or the protected Downloads model library. Deployment, real enrollment,
+  releases/tags/notarization and disruptive hardware operations require separate authority.
+- Use verified project-owned runtimes and temporary test state. Acquire only exact
+  manifest-defined inputs needed for an authorized qualification task; no whole-cache migration.
+- Preserve configurable 50 GB/30-day per-device defaults and enforced integrity,
+  authentication, accepted-job fencing, active-output protection and verified delivery.
+- Ponytail: reuse current code; no speculative frameworks. Graphify CLI remains
+  unavailable; the saved 747-node/1669-link graph covers older Voice source and is
+  insufficient for current Hub/native/Music work. Verify callers directly; do not
+  claim graph coverage or commit generated graphs. Restore code-only graph tooling
+  under R05 if feasible without paid extraction.
+- Each implementation task: reproduce → smallest fix → focused tests → independent
+  review → proportionate full/build/packaged gate → integration and evidence.
+  No claim of DONE while required proof is missing. Unknown bugs remain investigations.
+- Execute top to bottom by wave. R01 and R02 may run concurrently because files
+  do not overlap; review/integrate R01 before R02. Never concurrently edit shared
+  native, broker, staging or Voice registry files. Later tasks rebase their stated
+  base on the newest reviewed integration, not a stale initial commit.
+- Luna handles mechanical records/scans; Sol at high or below handles lifecycle,
+  integrity and security; Terra handles bounded cross-file UI integration.
+  Workers have explicit owned files and cannot commit, publish or recursively delegate.
+
+### Review focus
+
+1. Late/cancelled responses cannot revive a stopped/replaced process or stale connection (R01).
+2. Malformed inputs/metadata never erase original reference bytes or weaken valid inputs (R02).
+3. Lost/malformed acceptance never causes untracked duplicate generation or false completion (R03);
+   stable-ID idempotent reposts and the existing unverified-output fallback are distinct contracts.
+4. Remote dispatch must preserve local pause/storage/physical-machine safeguards (R04).
+5. New UI and artifact export remain source-bound, authenticated, keyboard-usable and truthful
+   about missing models, uncertain jobs and unsupported hardware (R06–R10).
+
+### R01 — Native lifecycle/rejoin correctness [VERIFIED — PR #12]
+
+**Owner:** Sol/high worker; root independent review/integration.
+**Owned files:** `native/StudioHub.swift`, `native/StartupRecovery.swift`,
+`native/StudioAPI.swift`, `tests/native/main.swift`, `tests/native/api_main.swift`;
+one focused lifecycle test runner under `tests/` only if the real app lifecycle
+cannot be exercised through existing fixtures (coordinator approves exact path first).
+**Interface:** Existing `StartupRecovery`, `adoptStartupMembership`, `refresh`,
+`rejoinControllerIfNeeded`, process ownership and authenticated health polling.
+
+- [x] Reproduce N-01 with ready-but-unhealthy uptime ≥60 seconds (controlled clock,
+  no real wait): crash budget must not reset; actual healthy uptime may reset it.
+- [x] Reproduce N-03: hold a health response, terminate its owning process,
+  then deliver it; stopped/error/new-process state must win over the old response.
+- [x] Reproduce N-02: first identity request fails then succeeds (paired version
+  path inspected, not separately fault-injected);
+  membership recovers without manual join or restart, with no duplicate successful
+  rejoin, no enrollment for minted/standalone identity, no retry after disconnect/leave.
+- [x] Fix the existing lifecycle: successful-health interval, post-await ownership
+  guards and bounded/idempotent retry through existing polling. No generic scheduler.
+- [x] Run native boundary/API fixtures and `bash native/build.sh`; review delayed,
+  disconnected, token-changed and explicit-stop cases before integrating.
+
+### R02 — Reference boundary integrity [VERIFIED — PR #12]
+
+**Owner:** coordinator inline fallback after second worker service rejection;
+independent review by `music_recovery_read`. **Owned files:**
+`components/hub/backend/execution_assets.py`, `tests/test_hub_voice_references.py`,
+`tests/test_execution_asset_purge.py`; root owns canonical records.
+**Interface:** Existing ExecutionAssetError and reference stage/read/purge contract.
+
+- [x] Reproduce C-01 through the real temporary authenticated endpoint with
+  `NaN`, `Infinity`, `-1`, reversed and zero-length intervals. Valid intervals
+  have finite start ≥0, finite end >start; preserve existing segment ordering rules.
+- [x] Require a controlled machine-readable 400 before creating/altering an asset;
+  valid local/GenStudio roundtrips and model-specific preparation remain unchanged.
+- [x] Reproduce C-02 by corrupting only stored expiry to `invalid-deadline` and
+  restaging/reading it. Choose controlled refusal (not silent metadata repair),
+  preserving original clip/metadata and unrelated assets; reject non-finite expiry too.
+- [x] Fix shared parsing/validation, not each route separately; preserve purge's
+  existing skip-invalid behavior and transaction/locking/symlink safeguards.
+- [x] Run `PYTHONPATH=.build/test-deps .build/voice-runtime/bin/python3 -B -m pytest
+  -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
+  tests/test_hub_standalone.py`, then independent fault-injection review.
+
+### R03 — Voice acceptance/completion fault matrix [NEXT after PR #12 integration]
+
+**Owned scope:** `components/hub/backend/broker.py`,
+`components/hub/backend/artifact_metadata.py`, its existing tests, and
+`tests/hub_regression/cases/test_voice_durability.py`, reference existing
+`test_image_uncertainty.py`/`test_music_durability.py`; Sol/high implementation.
+
+- [ ] Return missing ID, non-object receipt, unknown state, missing output URL,
+  invalid bytes/hash/media and changed identity from a fake Voice worker.
+- [ ] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
+  reposts are permitted by the existing Voice worker idempotency contract. One
+  worker attempt/result must remain; changed body with same ID remains a conflict.
+- [ ] Reproduce unknown live-poll state and done-without-output-URL in both live
+  and reconcile paths. Keep these uncertain rather than publishing false completion.
+- [ ] Preserve valid terminal receipt plus failed artifact fetch/verification as
+  the existing `done + artifact_metadata_error` compatibility path; do not rewrite
+  billing semantics. No missing-URL bypass and no falsely verified metadata.
+- [ ] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
+  truncated to 64 bytes still claiming 0.1s; require full declared PCM frame bytes
+  before reporting verified audio metadata, using the existing standard-library parser.
+- [ ] Fix only reproduced gaps using existing identity/receipt validation and
+  Voice's stable client-request recovery; preserve Image/Music behavior.
+- [ ] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
+  independent review and a model-free packaged Hub gate. If no failure reproduces,
+  retain the negative tests and close the candidate with evidence, not a rewrite.
+
+Preflight ruling: the original shorthand “one POST/no DONE without verified
+receipt” was too broad for the inherited contract. Preserve deliberate stable-ID
+reposts and generated-but-unverified results; fix false terminal states, absent
+artifact references and falsely verified payloads. Cost if wrong: callers still
+need to check metadata availability before treating a generated result as verified;
+this task does not certify or change the external billing counterpart.
+
+### R04 — Peer admission negative qualification [QUEUED]
+
+**Owned scope:** `tests/test_standalone_connections.py`, `tests/test_studio_proxy.py`;
+any fix in `components/hub/standalone.py`, `backend/broker.py`, worker admission
+requires root's traced-boundary decision before expansion; Sol/high.
+
+- [ ] Use two disposable Hub processes, never real enrollment. Submit via intended
+  peer route with node-local model paused, storage exhausted and a physical node busy.
+- [ ] Trace controller and node decisions, distinguish stale capability reports
+  from worker refusal, and require enforced node-owned safeguards without duplicate work.
+- [ ] Preserve intended controller→node worker forwarding and separate credentials.
+  Implement the smallest shared admission repair only for a reproduced failure.
+- [ ] Prove happy dispatch, negative admission, cancellation, artifact ACK and
+  offline-node handling; independently review before closing C-04.
+
+### R05 — Portable bootstrap and accurate handoff [QUEUED]
+
+**Owned scope:** `native/build.sh`, `native/render-page.sh`,
+`packaging/image-runtime/build.sh`, related runtime tests and `docs/NEW-COMPUTER-HANDOFF.md`;
+Terra for build scripts, Luna for root-approved mechanical documentation edits.
+
+- [ ] Preserve macOS14 deployment target while documenting/validating SDK selection;
+  exercise valid explicit selection and unavailable SDK failures, not blind newest-SDK fallback.
+- [ ] Establish declared CPython/wheel/cache inputs for Image; test offline rebuilding
+  with an empty user cache and project inputs. Never silently use the network.
+- [ ] Record separate test-dependency setup and safe explicit paths for old qualification
+  harnesses; replace no live library and avoid ctime-changing hardlinks into verified packages.
+- [ ] Reconcile ST-03/04/05/06/08/10/11 checkboxes against current source and exact receipts.
+  Preserve history; label missing evidence separately from missing implementation.
+- [ ] Check local code-only Graphify availability; restore/update an ignored code-only
+  graph if possible without paid model calls or private data ingestion. Otherwise record limitation.
+
+### R06 — Native Music workflow [QUEUED]
+
+**Owned scope:** `native/StudioAPI.swift`, `native/StudioViews.swift`,
+`native/ShellCore.swift`, `tests/native/api_main.swift`, focused Music UI tests;
+Terra implementation after root/Impeccable design review. Serialize native edits.
+
+- [ ] Reuse the Image/Audio form-result layout and existing durable Music Hub routes.
+  Show supported exact model/controls, install/readiness block, submit/progress/cancel,
+  recovery uncertainty, per-studio and unified history. No new job subsystem.
+- [ ] Wire authenticated artifact open/save with byte/hash verification and ACK only
+  after verified save. Preserve output protection when export or acknowledgement fails.
+- [ ] Test request validation and stale connection/job responses with native API fixtures;
+  render minimum/normal sizes, keyboard/focus/accessibility and long/error/empty states.
+- [ ] Stage model-free app; prove actual UI routing/readiness, then independent review.
+  Real generation is R07; do not advertise it as qualified after only startup.
+
+### R07 — Current-artifact model matrix [QUEUED]
+
+**Owned scope:** existing `qualification/evidence/` harnesses, model task cards and
+exact manifest/runtime receipts; model adapters only after a failing reproduction.
+Sol/high for integrity/adapters; root selects exact inputs and validates outputs.
+
+- [ ] Inventory only authorized project model inputs; request no protected-library scan.
+  Select manifest-defined inputs for the next missing check, not all model caches.
+- [ ] Requalify FLUX, Qwen0.6/1.7 Base, OmniVoice and Whisper Turbo against current
+  artifact; historical successes are starting evidence. Check reference origins, real
+  export/ACK, cancellation, restart/history, errors and immutable package bytes.
+- [ ] Obtain separate VoxCPM2 4-bit/8-bit/bf16 success/failure receipts with engines
+  idle on available suitable hardware; do not infer root cause solely from memory wording.
+- [ ] Exercise existing private NPZ→safetensors views for real Whisper Base/Small;
+  do not reimplement conversion because old cards called them catalog-only.
+- [ ] Run pinned ACE-Step Turbo/0.6B planner short and accepted long-duration Music
+  workloads, cancellation, restart/reconciliation and WAV artifact checks.
+- [ ] Record exact model/runtime/source/workload/host, output hash, duration and memory;
+  preserve unsupported combinations and missing hardware as qualification gates.
+
+### R08 — End-to-end native usability and export acceptance [QUEUED]
+
+**Owned scope:** existing native views/API and UI fixtures, ST-03/ST-08 evidence;
+root/Impeccable owns review, Terra only bounded fixes after reproduction.
+
+- [ ] Drive real native Image/Voice/Subtitle/Music Save panels against an isolated
+  current app; verify chosen output bytes, receipt ACK and history after restart.
+- [ ] Check minimum/normal layouts, focus order, keyboard actions, errors, missing
+  models and disconnected state. Reuse existing views; no aesthetic redesign.
+- [ ] Resolve retained task-card review gaps with exact current evidence, not stale
+  'missing export' claims where save/ACK code already exists.
+
+### R09 — Fleet and GenStudio completion [QUEUED; physical enrollment gated]
+
+**Owned scope:** ST-10, existing Hub connection/settings/stats and native Connections;
+root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
+
+- [ ] Complete disposable counterpart fixtures: discovery, submit/poll/cancel,
+  fetch/ACK, retries/timeouts, token rotation and reconnect with accepted jobs.
+- [ ] Prove selected-device settings with durable acknowledgement and no unselected
+  fanout; node identity, freshness, attempts-versus-items and location deduplication.
+- [ ] Pin and verify the GenStudio counterpart contract without changing billing,
+  accounts or assets. Real counterpart changes/enrollment require separate authority.
+- [ ] Run second-physical-node checks only when hardware and enrollment authority are
+  available; fixture success alone cannot close physical ST-10/ST-11 evidence.
+
+### R10 — Final kit, hardware and deployment gates [QUEUED / authority-dependent]
+
+**Owned scope:** `packaging/release_kit.py`, `qualification/focused-release.md`,
+ST-11, manifests/licenses and per-machine receipts; root integration.
+
+- [ ] Build a clean exact-source candidate; run complete relevant tests/native build,
+  verify immutable runtime/tree identity, licenses/notices and selected model packages.
+- [ ] Exercise configured download and offline copy/import using temporary clean state:
+  interruption, missing companions, moved library and no redundant full model copy.
+- [ ] On authorized clean target hardware without dev tools/network, prove each
+  advertised eligible mode, missing SSD, repair/recheck, cleanup, crash/cancel and rollback.
+- [ ] Explicit hardware gates: original M1/oldest supported Sonoma and newer OS;
+  actual login/logout/reboot/startup approval and upgrade recovery. Never simulate
+  these into a physical pass or promise generation through reboot.
+- [ ] Independent release review; update supported-model/hardware claims only from
+  evidence. Installed app replacement, distribution/releases/signing/notarization and
+  real enrollment remain separate explicit approvals, not automatic plan completion.
+
+### Preflight ownership/interface check
+
+| Tasks | Shared boundary | Decision |
+| --- | --- | --- |
+| R01/R02 | none of their owned source/tests | Concurrent wave 1 permitted; integration ordered. |
+| R01/R06/R08/R09 | native API/views/connection lifecycle | Serialize edits and carry reviewed connection guards forward. |
+| R02/R03 | staged references consumed by broker | R02 keeps existing successful contract; R03 starts after review. |
+| R03/R04 | broker receipts/admission | Sequential; preserve uncertainty and no-replay guarantees. |
+| R05/R06/R07/R10 | build/staging/model runtime identity | Serialize; qualify rebuilt exact artifacts, not version labels. |
+| R01–R10 individually | stated files, checks and deliverable | Each has explicit failure/success boundaries; physical gates are not code tasks. |
+
+Planning uses this existing canonical directory and its `progress.md` ledger;
+no additional Superpowers planning/workspace system is created. Current skills'
+extra approval pauses do not supersede the owner's explicit plan-and-execute
+authorization. Binding security/deployment boundaries still apply.
+
 ## Active takeover — new computer, 2026-09-20
 
 [MEASURED] **Resumed 2026-09-21:** integration and GitHub match `9f25c03`

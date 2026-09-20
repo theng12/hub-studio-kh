@@ -151,6 +151,17 @@ class StagedAssetPurgeTests(unittest.TestCase):
         self.assertEqual(execution_assets.cleanup_expired(), 1)
         self.assertFalse(folder.exists())
 
+    def test_corrupt_deadlines_are_preserved_and_do_not_block_the_sweep(self):
+        invalid = []
+        for index, deadline in enumerate(("invalid", "NaN", "Infinity", [], {}, None)):
+            folder = self._asset(f"invalid-{index}", age_seconds=0)
+            (folder / "metadata.json").write_text(json.dumps({"expires_at": deadline}))
+            invalid.append(folder)
+        expired = self._asset("expired", age_seconds=3600)
+        self.assertEqual(execution_assets.cleanup_expired(), 1)
+        self.assertFalse(expired.exists())
+        self.assertTrue(all(folder.exists() for folder in invalid))
+
     def test_the_storage_sweep_purges_them(self):
         """Execute the sweep: a textual import can be in the wrong function."""
         expired = self._asset("expired", age_seconds=3600)

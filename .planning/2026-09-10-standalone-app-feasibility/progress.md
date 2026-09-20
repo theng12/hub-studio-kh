@@ -1,5 +1,78 @@
 # Progress
 
+## 2026-09-21 — ordered remaining-work execution
+
+[MEASURED] Final wave-1 gate is green at clean product `7ec9f89`: 632 tests OK,
+seven skips, 415.052s; nested Voice722/19, Hub85; native build/boundary/API/lifecycle
+pass; 21 release/phonemizer and five original probes pass. Model-free four-worker
+startup/auth/shutdown and unchanged bundle pass. Exact candidate tree is
+`07c4d895b795513c9c5f8d1d073d34c90a31a40e5bd950f06f797bfa85d8cb25`.
+R01 was committed first at `0e11671`, then R02 at `7ec9f89`. Evidence:
+`qualification/handoff-completion-wave1-2026-09-21.md`. Reviewed integration is
+tracked by https://github.com/theng12/Studio-Hub-KH/pull/12 (merge state/hash
+authoritative there). Evidence-only child retains exact product source identity.
+Next after integration: R03; no worker dispatched for it yet. Root reproduced
+unknown Voice state and missing live/reconcile output URLs publishing persisted
+`done`/public `succeeded`, plus truncated-WAV acceptance. No R03 product fix yet.
+Workflows checked zero; no hosted compute/deployment or installed-app change.
+
+Earlier checkpoint: R01 and R02 source/test repairs independently reviewed with no actionable
+findings. Root separately re-ran full native build/boundary/API and lifecycle
+harness: all passed (`.build/root-native-final.log`). Source is frozen for ordered
+R01 then R02 commits and a clean current-source artifact gate before publishing.
+The first full Python run used the older explicit artifact; its single identity
+failure remains unresolved until the new artifact/run, not waived. Impeccable
+informed native offline/concurrent-state review without visual redesign; context
+launcher was not executable, so existing PRODUCT.md/DESIGN.md were read directly.
+
+Review rulings: R02 explicit corrupt deadlines remain preserved rather than
+silently deleted; missing deadlines retain prior expiry behavior. R03 preserves
+stable-ID replays and generated-but-unverified compatibility. Independent review
+declined broad changes to those contracts; root agrees for the reasons and costs
+recorded in r02-report.md and task_plan.md. No deferred minor code findings.
+
+Owner authorized planning all remaining work and starting top to bottom. Root
+extended the existing `task_plan.md` with R01–R10, ownership, dependencies, proving
+checks and explicit physical/deployment gates; no parallel planning system was created.
+Base integration `1267a51`; isolated worktree `handoff-completion`, branch
+`codex/handoff-completion`. Native build/boundary/API baseline passed; reference,
+purge and standalone baseline passed 18 tests with two dependency deprecation warnings.
+
+Preflight: R01 native and R02 execution-assets have disjoint source/tests and can
+run concurrently in the first wave. Broker (R03/R04), shared native (R01/R06/R08/R09)
+and build/staging/model boundaries are serialized as recorded in the plan's
+ownership table. Current Graphify CLI is absent and the old Voice graph cannot
+support these paths; use verified current-source callers. Existing artifacts,
+installed app and protected model library remain unchanged.
+
+R01: IN PROGRESS — native health ownership/rejoin reproduction then minimal repair.
+R02: IN PROGRESS — root inline fallback after second worker/follow-up dispatch
+failed with agent-service task limit; executing-plans applies within this canonical
+ledger. Real authenticated endpoint regressions reproduced 20 failures/1 error
+(accepted invalid timing, invalid stored expiry); purge regression reproduced
+4 deletions instead of 1 for empty-container/null deadlines. Minimal shared parser
+now refuses corrupt stored expiry without mutation, including purge skip-invalid.
+Ruling: distinguish explicit invalid null/container from absent deadline; preserve
+the latter's existing expired-cleanup contract. Cost: corrupt explicit deadlines
+need deliberate repair/removal rather than automatic deletion.
+R03–R10: queued; missing physical hardware/authority is not a completed test.
+
+R02 implementation: focused 19 passed (28 child HTTP tests), broader isolated Hub
+85 passed. Independent `music_recovery_read` reviewer traced callers, re-ran 19
+focused checks and found no actionable findings. Ordered integration waits for
+R01 native lifecycle proof/review; no DONE card or installed-app change yet.
+R03 read-only preflight completed to distinguish malformed terminal receipts from
+the existing done-but-unbillable metadata fallback and stable-ID idempotent repost
+contract. No broker implementation is authorized from an unverified assumption.
+
+[MEASURED] Broad preliminary Python run: 632 tests in 388.394s, seven skips,
+one source-identity assertion failed because the explicitly selected prior
+reviewed artifact names `c9eadca`, while this branch names `0ec3b3b`. All other
+assertions passed; nested Voice 722 passed/19 skipped, Hub 85 passed. This is
+not a passing final gate: rebuild from the reviewed final source and rerun the
+source-bound release checks without weakening the assertion. Local log:
+`.build/r02-full-regression.log`. Dependency/resource warnings remain visible.
+
 Follow-up framework decision: owner accepted native SwiftUI/AppKit with WKWebView and disclosed no Apple Developer account. Verified Apple membership and Gatekeeper guidance; recorded that paid enrollment is unnecessary for local development/internal testing, while Developer ID/notarization need membership and transferred internal builds may require normal per-app approval. No runtime changes, login registration, enrollment or distribution performed in this discussion turn. Updated the existing design and owner direction only; documentation diff checked.
 
 2026-09-10: Read requested skills. Created isolated planning project at /build/Projects/studiohub-standalone. Initialized PLAN_ID 2026-09-10-standalone-app-feasibility. No source repositories changed. Parent Pinokio instructions inspected in earlier work; launcher creation rules do not apply to this standalone planning project. Existing source graphs will be copied into this project before querying so generated research state stays isolated. Optional first-version Studio scope clarification sent to owner.
