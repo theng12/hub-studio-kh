@@ -1,33 +1,36 @@
 # Standalone Studio App Planning
 
-## Current continuation — new computer, 2026-09-20
+## Active takeover — new computer, 2026-09-20
 
-[MEASURED] Owner requested an audit/fix backlog and portable handoff with GitHub up
-to date. Baseline `f6362e0` includes the completed cleanup repair. Read
-`docs/NEW-COMPUTER-HANDOFF.md` and `qualification/bug-audit-2026-09-20.md`; the board
-owns current status. Five new fixture failures are OPEN. All prior branch tips,
-including the Music WIP, match GitHub. Runtimes/models remain external inputs;
-new-machine acceptance is pending. This documentation pass does not change product
-source or complete a model/fleet qualification card.
+[MEASURED] Codex `/root` owns the current continuation. The integration/default branch
+is `implementation/voice-runtime`, synchronized locally and on GitHub through
+`d1db940`. Read `docs/tasks/BOARD.md`, `docs/NEW-COMPUTER-HANDOFF.md`, and
+`qualification/bug-audit-2026-09-20.md`; this section and the board's TAKE OVER HERE
+block are the only current plan. Later sections are historical evidence.
 
-## Active takeover — 2026-09-20
+[MEASURED] Intake established an arm64 Mac14,13 with 32 GiB RAM, macOS 27.0, Command
+Line Tools, and no repo-local runtime. The pinned Voice runtime now builds locally.
+Reviewed PR #3 fixed FFmpeg/FFprobe deployment metadata to macOS 14.0. Reviewed PR #4
+closed H-01: the copied-app launch verifier now fails closed, uses the bundled runtime,
+and passes its existing regression plus seven behavioral tests.
 
-[MEASURED] Codex `/root` recovered the project at `415df68` (installed 0.6.38).
-The interrupted Music draft is preserved at `0eebc42` on `codex/recovered-music-draft`
-and backed up to `icloud`; it is not integrated or qualified. The main checkout's
-catalog failures disappear when that draft is separated (10 checks pass).
+[MEASURED] H-02 through H-05 remain OPEN. Execute them in that order: accepted Voice
+identity durability; truthful failed cancellation; deny-by-default fleet worker routes;
+truthful Subtitle artifact disposition. Then return to the recovered Music draft for a
+bounded package/engine contract decision before implementing worker, supervisor,
+peer-routing, and native UI integration. Do not merge the WIP wholesale.
 
-The bounded recovery/cleanup repair lives on `codex/takeover-storage-repair`.
-Use `docs/tasks/BOARD.md` and `qualification/takeover-2026-09-20.md` for its verification
-and integration state. The older milestones below remain historical evidence, not a
-reason to repeat already integrated implementation. No release, deployment, model
-download, or real fleet enrollment is part of this takeover.
+[MEASURED] The root gate is not globally green on this computer. The H-01 tests passed,
+while a freshly built Voice runtime lacks the expected `espeak-ng` command and an old
+staged 0.5.4 app conflicts with source 0.6.38. The protected 38 GiB legacy library in
+`~/Downloads/model-library` remains untouched. No deployment, publication, signing,
+notarization, model inference/download, or real fleet enrollment has occurred.
 
 ## Historical planning state
 
 Updated: 2026-09-15. Canonical planning directory remains this directory.
 
-## Current goal
+## Historical goal recorded 2026-09-15
 
 Execute the owner-authorized standalone Hub + Image + Voice + Subtitle plan.
 `implementation/voice-runtime` @ `cd6ed5d` is the integration line. ST-01 foundation,
