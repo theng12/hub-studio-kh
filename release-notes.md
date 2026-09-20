@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.32 — 2026-09-19
+
+### Kokoro, finished
+
+The last thing Kokoro needed was a small English language model (12.8 MB) for preparing text before
+espeak speaks it. Without it the preparation library tried to fetch the model at runtime — and the
+app's own folder is read-only, so that attempt failed and the job stopped. The model is now **inside**
+the app's runtime rather than in a user folder the app's worker deliberately ignores, so it travels
+with the app to every Mac and nothing is downloaded at job time.
+
+That completes Kokoro: espeak's program (vendored, signed, no Homebrew needed), espeak's data, and the
+text model are all carried by the app.
+
 ## 0.6.31 — 2026-09-19
 
 ### Kokoro speaks

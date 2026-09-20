@@ -117,6 +117,12 @@ def main() -> int:
                 break
             item = (detail.get("items") or [{}])[0]
             state, error = item.get("state") or "unknown", str(item.get("error") or "")
+            # A dispatched job that fails leaves the *item* queued and the reason in the batch's
+            # governor note, so reporting the item state alone said "queued" for a model that had
+            # in fact run and failed. The note is the truth here.
+            note = str(detail.get("governor_note") or "")
+            if note and note not in error:
+                error = f"{error} {note}".strip()
             artifact = bool(item.get("artifact_url"))
             if state in ("done", "error", "cancelled"):
                 break

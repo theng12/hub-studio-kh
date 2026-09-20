@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.32 — 2026-09-19 · the spaCy model must be inside the runtime
+
+- **Why Kokoro still failed after 0.6.30/0.6.31.** The packaged worker runs with `PYTHONNOUSERSITE=1`
+  (set by the worker launcher), so a spaCy model installed in `~/.local` is **invisible** to it. With
+  the model missing, `misaki` tries to download it at job time, and the app bundle is read-only:
+  `ERROR: Could not install packages due to an OSError: [Errno 13] Permission denied: .../site-packages/en_core_web_sm`
+  → `RuntimeError: SystemExit: 1`. Confirmed by reproducing it: with `PYTHONNOUSERSITE=1`,
+  `import en_core_web_sm` raised `ModuleNotFoundError`.
+- Fix: `en_core_web_sm` 3.8.0 now lives **inside** the runtime's site-packages
+  (`.../voice-runtime/lib/python3.12/site-packages/en_core_web_sm`), so staging carries it into the app.
+  The runtime directory had to be made writable first — it is read-only as staged, which is also why
+  the user-site install happened in the first place.
+- Verified under the worker's exact conditions (`PYTHONNOUSERSITE=1`, runtime `bin` on `PATH`, no
+  Homebrew): the model resolves inside the runtime and `misaki.en.G2P(...)` returns
+  `həlˈO wˈɜɹld.` Then a Kokoro job was run through the Hub.
+- Also corrected this round: `qualification/smoke_new_models.py` reported a dispatched job that failed
+  as `queued`, because it read the item's state while the reason lives in the batch's governor note —
+  it now reports the note too, so a failure cannot look like a hang.
+
 ## 0.6.31 — 2026-09-19 · the spaCy model was the other half of Kokoro's failure
 
 - **Root cause of `SystemExit: 1` found:** `misaki`'s English G2P loads spaCy's `en_core_web_sm`, and
