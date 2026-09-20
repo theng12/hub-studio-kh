@@ -6,10 +6,11 @@
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.
-This takeover started from `ca7928a`. H-02 and H-03 are integrated through reviewed
+This takeover started from `ca7928a`. H-02 through H-04 are integrated through reviewed
 [PR #6](https://github.com/theng12/Studio-Hub-KH/pull/6) at `47e7e1c` and
-[PR #7](https://github.com/theng12/Studio-Hub-KH/pull/7) at `ea1e622`; H-04 is fixed
-by reviewed [PR #8](https://github.com/theng12/Studio-Hub-KH/pull/8). GitHub reports zero
+[PR #7](https://github.com/theng12/Studio-Hub-KH/pull/7) at `ea1e622`, and
+[PR #8](https://github.com/theng12/Studio-Hub-KH/pull/8) at `a012c0a`; H-05 is fixed
+by reviewed [PR #9](https://github.com/theng12/Studio-Hub-KH/pull/9). GitHub reports zero
 Actions workflows and the tree contains no workflow directory; keep hosted compute disabled.
 
 **START:** [new-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
@@ -24,14 +25,15 @@ and FFprobe now record macOS 14.0 as their minimum after reviewed
 [PR #3](https://github.com/theng12/Studio-Hub-KH/pull/3). This is deployment-metadata
 evidence, not physical macOS 14 qualification.
 
-[MEASURED] **Audit progress:** H-01 through H-04 are fixed by reviewed PRs
+[MEASURED] **Audit progress:** H-01 through H-05 are fixed by reviewed PRs
 [#4](https://github.com/theng12/Studio-Hub-KH/pull/4),
-[#6](https://github.com/theng12/Studio-Hub-KH/pull/6), and
-[#7](https://github.com/theng12/Studio-Hub-KH/pull/7), and
-[#8](https://github.com/theng12/Studio-Hub-KH/pull/8). H-04 verification passed its
-original audit probe, 13 targeted permission/proxy tests, 110 affected backend tests,
-73 Hub regressions, and independent caller/middleware review. H-05 remains OPEN and is
-the next implementation unit. Music waits until it closes.
+[#6](https://github.com/theng12/Studio-Hub-KH/pull/6),
+[#7](https://github.com/theng12/Studio-Hub-KH/pull/7),
+[#8](https://github.com/theng12/Studio-Hub-KH/pull/8), and
+[#9](https://github.com/theng12/Studio-Hub-KH/pull/9). All five original probes pass.
+H-05 verification passed 106 affected Subtitle/Hub tests with seven real-model skips,
+73 Hub regressions, and independent fault-injection/restart review. The next bounded
+source task is the recovered Music package/engine contract; do not merge its WIP wholesale.
 
 [MEASURED] **Current gate boundary:** root discovery before H-02/H-03 ran 591 tests:
 the H-01 tests passed, but the checkout was not globally green. Remaining failures are an absent
