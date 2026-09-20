@@ -3150,10 +3150,14 @@ class GenerationManager:
         """Keep the FFmpeg child under the server job's cancellation custody."""
         model = catalog.get_model(str(job.params.get("repo") or ""))
         if model is not None and _speed_delivery(model.family) == "tempo":
-            _apply_mlx_output_speed(
-                output_path, float(job.params.get("speed") or 1.0), model.family,
-                cancel_event=job.cancel_event,
-            )
+            speed = float(job.params.get("speed") or 1.0)
+            # Say so. The direct path logs its tempo pass, but every Hub job runs natively and comes
+            # back through here, so a working speed control left no trace at all: proving that a
+            # requested 2x actually reached the file meant comparing artifact durations by hand.
+            if _apply_mlx_output_speed(output_path, speed, model.family,
+                                       cancel_event=job.cancel_event):
+                print(f"[gen] {model.family} applied pitch-preserving {speed:.2f}x tempo "
+                      f"to the joined artifact", flush=True)
 
     def _dispatch_txt2speech_direct(self, job: GenerationJob, output_path: Path,
                                     *, postprocess_speed: bool = True) -> None:

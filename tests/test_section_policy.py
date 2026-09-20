@@ -111,6 +111,12 @@ class SpeedDeliveryTests(unittest.TestCase):
         self.assertNotIn("not configured for", GENERATION,
                          "a family missing from a label table must not fail the job")
 
+    def test_a_tempo_pass_says_so_in_the_log(self) -> None:
+        """A working speed control that logs nothing is indistinguishable from a broken one."""
+        parent = GENERATION[GENERATION.index("def _apply_parent_output_speed("):]
+        parent = parent[:parent.index("def _dispatch_txt2speech_direct(")]
+        self.assertIn("applied pitch-preserving", parent)
+
     def test_the_policy_is_published_with_the_section_control(self) -> None:
         row = catalog.serialize_model(catalog.get_model("mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"))
         published = row["long_form_delivery"]
