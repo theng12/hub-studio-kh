@@ -3,8 +3,8 @@
 ## Active takeover — new computer, 2026-09-20
 
 [MEASURED] Codex `/root` owns the current continuation. The integration/default branch
-is `implementation/voice-runtime`. Reviewed PR #6 is integrated at `47e7e1c`, and
-reviewed PR #7 carries the H-03 fix. Read `docs/tasks/BOARD.md`,
+is `implementation/voice-runtime`. Reviewed PRs #6 and #7 are integrated at `47e7e1c`
+and `ea1e622`; reviewed PR #8 carries the H-04 fix. Read `docs/tasks/BOARD.md`,
 `docs/NEW-COMPUTER-HANDOFF.md`, and
 `qualification/bug-audit-2026-09-20.md`; this section and the board's TAKE OVER HERE
 block are the only current plan. Later sections are historical evidence.
@@ -13,14 +13,15 @@ block are the only current plan. Later sections are historical evidence.
 Line Tools, and no repo-local runtime. The pinned Voice runtime now builds locally.
 Reviewed PR #3 fixed FFmpeg/FFprobe deployment metadata to macOS 14.0. Reviewed PR #4
 closed H-01; reviewed PR #6 closed H-02 accepted-Voice receipt durability; reviewed
-PR #7 carries the H-03 cancellation-truthfulness and lease-expiry-fencing fix.
+PR #7 closed H-03 cancellation truthfulness and lease-expiry fencing; reviewed PR #8
+carries the H-04 deny-by-default fleet worker-route fix.
 
-[MEASURED] H-04 and H-05 remain OPEN. Execute them in that order: deny-by-default
-fleet worker routes, then truthful Subtitle artifact disposition. H-03 passed 73 Hub
-regressions, the original lifecycle/audit probes, and focused startup/fleet-auth checks.
-Then return to the recovered Music draft for a bounded package/engine contract decision
-before implementing worker, supervisor, peer-routing, and native UI integration. Do not
-merge the WIP wholesale.
+[MEASURED] H-05 remains OPEN and is the next implementation unit: make Subtitle's
+final artifact disposition truthful. H-04 passed its original audit probe, 13 targeted
+permission/proxy tests, 110 affected backend tests, 73 Hub regressions, and independent
+caller/middleware review. Then return to the recovered Music draft for a bounded
+package/engine contract decision before implementing worker, supervisor, peer-routing,
+and native UI integration. Do not merge the WIP wholesale.
 
 [MEASURED] The root gate is not globally green on this computer. The H-01 tests passed,
 while a freshly built Voice runtime lacks the expected `espeak-ng` command and an old
