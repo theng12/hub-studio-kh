@@ -60,7 +60,7 @@ Critical, Important or Minor findings and approved this bounded segment for merg
 The reviewer independently passed 85 Hub cases, 46 Music/package/baseline tests
 (four expected skips), 37 Hub/auth/peer tests, and three authenticated HTTP
 fault-injection reproductions. The reproductions covered normalized parameters,
-done/error/cancelled terminal-save failures, retained fences, exactly one generation
+done/error/cancelled terminal-save failures, retained fences, no additional generation
 POST, callback ordering and asset-ID reuse. Coordinator verification follows below.
 
 ## Verification gate corrections
@@ -126,10 +126,29 @@ model checkpoints remained missing and the engine unloaded. Owned processes and
 readiness descriptors disappeared; bundle bytes were unchanged afterward.
 
 The parameterized probe and sanitized JSON receipt are under
-`qualification/evidence/music-runtime-2026-09-21/`. A clean-commit artifact check
-will supersede the precommit receipt there before integration. The original audit
+`qualification/evidence/music-runtime-2026-09-21/`. The original audit
 probes passed again (five tests, 3.573 seconds). Native boundary/API/build checks
 passed, and `git diff --check` passed. GitHub still reports zero Actions workflows.
+
+### Clean-commit artifact and integration
+
+[MEASURED] Reviewed product commit:
+`c9eadcae72eef7c5a41791a651a3ed5894aa8be5`. Independent exact-commit review confirmed
+the product/test content and all six recorded source hashes. A fresh clean staging
+from that commit produced `.build/StudioHubReviewed.app`, version 0.6.38,
+`development_build: false`, tree SHA-256
+`f89885aee5e2c64844961f558d7bc947819a3ffe4d31b760e768d54549c1f837`.
+All 21 release/phonemizer tests passed against that exact app (1.162 seconds).
+The smoke probe passed with readiness at 9.79 seconds, four modalities, authenticated
+200s, unauthenticated 401, matching composite Music identity, no model loading,
+owned shutdown and unchanged bundle bytes. The JSON receipt now describes this
+clean artifact, superseding the precommit candidate above.
+
+[MEASURED] Integration is tracked by
+[PR #11](https://github.com/theng12/Studio-Hub-KH/pull/11); its merge state and
+merge commit are authoritative. Subsequent commits in this PR only record evidence
+and handoff status; they do not change the verified product/test source. The local
+artifact is a model-free qualification candidate, not an installed/deployed release.
 
 ## Remaining audit assessment
 
@@ -165,8 +184,8 @@ inspected directly. No new graph was committed, and no graph coverage is claimed
 
 ## Next work
 
-Finish independent review, verify the exact final candidate, and integrate through
-the authorized PR workflow. Then reproduce/repair native lifecycle findings and
+The runtime segment is independently reviewed and locally verified. After its
+PR integration, reproduce/repair native lifecycle findings and
 reference validation candidates before native Music workflow and model qualification.
 Physical second-Mac/fleet, login/reboot, M1/Sonoma and GenStudio acceptance remain
 explicit later evidence. No hosted compute, paid calls, deployment, release, tag,

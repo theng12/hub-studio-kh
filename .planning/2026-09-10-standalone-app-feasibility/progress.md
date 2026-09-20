@@ -472,3 +472,10 @@ Next: native lifecycle reproductions N-01/N-02/N-03, bounded reference-validatio
 repairs C-01/C-02, then the native Music workflow and separate model qualification.
 Physical machine/fleet/GenStudio checks remain open. No deployment, hosted compute,
 paid calls, releases, tags, notarization or real enrollment occurred.
+
+[MEASURED] Final product commit `c9eadca` passed independent exact-commit review.
+Root: 631 tests OK/7 skips; Voice: 722/19; Hub: 85. Clean-commit app
+`.build/StudioHubReviewed.app` passed 21 release/phonemizer checks and the
+model-free four-worker startup/authentication/identity/owned-shutdown probe.
+Exact tree digest and source hashes are in the resume receipt and sanitized JSON.
+PR #11 records integration: https://github.com/theng12/Studio-Hub-KH/pull/11.

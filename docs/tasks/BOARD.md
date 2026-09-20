@@ -41,13 +41,18 @@ runtime, 618 pinned ACE-Step source files stage without Git metadata, and a comp
 bundle owns and routes Music without loading a model. Native Music workflow and real-model
 qualification remain incomplete.
 
-[MEASURED] **Single active task:** integrate the reviewed and verified
+[MEASURED] **Runtime handoff:** reviewed product commit `c9eadca`; integration is
+tracked by [PR #11](https://github.com/theng12/Studio-Hub-KH/pull/11), whose merge
+state and merge commit are authoritative. The preserved worktree is
 `codex/music-package-runtime`, based on `9f25c0310dcbe1223f323da94e845d174e043960`,
 at `/build/.codex/worktrees/music-package-runtime/studio-hub-kh`.
 The coordinator owns packaging, canonical records and integration. The bounded
 worker finished canonical accepted-parameter recovery and terminal-save rollback.
-Independent review found no remaining findings. Next: native lifecycle audit
-reproductions and reference validation fixes before extending native Music UI.
+Independent review found no remaining findings. The clean-commit candidate and
+21 release/phonemizer tests also passed. **Single next task after integration:**
+reproduce/repair native lifecycle N-01/N-02/N-03, then reference validation
+C-01/C-02, before extending native Music UI. Root remains the coordinator; no
+worker owns the next task yet.
 
 [MEASURED] Resumed checks: 111 affected tests plus 122 subtests, all five original
 audit probes, native boundary/API/full build, and a model-free assembled

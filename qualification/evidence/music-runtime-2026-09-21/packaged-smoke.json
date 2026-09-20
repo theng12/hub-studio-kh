@@ -1,10 +1,10 @@
 {
-  "app": "/build/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/StudioHubCandidate.app",
-  "tree_sha256": "faea409d915ce467866d6b96d7b2fcdd378dfd6b0c5118490cd59e39a6a8c92d",
+  "app": "/build/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/StudioHubReviewed.app",
+  "tree_sha256": "f89885aee5e2c64844961f558d7bc947819a3ffe4d31b760e768d54549c1f837",
   "identity": {
     "version": "0.6.38",
-    "implementation_commit": "9f25c0310dcbe1223f323da94e845d174e043960",
-    "development_build": true
+    "implementation_commit": "c9eadcae72eef7c5a41791a651a3ed5894aa8be5",
+    "development_build": false
   },
   "model_inference": false,
   "source_sha256": {
@@ -24,7 +24,7 @@
     "owned_processes_stopped": true,
     "bundle_unchanged": true
   },
-  "ready_seconds": 9.68,
+  "ready_seconds": 9.79,
   "modalities": [
     "image",
     "music",

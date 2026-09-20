@@ -4,10 +4,13 @@
 
 [MEASURED] **Resumed 2026-09-21:** integration and GitHub match `9f25c03`
 (reviewed Music contract PR #10); the runtime continuation is preserved on
-`codex/music-package-runtime`. The single active task is integrating that reviewed
+`codex/music-package-runtime`. The current checkpoint is that reviewed runtime
 segment. Root owns the board and integration. The bounded worker completed
 normalized accepted-parameter recovery and rollback of terminal publication on
 failed persistence. Final independent review found no remaining findings.
+Product commit `c9eadca` and its clean artifact are verified; PR #11 records the
+integration state. After integration, the single next task is native lifecycle
+N-01/N-02/N-03 reproduction/repair, followed by reference-validation C-01/C-02.
 
 [MEASURED] This resume verified native build and the selected SDK 26.5, the pinned
 Voice runtime, and the matching Image runtime already available in the installed app.
