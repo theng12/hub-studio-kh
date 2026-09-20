@@ -243,6 +243,10 @@ def _packaged() -> bool:
 # machine that held it was excluded from every lane - image, voice and subtitle - for good. The owner
 # asked for exactly this: "make it recover after a set time frame so it doesn't block the app.
 # transcription isn't expensive. redo it if it fails."
+# How long to wait after a dispatch could not be written down: long enough that the same pass
+# does not immediately retry it against a Hub whose durable write is failing.
+DISPATCH_PERSIST_BACKOFF_S = 30.0
+
 UNCERTAIN_RECOVERY_SECONDS = 15 * 60
 
 
@@ -842,9 +846,10 @@ async def dispatch_once(monitor) -> int:
                     )
                 batch["last_dispatched_at"] = time.time()
                 busy_studios.add(studio["id"])
-                try:
-                    _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
-                except Exception as exc:
+                # `_save_quietly` returns whether the write landed: it swallows the exception by
+                # design (a failed bookkeeping write must not abort the pass), which made the
+                # `except` branch below unreachable when 0.6.19 wrapped this call in try/except.
+                if not _save_quietly(batch):
                     # The durable write is what makes a dispatch real. Without it the item stays
                     # "running" in memory with no task to finish it and the Mac leased to a job
                     # nothing will ever complete: the item can never be retried (it is not queued),
@@ -855,16 +860,20 @@ async def dispatch_once(monitor) -> int:
                     busy_studios.discard(studio["id"])
                     item.update(
                         state="queued", studio=None, machine=None, started_at=None,
-                        studio_task_id=None, error=f"dispatch could not be recorded: {exc}",
+                        studio_task_id=None,
+                        error="the Hub could not write down this dispatch, so it is queued again",
                         error_code="DISPATCH_PERSIST_FAILED",
                         tries=max(0, item.get("tries", 1) - 1),
                     )
                     batch["governor_note"] = ("A job could not be recorded when it was handed to a "
                                               "Mac, so it is queued again.")
-                    try:
-                        _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
-                    except Exception:
-                        pass
+                    # Back off before it is considered again. Freeing the Mac makes the item eligible
+                    # inside this same pass, and the retry would run the job against a Hub whose last
+                    # durable write failed - which is how a rolled-back dispatch turned into a job
+                    # that failed for an unrelated reason. The dispatcher already skips any item
+                    # whose `retry_at` is in the future.
+                    item["retry_at"] = time.time() + DISPATCH_PERSIST_BACKOFF_S
+                    _save_quietly(batch)  # bookkeeping: a failed write must not stop the pass
                     continue
                 task = asyncio.create_task(_run_item(
                     monitor, batch, item, studio, owner, generation,

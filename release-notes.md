@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.28 — 2026-09-19
+
+### A job that could not be written down now really is put back
+
+When the Hub hands a job to a Mac it writes that down first. If that write fails — a full disk, an
+unreadable database — the job must be returned to the queue and the Mac released, or the job sits
+reading as "running" with nothing watching it and the Mac stays reserved for work that will never
+happen.
+
+That repair was made two releases ago and **was not actually in force**: the write it wrapped had
+since been changed to one that reports failure by returning instead of raising, so the branch that
+undoes the dispatch could never run. It runs now, the job returns to the queue with the attempt it
+spent given back, the Mac is released, and it waits half a minute before trying again rather than
+retrying immediately against a Hub whose disk is still failing.
+
 ## 0.6.27 — 2026-09-19
 
 ### Three models looked broken because of a field name

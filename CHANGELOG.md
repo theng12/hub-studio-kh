@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.28 — 2026-09-19 · the dispatch rollback was unreachable
+
+- **The rollback added in 0.6.19 could never execute.** It wrapped the lease-time write in
+  `try: _save(batch) / except:`, and 0.6.21's bookkeeping sweep replaced that call with
+  `_save_quietly(batch)` — which **never raises**, by design, because a failed bookkeeping write must
+  not abort a dispatch pass. So the write failed silently, the item stayed on the "dispatched" path,
+  and the job was handed to a worker whose Hub had just failed to record it. Found by finally writing
+  the regression test: with the write forced to fail, the item ended `error` (from `_run_item`
+  failing on a fixture batch with no input path) with `retry_at=None` - proof the rollback never ran.
+- Fix: use `_save_quietly`'s **return value** (`if not _save_quietly(batch):`) so the rollback is
+  reachable, and give the item a 30-second `retry_at` backoff so the same pass does not immediately
+  retry it - which is what turned a rolled-back dispatch into a job failing for an unrelated reason.
+- **Correction to the 0.6.22 entry below:** that release claimed the loop was changed from `continue`
+  to `break`. The patch's anchor did not match and the change never landed; the code kept `continue`.
+  The backoff above is the real fix for the behaviour that entry described.
+- Evidence: `tests/_hub_dispatch_proof.py` - the `_PROOF` program from `tests/test_hub_jobs.py`,
+  extracted so a test can sit beside its packaged-Hub fixture - now runs **11 tests**: the original ten
+  plus `DispatchPersistenceRollbackTests`, which asserts the Mac is released, the item is `queued`, the
+  attempt is given back, `error_code=DISPATCH_PERSIST_FAILED` and `retry_at` is in the future.
+  `tests/test_hub_dispatch_proof_gate.py` runs it in its own process (its fixtures set `STUDIOHUB_*` at
+  import and would otherwise rebind the data directory for every module loaded after it).
+
 ## 0.6.27 — 2026-09-19 · picker families accept the field every client sends
 
 - **`_mlx_kwargs_voice_picker` read only `params["voice"]`**, while the app, the gateway and the kit
