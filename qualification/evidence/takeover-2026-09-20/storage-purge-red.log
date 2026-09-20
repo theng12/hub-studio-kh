@@ -1,0 +1,21 @@
+...E
+======================================================================
+ERROR: test_the_storage_sweep_purges_them (test_execution_asset_purge.StagedAssetPurgeTests.test_the_storage_sweep_purges_them)
+Execute the sweep: a textual import can be in the wrong function.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 77, in test_the_storage_sweep_purges_them
+    result = job_storage.enforce_budget()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/job_storage.py", line 153, in enforce_budget
+    return _enforce_budget(target_bytes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/job_storage.py", line 175, in _enforce_budget
+    staged = execution_assets.cleanup_expired()
+             ^^^^^^^^^^^^^^^^
+NameError: name 'execution_assets' is not defined
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.013s
+
+FAILED (errors=1)

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import time
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,8 @@ MIME_BY_EXTENSION = {
     ".aac": "audio/aac", ".webm": "audio/webm",
 }
 _ASSET_ID = re.compile(r"^[0-9a-f]{24}$")
+# ponytail: one Hub process owns this store; use a file lock if ownership becomes multi-process.
+_MUTATION_LOCK = threading.RLock()
 
 
 class ExecutionAssetError(ValueError):
@@ -179,72 +183,85 @@ def _stage_voice_reference(
         }, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     asset_id = identity[:24]
-    target = ROOT / asset_id
-    expires_at = time.time() + ttl
-    existing = _read(target / "metadata.json") if target.is_dir() else None
-    if existing:
-        existing["expires_at"] = max(float(existing.get("expires_at") or 0), expires_at)
-        existing["updated_at"] = time.time()
-        _atomic_json(target / "metadata.json", existing)
-        return existing
+    with _MUTATION_LOCK:
+        if ROOT.is_symlink():
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_INACCESSIBLE", "The execution asset store is unsafe."
+            )
+        target = ROOT / asset_id
+        expires_at = time.time() + ttl
+        existing = _read(target / "metadata.json") if target.is_dir() else None
+        if existing:
+            existing["expires_at"] = max(float(existing.get("expires_at") or 0), expires_at)
+            existing["updated_at"] = time.time()
+            _atomic_json(target / "metadata.json", existing)
+            return existing
 
-    ROOT.mkdir(parents=True, exist_ok=True)
-    if ROOT.is_symlink():
-        raise ExecutionAssetError(
-            "VOICE_REFERENCE_ASSET_INACCESSIBLE", "The execution asset store is unsafe."
-        )
-    temporary = ROOT / f".{asset_id}.{uuid.uuid4().hex}.tmp"
-    temporary.mkdir(mode=0o700)
-    metadata = {
-        "id": asset_id,
-        "kind": "voice_reference",
-        "source_asset_fingerprint": source_fingerprint,
-        "sha256": digest,
-        "bytes": len(audio_bytes),
-        "audio_extension": extension,
-        "media_type": MIME_BY_EXTENSION[extension],
-        "transcript": transcript,
-        "transcript_segments": segments,
-        "language": language.strip() or None,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "expires_at": expires_at,
-    }
-    try:
-        (temporary / f"reference{extension}").write_bytes(audio_bytes)
-        _atomic_json(temporary / "metadata.json", metadata)
-        os.replace(temporary, target)
-    finally:
-        if temporary.exists():
-            shutil.rmtree(temporary, ignore_errors=True)
-    return metadata
+        ROOT.mkdir(parents=True, exist_ok=True)
+        if ROOT.is_symlink():
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_INACCESSIBLE", "The execution asset store is unsafe."
+            )
+        temporary = ROOT / f".{asset_id}.{uuid.uuid4().hex}.tmp"
+        temporary.mkdir(mode=0o700)
+        metadata = {
+            "id": asset_id,
+            "kind": "voice_reference",
+            "source_asset_fingerprint": source_fingerprint,
+            "sha256": digest,
+            "bytes": len(audio_bytes),
+            "audio_extension": extension,
+            "media_type": MIME_BY_EXTENSION[extension],
+            "transcript": transcript,
+            "transcript_segments": segments,
+            "language": language.strip() or None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "expires_at": expires_at,
+        }
+        try:
+            (temporary / f"reference{extension}").write_bytes(audio_bytes)
+            _atomic_json(temporary / "metadata.json", metadata)
+            os.replace(temporary, target)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary, ignore_errors=True)
+        return metadata
+
+
+def read_voice_reference(asset_id: str, *, now: float | None = None) -> tuple[dict, bytes]:
+    """Copy an accepted reference before a concurrent expiry sweep can remove it."""
+    with _MUTATION_LOCK:
+        metadata, path = resolve_voice_reference(asset_id, now=now)
+        return metadata, path.read_bytes()
 
 
 def resolve_voice_reference(asset_id: str, *, now: float | None = None) -> tuple[dict, Path]:
-    directory = _dir(asset_id)
-    metadata = _read(directory / "metadata.json")
-    if not metadata:
-        raise ExecutionAssetError(
-            "VOICE_REFERENCE_ASSET_MISSING",
-            "The private voice reference is missing. Upload it again before generating.",
-        )
-    if float(metadata.get("expires_at") or 0) <= (time.time() if now is None else now):
-        raise ExecutionAssetError(
-            "VOICE_REFERENCE_ASSET_EXPIRED",
-            "The private voice reference has expired. Upload it again before generating.",
-        )
-    audio = directory / f"reference{metadata.get('audio_extension') or ''}"
-    if audio.is_symlink() or not audio.is_file():
-        raise ExecutionAssetError(
-            "VOICE_REFERENCE_ASSET_INACCESSIBLE",
-            "The private voice reference is no longer readable. Upload it again.",
-        )
-    if hashlib.sha256(audio.read_bytes()).hexdigest() != metadata.get("sha256"):
-        raise ExecutionAssetError(
-            "VOICE_REFERENCE_ASSET_INACCESSIBLE",
-            "The private voice reference failed checksum verification. Upload it again.",
-        )
-    return metadata, audio
+    with _MUTATION_LOCK:
+        directory = _dir(asset_id)
+        metadata = _read(directory / "metadata.json")
+        if not metadata:
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_MISSING",
+                "The private voice reference is missing. Upload it again before generating.",
+            )
+        if float(metadata.get("expires_at") or 0) <= (time.time() if now is None else now):
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_EXPIRED",
+                "The private voice reference has expired. Upload it again before generating.",
+            )
+        audio = directory / f"reference{metadata.get('audio_extension') or ''}"
+        if audio.is_symlink() or not audio.is_file():
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_INACCESSIBLE",
+                "The private voice reference is no longer readable. Upload it again.",
+            )
+        if hashlib.sha256(audio.read_bytes()).hexdigest() != metadata.get("sha256"):
+            raise ExecutionAssetError(
+                "VOICE_REFERENCE_ASSET_INACCESSIBLE",
+                "The private voice reference failed checksum verification. Upload it again.",
+            )
+        return metadata, audio
 
 
 def public(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -256,23 +273,29 @@ def public(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def delete(asset_id: str) -> bool:
-    directory = _dir(asset_id)
-    if not directory.exists():
-        return False
-    shutil.rmtree(directory)
-    return True
+    with _MUTATION_LOCK:
+        directory = _dir(asset_id)
+        if not directory.exists():
+            return False
+        shutil.rmtree(directory)
+        return True
 
 
 def cleanup_expired(now: float | None = None) -> int:
-    current = time.time() if now is None else now
-    removed = 0
-    if not ROOT.is_dir():
-        return 0
-    for child in ROOT.iterdir():
-        if child.is_symlink() or not child.is_dir() or child.name.startswith("."):
-            continue
-        metadata = _read(child / "metadata.json") or {}
-        if float(metadata.get("expires_at") or 0) <= current:
-            shutil.rmtree(child, ignore_errors=True)
-            removed += 1
-    return removed
+    with _MUTATION_LOCK:
+        current = time.time() if now is None else now
+        removed = 0
+        if ROOT.is_symlink() or not ROOT.is_dir():
+            return 0
+        for child in ROOT.iterdir():
+            if child.is_symlink() or not child.is_dir() or child.name.startswith("."):
+                continue
+            metadata = _read(child / "metadata.json") or {}
+            try:
+                expires_at = float(metadata.get("expires_at") or 0)
+            except (TypeError, ValueError):
+                continue  # An unreadable deadline cannot establish expiry.
+            if math.isfinite(expires_at) and expires_at <= current:
+                shutil.rmtree(child, ignore_errors=True)
+                removed += 1
+        return removed

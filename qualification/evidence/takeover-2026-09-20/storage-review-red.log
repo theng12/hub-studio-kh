@@ -1,0 +1,54 @@
+..EF.E.
+======================================================================
+ERROR: test_a_refresh_and_sweep_cannot_delete_the_refreshed_copy (test_execution_asset_purge.StagedAssetPurgeTests.test_a_refresh_and_sweep_cannot_delete_the_refreshed_copy)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 91, in test_a_refresh_and_sweep_cannot_delete_the_refreshed_copy
+    refresh.result(timeout=2)
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 58, in stage
+    return execution_assets.stage_local_voice_reference(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/execution_assets.py", line 133, in stage_local_voice_reference
+    return _stage_voice_reference(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/execution_assets.py", line 188, in _stage_voice_reference
+    _atomic_json(target / "metadata.json", existing)
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 72, in paused_write
+    write(path, value)
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/execution_assets.py", line 53, in _atomic_json
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/var/folders/c7/84mt7mc151914_z_2m5jt3sc0000gn/T/tmp8rjfkpeh/327bdcceb2857086f5777d61/.metadata.json.2c6cc3ad7daa4d02946e5674b9e31aa1.tmp'
+
+======================================================================
+ERROR: test_an_invalid_deadline_does_not_block_other_expired_copies (test_execution_asset_purge.StagedAssetPurgeTests.test_an_invalid_deadline_does_not_block_other_expired_copies)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 108, in test_an_invalid_deadline_does_not_block_other_expired_copies
+    self.assertEqual(execution_assets.cleanup_expired(), 1)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/execution_assets.py", line 275, in cleanup_expired
+    if float(metadata.get("expires_at") or 0) <= current:
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: could not convert string to float: 'later'
+
+======================================================================
+FAIL: test_a_symlinked_store_does_not_purge_its_target (test_execution_asset_purge.StagedAssetPurgeTests.test_a_symlinked_store_does_not_purge_its_target)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 101, in test_a_symlinked_store_does_not_purge_its_target
+    self.assertEqual(execution_assets.cleanup_expired(), 0)
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.014s
+
+FAILED (failures=1, errors=2)

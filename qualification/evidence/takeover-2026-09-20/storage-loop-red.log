@@ -1,0 +1,35 @@
+.E...
+======================================================================
+ERROR: test_cancelling_a_failed_sweeps_retry_returns_cleanly (test_storage_budget_loop.StorageBudgetLoopTests.test_cancelling_a_failed_sweeps_retry_returns_cleanly)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/job_storage.py", line 130, in budget_loop
+    await sweep_once()
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 2291, in _execute_mock_call
+    raise effect
+OSError: disk busy
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_storage_budget_loop.py", line 38, in test_cancelling_a_failed_sweeps_retry_returns_cleanly
+    await task
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/job_storage.py", line 135, in budget_loop
+    await asyncio.sleep(30)
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_storage_budget_loop.py", line 30, in sleep
+    await real_sleep(3600)
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/asyncio/tasks.py", line 665, in sleep
+    return await future
+           ^^^^^^^^^^^^
+asyncio.exceptions.CancelledError
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.125s
+
+FAILED (errors=1)

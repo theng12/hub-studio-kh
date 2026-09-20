@@ -2,6 +2,44 @@
 
 ## ▶ TAKE OVER HERE
 
+### Current takeover — 2026-09-20
+
+[MEASURED] **Holder:** Codex orchestrator `/root`. Start: `415df68` on
+`implementation/voice-runtime`. The installed app is **0.6.38**, not the historical
+0.4/0.5 builds described below. Its isolated startup and authenticated health check
+passed. This establishes a usable starting point, not all-model qualification.
+
+[MEASURED] **Interrupted work is recovered:** all 17 Music files were byte-verified,
+committed as **`0eebc42` on `codex/recovered-music-draft`**, and pushed to `icloud`.
+The worktree is `/build/.codex/worktrees/studiohub-music-recovery/studiohub-standalone`;
+read its `docs/tasks/MUSIC-RECOVERY.md` before resuming. The original copy is also
+retained in a named Git stash. Do not merge this WIP wholesale: its manifest is
+invalid under the current package contract, and packaged worker/UI wiring is absent.
+Separating it restored all ten catalog checks without weakening validation.
+
+**Verified maintenance repair:** source/test commit `5892089` on
+`codex/takeover-storage-repair`, targeting the integration line; see [takeover evidence](../../qualification/takeover-2026-09-20.md).
+The worktree is `/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone`.
+The repair covers the missing cleanup import, shutdown cancellation, and preserving
+references during refresh/read versus expiry. No new Music feature or fleet enrollment
+belongs in this repair. Full root gate: **584 tests OK, 7 skipped**; Voice:
+**722 passed, 19 skipped**; Hub: **54 passed**. Native build and the final packaged
+scheduled-cleanup/API/shutdown probe passed. Check Git for the integration of `5892089`
+before applying anything from the repair branch again.
+[Integration PR #1](https://github.com/theng12/Studio-Hub-KH/pull/1) records merge state.
+
+[MEASURED] **Remotes:** `origin` is `https://github.com/theng12/Studio-Hub-KH.git`;
+`icloud` remains the backup. GitHub's default branch is `implementation/voice-runtime`.
+Actions is enabled at the repository level, but the API lists **zero workflows** and
+the base contains no workflow files. Do not add or run hosted compute. Recheck before
+pushing if workflows change.
+
+**Next:** use the recovered Music card for the next bounded implementation decision;
+reconcile remaining model/hardware receipts against current source before treating an
+old open checkbox as current work. No card is newly marked DONE by this takeover.
+
+### Historical handoff (superseded where the current takeover differs)
+
 **Current holder:** DeepSeek Harness session, last active 2026-09-16. Earlier sessions
 (Codex, then this one) are recorded below. Read this block, then the table below, then the
 one task card you are claiming. The bullets between here and "Everything below this line"

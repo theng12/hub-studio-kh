@@ -20,6 +20,26 @@ from components.hub import standalone_config  # noqa: E402
 
 
 class StorageBudgetLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_a_failed_sweeps_retry_returns_cleanly(self):
+        retrying = asyncio.Event()
+        real_sleep = asyncio.sleep
+
+        async def sleep(seconds):
+            if seconds == 30:
+                retrying.set()
+                await real_sleep(3600)
+
+        with mock.patch.object(job_storage, "sweep_once", side_effect=OSError("disk busy")), \
+                mock.patch.object(job_storage.asyncio, "sleep", sleep):
+            task = asyncio.create_task(job_storage.budget_loop(5))
+            try:
+                await asyncio.wait_for(retrying.wait(), timeout=2)
+                task.cancel()
+                await task
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def test_one_pass_enforces_the_budget(self):
         calls = []
 

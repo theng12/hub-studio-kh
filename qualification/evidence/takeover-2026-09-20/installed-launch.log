@@ -1,0 +1,12 @@
+app:     /build/Applications/Studio Hub.app
+library: /build/StudioHubModels
+
+identity: 0.6.38 415df68d35c628cf77893fa6550f75b160f4221b development_build: False
+quarantined files: 0
+
+starting......
+ready at: http://127.0.0.1:49479 | health: 200 ok = True
+
+RESULT: PASS — this copy starts, becomes ready and answers its health check.
+You can delete this temporary state; the app uses its own when you launch it normally.
+qualification/verify-launch.sh: line 81: 75166 Terminated: 15          "$SVC" --data-dir "$TMP" --models-dir "$LIB" --ready-file "$TMP/hub-ready.json" --parent-pid "$$" --host "127.0.0.1" --port "$PORT" > "$TMP/start.log" 2>&1

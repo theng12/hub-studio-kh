@@ -1,0 +1,74 @@
+{
+  "source_commit": "415df68d35c628cf77893fa6550f75b160f4221b",
+  "recovery_worktree": "/build/.codex/worktrees/studiohub-music-recovery/studiohub-standalone",
+  "files": [
+    {
+      "path": "components/hub/backend/activity.py",
+      "sha256": "68359f055e5b8aaba86556795f9125bf7e89a9143aafe62bd3bd9429fe5a9aaf"
+    },
+    {
+      "path": "components/hub/backend/fleet_nodes.py",
+      "sha256": "fe042b9efbd1261f010322fe831a441a86519c3fbd307f972c73335358e20da2"
+    },
+    {
+      "path": "components/hub/backend/ledger.py",
+      "sha256": "e38c72ece6fde2a8becb0993e90eb14532605fc83a1fff4bbba8f07ce5335a30"
+    },
+    {
+      "path": "components/hub/standalone.py",
+      "sha256": "2c845d2c75d78287329b15909c366c5965b4b9232a34043788b6b2c3f3fc3e2d"
+    },
+    {
+      "path": "components/music/__init__.py",
+      "sha256": "4cddefb8e51a6926af33aae2374965d9bb682e669c12ba75d8f3e938280dd5bb"
+    },
+    {
+      "path": "components/music/app/__init__.py",
+      "sha256": "d6a64bc0800799e21ba52d93a595a93c62133ec7d61d35c2580507d6b5e67370"
+    },
+    {
+      "path": "components/music/app/backend/__init__.py",
+      "sha256": "6f28c43870e3405f70de251327415bd0a971a6cc619e5d0afa6dfdbc920a2328"
+    },
+    {
+      "path": "components/music/app/backend/cache.py",
+      "sha256": "3065d1c5fe33d02fecc3705b9a03adfe8ecf32f095bca253b218d19a0eb137ed"
+    },
+    {
+      "path": "components/music/app/backend/catalog.py",
+      "sha256": "bc0d4964efb2b4b543233d6d65c80e9783930408c20631ed39324f6378480e3c"
+    },
+    {
+      "path": "components/music/app/backend/engine_child.py",
+      "sha256": "604a2f65a45eb54852d33bd354e576c97cc0edb525b4bbd44efe80d34392e2ae"
+    },
+    {
+      "path": "components/music/app/backend/generation.py",
+      "sha256": "f92c36f9bc523f561a8e6b9769e3fb13e581d52a21cbf6676911debbd22f0e49"
+    },
+    {
+      "path": "components/music/app/backend/main.py",
+      "sha256": "81aa23d7ceb23729a962bea45d533778058783540b4def2079f79228b2feefc2"
+    },
+    {
+      "path": "docs/music-studio-adoption.md",
+      "sha256": "3deaa942b448d408e61c6d51d5e8c13e3e4b83fc182972c868b3902e01a96b5d"
+    },
+    {
+      "path": "model-manifests/ace-step-1.5-turbo.json",
+      "sha256": "fb885ebb105084a348d3f69c23976678b0ba03e8b28e8d526c2f31381a964759"
+    },
+    {
+      "path": "packaging/music_worker.py",
+      "sha256": "ac320ddc6196f91ef2b9f20e7b261ae5365d99ea0d6c19641be465518113ea93"
+    },
+    {
+      "path": "research/music-adoption.json",
+      "sha256": "c57f5eba4fb81f6a75760300263a2534bc678fb64a555cf22f4b515f3e2d224e"
+    },
+    {
+      "path": "tests/test_music_modality.py",
+      "sha256": "336cf55db7a0d561035d4feb0b2606852ae6624822902b021303165f24d58830"
+    }
+  ]
+}

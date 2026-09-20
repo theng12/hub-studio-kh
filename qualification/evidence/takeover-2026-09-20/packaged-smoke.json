@@ -1,0 +1,33 @@
+{
+  "app": "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/dist/Studio Hub.app",
+  "checks": {
+    "job_storage.py": "7c0f6cc8229cbdb288643668f2b70bd9dad08d7a1046209cf77aab597adf56f1",
+    "execution_assets.py": "ca520a8d006d8bac84b3158458b5e6fe7316681c46178ea32b1d9c2ece251fea",
+    "broker.py": "437f74d817dddf14ee1a06cc31f98a3ab39c05e4012cb3905b06cc1409f9284d",
+    "/api/health": 200,
+    "/api/hub/workers": 200,
+    "/api/hub/model-packages": 200,
+    "/api/hub/fleet/nodes": 200,
+    "/studio/image/api/catalog": 200,
+    "/studio/voice/api/catalog": 200,
+    "/studio/transcription/api/transcribe/availability": 200,
+    "unauthenticated_workers": 401,
+    "background_expired_removed_live_preserved": true,
+    "owned_processes_stopped": true
+  },
+  "inference_run": false,
+  "identity": {
+    "version": "0.6.38",
+    "implementation_commit": "415df68d35c628cf77893fa6550f75b160f4221b",
+    "development_build": true
+  },
+  "ready_seconds": 15.25,
+  "modalities": [
+    "image",
+    "transcription",
+    "voice"
+  ],
+  "sweep_seconds": 75.23,
+  "service_exit": -15,
+  "ok": true
+}

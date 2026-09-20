@@ -1,0 +1,14 @@
+..E.....
+======================================================================
+ERROR: test_a_reader_copies_bytes_before_expiry_cleanup (test_execution_asset_purge.StagedAssetPurgeTests.test_a_reader_copies_bytes_before_expiry_cleanup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/tests/test_execution_asset_purge.py", line 118, in test_a_reader_copies_bytes_before_expiry_cleanup
+    reader = workers.submit(execution_assets.read_voice_reference, asset['id'])
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'components.hub.backend.execution_assets' has no attribute 'read_voice_reference'. Did you mean: 'stage_voice_reference'?
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.127s
+
+FAILED (errors=1)

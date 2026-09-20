@@ -1,0 +1,168 @@
+[gen] loaded 166 jobs from history
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+..........................Could not persist batch batch-1; continuing
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/components/hub/backend/transcription_jobs.py", line 80, in _save_quietly
+    _save(batch)
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+OSError: disk full
+.......................................................................................................................................................................s........................FEFE....................................................................................................[gen] loaded 166 jobs from history
+[gen] loaded 166 jobs from history
+.[gen] loaded 166 jobs from history
+.[gen] loaded 166 jobs from history
+.[gen] loaded 166 jobs from history
+...................[gen] loaded 166 jobs from history
+................................................................................/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:369: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 49587)>
+  path = os.fspath(arg)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:369: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 49629)>
+  path = os.fspath(arg)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:369: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 49636)>
+  path = os.fspath(arg)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:369: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 49701)>
+  path = os.fspath(arg)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:369: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 49711)>
+  path = os.fspath(arg)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 76148 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...../build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 50079)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 50080)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 50219)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 50220)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 50427)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=0, laddr=('127.0.0.1', 50428)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=0, laddr=('127.0.0.1', 50461)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:299: ResourceWarning: unclosed <socket.socket fd=16, family=2, type=1, proto=0, laddr=('127.0.0.1', 50472)>
+  def __enter__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......./build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 50600)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 50608)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 50670)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 50683)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 50732)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=0, laddr=('127.0.0.1', 50740)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=0, laddr=('127.0.0.1', 50814)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=17, family=2, type=1, proto=0, laddr=('127.0.0.1', 50828)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=16, family=2, type=1, proto=0, laddr=('127.0.0.1', 50900)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=21, family=2, type=1, proto=0, laddr=('127.0.0.1', 50912)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+........................................s../build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:997: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 51290)>
+  args = tuple(self._resolve_forward_ref(a) if isinstance(a, ForwardRef) else a for a in args)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:997: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 51306)>
+  args = tuple(self._resolve_forward_ref(a) if isinstance(a, ForwardRef) else a for a in args)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 49570)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=0, laddr=('127.0.0.1', 49762)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=10, family=2, type=1, proto=0, laddr=('127.0.0.1', 49755)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=15, family=2, type=1, proto=0, laddr=('127.0.0.1', 50529)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=18, family=2, type=1, proto=0, laddr=('127.0.0.1', 50541)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=22, family=2, type=1, proto=0, laddr=('127.0.0.1', 51040)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/typing.py:1904: ResourceWarning: unclosed <socket.socket fd=19, family=2, type=1, proto=0, laddr=('127.0.0.1', 50995)>
+  def __instancecheck__(cls, instance):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......s.....................................................ssss.........................................
+======================================================================
+ERROR: test_dependencies_and_layout_are_explicit (test_model_manifest_catalog.ModelManifestCatalogTests.test_dependencies_and_layout_are_explicit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/tests/test_model_manifest_catalog.py", line 186, in test_dependencies_and_layout_are_explicit
+    self.assertEqual(source["layout"]["model"]["destination"], "model")
+                     ~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyError: 'model'
+
+======================================================================
+ERROR: test_manifest_contents_match_the_captured_inventory (test_model_manifest_catalog.ModelManifestCatalogTests.test_manifest_contents_match_the_captured_inventory)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/tests/test_model_manifest_catalog.py", line 126, in test_manifest_contents_match_the_captured_inventory
+    self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_digests[package_id])
+                                                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+KeyError: 'ace-step-1.5-turbo'
+
+======================================================================
+FAIL: test_catalog_is_the_exact_release_menu (test_model_manifest_catalog.ModelManifestCatalogTests.test_catalog_is_the_exact_release_menu)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/tests/test_model_manifest_catalog.py", line 72, in test_catalog_is_the_exact_release_menu
+    self.assertEqual(set(self.manifests), set(EXPECTED))
+AssertionError: Items in the first set but not the second:
+'ace-step-1.5-turbo'
+
+======================================================================
+FAIL: test_every_imported_file_has_an_immutable_hash_and_source_mapping (test_model_manifest_catalog.ModelManifestCatalogTests.test_every_imported_file_has_an_immutable_hash_and_source_mapping)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/tests/test_model_manifest_catalog.py", line 131, in test_every_imported_file_has_an_immutable_hash_and_source_mapping
+    self.assertEqual(paths, sorted(set(paths)))
+AssertionError: Lists differ: ['Qwe[387 chars]z-lm-1.7B/added_tokens.json', 'acestep-5Hz-lm-[874 chars]son'] != ['Qwe[387 chars]z-lm-0.6B/README.md', 'acestep-5Hz-lm-0.6B/add[874 chars]ors']
+
+First differing element 10:
+'acestep-5Hz-lm-1.7B/added_tokens.json'
+'acestep-5Hz-lm-0.6B/README.md'
+
+Diff is 1983 characters long. Set self.maxDiff to None to see it.
+
+----------------------------------------------------------------------
+Ran 584 tests in 443.951s
+
+FAILED (failures=2, errors=2, skipped=7)
+sys:1: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 51448)>
