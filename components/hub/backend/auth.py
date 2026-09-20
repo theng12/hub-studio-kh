@@ -410,6 +410,7 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
 # In short: send work, watch it, collect it, cancel it - and read what is needed to decide
 # where work should go. Never change this Mac's settings, never delete its output, never
 # manage its models or its membership of the fleet.
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -421,10 +422,20 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/stats$"),
     ("GET", r"^/api/hub/model-packages$"),
     ("GET", r"^/api/hub/memory/policy$"),
-    ("GET", r"^/studio/(voice|subtitle|image|transcription)/api/[A-Za-z0-9_./-]*$"),
+    # Remote scheduling reads only these worker contracts. Keep each shape
+    # explicit so a newly added settings/storage/debug route is denied until
+    # it is deliberately classified here.
+    ("GET", rf"^/studio/{_FLEET_STUDIO}/api/"
+            r"(?:health|catalog|fleet/activity|memory-policy|transcribe/availability|"
+            r"generate/availability)$"),
+    ("GET", rf"^/studio/{_FLEET_STUDIO}/api/generate/jobs/"
+            r"[A-Za-z0-9_-]+(?:/(?:audio|image|video))?$"),
+    ("GET", r"^/studio/(?:subtitle|transcription)/api/generate/transcribe/jobs"
+            r"(?:/[A-Za-z0-9_-]+(?:/artifact)?)?$"),
+    ("GET", r"^/studio/voice/api/voices(?:/[A-Za-z0-9_-]+(?:/audio)?)?$"),
     # Editing a saved voice changes metadata only - never the stored clip - and it is how an
     # operator fixes a transcript typo that would otherwise produce a wrong-sounding clone.
-    ("PATCH", r"^/studio/(voice|subtitle|image|transcription)/api/[A-Za-z0-9_./-]*$"),
+    ("PATCH", r"^/studio/voice/api/voices/[A-Za-z0-9_-]+$"),
     # Installing and removing a shared voice. This is fleet state rather than this Mac's own
     # library: the voice is namespaced by an id the fleet minted, a node's own voice can never be
     # overwritten (the receiver refuses an id that holds other audio, and refuses a local voice),
