@@ -941,8 +941,8 @@ def voice_recovery_item(batch_id: str, item_index: int) -> tuple[dict, dict]:
                  if row.get("index") == item_index), None)
     if item is None:
         raise ValueError("unknown job item")
-    if item.get("state") not in {"running", "cancel_requested", "uncertain"}:
-        raise ValueError("Voice recovery requires an active or uncertain job")
+    if item.get("state") != "uncertain":
+        raise ValueError("Voice recovery requires an uncertain job")
     if not item.get("studio") or not item.get("studio_job_id"):
         _mark_voice_uncertain(
             item,
@@ -1179,7 +1179,7 @@ def busy_machines() -> set[str]:
         if sid in by_id
     }
     for batch in batches.values():
-        if batch.get("modality") == "image":
+        if batch.get("modality") in {"image", "voice"}:
             for item in batch.get("items") or []:
                 if item.get("state") == "uncertain":
                     machine = item.get("machine") or (
@@ -2006,6 +2006,125 @@ async def reconcile_image_item(batch_id: str, item_index: int,
             await client.aclose()
 
 
+async def reconcile_voice_item(batch_id: str, item_index: int,
+                               client: httpx.AsyncClient | None = None) -> dict:
+    """Read and adopt only the original accepted Voice job after Hub recovery."""
+    batch, item = voice_recovery_item(batch_id, item_index)
+
+    def result(reconciled: bool) -> dict:
+        return {
+            "batch_id": batch_id,
+            "clientRequestId": batch.get("client_request_id"),
+            "reconciled": reconciled,
+            "item": public_item(batch, item),
+        }
+
+    def pending(reason: str) -> dict:
+        set_voice_recovery(item, "manual_action_required", reason)
+        item["error"] = reason
+        ledger.save_batch(batch)
+        return result(False)
+
+    worker_id = item.get("studio")
+    machine = item.get("machine")
+    studio = next((row for row in _monitor().registry
+                   if row.get("id") == worker_id
+                   and (machine is None or row.get("machine") == machine)), None)
+    if studio is None:
+        return pending(
+            "The original Voice Studio is unavailable; its outcome remains uncertain."
+        )
+
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(follow_redirects=False)
+    try:
+        job_id = item["studio_job_id"]
+        try:
+            url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
+            response = await client.get(url, headers=headers, timeout=15.0)
+            if response.status_code >= 400:
+                return pending(
+                    "The original Voice job could not be read; its outcome remains uncertain."
+                )
+            job = response.json().get("job")
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            return pending(
+                "The original Voice worker response was unavailable or malformed."
+            )
+        if not isinstance(job, dict) or job.get("id") != job_id:
+            return pending(
+                "The original Voice worker status did not match the accepted job identity."
+            )
+        state = job.get("state")
+        if state not in {"queued", "running", "cancel_requested", "done", "error", "cancelled"}:
+            return pending("The original Voice worker returned an unknown job state.")
+        params = job.get("params")
+        expected_request_id = f"studiohub:{batch['id']}:{item['index']}"
+        if (not isinstance(params, dict)
+                or params.get("client_request_id") != expected_request_id):
+            return pending(
+                "The original Voice worker request identity did not match the accepted attempt."
+            )
+        if state in {"queued", "running", "cancel_requested"}:
+            set_voice_recovery(
+                item, "health_wait", "The original Voice job is still active."
+            )
+            _record_worker_progress(item, job.get("progress"))
+            ledger.save_batch(batch)
+            return result(False)
+
+        body = dict(batch.get("shared_params") or {})
+        body.update(item.get("params") or {})
+        body.update(repo=batch["model"], text=item["prompt"],
+                    client_request_id=expected_request_id)
+        if item.get("seed") is not None:
+            body["seed"] = item["seed"]
+        if state == "done":
+            if job.get("error"):
+                return pending(
+                    "The original Voice worker returned a contradictory terminal status."
+                )
+            try:
+                await _record_worker_success(
+                    client, batch, item, studio, job, body,
+                    float(item.get("run_started") or batch["created_at"]),
+                    recovery=True,
+                )
+            except Exception:
+                return pending(
+                    "The original Voice output could not be verified by the Hub."
+                )
+            if item.get("state") != "done":
+                return pending(
+                    "The original Voice output could not be adopted by the Hub."
+                )
+        else:
+            _record_worker_failure(
+                item, studio, job,
+                float(item.get("run_started") or batch["created_at"]),
+            )
+            item.update(
+                state=state,
+                error=str(job.get("error") or state)[:500],
+                error_code=str(job.get("error_code") or "WORKER_TERMINAL_ERROR")[:128],
+                finished_at=time.time(),
+                retry_at=None,
+            )
+        set_voice_recovery(
+            item, "reconciled",
+            "The original Voice worker returned a verified terminal result.",
+        )
+        ledger.save_batch(batch)
+        await _post_item_webhook(client, batch, item)
+        await _maybe_finish(client, batch)
+        _wakeup.set()
+        return result(True)
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
     """Persist state; when the batch just reached a terminal state, alert on any
     failures and fire the client's webhook (Story Studio et al) once."""
@@ -2370,9 +2489,12 @@ async def _dispatch_loop():
                     _reserved["gb"] += reserve
                     _busy.add(studio["id"])
                     b["last_dispatched_at"] = time.time()
-                    if b["modality"] == "image":
+                    if b["modality"] in {"image", "voice"}:
                         # A crash after POST may lose its response. Persist the
-                        # attempt identity before the worker can accept it.
+                        # attempt identity before the worker can accept it. Voice
+                        # also sends a stable client_request_id, but this fence is
+                        # what prevents restart from automatically replaying work
+                        # whose accepted receipt never reached the Hub.
                         try:
                             ledger.save_batch(b)
                         except Exception:
@@ -2820,12 +2942,29 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 or not job["id"] or job.get("state") not in {
                     "queued", "running", "cancel_requested", "done", "error", "cancelled"}):
             raise ValueError("Image worker acceptance did not contain a valid job receipt")
-        _persist_worker_execution_started_at(b, item, job)
+        if b["modality"] in {"image", "voice"}:
+            # The acceptance receipt below is the durability boundary. Record
+            # a supplied start time in the same write so a failure cannot occur
+            # first and requeue work the worker has already accepted.
+            _record_worker_execution_started_at(item, job)
+        else:
+            _persist_worker_execution_started_at(b, item, job)
         _record_worker_identity(item, studio, job)
         _record_worker_resource_usage(item, job)
         item["studio_job_id"] = job["id"]
-        if b["modality"] == "image":
-            ledger.save_batch(b)  # retain the accepted receipt before polling
+        if b["modality"] in {"image", "voice"}:
+            try:
+                ledger.save_batch(b)  # retain the accepted receipt before polling
+            except Exception:
+                if b["modality"] == "voice":
+                    _mark_voice_uncertain(
+                        item,
+                        "The Voice worker accepted this job, but the Hub could not "
+                        "persist its receipt; it was not retried automatically.",
+                    )
+                    item["error_code"] = "JOB_PERSISTENCE_UNCERTAIN"
+                    item["error"] = item["recovery"]["reason"]
+                raise
         # Keep the Hub's ownership fact after this finished batch is pruned;
         # the optional Studio reporter must not have to win a poll race.
         try:

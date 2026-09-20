@@ -909,9 +909,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return _summary(batch)
 
     @app.post("/api/hub/jobs/{batch_id}/items/{item_index}/reconcile")
-    async def reconcile_image(batch_id: str, item_index: int) -> dict[str, Any]:
+    async def reconcile_item(batch_id: str, item_index: int) -> dict[str, Any]:
         try:
-            return await broker.reconcile_image_item(batch_id, item_index, client=monitor._client)
+            batch = broker.batches.get(batch_id) or ledger.load_batch(batch_id)
+            if batch is not None and batch.get("modality") == "voice":
+                return await broker.reconcile_voice_item(
+                    batch_id, item_index, client=monitor._client
+                )
+            # Preserve the existing Image/unknown-batch behavior and error text;
+            # Voice is the only new dispatch introduced by this route.
+            return await broker.reconcile_image_item(
+                batch_id, item_index, client=monitor._client
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
