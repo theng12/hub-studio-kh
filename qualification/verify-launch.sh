@@ -51,7 +51,18 @@ fail() { echo "RESULT: FAIL — $1"; exit 1; }
 [ -x "$SVC" ] || fail "the bundled service is missing or not executable (replace this app with a complete copy)"
 [ -x "$PY" ]  || fail "the bundled Python runtime is missing or not executable (replace this app with a complete copy)"
 [ -n "$LIB" ] && [ -d "$LIB" ] || fail "no model library found — set LIB= to wherever you put it (looked beside this script, in your home folder, and in /Volumes/Models)"
-echo "identity: $("$PY" -c "import json;d=json.load(open('$APP/Contents/Resources/release-manifest.json'));print(d['version'], d['implementation_commit'], 'development_build:', d['development_build'])")"
+MANIFEST="$APP/Contents/Resources/release-manifest.json"
+identity=$("$PY" - "$MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    manifest = json.load(stream)
+print(manifest["version"], manifest["implementation_commit"],
+      "development_build:", manifest["development_build"])
+PY
+) || fail "the release manifest is missing, malformed, or incomplete"
+echo "identity: $identity"
 
 # Note: this deliberately does not try to read the app's flags out of the binary. It did at
 # first, and that was wrong twice over - Swift folds those short string literals away, and the
@@ -101,15 +112,25 @@ if [ ! -f "$TMP/hub-ready.json" ]; then
   fail "the service ran but never became ready"
 fi
 
-python3 - "$TMP/hub-ready.json" <<'PY'
+if ! "$PY" - "$TMP/hub-ready.json" <<'PY'
 import json, sys, urllib.request
-info = json.load(open(sys.argv[1]))
+with open(sys.argv[1]) as stream:
+    info = json.load(stream)
+if not isinstance(info, dict) or not isinstance(info.get("url"), str) or not isinstance(info.get("token"), str):
+    raise ValueError("readiness record must contain string url and token values")
 req = urllib.request.Request(info["url"].rstrip("/") + "/api/health",
                              headers={"Authorization": "Bearer " + info["token"]})
 with urllib.request.urlopen(req, timeout=15) as response:
     body = json.loads(response.read())
-print("ready at:", info["url"], "| health:", response.status, "ok =", body.get("ok"))
+    if response.status != 200:
+        raise RuntimeError("health endpoint returned HTTP %s" % response.status)
+    if not isinstance(body, dict) or body.get("ok") is not True:
+        raise ValueError("health response must be a JSON object with ok=true")
+    print("ready at:", info["url"], "| health:", response.status, "ok =", body["ok"])
 PY
+then
+  fail "the service readiness or authenticated health check failed"
+fi
 
 echo
 echo "RESULT: PASS — this copy starts, becomes ready and answers its health check."
