@@ -428,8 +428,11 @@ def policy_for(
     script", which is the failure this function exists to prevent.
     """
     policy = _runtime_default(family, repo)
-    source = ("conservative_default" if policy.origin == "conservative_default"
-              else "runtime_default")
+    # The published `source` is what a person reads on the Models page, so it names the evidence
+    # rather than the code path that produced it.
+    source = {"conservative_default": "conservative_default",
+              "measured": "measured_fleet",
+              "engine_input_limit": "engine_input_limit"}.get(policy.origin, "runtime_default")
 
     if repo == QWEN_17B_BASE_REPO:
         if (

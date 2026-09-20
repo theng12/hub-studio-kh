@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.36 — 2026-09-20 · a done item reported 79%, and the Hub regression suite joins the gate
+
+- **`item["progress"] = 1.0` on the done transition.** `_record_worker_success` published the
+  terminal state without touching progress, so the item kept whatever the last poll read. The
+  15,058-character Kokoro proof finished with `state: done`, `chunk_total: 6`, a complete 807.1 s
+  artifact - and `progress: 0.788` (`0.08 + 5/6 * 0.85`, i.e. after section five). Case:
+  `tests/hub_regression/cases/test_terminal_progress.py`.
+- **The regression cases were never in the gate.** `tests/hub_regression/test_regression.py` was a
+  bare `test_*` function, which `unittest discover` does not collect, so its 54 isolated pytest cases
+  (dispatch fencing, execution identity, memory admission, model-failure protection, ledger recovery)
+  ran only when someone remembered to invoke pytest by hand. It is now a `TestCase`, asserts that
+  pytest actually collected and passed rather than merely exiting 0, and the subprocess timeout is 120 s
+  (the suite takes ~1.5 s; 60 s was too tight on a loaded machine). Gate count: 54 cases + 1 harness.
+- **Published `source` names the evidence, not the code path.** `policy_for` mapped every non-audit
+  origin to "runtime_default"; voxtral's measured 800 came out as "runtime_default" while its origin
+  said "measured". Now `measured_fleet` and `engine_input_limit` are published as themselves, so the
+  Models page says where the number came from.
+- **`qualification/long_script_run.py` counts sections correctly.** Its section counter matched the
+  word " section ", but the worker writes section files (`section_001.wav`), so the first 15,058-
+  character run reported "sections seen 0" while the log showed six. It counts the paths now.
+
 ## 0.6.35 — 2026-09-20 · voxtral-tts measured: 800-character sections, and a 96-second truncation found
 
 - **Measured voxtral-tts through the app's own Hub** with the new

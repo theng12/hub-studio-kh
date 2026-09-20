@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
 import time
 import urllib.request
@@ -84,13 +85,19 @@ def log_size() -> int:
         return 0
 
 
+# The worker names each rendered section on disk (`/tmp/voice_sections_<job>/section_001.wav`), so
+# counting those paths after the submission is what shows the script really was sectioned. Matching
+# only the word "section" missed every one of them: the first 15,058-character run reported 0.
+_SECTION_LINE = re.compile(r"section_\d+\.wav")
+
+
 def sections_since(offset: int) -> int:
-    """How many section lines the worker wrote after `offset` - the proof that it sectioned."""
+    """How many sections the worker rendered after `offset` - the proof that it sectioned."""
     try:
         text = WORKER_LOG.read_text(errors="ignore")[offset:]
     except OSError:
         return 0
-    return sum(1 for line in text.splitlines() if " section " in line or "stable section" in line)
+    return len(_SECTION_LINE.findall(text))
 
 
 def main() -> int:

@@ -154,6 +154,7 @@ class SectionSizeControlTests(unittest.TestCase):
         policy = long_form_policy.policy_for("voxtral-tts", "x")
         self.assertEqual(policy["section_max_characters"], 800)
         self.assertEqual(policy["origin"], "measured")
+        self.assertEqual(policy["source"], "measured_fleet")
         self.assertNotEqual(policy["section_max_characters"],
                             long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS)
         # The evidence: a single call still held every word at 1162 characters, and began losing

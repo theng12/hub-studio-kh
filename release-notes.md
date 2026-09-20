@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.36 — 2026-09-20
+
+### A finished job no longer reads as unfinished
+
+A 15,000-character script rendered as six sections, produced a correct thirteen-minute file, and the
+job still said **79%**. Nothing was wrong with the audio: the last progress update happened between
+two of the Hub's polls, so the Hub kept the value from the second-to-last section. A finished job now
+reports finished, whatever the last poll happened to catch.
+
+### The Hub's own regression suite now runs before every release
+
+The Hub keeps a suite of 54 cases covering the things that are hardest to see: a job that must not be
+dispatched twice, a Mac that must stay reserved, a model that must stop being fed work, a result that
+must survive a lost response. That suite was only ever run by hand — a person had to remember a
+separate command, and nothing failed if nobody did. It now runs as part of the release gate, so a
+regression there stops the release instead of waiting to be noticed in the app. Two cases were added
+with this release, one of them the finished-progress bug above.
+
 ## 0.6.35 — 2026-09-20
 
 ### How long a script each voice model can actually take

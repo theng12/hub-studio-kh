@@ -1802,6 +1802,10 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     # stable asset identity are complete. Pollers must never observe a partial
     # "done" result while the Hub is still finalizing the worker artifact.
     item["state"] = "done"
+    # A finished item is 100% done, whatever the last progress poll caught. A six-section long-form
+    # job reported 0.788 - the value after section five - because the worker finished between polls
+    # and the final update was never read, so a completed artifact displayed as four fifths rendered.
+    item["progress"] = 1.0
 
 
 def _validate_image_worker_job(item: dict, job: object) -> None:
