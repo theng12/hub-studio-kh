@@ -3780,7 +3780,11 @@ class GenerationManager:
     def _mlx_kwargs_voice_picker(self, family: str, params, gen_kwargs) -> str:
         """Kokoro-MLX / Orpheus / similar: voice param is required (named
         preset voice). No reference audio cloning, no instruction prompt."""
-        voice = (params.get("voice") or "").strip()
+        # `preset_speaker` is the name the Qwen families use for the same idea, and it is what the
+        # app and the gateway send for every model. Accepting either here fixes every client at once,
+        # at the place that actually knows the difference, instead of teaching each of them a
+        # per-family field name - a mismatch that made three working models look broken.
+        voice = (params.get("voice") or params.get("preset_speaker") or "").strip()
         if not voice:
             raise ValueError(
                 f"{family} needs a preset voice. Pick one from the voice dropdown — "

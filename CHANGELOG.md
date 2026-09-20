@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.27 — 2026-09-19 · picker families accept the field every client sends
+
+- **`_mlx_kwargs_voice_picker` read only `params["voice"]`**, while the app, the gateway and the kit
+  smoke all send `preset_speaker` (the Qwen name). Jobs for kokoro-mlx, orpheus, vibevoice and
+  voxtral-tts failed with "needs a preset voice" while carrying a valid voice under the other name -
+  which is why three working models looked unable to run at all. The worker now accepts either, at
+  the place that knows the difference; the family-native field still wins when both are present.
+- Found by the adoption smoke test (`qualification/smoke_new_models.py`): with the correct field,
+  orpheus, VibeVoice and Voxtral produced artifacts on the first attempt. Kokoro still fails for an
+  unrelated reason - its phonemizer needs `espeak-ng`, which is not on this Mac nor bundled (the app
+  ships `ffmpeg` only) - and F5-TTS cannot run because its engine is not packaged at all.
+- Evidence: `tests/test_preset_voice_field_alias.py` (4 checks) - the alias is accepted, the native
+  field wins, a missing voice still refuses with the actionable message, and an unknown VibeVoice
+  voice is still rejected.
+
 ## 0.6.26 — 2026-09-19 · package rows state model vs dependency
 
 - **`/api/hub/model-packages` rows gained `type` (`model` | `dependency`) and `dependencies`.** A

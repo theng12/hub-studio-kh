@@ -31,6 +31,7 @@ PRESET_KEY = {
     "voxtral-tts": "voxtral_voices",
     "marvis": "marvis_voices",
 }
+PICKER_FAMILIES = {"kokoro-mlx", "orpheus", "vibevoice", "voxtral-tts", "marvis"}
 SKIP = {  # cannot load on a 16 GB Mac; named so the report is explicit rather than a silent omission
     "mlx-community/fish-audio-s2-pro-8bit": 24,
     "mlx-community/fish-audio-s2-pro-bf16": 32,
@@ -86,9 +87,13 @@ def main() -> int:
                 preset = first.get("id") or first.get("name") or first.get("voice") or ""
             else:
                 preset = first or ""
+        # `preset_speaker` only - the field the app's audio request carries - because that is the
+        # contract under test. The picker families read `voice` internally; the worker now accepts
+        # either name, so a smoke that injected the internal field would hide a client-facing break.
+        params = {"language": "en", "speed": 1.0, "preset_speaker": preset}
         body = {
             "modality": "voice", "model": repo, "client_request_id": f"smoke-{uuid.uuid4().hex[:12]}",
-            "items": [{"text": TEXT_TEMPLATE.format(uuid.uuid4().hex[:6]), "params": {"preset_speaker": preset, "language": "en", "speed": 1.0}}],
+            "items": [{"text": TEXT_TEMPLATE.format(uuid.uuid4().hex[:6]), "params": params}],
         }
         if not preset:
             if not library_id:

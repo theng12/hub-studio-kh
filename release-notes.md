@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.27 — 2026-09-19
+
+### Three models looked broken because of a field name
+
+The worker has two names for the same thing: some model families ask for a `preset_speaker`, others
+for a `voice`. Every client — the app, the gateway, the drive kit — sends `preset_speaker`, because
+that is the field the app has always carried. So jobs for Kokoro, orpheus, VibeVoice and Voxtral were
+refused with *"needs a preset voice"* while holding a perfectly good one under the other name. The
+worker now accepts either, which fixes every client at once instead of teaching each of them a
+per-family detail.
+
+With that, **orpheus, VibeVoice and Voxtral generate audio** — verified by running real jobs.
+
 ## 0.6.26 — 2026-09-19
 
 ### The Hub now says whether a package is a model or a dependency
