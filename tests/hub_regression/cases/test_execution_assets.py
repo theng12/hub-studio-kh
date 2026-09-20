@@ -99,12 +99,13 @@ def test_broker_streams_staged_voice_to_worker_multipart(tmp_path: Path, monkeyp
     batch = {
         "id": "batch-1", "modality": "voice", "model": "model/a",
         "shared_params": {"voice_reference_asset_id": "a" * 24},
-        "cancelled": False, "genstudio_execution": None,
+        "cancelled": False, "genstudio_execution": None, "created_at": time.time(),
     }
     item = {
         "index": 0, "prompt": "Narration", "params": {}, "seed": None,
         "state": "running", "studio_job_id": None,
     }
+    batch["items"] = [item]
     studio = {"id": "voice@mac-a", "host": "127.0.0.1", "port": 47870}
     async def exercise():
         await broker._run_item(Client(), batch, item, studio)
