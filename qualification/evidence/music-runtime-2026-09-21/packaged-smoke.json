@@ -1,0 +1,37 @@
+{
+  "app": "/build/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/StudioHubReviewed.app",
+  "tree_sha256": "f89885aee5e2c64844961f558d7bc947819a3ffe4d31b760e768d54549c1f837",
+  "identity": {
+    "version": "0.6.38",
+    "implementation_commit": "c9eadcae72eef7c5a41791a651a3ed5894aa8be5",
+    "development_build": false
+  },
+  "model_inference": false,
+  "source_sha256": {
+    "components/hub/backend/broker.py": "6757d601bf3669925d7fe29169591258fc6a282efd8798dfb03ee15156b8c64f",
+    "components/hub/standalone.py": "44c9187bd5038fecd3b4cb49001f934068aa6c61e86d13364d4cd48eae2d12c6",
+    "components/music/app/backend/generation.py": "20229401cda43d7b5e9859e93ad40fefe188ea2ef852603469fe81a1c451c1e7",
+    "components/music/app/backend/engine_child.py": "54d43190f99ae99f33979c974df183ec3358e0683330ddefc4addbdf7c9ce9cc",
+    "packaging/music_worker.py": "9b9109c57d700c5ff39800a8f29fad970a40c3df7f79d3f7fe6b333a072731a2",
+    "packaging/hub_worker.py": "15177db9573099bf5ee3a79129491a68891ec9cfdb7ee0f1f666ceaf5aca01b6"
+  },
+  "checks": {
+    "/api/health": 200,
+    "/api/hub/workers": 200,
+    "/studio/music/api/health": 200,
+    "/studio/music/api/catalog": 200,
+    "unauthenticated_music": 401,
+    "owned_processes_stopped": true,
+    "bundle_unchanged": true
+  },
+  "ready_seconds": 9.79,
+  "modalities": [
+    "image",
+    "music",
+    "transcription",
+    "voice"
+  ],
+  "music_runtime_sha256": "cea7ab91550efffaaf71644b12573ddcddb442596e534361d4637a959dd325ef",
+  "service_exit": -15,
+  "ok": true
+}

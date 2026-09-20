@@ -440,3 +440,42 @@ independent documentation/evidence review, local validation and authorized PR in
 corrections resolved. Local validation: 55 links, 11 shell blocks, Python syntax,
 and the expected five negative-probe failures. Integration record:
 https://github.com/theng12/Studio-Hub-KH/pull/2 (use its merge state/commit).
+
+## 2026-09-21 — resumed Music runtime and new-computer verification
+
+[MEASURED] Integration was clean at `9f25c03`, containing reviewed H-01 through
+H-05 and Music package-contract PR #10. Root resumed the preserved
+`codex/music-package-runtime` worktree, without merging the old draft wholesale.
+The runtime segment stages 618 exact-revision source files and a seven-package
+hash-locked overlay over Voice Python, supervises a private Music worker, adds
+closed proxy routes, and retains uncertain accepted jobs for exact-job recovery.
+
+[MEASURED] Native build and SDK 26.5 selection passed. The existing Image runtime
+matched the tracked lock and passed manifest verification before and after a
+separate project-owned copy. Product runtimes were not modified. No live state,
+credentials, model library or installed app was copied or changed.
+
+[REPORTED] Final independent review found no remaining findings after regression
+repairs for normalized accepted parameters and terminal-persistence rollback.
+It passed 85 Hub, 46 Music/package/baseline (four skips), 37 auth/peer tests and
+three authenticated HTTP recovery fault injections. Root owns the full gate and
+packaged evidence, recorded in `qualification/new-computer-resume-2026-09-21.md`.
+
+[MEASURED] The real pinned phonemizer works through its bundled shared library
+without a host executable. Tests now exercise that path, explicitly select a
+staged app and verify its source commit. A missing package marker was restored so
+ordinary unittest discovery actually invokes the isolated Hub regression suite.
+Graphify CLI/interpreter are unavailable and its old graph has no relevant Music
+coverage; current callers were inspected directly.
+
+Next: native lifecycle reproductions N-01/N-02/N-03, bounded reference-validation
+repairs C-01/C-02, then the native Music workflow and separate model qualification.
+Physical machine/fleet/GenStudio checks remain open. No deployment, hosted compute,
+paid calls, releases, tags, notarization or real enrollment occurred.
+
+[MEASURED] Final product commit `c9eadca` passed independent exact-commit review.
+Root: 631 tests OK/7 skips; Voice: 722/19; Hub: 85. Clean-commit app
+`.build/StudioHubReviewed.app` passed 21 release/phonemizer checks and the
+model-free four-worker startup/authentication/identity/owned-shutdown probe.
+Exact tree digest and source hashes are in the resume receipt and sanitized JSON.
+PR #11 records integration: https://github.com/theng12/Studio-Hub-KH/pull/11.

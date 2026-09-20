@@ -138,6 +138,13 @@ MODALITY = {
     "render": ("/api/generate/render", "label", "video"),
 }
 
+# These workers acknowledge an asynchronous job before the result exists and
+# do not provide Voice's stable client-request recovery contract. Once a POST
+# may have reached one of them, retain that exact attempt instead of silently
+# replaying it and producing a duplicate artifact.
+DURABLE_ASYNC_MODALITIES = frozenset({"image", "music"})
+RECEIPT_DURABLE_MODALITIES = DURABLE_ASYNC_MODALITIES | {"voice"}
+
 # Every modality whose artifact is sound. Derived from MODALITY so a future
 # audio modality inherits the priority below without a second edit.
 AUDIO_MODALITIES = frozenset(
@@ -828,13 +835,13 @@ def _expire_genstudio_batch(batch: dict) -> bool:
                 _mark_voice_uncertain(item, reason)
                 item["error_code"] = "VOICE_CANCEL_OUTCOME_UNCERTAIN"
                 item["error"] = reason
-        elif batch.get("modality") == "image" and item.get("state") in {
+        elif batch.get("modality") in DURABLE_ASYNC_MODALITIES and item.get("state") in {
                 "running", "cancel_requested"}:
             studio = next((row for row in _monitor().registry
                            if row.get("id") == item.get("studio")), {})
-            _mark_image_uncertain(
-                item, studio,
-                "GenStudio lease expired during an Image attempt; cancellation "
+            _mark_async_uncertain(
+                item, studio, batch["modality"],
+                f"GenStudio lease expired during a {batch['modality'].title()} attempt; cancellation "
                 "was requested, but the original worker outcome must be reconciled.",
             )
         else:
@@ -935,17 +942,23 @@ def _mark_accepted_voice_cancel_uncertain(batch: dict, item: dict) -> bool:
     return True
 
 
-def _mark_image_uncertain(item: dict, studio: dict, reason: str,
-                          code: str = "IMAGE_OUTCOME_UNCERTAIN") -> None:
-    """Retain an Image attempt whose worker outcome cannot be safely replayed."""
+def _mark_async_uncertain(item: dict, studio: dict, modality: str, reason: str,
+                          code: str | None = None) -> None:
+    """Retain an async attempt whose worker outcome cannot be safely replayed."""
     item["state"] = "uncertain"
     item["retry_at"] = None
     item.setdefault("machine", str(studio.get("machine") or "local")[:500])
     item.setdefault("worker_id", str(studio.get("id") or "unknown")[:500])
-    item["error_code"] = code
+    item["error_code"] = code or f"{modality.upper()}_OUTCOME_UNCERTAIN"
     item["error"] = reason
     item["recovery"] = {"phase": "uncertain", "reason": reason,
                         "updated_at": time.time()}
+
+
+def _mark_image_uncertain(item: dict, studio: dict, reason: str,
+                          code: str = "IMAGE_OUTCOME_UNCERTAIN") -> None:
+    """Retain an Image attempt whose worker outcome cannot be safely replayed."""
+    _mark_async_uncertain(item, studio, "image", reason, code)
 
 
 def set_voice_recovery(item: dict, phase: str, reason: str) -> dict:
@@ -997,8 +1010,8 @@ def voice_recovery_item(batch_id: str, item_index: int) -> tuple[dict, dict]:
 def restore_batches():
     """Reload unfinished batches after a Hub restart.
 
-    Accepted Voice and Image jobs remain fenced after restart. Other modalities
-    retain their historic retry behavior.
+    Accepted Voice, Image, and Music jobs remain fenced after restart. Other
+    modalities retain their historic retry behavior.
     """
     for b in ledger.load_unfinished_batches():
         if _expire_genstudio_batch(b):
@@ -1012,12 +1025,13 @@ def restore_batches():
                     "Hub restarted while Voice Studio work was active; "
                     "the original job must be reconciled before any retry.",
                 )
-            elif it["state"] in {"running", "cancel_requested"} and b.get("modality") == "image":
+            elif (it["state"] in {"running", "cancel_requested"}
+                  and b.get("modality") in DURABLE_ASYNC_MODALITIES):
                 studio = next((row for row in _monitor().registry
                                if row.get("id") == it.get("studio")), {})
-                _mark_image_uncertain(
-                    it, studio,
-                    "Hub restarted while an Image worker attempt was active; "
+                _mark_async_uncertain(
+                    it, studio, b["modality"],
+                    f"Hub restarted while a {b['modality'].title()} worker attempt was active; "
                     "reconcile the original job before any retry.",
                 )
             elif it["state"] == "running":
@@ -1214,7 +1228,7 @@ def busy_machines() -> set[str]:
         if sid in by_id
     }
     for batch in batches.values():
-        if batch.get("modality") in {"image", "voice"}:
+        if batch.get("modality") in RECEIPT_DURABLE_MODALITIES:
             for item in batch.get("items") or []:
                 if item.get("state") == "uncertain":
                     machine = item.get("machine") or (
@@ -1532,17 +1546,31 @@ def clear_finished_batches(modality: str | None = None,
     return {"cleared": len(selected), "batch_ids": selected}
 
 
-async def _post_item_webhook(client: httpx.AsyncClient, b: dict, item: dict):
+def _reserve_item_webhook(b: dict, item: dict) -> bool:
+    """Mark one terminal callback before its durable publication write."""
+    if (not b.get("item_webhook") or item.get("_item_notified")
+            or item.get("state") not in {"done", "error", "cancelled"}):
+        return False
+    item["_item_notified"] = True
+    return True
+
+
+async def _post_item_webhook(client: httpx.AsyncClient, b: dict, item: dict,
+                             *, reserved: bool = False):
     """POST a single item to the client's per-item webhook the moment it reaches a
     terminal state — lets a client submit ALL scenes as one batch yet still
     receive each result as it finishes (instead of waiting for the whole batch).
     Fires at most once per item; skipped for retry-requeued items."""
     url = b.get("item_webhook")
-    if not url or item.get("_item_notified"):
+    if not url or (item.get("_item_notified") and not reserved):
         return
     if item["state"] not in ("done", "error", "cancelled"):
         return
-    item["_item_notified"] = True
+    if reserved:
+        if not item.get("_item_notified"):
+            return
+    else:
+        item["_item_notified"] = True
     sid = item.get("studio") or ""
     safe_item = public_item(b, item)
     try:
@@ -1636,7 +1664,8 @@ def terminal_result(b: dict, item: dict) -> dict | None:
 def public_item(b: dict, item: dict) -> dict:
     """Return a public job item without worker-local paths or worker URLs."""
     result = {k: v for k, v in item.items()
-              if k not in {"artifact_path", "worker_artifact_url"}}
+              if k not in {"artifact_path", "worker_artifact_url",
+                           "worker_accepted_params"}}
     result["execution_started_at"] = item.get("execution_started_at")
     if result.get("cancel_error") is not None:
         result["cancel_error"] = _sanitize_public_error(result["cancel_error"])
@@ -1805,6 +1834,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     item["finished_at"] = time.time()
     item["last_progress_at"] = item["finished_at"]
     item["asset_id"] = ledger.record_asset(
+        id=item.get("asset_id"),
         source="job", modality=b["modality"], studio=studio["id"],
         machine=studio.get("machine", "local"), model=b["model"],
         seed=job.get("resolved_seed") or item["seed"], prompt=item["prompt"],
@@ -1869,6 +1899,40 @@ def _validate_image_worker_job(item: dict, job: object) -> None:
             raise ValueError("Image worker completion lacks a final PNG receipt")
 
 
+def _validate_music_worker_job(item: dict, job: object) -> None:
+    """Reject a changed Music identity or a completion without a WAV receipt."""
+    if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
+        raise ValueError("Music worker status did not match the accepted job ID")
+    state = job.get("state")
+    if state not in {"queued", "running", "cancel_requested", "done", "error", "cancelled"}:
+        raise ValueError("Music worker status has an unknown state")
+    for field, accepted in (("model_revision", item.get("model_revision")),
+                            ("runtime_revision", item.get("runtime_revision")),
+                            ("worker_id", item.get("worker_id")),
+                            ("machine_id", item.get("machine"))):
+        if accepted is not None and job.get(field) != accepted:
+            raise ValueError(f"Music worker status changed its {field}")
+    if state == "done" and not job.get("error"):
+        digest = job.get("sha256")
+        generated_at = job.get("generated_at", job.get("finished_at"))
+        if (type(job.get("bytes")) is not int or job["bytes"] <= 0
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+                or job.get("output_url") != f"/api/generate/jobs/{job['id']}/audio"
+                or not isinstance(job.get("output_path"), str) or not job["output_path"]
+                or job.get("media_type") != "audio/wav"
+                or type(generated_at) not in (int, float)
+                or not math.isfinite(float(generated_at)) or generated_at <= 0):
+            raise ValueError("Music worker completion lacks a final WAV receipt")
+
+
+def _validate_durable_worker_job(modality: str, item: dict, job: object) -> None:
+    if modality == "image":
+        _validate_image_worker_job(item, job)
+    elif modality == "music":
+        _validate_music_worker_job(item, job)
+
+
 async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                               body: dict, t_start: float) -> bool | dict:
     """Reconcile a worker job after a transport failure.
@@ -1896,8 +1960,8 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             job = jr.json().get("job") or {}
             if not isinstance(job, dict) or job.get("id") != job_id:
                 return False
-            if b.get("modality") == "image":
-                _validate_image_worker_job(item, job)
+            if b.get("modality") in DURABLE_ASYNC_MODALITIES:
+                _validate_durable_worker_job(b["modality"], item, job)
             if _voice_recovery_owns(item):
                 return False
             _persist_worker_execution_started_at(b, item, job)
@@ -1922,18 +1986,21 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
     return False
 
 
-async def reconcile_image_item(batch_id: str, item_index: int,
-                               client: httpx.AsyncClient | None = None) -> dict:
-    """Check only the original accepted Image job; never submit another one."""
+async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
+                                client: httpx.AsyncClient | None = None) -> dict:
+    """Check only the original accepted async job; never submit another one."""
+    if modality not in DURABLE_ASYNC_MODALITIES:
+        raise ValueError("unsupported durable modality")
+    label = modality.title()
     batch = batches.get(batch_id) or ledger.load_batch(batch_id)
-    if batch is None or batch.get("modality") != "image":
-        raise ValueError("unknown Image batch")
+    if batch is None or batch.get("modality") != modality:
+        raise ValueError(f"unknown {label} batch")
     item = next((row for row in batch.get("items", [])
                  if row.get("index") == item_index), None)
     if item is None:
-        raise ValueError("unknown Image item")
+        raise ValueError(f"unknown {label} item")
     if item.get("state") != "uncertain":
-        raise ValueError("Image item is not uncertain")
+        raise ValueError(f"{label} item is not uncertain")
     batches[batch_id] = batch
 
     def result(reconciled: bool) -> dict:
@@ -1953,14 +2020,14 @@ async def reconcile_image_item(batch_id: str, item_index: int,
     worker_id = item.get("studio")
     machine = item.get("machine")
     if not all(isinstance(value, str) and value for value in (job_id, worker_id, machine)):
-        return pending("The original Image worker identity is incomplete; manual reconciliation is required.")
+        return pending(f"The original {label} worker identity is incomplete; manual reconciliation is required.")
     studio = next((row for row in _monitor().registry
                    if row.get("id") == worker_id and row.get("machine") == machine), None)
     if studio is None:
-        return pending("The original Image worker and machine are unavailable; manual reconciliation is required.")
+        return pending(f"The original {label} worker and machine are unavailable; manual reconciliation is required.")
     if any(not isinstance(item.get(field), str) or not item[field]
            for field in ("model_revision", "runtime_revision", "worker_id")):
-        return pending("The accepted Image model, runtime or worker revision is missing.")
+        return pending(f"The accepted {label} model, runtime or worker revision is missing.")
     owns_client = client is None
     if owns_client:
         client = httpx.AsyncClient(follow_redirects=False)
@@ -1972,16 +2039,16 @@ async def reconcile_image_item(batch_id: str, item_index: int,
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
             if response.status_code >= 400:
-                return pending("The original Image job could not be read; its outcome remains uncertain.")
+                return pending(f"The original {label} job could not be read; its outcome remains uncertain.")
             job = response.json().get("job")
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
-            return pending("The original Image worker response was unavailable or malformed.")
+            return pending(f"The original {label} worker response was unavailable or malformed.")
         if not isinstance(job, dict):
-            return pending("The original Image worker response was malformed.")
+            return pending(f"The original {label} worker response was malformed.")
         try:
-            _validate_image_worker_job(item, job)
+            _validate_durable_worker_job(modality, item, job)
         except ValueError:
-            return pending("The original Image worker status or final PNG receipt was malformed.")
+            return pending(f"The original {label} worker status or final artifact receipt was malformed.")
         params = job.get("params")
         body = dict(batch.get("shared_params") or {})
         body.update(item.get("params") or {})
@@ -1993,15 +2060,27 @@ async def reconcile_image_item(batch_id: str, item_index: int,
             "runtime_revision": item.get("runtime_revision"),
             "worker_id": item.get("worker_id"), "machine_id": machine,
         }
-        if (not isinstance(params, dict)
-                or any(job.get(key) != value for key, value in accepted.items()
-                       if value is not None)
-                or any(params.get(key) != value for key, value in body.items())):
-            return pending("Original Image job identity or request settings did not match the accepted attempt.")
+        accepted_params = item.get("worker_accepted_params")
+        if modality == "music" and not isinstance(accepted_params, dict):
+            # Receipts written before Music retained the worker's normalized
+            # request cannot prove that a same-id job has the same inputs.
+            # Keep those legacy attempts fenced for manual reconciliation.
+            return pending(
+                "The accepted Music canonical request settings are missing; "
+                "manual reconciliation is required."
+            )
+        params_match = (
+            params == accepted_params if modality == "music"
+            else isinstance(params, dict)
+            and all(params.get(key) == value for key, value in body.items())
+        )
+        if (any(job.get(key) != value for key, value in accepted.items()
+                if value is not None) or not params_match):
+            return pending(f"Original {label} job identity or request settings did not match the accepted attempt.")
         state = job.get("state")
         if state in {"queued", "running", "cancel_requested"}:
             recovery = dict(item.get("recovery") or {})
-            recovery.update(phase="health_wait", reason="The original Image job is still active.",
+            recovery.update(phase="health_wait", reason=f"The original {label} job is still active.",
                             updated_at=time.time())
             item["recovery"] = recovery
             _record_worker_progress(item, job.get("progress"))
@@ -2009,7 +2088,7 @@ async def reconcile_image_item(batch_id: str, item_index: int,
             return result(False)
         code = str(job.get("error_code") or "")
         if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
-            return pending("The original Image worker cannot prove a final receipt; manual reconciliation is required.")
+            return pending(f"The original {label} worker cannot prove a final receipt; manual reconciliation is required.")
         if state == "done" and not job.get("error"):
             try:
                 await _record_worker_success(
@@ -2017,9 +2096,11 @@ async def reconcile_image_item(batch_id: str, item_index: int,
                     float(item.get("run_started") or batch["created_at"]), recovery=True,
                 )
             except Exception:
-                return pending("The original Image output could not be verified by the Hub.")
+                return pending(f"The original {label} output could not be verified by the Hub.")
             if item.get("state") != "done":
-                return pending("The original Image output could not be adopted by the Hub.")
+                return pending(f"The original {label} output could not be adopted by the Hub.")
+            item["error"] = None
+            item.pop("error_code", None)
         elif state in {"error", "cancelled"}:
             _record_worker_failure(item, studio, job,
                                    float(item.get("run_started") or batch["created_at"]))
@@ -2027,17 +2108,39 @@ async def reconcile_image_item(batch_id: str, item_index: int,
                         error_code=code or "WORKER_TERMINAL_ERROR",
                         finished_at=time.time(), retry_at=None)
         else:
-            return pending("The original Image worker returned an unknown job state.")
+            return pending(f"The original {label} worker returned an unknown job state.")
         item["recovery"] = {"phase": "reconciled",
-                            "reason": "The original Image worker returned a verified terminal result.",
+                            "reason": f"The original {label} worker returned a verified terminal result.",
                             "updated_at": time.time()}
-        await _post_item_webhook(client, batch, item)
-        await _maybe_finish(client, batch)
+        publication_state = {
+            key: batch[key] for key in ("done_notified", "finished_at")
+            if key in batch
+        }
+        item_webhook_reserved = _reserve_item_webhook(batch, item)
+        try:
+            await _maybe_finish(client, batch)
+        except Exception:
+            _retain_async_terminal_persistence_uncertainty(
+                batch, item, studio, publication_state
+            )
+            raise
+        if item_webhook_reserved:
+            await _post_item_webhook(client, batch, item, reserved=True)
         _wakeup.set()
         return result(True)
     finally:
         if owns_client:
             await client.aclose()
+
+
+async def reconcile_image_item(batch_id: str, item_index: int,
+                               client: httpx.AsyncClient | None = None) -> dict:
+    return await _reconcile_async_item(batch_id, item_index, "image", client)
+
+
+async def reconcile_music_item(batch_id: str, item_index: int,
+                               client: httpx.AsyncClient | None = None) -> dict:
+    return await _reconcile_async_item(batch_id, item_index, "music", client)
 
 
 async def reconcile_voice_item(batch_id: str, item_index: int,
@@ -2165,16 +2268,18 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
     """Persist state; when the batch just reached a terminal state, alert on any
     failures and fire the client's webhook (Story Studio et al) once."""
-    ledger.save_batch(b)
-    if b.get("done_notified"):
-        return
     states = {i["state"] for i in b["items"]}
-    if states & {"queued", "running", "cancel_requested", "uncertain"}:
-        return  # not terminal yet
-    if not b.get("finished_at"):
-        b["finished_at"] = time.time()
-    b["done_notified"] = True
+    terminal = not states & {"queued", "running", "cancel_requested", "uncertain"}
+    publish = terminal and not b.get("done_notified")
+    if publish:
+        if not b.get("finished_at"):
+            b["finished_at"] = time.time()
+        b["done_notified"] = True
+    # One durable write publishes both the terminal item and final batch facts.
+    # Webhooks below must never outrun this boundary.
     ledger.save_batch(b)
+    if not publish:
+        return
     summary = batch_summary(b)
     if summary["error"]:
         from . import alerts
@@ -2192,6 +2297,35 @@ async def _maybe_finish(client: httpx.AsyncClient, b: dict):
             }, timeout=10.0)
         except httpx.HTTPError:
             pass  # client unreachable — batch state is still queryable
+
+
+def _retain_async_terminal_persistence_uncertainty(
+    batch: dict, item: dict, studio: dict,
+    publication_state: dict | None = None,
+) -> bool:
+    """Keep a terminal async worker receipt fenced when Hub publication fails."""
+    modality = batch.get("modality")
+    if (modality not in DURABLE_ASYNC_MODALITIES
+            or item.get("state") not in {"done", "error", "cancelled"}
+            or not item.get("studio_job_id")):
+        return False
+    for key in ("done_notified", "finished_at"):
+        batch.pop(key, None)
+    batch.update(publication_state or {})
+    item.pop("_item_notified", None)
+    _mark_async_uncertain(
+        item, studio, modality,
+        f"The {modality.title()} worker returned a terminal result, but the Hub "
+        "could not persist it; reconcile the original worker receipt before retrying.",
+        "JOB_PERSISTENCE_UNCERTAIN",
+    )
+    try:
+        ledger.save_batch(batch)
+    except Exception:
+        # The live fence remains authoritative until storage recovers; a
+        # restart falls back to the last durable nonterminal receipt.
+        pass
+    return True
 
 
 def _eligible_studios(modality: str, routing: str) -> list[dict]:
@@ -2401,7 +2535,8 @@ async def _dispatch_loop():
                 evict_finished_batches()
             assigned = False
             for batch in list(batches.values()):
-                if batch.get("modality") == "image" and batch.get("cancelled"):
+                if (batch.get("modality") in DURABLE_ASYNC_MODALITIES
+                        and batch.get("cancelled")):
                     for item in batch.get("items") or []:
                         if (item.get("state") == "uncertain"
                                 and item.get("studio_job_id")
@@ -2526,12 +2661,11 @@ async def _dispatch_loop():
                     _reserved["gb"] += reserve
                     _busy.add(studio["id"])
                     b["last_dispatched_at"] = time.time()
-                    if b["modality"] in {"image", "voice"}:
+                    if b["modality"] in RECEIPT_DURABLE_MODALITIES:
                         # A crash after POST may lose its response. Persist the
-                        # attempt identity before the worker can accept it. Voice
-                        # also sends a stable client_request_id, but this fence is
-                        # what prevents restart from automatically replaying work
-                        # whose accepted receipt never reached the Hub.
+                        # attempt identity before the worker can accept it.
+                        # Voice also sends a stable client_request_id; Image and
+                        # Music retain the possible attempt for reconciliation.
                         try:
                             ledger.save_batch(b)
                         except Exception:
@@ -2681,6 +2815,7 @@ _OUTCOME_STATES = frozenset({"done", "error", "cancelled"})
 _ATTEMPT_EVIDENCE_FIELDS = (
     "machine", "worker_id", "model_revision", "runtime_revision",
     "resource_usage", "error_code", "runtime_s", "duration_s", "finished_at",
+    "worker_accepted_params",
 )
 
 
@@ -2827,8 +2962,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     ref_mode = body.pop("ref_mode", None)
     body.pop("reference_images", None)  # never forward references as JSON
     generation = item.get("_dispatch_generation")
-    image_post_attempted = False
-    image_post_rejected = False
+    durable_post_attempted = False
+    durable_post_rejected = False
 
     def requeue_if_peer_changed() -> bool:
         if generation is None or peers.dispatch_ready(studio, generation):
@@ -2840,7 +2975,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
 
     try:
         if _voice_recovery_owns(item):
-            if b.get("modality") == "image" and b.get("cancelled") and item.get("studio_job_id"):
+            if (b.get("modality") in DURABLE_ASYNC_MODALITIES
+                    and b.get("cancelled") and item.get("studio_job_id")):
                 await _signal_worker_cancel(client, item)
             return  # recovery owns the accepted Voice identity; never race adoption
         if _expire_genstudio_batch(b):
@@ -2938,7 +3074,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if requeue_if_peer_changed():
                     return
                 url, headers = studio_request(studio, f"/api/generate/{mode}")
-                image_post_attempted = True
+                durable_post_attempted = True
                 r = await client.post(
                     url,
                     data=_multipart_fields(body),
@@ -2948,7 +3084,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if requeue_if_peer_changed():
                 return
             url, headers = studio_request(studio, endpoint)
-            image_post_attempted = b["modality"] == "image"
+            durable_post_attempted = b["modality"] in DURABLE_ASYNC_MODALITIES
             r = await client.post(url, json=body, headers=headers)
         if r.status_code == 401 and not peers.is_local_studio(studio):
             peers.invalidate(studio["machine"], rejected=True,
@@ -2966,7 +3102,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 )
                 return
         if r.status_code >= 400:
-            image_post_rejected = b["modality"] == "image"
+            durable_post_rejected = b["modality"] in DURABLE_ASYNC_MODALITIES
             rejection = _worker_http_error(r)
             if rejection.model_unavailable:
                 item["error_code"] = "MODEL_FILES_UNAVAILABLE"
@@ -2974,12 +3110,14 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                                     "MODEL_FILES_UNAVAILABLE", str(rejection))
             raise rejection
         job = r.json()["job"]
-        if b["modality"] == "image" and (
+        if b["modality"] in DURABLE_ASYNC_MODALITIES and (
                 not isinstance(job, dict) or not isinstance(job.get("id"), str)
                 or not job["id"] or job.get("state") not in {
                     "queued", "running", "cancel_requested", "done", "error", "cancelled"}):
-            raise ValueError("Image worker acceptance did not contain a valid job receipt")
-        if b["modality"] in {"image", "voice"}:
+            raise ValueError(
+                f"{b['modality'].title()} worker acceptance did not contain a valid job receipt"
+            )
+        if b["modality"] in RECEIPT_DURABLE_MODALITIES:
             # The acceptance receipt below is the durability boundary. Record
             # a supplied start time in the same write so a failure cannot occur
             # first and requeue work the worker has already accepted.
@@ -2989,7 +3127,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         _record_worker_identity(item, studio, job)
         _record_worker_resource_usage(item, job)
         item["studio_job_id"] = job["id"]
-        if b["modality"] in {"image", "voice"}:
+        if b["modality"] == "music" and isinstance(job.get("params"), dict):
+            # Music normalizes aliases, defaults and prompt whitespace inside
+            # its validator. Retain that worker-owned canonical request in the
+            # same durable write as the accepted job identity.
+            item["worker_accepted_params"] = job["params"]
+        if b["modality"] in RECEIPT_DURABLE_MODALITIES:
             try:
                 ledger.save_batch(b)  # retain the accepted receipt before polling
             except Exception:
@@ -3001,6 +3144,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     )
                     item["error_code"] = "JOB_PERSISTENCE_UNCERTAIN"
                     item["error"] = item["recovery"]["reason"]
+                else:
+                    _mark_async_uncertain(
+                        item, studio, b["modality"],
+                        f"The {b['modality'].title()} worker accepted this job, but the Hub "
+                        "could not persist its receipt; it was not retried automatically.",
+                        "JOB_PERSISTENCE_UNCERTAIN",
+                    )
                 raise
         # Keep the Hub's ownership fact after this finished batch is pruned;
         # the optional Studio reporter must not have to win a poll race.
@@ -3021,11 +3171,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             cancel_confirmed = bool(item.get("cancel_signal_sent_at"))
             if not cancel_confirmed:
                 cancel_confirmed = await _signal_worker_cancel(client, item)
-            if b["modality"] == "image" and image_post_attempted:
+            if b["modality"] in DURABLE_ASYNC_MODALITIES and durable_post_attempted:
                 if item.get("state") != "uncertain":
-                    _mark_image_uncertain(
-                        item, studio,
-                        "Image cancellation was requested after submission; "
+                    _mark_async_uncertain(
+                        item, studio, b["modality"],
+                        f"{b['modality'].title()} cancellation was requested after submission; "
                         "the original worker outcome must be reconciled.",
                     )
                 return
@@ -3049,7 +3199,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         while True:
             await asyncio.sleep(POLL_S)
             if _voice_recovery_owns(item):
-                if b.get("modality") == "image" and b.get("cancelled") and item.get("studio_job_id"):
+                if (b.get("modality") in DURABLE_ASYNC_MODALITIES
+                        and b.get("cancelled") and item.get("studio_job_id")):
                     await _signal_worker_cancel(client, item)
                 return  # explicit recovery has taken ownership of this job
             lease_expired = _expire_genstudio_batch(b)
@@ -3057,11 +3208,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 cancel_confirmed = bool(item.get("cancel_signal_sent_at"))
                 if not cancel_confirmed:
                     cancel_confirmed = await _signal_worker_cancel(client, item)
-                if b["modality"] == "image":
+                if b["modality"] in DURABLE_ASYNC_MODALITIES:
                     if item.get("state") != "uncertain":
-                        _mark_image_uncertain(
-                            item, studio,
-                            "Image cancellation was requested after acceptance; "
+                        _mark_async_uncertain(
+                            item, studio, b["modality"],
+                            f"{b['modality'].title()} cancellation was requested after acceptance; "
                             "the original worker outcome must be reconciled.",
                         )
                     return
@@ -3092,8 +3243,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             j = jr.json()["job"]
             if _voice_recovery_owns(item):
                 return
-            if b["modality"] == "image":
-                _validate_image_worker_job(item, j)
+            if b["modality"] in DURABLE_ASYNC_MODALITIES:
+                _validate_durable_worker_job(b["modality"], item, j)
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)
@@ -3132,11 +3283,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         # retry; otherwise one image can be generated twice or reported as a
         # false failure.
         if b["cancelled"]:
-            if b["modality"] == "image" and image_post_attempted and not image_post_rejected:
+            if (b["modality"] in DURABLE_ASYNC_MODALITIES
+                    and durable_post_attempted and not durable_post_rejected):
                 if item.get("state") != "uncertain":
-                    _mark_image_uncertain(
-                        item, studio,
-                        "Image cancellation followed a possible worker acceptance; "
+                    _mark_async_uncertain(
+                        item, studio, b["modality"],
+                        f"{b['modality'].title()} cancellation followed a possible worker acceptance; "
                         "reconcile the original outcome before releasing its machine.",
                     )
                 if item.get("studio_job_id"):
@@ -3162,34 +3314,36 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         # retry below, which already avoids the machine and limits the attempts. Local work
         # keeps reconciliation, because there the earlier result may genuinely still be there.
         remote_studio = not peers.is_local_studio(studio)
-        if b.get("modality") == "image":
+        if b.get("modality") in DURABLE_ASYNC_MODALITIES:
             code = str(getattr(e, "error_code", None) or item.get("error_code") or "")
             if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
-                _mark_image_uncertain(
-                    item, studio,
-                    "The accepted Image job has an uncertain final result; "
+                _mark_async_uncertain(
+                    item, studio, b["modality"],
+                    f"The accepted {b['modality'].title()} job has an uncertain final result; "
                     "reconcile its original worker receipt before any retry.", code,
                 )
                 return
             if (item.get("studio_job_id") and recovered is False
                     and not getattr(e, "worker_terminal", False)):
-                if remote_studio:
+                if remote_studio and b.get("modality") == "image":
                     item.pop("studio_job_id", None)
                     item.pop("studio", None)
                 else:
-                    _mark_image_uncertain(
-                        item, studio,
-                        "The accepted Image job could not be reconciled; "
+                    _mark_async_uncertain(
+                        item, studio, b["modality"],
+                        f"The accepted {b['modality'].title()} job could not be reconciled; "
                         "it was not retried automatically.",
                     )
                     return
-            if (image_post_attempted and not image_post_rejected
-                    and not item.get("studio_job_id") and not remote_studio):
-                # Local only, for the same reason as above: on another Mac the receipt is gone
-                # with the machine, so there is nothing to reconcile and the job is regenerated.
-                _mark_image_uncertain(
-                    item, studio,
-                    "Image submission may have been accepted but its worker "
+            if (durable_post_attempted and not durable_post_rejected
+                    and not item.get("studio_job_id")
+                    and (not remote_studio or b.get("modality") == "music")):
+                # Image preserves its established remote regeneration policy.
+                # Music remains fenced even remotely because a single render is
+                # long-running and cannot be made idempotent without a receipt.
+                _mark_async_uncertain(
+                    item, studio, b["modality"],
+                    f"{b['modality'].title()} submission may have been accepted but its worker "
                     "receipt was lost; reconcile before any retry.",
                 )
                 return
@@ -3270,8 +3424,26 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         _reserved["gb"] = max(0.0, _reserved["gb"] - item.get("_reserved", 0.0))
         item["_reserved"] = 0.0
         item.pop("_dispatch_generation", None)
-        await _post_item_webhook(client, b, item)   # per-scene result → client
-        await _maybe_finish(client, b)
+        if b.get("modality") in DURABLE_ASYNC_MODALITIES:
+            publication_state = {
+                key: b[key] for key in ("done_notified", "finished_at")
+                if key in b
+            }
+            item_webhook_reserved = _reserve_item_webhook(b, item)
+            try:
+                await _maybe_finish(client, b)
+            except Exception:
+                _retain_async_terminal_persistence_uncertainty(
+                    b, item, studio, publication_state
+                )
+                raise
+            if item_webhook_reserved:
+                await _post_item_webhook(
+                    client, b, item, reserved=True
+                )   # per-scene result → client
+        else:
+            await _post_item_webhook(client, b, item)
+            await _maybe_finish(client, b)
         _wakeup.set()
 
 

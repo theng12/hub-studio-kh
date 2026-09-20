@@ -9,8 +9,12 @@ They also pin the two decisions behind the What's New screen, because both are e
 accident: the release notes are the *bundled* file (not a second copy), and a brand-new install
 does not greet its operator with release notes.
 """
+import json
+import os
 import plistlib
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -108,14 +112,35 @@ class ReleaseNotesScreenTests(unittest.TestCase):
 class StagedBundleTests(unittest.TestCase):
     """The real bundle, when one has been staged beside this tree."""
 
+    @staticmethod
+    def select_bundle(explicit, default):
+        if explicit is not None:
+            candidate = Path(explicit).expanduser()
+            if not (candidate / "Contents/Info.plist").is_file():
+                raise AssertionError(
+                    f"STUDIOHUB_TEST_APP is not a staged Studio Hub app: {candidate}")
+            return candidate
+        return default if (default / "Contents/Info.plist").is_file() else None
+
     def staged(self):
-        for candidate in (Path("/tmp/StudioTest/Studio Hub.app"),
-                          Path("/tmp/StudioTest/StudioHubTest.app"),
-                          Path.home() / "Applications" / "Studio Hub.app",
-                          Path("/Applications/Studio Hub.app")):
-            if (candidate / "Contents/Info.plist").is_file():
-                return candidate
-        return None
+        return self.select_bundle(os.environ.get("STUDIOHUB_TEST_APP"),
+                                  ROOT / "dist" / "Studio Hub.app")
+
+    def test_explicit_bundle_path_is_selected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "Explicit.app" / "Contents"
+            candidate.mkdir(parents=True)
+            (candidate / "Info.plist").touch()
+            selected = self.select_bundle(str(candidate.parent), ROOT / "missing.app")
+        self.assertEqual(selected, candidate.parent)
+
+    def test_explicit_missing_bundle_path_fails(self):
+        with self.assertRaises(AssertionError):
+            self.select_bundle("/definitely/missing/Studio Hub.app", ROOT / "missing.app")
+
+    def test_default_selection_skips_when_no_repo_artifact_exists(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(self.select_bundle(None, Path(temporary) / "Studio Hub.app"))
 
     def test_the_packaged_plist_carries_the_current_version(self):
         bundle = self.staged()
@@ -133,6 +158,18 @@ class StagedBundleTests(unittest.TestCase):
         notes = bundle / "Contents/Resources/release-notes.md"
         self.assertTrue(notes.is_file(), "the What's New screen would have nothing to show")
         self.assertIn(current_version(), notes.read_text())
+
+    def test_the_release_manifest_names_this_source_commit(self):
+        bundle = self.staged()
+        if bundle is None:
+            self.skipTest("no staged bundle on this machine")
+        manifest_path = bundle / "Contents/Resources/release-manifest.json"
+        self.assertTrue(manifest_path.is_file(), "the staged bundle has no release identity")
+        manifest = json.loads(manifest_path.read_text())
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        self.assertEqual(manifest["implementation_commit"], source_commit)
+        self.assertIsInstance(manifest.get("development_build"), bool)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+# Pure-Python ACE-Step inference additions layered over the pinned Voice runtime.
+# Versions and hashes are the macOS arm64 resolution in ACE-Step's uv.lock at
+# ca1e85fe9430179831e6bc6be790c332190a3866. Heavy Torch/MLX dependencies stay
+# in the already packaged Voice runtime.
+diskcache==5.6.3 \
+    --hash=sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19
+einops==0.8.2 \
+    --hash=sha256:54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193
+einx==0.3.0 \
+    --hash=sha256:367d62bab8dbb8c4937308512abb6f746cc0920990589892ba0d281356d39345
+frozendict==2.4.7 \
+    --hash=sha256:972af65924ea25cf5b4d9326d549e69a9a4918d8a76a9d3a7cd174d98b237550
+loguru==0.7.3 \
+    --hash=sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c
+toml==0.10.2 \
+    --hash=sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b
+vector-quantize-pytorch==1.27.20 \
+    --hash=sha256:ab85fb622e900edf1317c7c77b3a23dd95995e0ce17a123b4ba6178c1c678335

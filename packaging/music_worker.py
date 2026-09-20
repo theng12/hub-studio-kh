@@ -1,14 +1,14 @@
 """Private bundle-relative Music entry point; run with immutable Python -I -B.
 
-The Music worker runs under the **ACE-Step engine interpreter** — the uv venv
-created by ``uv sync`` in the ACE-Step 1.5 checkout — because that is the only
-environment on this machine where ``import acestep`` (and its MLX/transformers/
-torch pins) resolves.  Nothing is installed into the app's voice/image runtimes.
+The Music worker reuses the immutable Voice Python for the shared ML stack and
+adds the bundle's small, independently verified Music dependency overlay.  The
+ACE-Step package is loaded only from the bundled, content-verified source tree;
+nothing is installed or downloaded at runtime.
 
 Standalone use (no app wiring required yet)::
 
-    ENGINE=/path/to/pinned/ACE-Step-1.5
-    /path/to/pinned/music-runtime/bin/python -I -B packaging/music_worker.py \\
+    ENGINE=/path/to/content-verified/ACE-Step-1.5
+    /path/to/pinned/voice-runtime/bin/python -I -B packaging/music_worker.py \\
         --data-dir ~/MusicWorker/data \\
         --models-dir ~/MusicWorker/models \\
         --engine-root "$ENGINE" \\
@@ -25,6 +25,7 @@ from the verified package receipt in ``--models-dir``.
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,27 @@ from voice_worker import read_private_token, run_server  # noqa: E402
 
 PACKAGE_ID = "ace-step-1-5-turbo"
 MANIFEST_NAME = f"{PACKAGE_ID}.json"
+
+
+def _tree_digest(root: Path) -> str:
+    digest = sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"Music runtime overlay contains a symlink: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(f"Music runtime overlay contains a non-regular file: {relative}")
+        digest.update(relative.encode() + b"\0file\0"
+                      + str(path.stat().st_mode & 0o7777).encode() + b"\0")
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _resolve_source(resources: Path) -> Path:
     """The directory holding ``backend/`` for this worker.
 
@@ -83,6 +105,28 @@ def main() -> None:
     models = args.models_dir.expanduser().resolve()
     ready = args.ready_file.expanduser().absolute()
     source = (args.source or _resolve_source(resources)).expanduser().resolve()
+    release_path = resources / "release-manifest.json"
+    release_version = "standalone"
+    runtime_sha256 = None
+    overlay_sha256 = None
+    if release_path.is_file():
+        try:
+            release = json.loads(release_path.read_text())
+            music_release = release["components"]["music"]
+            runtime_sha256 = music_release["runtime_sha256"]
+            overlay_sha256 = music_release["overlay_sha256"]
+            if (release["schema"] != "studiohub.standalone-release"
+                    or release["schema_version"] != 1
+                    or not isinstance(runtime_sha256, str)
+                    or len(runtime_sha256) != 64
+                    or any(ch not in "0123456789abcdef" for ch in runtime_sha256)
+                    or not isinstance(overlay_sha256, str)
+                    or len(overlay_sha256) != 64
+                    or any(ch not in "0123456789abcdef" for ch in overlay_sha256)):
+                raise ValueError("release does not identify an exact Music runtime")
+            release_version = str(release["version"])
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            parser.error(f"Invalid Music release identity: {exc}")
 
     engine_value = args.engine_root or os.environ.get("STUDIOHUB_MUSIC_ENGINE_ROOT")
     if not engine_value:
@@ -102,6 +146,14 @@ def main() -> None:
         parser.error(f"ACE-Step engine root is missing: {engine_root}")
     if manifest is None:
         parser.error(f"Music model manifest {MANIFEST_NAME} was not found")
+    overlay = resources / "runtimes" / "music"
+    if overlay_sha256 is not None:
+        try:
+            observed_overlay = _tree_digest(overlay)
+        except (OSError, ValueError) as exc:
+            parser.error(f"Music runtime overlay could not be verified: {exc}")
+        if observed_overlay != overlay_sha256:
+            parser.error("Music runtime overlay digest does not match its release identity")
 
     if args.parent_pid is not None:
         if args.parent_pid <= 1 or args.parent_pid != os.getppid():
@@ -148,11 +200,15 @@ def main() -> None:
         "XDG_CACHE_HOME": str(music_data / "cache"),
         "MPLCONFIGDIR": str(music_data / "cache" / "matplotlib"),
     })
+    if runtime_sha256 is not None:
+        os.environ["STUDIOHUB_MUSIC_RUNTIME_SHA256"] = runtime_sha256
     os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
     if args.offline:
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
     sys.dont_write_bytecode = True
+    if overlay.is_dir():
+        sys.path.insert(0, str(overlay))
     sys.path.insert(0, str(source))
     # Import the exact supplied checkout, not an unrelated site-packages copy.
     sys.path.insert(0, str(engine_root))
@@ -168,19 +224,20 @@ def main() -> None:
         except (OSError, ValueError, KeyError) as exc:
             package_status = {"state": "invalid", "reason": str(exc)}
         print(json.dumps({
-            "component": "music", "version": "standalone",
+            "component": "music", "version": release_version,
             "source": str(source), "data": str(music_data),
             "models": str(models), "engine_root": str(engine_root),
             "manifest": str(manifest),
             "manifest_package_id": PACKAGE_ID,
-            "python": sys.executable, "engine_import": engine_import,
+            "python": sys.executable, "runtime_sha256": runtime_sha256,
+            "engine_import": engine_import,
             "package": package_status,
             "offline": bool(args.offline), "managed_updates": False,
         }, indent=2))
         return
 
     os.chdir(music_data)
-    run_server("backend.main:from_environment", args.port, ready, "standalone",
+    run_server("backend.main:from_environment", args.port, ready, release_version,
                args.parent_pid, pgid, factory=True)
 
 

@@ -410,7 +410,7 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
 # In short: send work, watch it, collect it, cancel it - and read what is needed to decide
 # where work should go. Never change this Mac's settings, never delete its output, never
 # manage its models or its membership of the fleet.
-_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription)"
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -448,9 +448,9 @@ FLEET_ALLOWED = (
     # routes are deliberately absent: they are reachable over the same proxy, so a blanket
     # allowance for the studio surface would have handed a controller exactly the control this
     # scope exists to withhold.
-    ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/generate/[A-Za-z0-9_./-]*$"),
+    ("POST", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
-    ("DELETE", r"^/studio/(voice|subtitle|image|transcription)/api/generate/[A-Za-z0-9_./-]*$"),
+    ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
     # Jobs: submit, watch, collect, acknowledge, reconcile, cancel.
     ("POST", r"^/api/hub/jobs$"),
     ("GET", r"^/api/hub/jobs$"),
