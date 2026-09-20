@@ -53,7 +53,7 @@ branch `codex/handoff-completion`. Existing worktrees remain preserved.
 5. New UI and artifact export remain source-bound, authenticated, keyboard-usable and truthful
    about missing models, uncertain jobs and unsupported hardware (R06–R10).
 
-### R01 — Native lifecycle/rejoin correctness [REVIEWED; final gate pending]
+### R01 — Native lifecycle/rejoin correctness [VERIFIED — PR #12]
 
 **Owner:** Sol/high worker; root independent review/integration.
 **Owned files:** `native/StudioHub.swift`, `native/StartupRecovery.swift`,
@@ -76,7 +76,7 @@ cannot be exercised through existing fixtures (coordinator approves exact path f
 - [x] Run native boundary/API fixtures and `bash native/build.sh`; review delayed,
   disconnected, token-changed and explicit-stop cases before integrating.
 
-### R02 — Reference boundary integrity [REVIEWED; final gate pending]
+### R02 — Reference boundary integrity [VERIFIED — PR #12]
 
 **Owner:** coordinator inline fallback after second worker service rejection;
 independent review by `music_recovery_read`. **Owned files:**
@@ -98,7 +98,7 @@ independent review by `music_recovery_read`. **Owned files:**
   -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
   tests/test_hub_standalone.py`, then independent fault-injection review.
 
-### R03 — Voice acceptance/completion fault matrix [QUEUED]
+### R03 — Voice acceptance/completion fault matrix [NEXT after PR #12 integration]
 
 **Owned scope:** `components/hub/backend/broker.py`,
 `components/hub/backend/artifact_metadata.py`, its existing tests, and

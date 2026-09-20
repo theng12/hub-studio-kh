@@ -2,7 +2,21 @@
 
 ## 2026-09-21 — ordered remaining-work execution
 
-Latest: R01 and R02 source/test repairs independently reviewed with no actionable
+[MEASURED] Final wave-1 gate is green at clean product `7ec9f89`: 632 tests OK,
+seven skips, 415.052s; nested Voice722/19, Hub85; native build/boundary/API/lifecycle
+pass; 21 release/phonemizer and five original probes pass. Model-free four-worker
+startup/auth/shutdown and unchanged bundle pass. Exact candidate tree is
+`07c4d895b795513c9c5f8d1d073d34c90a31a40e5bd950f06f797bfa85d8cb25`.
+R01 was committed first at `0e11671`, then R02 at `7ec9f89`. Evidence:
+`qualification/handoff-completion-wave1-2026-09-21.md`. Reviewed integration is
+tracked by https://github.com/theng12/Studio-Hub-KH/pull/12 (merge state/hash
+authoritative there). Evidence-only child retains exact product source identity.
+Next after integration: R03; no worker dispatched for it yet. Root reproduced
+unknown Voice state and missing live/reconcile output URLs publishing persisted
+`done`/public `succeeded`, plus truncated-WAV acceptance. No R03 product fix yet.
+Workflows checked zero; no hosted compute/deployment or installed-app change.
+
+Earlier checkpoint: R01 and R02 source/test repairs independently reviewed with no actionable
 findings. Root separately re-ran full native build/boundary/API and lifecycle
 harness: all passed (`.build/root-native-final.log`). Source is frozen for ordered
 R01 then R02 commits and a clean current-source artifact gate before publishing.

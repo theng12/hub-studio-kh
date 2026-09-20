@@ -7,16 +7,21 @@
 [MEASURED] **Ordered execution authorized:** the owner asked to plan all remaining
 work and start fixing top to bottom. The full R01–R10 completion plan is at the
 top of [the canonical plan](../../.planning/2026-09-10-standalone-app-feasibility/task_plan.md).
-PR #11 is merged; integration is `1267a51170503a7801786c021a16b6a6a3d3b8af`.
-**Current batch:** R01 native lifecycle N-01/N-02/N-03, then R02 reference
-validation C-01/C-02. Independent non-overlapping implementations may run together;
-review/integration follows that order. Root owns the board, plan and Git integration.
+Wave-1 started at PR #11 integration `1267a51170503a7801786c021a16b6a6a3d3b8af`.
+**Verified:** R01 native lifecycle N-01/N-02/N-03, then R02 reference
+validation C-01/C-02, committed in that order at `0e11671` and `7ec9f89`.
+Integration is tracked by [PR #12](https://github.com/theng12/Studio-Hub-KH/pull/12);
+its merge state and merge commit are authoritative. Root owns the board, plan
+and Git integration. **Next after PR #12 is merged:** R03 Voice receipt/payload
+repair, starting from the fresh integration HEAD. No R03 worker has been dispatched.
 Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
 branch `codex/handoff-completion`. Nothing later is marked qualified by this batch.
-Both repairs now have RED→GREEN evidence and clean independent review. Root's
-native build/boundary/API/lifecycle rerun passed. Current phase: clean-source
-packaging and full release gate, then authorized feature PR integration. R03
-Voice receipt/payload negatives are the next implementation task, not yet started.
+Both repairs have RED→GREEN evidence and clean independent review. Root's native
+build/boundary/API/lifecycle rerun passed. Clean `7ec9f89` candidate passed 632
+tests (7 skips), nested Voice722/19, Hub85, 21 release checks, five original probes,
+and four-worker model-free startup/auth/owned shutdown with an unchanged bundle.
+[Full wave-1 evidence](../../qualification/handoff-completion-wave1-2026-09-21.md).
+R03 false-completion and truncated-WAV defects are reproduced, not yet repaired.
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.

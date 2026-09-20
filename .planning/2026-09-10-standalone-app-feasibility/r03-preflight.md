@@ -7,7 +7,8 @@ integrated R01/R02 base before edits.
 
 [MEASURED] Existing focused durability suite: 46 passed, two warnings, 0.74s.
 
-Current-source candidates to reproduce in regression tests:
+Current-source defects reproduced in disposable probes; permanent failing
+regression tests remain required before implementation:
 
 1. Live Voice polling validates neither known state nor complete output reference;
    unknown non-active/non-error states flow into `_record_worker_success`.
@@ -20,6 +21,21 @@ Current-source candidates to reproduce in regression tests:
    Python runtime, `io.BytesIO`/`wave` (8kHz mono 16-bit, 1,600 PCM bytes), and
    `wav_metadata(full[:64])`: bytes=64, audio_duration_s=0.1, no error. A failing
    permanent regression test remains required before the repair.
+
+[MEASURED] Root's model-free receipt probe at clean product commit `7ec9f89`
+reused `cases/conftest.py`'s disposable Hub state and `voice_attempt` fixture,
+called the real broker live/reconcile paths with an in-memory fake worker, and
+loaded persisted ledger receipts. Exact observations:
+
+| Fake worker response | Live / persisted state | Public result | Generation POSTs |
+| --- | --- | --- | --- |
+| Live `state=bogus`, otherwise valid WAV reference | done / done | succeeded | 1 |
+| Live `state=done`, no output URL | done / done | succeeded | 1 |
+| Reconcile `state=done`, matching request ID, no output URL | done / done | succeeded | 0 |
+
+This verifies false completion without touching production state. Local probe and
+raw output remain `.build/r03-receipt-probe.py` and `.build/r03-receipt-probe.log`.
+R03 must turn these observations into durable RED→GREEN regression coverage.
 
 Preserve these intentional contracts:
 
