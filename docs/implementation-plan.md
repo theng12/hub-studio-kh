@@ -2,7 +2,7 @@
 
 > For agentic workers: use executing-plans or subagent-driven-development for implementation, scoped to the assigned task. Extend this canonical plan; do not initialize another planning system.
 
-**Goal:** One standalone Apple Silicon app containing Hub, Image Studio, Voice Studio and independent Subtitle Studio.
+**Goal:** One standalone Apple Silicon app containing Hub, Image Studio, Voice Studio, independent Subtitle Studio, and the owner-added Music recovery track.
 **Architecture:** Native client → bundled Hub → private studio workers. Qualified immutable runtimes, external model packages and one device output policy.
 **Tech stack:** Existing SwiftUI/AppKit, Python, MLX, SQLite and macOS ServiceManagement.
 **Spec:** [Focused design](standalone-plan.md).
@@ -15,7 +15,8 @@ fleet integration remain their named subsequent phases.
 
 - Apple Silicon; macOS 14 target requires physical qualification.
 - Include original M1 and qualify the oldest practical Sonoma point release per model/runtime. Preserve last-compatible app/runtime operation while OS upgrades are deferred; no newest-OS requirement by default and no generation-through-reboot promise.
-- Only the ten choices in the design. Chat, Music and Video are deferred.
+- Preserve the bounded original catalog. Chat and Video remain deferred; Music
+  is the explicit owner-approved extension tracked by `tasks/MUSIC-RECOVERY.md`.
 - Target devices need no Pinokio, Git, package manager, compiler or system Python.
 - Editable operating defaults, including per-device 50,000,000,000 bytes of generated files and 30 days from generation.
 - Integrity, authentication, active-job protection and verified delivery remain fixed safeguards.

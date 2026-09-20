@@ -1,5 +1,15 @@
 # Music Studio: adopting a local generator into Studio Hub
 
+> Contract update, 2026-09-21: the first package is
+> `ace-step-1-5-turbo` (`music-mlx`). Its verified installer folder owns a
+> single `model/` checkpoint root containing only the Turbo DiT, VAE, text
+> encoder, and 0.6B planner. The worker requires an explicit pinned ACE-Step
+> source root and an interpreter where `acestep` is installed; it never falls
+> back to a developer checkout's checkpoints. XL, 1.7B, and 4B choices are not
+> offered. ACE-Step startup uses read-only bounded checks, so it cannot download
+> the excluded planner or rewrite the installed package. This is a source
+> contract, not packaged inference qualification.
+
 Written 2026-09-20, while the Voice/Image/Subtitle studios are at 0.6.37. This is the adoption plan for
 the fourth studio the owner asked for ("i want you to help me check for music generator for the local
 fleet… i think there's a new one that can generate instrumental for around 6m+ and can be run locally

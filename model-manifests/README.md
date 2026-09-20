@@ -1,7 +1,7 @@
 # Studio Hub model manifests
 
-This catalog contains the ten bounded first-release model packages. The files
-describe **24,494,855,896 expected bytes** across the packages; Qwen Base
+This catalog contains 34 bounded model packages. The files describe
+**82,039,302,033 expected bytes** across the packages; Qwen Base
 packages reference the shared `whisper-turbo` package for their internal
 quality check and do not copy its weights again.
 
@@ -20,8 +20,9 @@ folder already in the selected model library.
 Whisper models include their required tokenizer/processor assets only at
 `companions/processor/<upstream path>`. Companion files intentionally have no
 root-folder fallback: a root `config.json` is ambiguous and must not satisfy a
-processor requirement. The `source.layout` mapping identifies every model and
-processor repository/revision.
+processor requirement. The `source.layout` mapping identifies every source
+repository/revision. The Music package assembles its Turbo model and 0.6B
+planner beneath the same installer-owned `model/` checkpoint root.
 
 The catalog excludes model cards, Git attributes, licenses and example audio;
 it keeps only required generation weights, indexes, configuration and
