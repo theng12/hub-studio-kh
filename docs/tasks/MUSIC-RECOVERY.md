@@ -5,8 +5,9 @@
 [MEASURED] Package/engine source contract implemented on
 `codex/music-package-contract` from integration commit
 `14cd174fbb3f9ef8e4fff75aaf7ecf1047858c79`. Independent review of the first
-implementation found lifecycle and upstream-initialization blockers; fixes are
-implemented and awaiting exact-commit re-review.
+implementation found lifecycle and upstream-initialization blockers. The
+hardened commit `3a11c6f` passed exact-commit re-review with no remaining
+findings and was approved for this bounded merge.
 
 [MEASURED] No model payload was downloaded, copied, or modified. The protected
 legacy library at `~/Downloads/model-library` was not inspected. No Music
@@ -59,8 +60,8 @@ engine directory, and terminal receipt failure.
 
 [MEASURED] The focused package/worker suite passes all 21 tests under the pinned
 Voice runtime. The combined Music, model-manifest, and installer run passes 66
-tests. The isolated
-Hub regression passes 73 tests; the Voice product suite passes 722 with 19
+tests. The isolated Hub regression passes 73 tests; the Voice product suite
+passes 722 with 19
 real-model/environment skips.
 
 [MEASURED] Independent review of `1401b1f` reproduced eight important defects
@@ -68,14 +69,16 @@ and two minor contract defects: upstream auto-download and package mutation,
 unbound engine imports, cancellation uncertainty, ACK and running-state
 durability, corrupt-ledger destruction, truncated WAV acceptance, zero-value
 defaulting, and an overstated qualification label. Each now has a bounded fix
-and regression coverage; final re-review remains pending.
+and regression coverage. Exact-commit re-review found no Critical, Important,
+or Minor findings; it independently passed all 66 focused tests, seven executor
+fault reproductions, four adapter reproductions, and a two-file installer
+download/receipt proof.
 
-[MEASURED] Broad discovery ran 608 tests: 592 passed and 11 skipped. Its five
+[MEASURED] Broad discovery reran 618 tests: 603 passed and 11 skipped. Its four
 non-passes are the intake baseline rather than Music failures: no worktree-local
-Image runtime, no `espeak-ng` on the shell PATH, two stale staged 0.5.4 release
-checks while source is 0.6.38, and an initially undiscoverable shared pytest
-dependency. Supplying the existing shared test-dependency path made both nested
-pytest gates pass at the counts above.
+Image runtime, no `espeak-ng` on the shell PATH, and two stale staged 0.5.4
+release checks while source is 0.6.38. The isolated Hub and Voice product gates
+both passed with the existing shared test-dependency path.
 
 [MEASURED] Graphify was unavailable in this environment. Callers and impact
 were checked directly; no graph consultation is claimed.
