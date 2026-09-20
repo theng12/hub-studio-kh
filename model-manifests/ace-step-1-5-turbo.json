@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "package_id": "ace-step-1-5-turbo",
+  "model_id": "ACE-Step/Ace-Step1.5",
+  "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+  "engine": "music-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-20",
+    "sources": [
+      {
+        "repo": "ACE-Step/Ace-Step1.5",
+        "revision": "19671f406d603126926c1b7e2adc169acbcade22"
+      },
+      {
+        "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+        "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80"
+      }
+    ],
+    "layout": {
+      "model": {
+        "repo": "ACE-Step/Ace-Step1.5",
+        "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+        "destination": "model",
+        "note": "Verified ACE-Step checkpoint root loaded from the installer receipt."
+      },
+      "planner_0_6b": {
+        "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+        "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+        "destination": "model/acestep-5Hz-lm-0.6B",
+        "note": "Verified 0.6B planner used by the first Turbo package."
+      }
+    }
+  },
+  "defaults": {
+    "dit_model": "acestep-v15-turbo",
+    "lm_model": "acestep-5Hz-lm-0.6B",
+    "inference_steps": 8,
+    "guidance_scale": 1,
+    "shift": 3,
+    "audio_format": "wav",
+    "sample_rate_hz": 48000,
+    "channels": 2
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified",
+    "reason": "Historical source inference does not qualify the installed Studio Hub package or packaged runtime.",
+    "memory_evidence": "Probe peak process-tree RSS 4.645 GiB; peak system used 14.552 GiB of 16 GiB.",
+    "engine_managed_files": [
+      "model/acestep-v15-turbo/configuration_acestep_v15.py",
+      "model/acestep-v15-turbo/modeling_acestep_v15_turbo.py"
+    ]
+  },
+  "files": [
+    {
+      "path": "model/Qwen3-Embedding-0.6B/added_tokens.json",
+      "source_path": "Qwen3-Embedding-0.6B/added_tokens.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 707,
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/chat_template.jinja",
+      "source_path": "Qwen3-Embedding-0.6B/chat_template.jinja",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 4116,
+      "sha256": "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/config.json",
+      "source_path": "Qwen3-Embedding-0.6B/config.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 1359,
+      "sha256": "bb23c1607cfe059a58d8f0196cf1cebb52082b1056b8e358a579da80a5759420",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/config.json"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/merges.txt",
+      "source_path": "Qwen3-Embedding-0.6B/merges.txt",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/merges.txt"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/model.safetensors",
+      "source_path": "Qwen3-Embedding-0.6B/model.safetensors",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 1191586416,
+      "sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/special_tokens_map.json",
+      "source_path": "Qwen3-Embedding-0.6B/special_tokens_map.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 613,
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/tokenizer.json",
+      "source_path": "Qwen3-Embedding-0.6B/tokenizer.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 11423705,
+      "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/tokenizer_config.json",
+      "source_path": "Qwen3-Embedding-0.6B/tokenizer_config.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 5404,
+      "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/Qwen3-Embedding-0.6B/vocab.json",
+      "source_path": "Qwen3-Embedding-0.6B/vocab.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/Qwen3-Embedding-0.6B/vocab.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/added_tokens.json",
+      "source_path": "added_tokens.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 2217787,
+      "sha256": "db08b66a515fb5d6acca0b3492d25bb44e0deda6241fc1113ac0679d40558c48",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/chat_template.jinja",
+      "source_path": "chat_template.jinja",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 4168,
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/config.json",
+      "source_path": "config.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 1386,
+      "sha256": "873ca63808b74e1e008ab950114765553b898b489b9e077e80db83348a118384",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/config.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/merges.txt",
+      "source_path": "merges.txt",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/merges.txt"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/model.safetensors",
+      "source_path": "model.safetensors",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 1325804024,
+      "sha256": "5d92a60806e2e88c04de58ddc6dde93f2bc8f1336162b3ad5853886c9bcc6b82",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/special_tokens_map.json",
+      "source_path": "special_tokens_map.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 1824199,
+      "sha256": "76e233bfc357b0b03d7b6e6ba8e799244f358552575a7cdadb78d3d19106b298",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/tokenizer.json",
+      "source_path": "tokenizer.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 24321939,
+      "sha256": "35af56c3f5cb3ea2cc578aa28a8937770981d504f183ac5c8c38baf4bbd4af4d",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/tokenizer_config.json",
+      "source_path": "tokenizer_config.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 14072925,
+      "sha256": "6cd70cdd89425971794f5235562edcc608b0629a6c4686ae51a8b8c8b8ba5e95",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/acestep-5Hz-lm-0.6B/vocab.json",
+      "source_path": "vocab.json",
+      "repo": "ACE-Step/acestep-5Hz-lm-0.6B",
+      "revision": "148d8ea0225bdab342ee1ae3a354275ccd60ca80",
+      "size": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "urls": [
+        "https://huggingface.co/ACE-Step/acestep-5Hz-lm-0.6B/resolve/148d8ea0225bdab342ee1ae3a354275ccd60ca80/vocab.json"
+      ]
+    },
+    {
+      "path": "model/acestep-v15-turbo/config.json",
+      "source_path": "acestep-v15-turbo/config.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 1968,
+      "sha256": "74745ff704ea49164c3d2d1c99fc0670f3fc635a869f0aec2d1311e6a52d400a",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/acestep-v15-turbo/config.json"
+      ]
+    },
+    {
+      "path": "model/acestep-v15-turbo/model.safetensors",
+      "source_path": "acestep-v15-turbo/model.safetensors",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 4787825604,
+      "sha256": "3f6e0797fad420a39bd33979eb6e840e30989e34a3794e843d23b60ec6e422d7",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/acestep-v15-turbo/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/acestep-v15-turbo/silence_latent.pt",
+      "source_path": "acestep-v15-turbo/silence_latent.pt",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 3841215,
+      "sha256": "a778e9dd942f5e8b2c09c55370782d318834432b03dabbcdf70e6ed49ad6358b",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/acestep-v15-turbo/silence_latent.pt"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "source_path": "config.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 1968,
+      "sha256": "74745ff704ea49164c3d2d1c99fc0670f3fc635a869f0aec2d1311e6a52d400a",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/config.json"
+      ]
+    },
+    {
+      "path": "model/vae/config.json",
+      "source_path": "vae/config.json",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 425,
+      "sha256": "14e019904df567f26df750317a70e2bd08f9f8f3c40ff4a24c97d1cd3f20ccd2",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/vae/config.json"
+      ]
+    },
+    {
+      "path": "model/vae/diffusion_pytorch_model.safetensors",
+      "source_path": "vae/diffusion_pytorch_model.safetensors",
+      "repo": "ACE-Step/Ace-Step1.5",
+      "revision": "19671f406d603126926c1b7e2adc169acbcade22",
+      "size": 337431388,
+      "sha256": "da17edb604c40deaf09e9b24974e590d1ca83a374070e5d0884cfa4bed9a99b0",
+      "urls": [
+        "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/vae/diffusion_pytorch_model.safetensors"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "requires_packages": []
+}

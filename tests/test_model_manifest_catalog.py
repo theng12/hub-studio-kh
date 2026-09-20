@@ -13,6 +13,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED = {
+    "ace-step-1-5-turbo": ("ACE-Step/Ace-Step1.5", "19671f406d603126926c1b7e2adc169acbcade22", "music-mlx"),
     "flux2-klein-4b-mlx-4bit": ("AITRADER/FLUX2-klein-4B-mlx-4bit", "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "image-mflux"),
     "qwen3-tts-12hz-0-6b-base-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "50f45ef0047cde7e84c2ef04326acb8ada2436a7", "voice-mlx"),
     "qwen3-tts-12hz-0-6b-base-4bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "0d6bb6fe33f92d47a507e23b9148940e8366ab5b", "voice-mlx"),
@@ -82,6 +83,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def test_manifest_contents_match_the_captured_inventory(self):
         expected_digests = {
             # Updated only by a deliberate recapture of the exact pinned revisions.
+            "ace-step-1-5-turbo": "967bdde4b85602d6a18392bd8faaab84abd6edae2142249596021f2f5565d652",
             "flux2-klein-4b-mlx-4bit": "d49528a1b5da899519099f3312a7d1a60174c5f6c0858a6ac35daf16d1e0012d",
             "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
             "qwen3-tts-12hz-0-6b-base-4bit": "30cd91171bb5c1e63e5d7fb66aa4de16400fe77f2a0ebf6480e706ce4285a45b",

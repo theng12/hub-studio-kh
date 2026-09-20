@@ -32,8 +32,9 @@ evidence, not physical macOS 14 qualification.
 [#8](https://github.com/theng12/Studio-Hub-KH/pull/8), and
 [#9](https://github.com/theng12/Studio-Hub-KH/pull/9). All five original probes pass.
 H-05 verification passed 106 affected Subtitle/Hub tests with seven real-model skips,
-73 Hub regressions, and independent fault-injection/restart review. The next bounded
-source task is the recovered Music package/engine contract; do not merge its WIP wholesale.
+73 Hub regressions, and independent fault-injection/restart review. The recovered Music
+package/engine contract is now in review on `codex/music-package-contract`; only its bounded
+source, manifest, worker launcher and focused tests were recovered, not the stale Hub draft.
 
 [MEASURED] **Current gate boundary:** root discovery before H-02/H-03 ran 591 tests:
 the H-01 tests passed, but the checkout was not globally green. Remaining failures are an absent
