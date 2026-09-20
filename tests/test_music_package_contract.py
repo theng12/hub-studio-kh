@@ -5,6 +5,7 @@ import json
 import importlib.util
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import time
@@ -37,7 +38,22 @@ class MusicPackageContractTests(unittest.TestCase):
         self.assertFalse(any("xl" in path.casefold() or "1.7b" in path.casefold()
                              or "4b" in path.casefold() for path in paths))
         for entry in manifest["files"]:
-            self.assertFalse(entry["source_path"].startswith("model/"))
+            if entry.get("provider", "huggingface") == "huggingface":
+                self.assertFalse(entry["source_path"].startswith("model/"))
+
+    def test_package_pins_the_engine_model_code_that_upstream_would_sync(self):
+        manifest = json.loads(MANIFEST_PATH.read_text())
+        files = {entry["path"]: entry for entry in manifest["files"]}
+        expected = {
+            "model/acestep-v15-turbo/configuration_acestep_v15.py":
+                (212, "5f15aa79fe793bba3c00b6992dd193a269954950603d5031ecd7703b0fa69da1"),
+            "model/acestep-v15-turbo/modeling_acestep_v15_turbo.py":
+                (108712, "71b22e01b490bd9e149e4c0c5da2e1f512126f3ab3316e0ae97779af84d19512"),
+        }
+        self.assertEqual({path for path in files if path.endswith(".py")}, set(expected))
+        for path, (size, digest) in expected.items():
+            self.assertEqual((files[path]["size"], files[path]["sha256"]), (size, digest))
+            self.assertEqual(files[path]["revision"], "ca1e85fe9430179831e6bc6be790c332190a3866")
 
     def test_cache_resolves_the_installer_receipt_instead_of_an_external_root(self):
         from components.music.app.backend import cache
@@ -165,6 +181,40 @@ class MusicWorkerContractTests(unittest.TestCase):
         self.assertEqual(result["state"], "engine_source_invalid")
         self.assertIn("pinned ACE-Step", result["reason"])
 
+    def test_readiness_rejects_an_acestep_import_outside_the_engine_root(self):
+        for relative in ("acestep/handler.py", "acestep/inference.py",
+                         "acestep/llm_inference.py",
+                         "acestep/models/turbo/configuration_acestep_v15.py",
+                         "acestep/models/turbo/modeling_acestep_v15_turbo.py"):
+            path = self.engine / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("placeholder")
+        manager = self.manager()
+        manager._engine_contract_reason = self.generation.GenerationManager._engine_contract_reason.__get__(manager)
+        spec = mock.Mock(origin=str(self.root / "other" / "acestep" / "__init__.py"),
+                         submodule_search_locations=[str(self.root / "other" / "acestep")])
+        with mock.patch.object(self.generation.importlib.util, "find_spec", return_value=spec), \
+                mock.patch.object(self.generation, "_file_sha256",
+                                  side_effect=self.generation.catalog.ENGINE_MODEL_CODE_SHA256.values()), \
+                mock.patch.object(self.generation.subprocess, "run", side_effect=[
+                    mock.Mock(stdout=self.generation.catalog.ENGINE_REVISION + "\n"),
+                    mock.Mock(stdout=""),
+                ]):
+            self.assertIn("outside", manager._engine_contract_reason())
+
+    def test_bounded_engine_precheck_never_requires_the_excluded_17b_planner(self):
+        from components.music.app.backend import engine_child
+
+        checkpoints = self.root / "checkpoints"
+        for component in ("acestep-v15-turbo", "vae", "Qwen3-Embedding-0.6B",
+                          "acestep-5Hz-lm-0.6B"):
+            path = checkpoints / component
+            path.mkdir(parents=True)
+            (path / "model.safetensors").write_bytes(b"weight")
+        self.assertIsNone(engine_child._bounded_model_precheck(
+            checkpoint_path=checkpoints, config_path="acestep-v15-turbo"))
+        self.assertFalse((checkpoints / "acestep-5Hz-lm-1.7B").exists())
+
     def test_engine_environment_cannot_override_the_verified_checkpoint_root(self):
         from components.music.app.backend import engine_child
 
@@ -179,6 +229,34 @@ class MusicWorkerContractTests(unittest.TestCase):
             self.assertEqual(os.environ["ACESTEP_PROJECT_ROOT"], "/pinned/source")
             self.assertEqual(os.environ["ACESTEP_CHECKPOINTS_DIR"],
                              "/verified/package/model")
+
+    def test_zero_guidance_and_shift_are_forwarded_without_defaulting(self):
+        from components.music.app.backend import engine_child
+
+        class Params:
+            def __init__(self, **values):
+                captured.update(values)
+
+        class Config:
+            def __init__(self, **unused):
+                pass
+
+        class Result:
+            success = True
+            audios = [{"path": "/tmp/result.wav", "sample_rate": 48000}]
+
+        captured = {}
+        fake = type(sys)("acestep.inference")
+        fake.GenerationConfig = Config
+        fake.GenerationParams = Params
+        fake.generate_music = lambda *args, **kwargs: Result()
+        payload = {"job_id": "j", "prompt": "p", "duration": 1, "seed": 1,
+                   "staging_dir": "/tmp", "guidance_scale": 0.0, "shift": 0.0}
+        with mock.patch.dict(sys.modules, {"acestep.inference": fake}):
+            engine_child._generate(object(), object(), payload,
+                                   mock.Mock(is_set=lambda: False), mock.Mock())
+        self.assertEqual(captured["guidance_scale"], 0.0)
+        self.assertEqual(captured["shift"], 0.0)
 
     @staticmethod
     def wait_for(manager, job_id, state="done"):
@@ -218,6 +296,78 @@ class MusicWorkerContractTests(unittest.TestCase):
         self.assertEqual(failed["error_code"], "JOB_PERSISTENCE_FAILED")
         self.assertFalse((manager.outputs / f"{job['id']}.wav").exists())
         self.assertFalse((manager.outputs / f"{job['id']}.json").exists())
+
+    def test_ack_rolls_back_memory_when_its_receipt_cannot_be_persisted(self):
+        manager = self.manager()
+        job = manager.submit({"prompt": "warm Khmer instrumental", "duration": 1})
+        self.wait_for(manager, job["id"])
+        persist = manager._persist
+        calls = 0
+
+        def fail_once():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("receipt disk unavailable")
+            persist()
+
+        manager._persist = fail_once
+        with self.assertRaises(OSError):
+            manager.ack(job["id"])
+        self.assertFalse(manager.get(job["id"])["acknowledged"])
+        self.assertTrue(manager.ack(job["id"])["ok"])
+        self.assertEqual(calls, 2)
+
+    def test_running_transition_persist_failure_finishes_and_cleans_up(self):
+        manager = self.manager()
+        persist = manager._persist
+
+        def fail_running():
+            if any(job.get("state") == "running" for job in manager.jobs.values()):
+                raise OSError("receipt disk unavailable")
+            persist()
+
+        manager._persist = fail_running
+        job = manager.submit({"prompt": "warm Khmer instrumental", "duration": 1})
+        failed = self.wait_for(manager, job["id"], state="error")
+        self.assertEqual(failed["error_code"], "JOB_PERSISTENCE_FAILED")
+        deadline = time.monotonic() + 1
+        while job["id"] in manager.cancel_events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertNotIn(job["id"], manager.cancel_events)
+
+    def test_unverified_child_exit_is_never_downgraded_to_cancelled(self):
+        manager = self.manager()
+        job = {"id": "job", "state": "running", "started_at": time.time()}
+        manager.jobs["job"] = job
+        event = manager.cancel_events["job"] = __import__("threading").Event()
+        event.set()
+        manager._finish_failure(job, {
+            "state": "error", "error": "engine process exit was not verified",
+            "error_code": "ENGINE_CHILD_EXIT_UNVERIFIED",
+        })
+        self.assertEqual(job["state"], "error")
+        self.assertEqual(job["error_code"], "ENGINE_CHILD_EXIT_UNVERIFIED")
+
+    def test_corrupt_history_is_preserved_and_startup_fails_closed(self):
+        self.data.mkdir()
+        ledger = self.data / "jobs.json"
+        ledger.write_text("{broken")
+        with mock.patch.object(self.generation.cache_module, "MusicCache", _VerifiedCache):
+            with self.assertRaisesRegex(RuntimeError, "history"):
+                self.generation.GenerationManager(
+                    self.data, engine_root=str(self.engine), library_dir=str(self.models),
+                    runtime_sha256="f" * 64)
+        self.assertEqual(ledger.read_text(), "{broken")
+
+    def test_truncated_wav_payload_is_rejected(self):
+        path = self.root / "truncated.wav"
+        fmt = struct.pack("<HHIIHH", 1, 2, 48000, 192000, 4, 16)
+        path.write_bytes(b"RIFF" + struct.pack("<I", 36 + 1920) + b"WAVE" +
+                         b"fmt " + struct.pack("<I", len(fmt)) + fmt +
+                         b"data" + struct.pack("<I", 1920))
+        with self.assertRaisesRegex(RuntimeError, "truncated"):
+            self.generation.inspect_wav(path)
 
     def test_cleanup_failure_remains_explicit_after_restart(self):
         manager = self.manager()

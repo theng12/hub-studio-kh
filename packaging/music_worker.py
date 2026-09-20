@@ -154,15 +154,15 @@ def main() -> None:
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(source))
+    # Import the exact supplied checkout, not an unrelated site-packages copy.
+    sys.path.insert(0, str(engine_root))
 
     if args.check:
         from backend.cache import MusicCache
+        from backend.generation import engine_contract_reason
 
-        try:
-            import acestep  # noqa: F401
-            engine_import = "ok"
-        except Exception as exc:  # noqa: BLE001 - report, do not crash the probe
-            engine_import = f"{type(exc).__name__}: {exc}"
+        engine_issue = engine_contract_reason(str(engine_root))
+        engine_import = engine_issue or "ok"
         try:
             package_status = MusicCache(library=models, manifest_path=manifest).status()
         except (OSError, ValueError, KeyError) as exc:

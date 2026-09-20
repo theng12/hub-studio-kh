@@ -33,6 +33,14 @@ import time
 import traceback
 
 
+_WEIGHT_FILES = (
+    "model.safetensors", "model.safetensors.index.json", "pytorch_model.bin",
+    "pytorch_model.bin.index.json", "diffusion_pytorch_model.safetensors",
+    "diffusion_pytorch_model.safetensors.index.json", "diffusion_pytorch_model.bin",
+    "diffusion_pytorch_model.bin.index.json",
+)
+
+
 class EngineCancelled(RuntimeError):
     """Raised inside the engine callback when the parent asks for a stop."""
 
@@ -52,13 +60,47 @@ def _configure_environment(config: dict) -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
+def _bounded_model_precheck(*, checkpoint_path, config_path: str, **unused):
+    """Validate only the package Studio Hub selected; never auto-download."""
+    from pathlib import Path
+
+    root = Path(checkpoint_path)
+    required = (config_path, "vae", "Qwen3-Embedding-0.6B", "acestep-5Hz-lm-0.6B")
+    missing = [name for name in required
+               if not any((root / name / filename).is_file() for filename in _WEIGHT_FILES)]
+    if missing:
+        return "ERROR: verified Studio Hub package is missing: " + ", ".join(missing), False
+    return None
+
+
+def _verify_model_code(config_path: str, checkpoint_path) -> None:
+    """Refuse upstream's checkpoint-code sync instead of mutating the package."""
+    from acestep.model_downloader import _check_code_mismatch
+
+    mismatched = _check_code_mismatch(config_path, checkpoint_path)
+    if mismatched:
+        raise RuntimeError(
+            "verified checkpoint model code differs from pinned engine source: "
+            + ", ".join(mismatched))
+
+
 def _load_handlers(config: dict, events) -> tuple[object, object]:
     from acestep.handler import AceStepHandler
     from acestep.llm_inference import LLMHandler
 
+    class StudioHubAceStepHandler(AceStepHandler):
+        """ACE-Step with Studio Hub's verified, offline package boundary."""
+
+        def _ensure_models_present(self, **values):
+            return _bounded_model_precheck(**values)
+
+        @staticmethod
+        def _sync_model_code_if_needed(config_path, checkpoint_path):
+            _verify_model_code(config_path, checkpoint_path)
+
     events.put({"kind": "loading"})
     started = time.time()
-    dit = AceStepHandler()
+    dit = StudioHubAceStepHandler()
     status, ok = dit.initialize_service(
         project_root=str(config["engine_root"]),
         config_path=str(config["dit_model"]),
@@ -108,8 +150,8 @@ def _generate(dit, llm, payload: dict, cancel_event, events) -> dict:
         vocal_language=str(payload.get("vocal_language") or "unknown"),
         duration=float(payload["duration"]),
         inference_steps=int(payload.get("steps") or 8),
-        guidance_scale=float(payload.get("guidance_scale") or 1.0),
-        shift=float(payload.get("shift") or 3.0),
+        guidance_scale=float(payload.get("guidance_scale", 1.0)),
+        shift=float(payload.get("shift", 3.0)),
         seed=int(payload["seed"]),
         use_cot_metas=False,
         use_cot_caption=False,

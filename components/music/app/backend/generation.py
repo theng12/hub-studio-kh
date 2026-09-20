@@ -175,6 +175,68 @@ def _atomic_json(path: Path, value: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def engine_contract_reason(engine_root: str) -> str | None:
+    """Return why the supplied checkout is not the exact runnable engine."""
+    root = Path(engine_root)
+    required = (
+        root / "acestep" / "handler.py",
+        root / "acestep" / "inference.py",
+        root / "acestep" / "llm_inference.py",
+        *(root / relative for relative in catalog.ENGINE_MODEL_CODE_SHA256),
+    )
+    if not all(path.is_file() and not path.is_symlink() for path in required):
+        return "pinned ACE-Step source is incomplete"
+    git = Path("/usr/bin/git")
+    if not git.is_file():
+        return "system Git is unavailable for ACE-Step source verification"
+    try:
+        revision = subprocess.run(
+            [str(git), "-C", str(root), "rev-parse", "HEAD"],
+            text=True, capture_output=True, timeout=10, check=True).stdout.strip()
+        changed = subprocess.run(
+            [str(git), "-C", str(root), "status", "--porcelain",
+             "--untracked-files=all", "--", "acestep"],
+            text=True, capture_output=True, timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"ACE-Step source revision could not be verified: {exc}"
+    if revision != catalog.ENGINE_REVISION:
+        return f"ACE-Step source revision is {revision or 'unknown'}, not the pinned revision"
+    if changed:
+        return "ACE-Step source has tracked or untracked changes"
+    for relative, expected in catalog.ENGINE_MODEL_CODE_SHA256.items():
+        try:
+            observed = _file_sha256(root / relative)
+        except OSError as exc:
+            return f"ACE-Step model code could not be hashed: {exc}"
+        if observed != expected:
+            return f"ACE-Step model code digest mismatch: {relative}"
+    try:
+        spec = importlib.util.find_spec("acestep")
+        if spec is None:
+            return "ACE-Step is not installed in the Music runtime"
+    except (ImportError, AttributeError, ValueError) as exc:
+        return f"ACE-Step runtime could not be inspected: {exc}"
+    locations = list(spec.submodule_search_locations or ())
+    if spec.origin:
+        locations.append(spec.origin)
+    try:
+        if not locations or any(
+                not Path(location).resolve().is_relative_to(root.resolve())
+                for location in locations):
+            return "ACE-Step runtime import resolves outside the pinned engine root"
+    except OSError as exc:
+        return f"ACE-Step runtime import path could not be verified: {exc}"
+    return None
+
+
 def inspect_wav(path: Path) -> dict:
     """Read the real PCM facts out of the artifact, not the request."""
     if path.is_symlink() or not path.is_file():
@@ -190,10 +252,16 @@ def inspect_wav(path: Path) -> dict:
             sample_rate = audio.getframerate()
             channels = audio.getnchannels()
             sample_width = audio.getsampwidth()
+            payload = audio.readframes(frames)
     except (EOFError, wave.Error) as exc:
         raise RuntimeError(f"invalid WAV artifact: {exc}") from exc
     if frames <= 0 or sample_rate <= 0 or channels not in (1, 2):
         raise RuntimeError("WAV has invalid duration, sample rate, or channel count")
+    expected_payload = frames * channels * sample_width
+    if len(payload) != expected_payload:
+        raise RuntimeError(
+            f"WAV payload is truncated: expected {expected_payload} PCM bytes, "
+            f"found {len(payload)}")
     return {"bytes": len(data), "sha256": sha256(data).hexdigest(),
             "frames": frames, "sample_rate_hz": sample_rate, "channels": channels,
             "sample_width_bytes": sample_width,
@@ -261,8 +329,9 @@ class EngineExecutor:
                 process.kill()
             process.join(5.0)
         dead = not process.is_alive()
-        if dead:
-            process.close()
+        if not dead:
+            return False
+        process.close()
         self._process = None
         self._commands = None
         self._events = None
@@ -310,7 +379,9 @@ class EngineExecutor:
         deadline = time.monotonic() + self.load_timeout
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                self._discard()
+                if not self._discard():
+                    self._blocked_reason = "engine child exit was not verified"
+                    raise RuntimeError(self._blocked_reason)
                 return False
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -362,6 +433,15 @@ class EngineExecutor:
         def result(state: str, **extra) -> dict:
             return {"state": state, "peak_rss_bytes": self.peak_rss_bytes, **extra}
 
+        def stop_for_cancel() -> dict:
+            dead = self._discard()
+            if not dead:
+                self._blocked_reason = "engine child exit was not verified"
+                return result("error", error=self._blocked_reason,
+                              error_code="ENGINE_CHILD_EXIT_UNVERIFIED",
+                              terminated=False, resumed=False)
+            return result("cancelled", error=None, terminated=True, resumed=False)
+
         try:
             if cancel_event.is_set():
                 return result("cancelled", error=None, terminated=False, resumed=False)
@@ -395,24 +475,18 @@ class EngineExecutor:
                             on_progress(event.get("ratio"), event.get("desc"))
                     elif kind == "done":
                         if cancel_at is not None:
-                            dead = self._discard()
-                            return result("cancelled", error=None,
-                                          terminated=dead, resumed=False)
+                            return stop_for_cancel()
                         return result("done", path=event.get("path"),
                                       sample_rate=event.get("sample_rate"),
                                       engine_seconds=event.get("engine_seconds"),
                                       terminated=False, resumed=True)
                     elif kind == "cancelled":
-                        dead = self._discard()
-                        return result("cancelled", error=None,
-                                      terminated=dead, resumed=False)
+                        return stop_for_cancel()
                     elif kind == "error":
                         detail = event.get("error") or "engine error"
                         trace = event.get("traceback") or ""
                         if cancel_at is not None:
-                            self._discard()
-                            return result("cancelled", error=None,
-                                          terminated=True, resumed=False)
+                            return stop_for_cancel()
                         return result("error",
                                       error=f"{detail}\n{trace.strip()}" if trace else detail,
                                       terminated=False, resumed=True)
@@ -424,6 +498,8 @@ class EngineExecutor:
                             self._blocked_reason = "engine child exit was not verified"
                         return result("cancelled" if dead else "error",
                                       error=None if dead else self._blocked_reason,
+                                      error_code=(None if dead else
+                                                  "ENGINE_CHILD_EXIT_UNVERIFIED"),
                                       terminated=dead, resumed=False)
                 if self._process is None or not self._process.is_alive():
                     self._discard()
@@ -431,8 +507,13 @@ class EngineExecutor:
                                   error="engine process exited without a result",
                                   terminated=True, resumed=False)
         except BaseException as exc:  # noqa: BLE001 - never kill the job thread
-            self._discard()
-            if cancel_event.is_set():
+            dead = self._discard()
+            if not dead:
+                self._blocked_reason = "engine child exit was not verified"
+                return result("error", error=self._blocked_reason,
+                              error_code="ENGINE_CHILD_EXIT_UNVERIFIED",
+                              terminated=False, resumed=False)
+            if cancel_event.is_set() and self._blocked_reason is None:
                 return result("cancelled", error=None, terminated=True, resumed=False)
             return result("error", error=f"{type(exc).__name__}: {exc}",
                           terminated=True, resumed=False)
@@ -486,11 +567,14 @@ class GenerationManager:
                 raise ValueError("Music job history is malformed")
         except FileNotFoundError:
             saved = {}
-        except (OSError, ValueError):
-            saved = {}
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                "Music job history is unreadable; original recovery evidence was preserved"
+            ) from exc
         for job_id, job in saved.items():
             if not isinstance(job, dict) or job_id != job.get("id"):
-                continue
+                raise RuntimeError(
+                    "Music job history is malformed; original recovery evidence was preserved")
             if job.get("state") not in TERMINAL:
                 job.update(state="error",
                            error="Worker restarted before completion",
@@ -506,20 +590,7 @@ class GenerationManager:
 
     # -- readiness / cache ---------------------------------------------------
     def _engine_contract_reason(self) -> str | None:
-        root = Path(self.engine_root)
-        required = (
-            root / "acestep" / "handler.py",
-            root / "acestep" / "inference.py",
-            root / "acestep" / "llm_inference.py",
-        )
-        if not all(path.is_file() and not path.is_symlink() for path in required):
-            return "pinned ACE-Step source is incomplete"
-        try:
-            if importlib.util.find_spec("acestep") is None:
-                return "ACE-Step is not installed in the Music runtime"
-        except (ImportError, AttributeError, ValueError) as exc:
-            return f"ACE-Step runtime could not be inspected: {exc}"
-        return None
+        return engine_contract_reason(self.engine_root)
 
     def preflight(self) -> dict:
         try:
@@ -604,9 +675,19 @@ class GenerationManager:
             if not final_matches(job, self.outputs / f"{job_id}.wav"):
                 return None
             if not job["acknowledged"]:
+                previous_ack = job["acknowledged"]
+                previous_time = job.get("receipt_acked_at")
                 job["acknowledged"] = True
                 job["receipt_acked_at"] = time.time()
-                self._persist()
+                try:
+                    self._persist()
+                except Exception:
+                    job["acknowledged"] = previous_ack
+                    if previous_time is None:
+                        job.pop("receipt_acked_at", None)
+                    else:
+                        job["receipt_acked_at"] = previous_time
+                    raise
             return {"ok": True, "job_id": job_id, "sha256": job["sha256"]}
 
     # -- the run -------------------------------------------------------------
@@ -615,19 +696,22 @@ class GenerationManager:
         final = self.outputs / f"{job_id}.wav"
         sidecar = self.outputs / f"{job_id}.json"
         with self.inference_lock:
-            with self.lock:
-                event = self.cancel_events.get(job_id)
-                job = self.jobs.get(job_id)
-                if job is None:
-                    return
-                if event is not None and event.is_set():
-                    job.update(state="cancelled", finished_at=time.time())
-                    self._persist()
-                    self.cancel_events.pop(job_id, None)
-                    return
-                job.update(state="running", progress=0.01, started_at=time.time())
-                self._persist()
+            job = None
             try:
+                with self.lock:
+                    event = self.cancel_events.get(job_id)
+                    job = self.jobs.get(job_id)
+                    if job is None:
+                        return
+                    if event is not None and event.is_set():
+                        job.update(state="cancelled", finished_at=time.time())
+                        self._persist()
+                        return
+                    job.update(state="running", progress=0.01, started_at=time.time())
+                    try:
+                        self._persist()
+                    except Exception as exc:
+                        raise _JobPersistenceFailed(str(exc)) from exc
                 staging.mkdir(parents=True, exist_ok=True, mode=0o700)
                 params = job["params"]
                 seed = params["seed"]
@@ -729,6 +813,11 @@ class GenerationManager:
                     self._persist()
             except _JobFailed as failure:
                 self._finish_failure(job, failure.outcome)
+            except _JobPersistenceFailed as exc:
+                self._finish_failure(job, {
+                    "state": "error", "error": f"Music job state could not be persisted: {exc}",
+                    "error_code": "JOB_PERSISTENCE_FAILED",
+                })
             except Exception as exc:  # noqa: BLE001 - report the engine's own text
                 published = [path for path in (final, sidecar)
                              if path.exists() or path.is_symlink()]
@@ -767,10 +856,10 @@ class GenerationManager:
         job_id = job["id"]
         with self.lock:
             event = self.cancel_events.get(job_id)
-            persistence_uncertain = outcome.get("error_code") == "JOB_PERSISTENCE_UNCERTAIN"
-            cancelled = not persistence_uncertain and bool(
-                outcome.get("state") == "cancelled"
-                or (event is not None and event.is_set()))
+            explicit_error = bool(outcome.get("error") or outcome.get("error_code")
+                                  or outcome.get("state") == "error")
+            cancelled = bool(outcome.get("state") == "cancelled"
+                             or (not explicit_error and event is not None and event.is_set()))
             job["engine_peak_rss_bytes"] = outcome.get("peak_rss_bytes")
             if cancelled:
                 job.update(state="cancelled", error=None, error_code=None)
@@ -820,6 +909,10 @@ class GenerationManager:
 
     def close(self) -> None:
         self.executor.close()
+
+
+class _JobPersistenceFailed(RuntimeError):
+    pass
 
 
 class _JobFailed(RuntimeError):

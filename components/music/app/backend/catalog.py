@@ -39,6 +39,14 @@ MAIN_REPO = "ACE-Step/Ace-Step1.5"
 MAIN_REVISION = "19671f406d603126926c1b7e2adc169acbcade22"
 LM_06B_REPO = "ACE-Step/acestep-5Hz-lm-0.6B"
 LM_06B_REVISION = "148d8ea0225bdab342ee1ae3a354275ccd60ca80"
+ENGINE_REPO = "ace-step/ACE-Step-1.5"
+ENGINE_REVISION = "ca1e85fe9430179831e6bc6be790c332190a3866"
+ENGINE_MODEL_CODE_SHA256 = {
+    "acestep/models/turbo/configuration_acestep_v15.py":
+        "5f15aa79fe793bba3c00b6992dd193a269954950603d5031ecd7703b0fa69da1",
+    "acestep/models/turbo/modeling_acestep_v15_turbo.py":
+        "71b22e01b490bd9e149e4c0c5da2e1f512126f3ab3316e0ae97779af84d19512",
+}
 
 # The package the local manifest describes. Periods are normalized to hyphens
 # to match the model package identifier contract.
@@ -250,7 +258,7 @@ CATALOG: tuple[ModelEntry, ...] = (
         checkpoint="acestep-v15-turbo",
         # Exact manifest byte total: Turbo DiT, VAE, text encoder and the
         # separately published 0.6B planner.
-        size_gb=7709268688 / 1e9,
+        size_gb=7709377612 / 1e9,
         gated=False,
         min_unified_memory_gb=8,
         recommended_hardware=(
@@ -271,13 +279,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         dit_tiers=(TURBO_DIT,),
         lm_tiers=(LM_06B,),
         default_lm_model="acestep-5Hz-lm-0.6B",
-        ignore_patterns=(
-            # The engine rewrites these two from the installed wheel's
-            # acestep/models/turbo/ on first init; they are not checkpoint
-            # identity and are deliberately not part of the package file list.
-            "acestep-v15-turbo/configuration_acestep_v15.py",
-            "acestep-v15-turbo/modeling_acestep_v15_turbo.py",
-        ),
+        # The two executable model files that upstream normally synchronizes
+        # are package members instead. Studio Hub's adapter verifies equality
+        # and refuses a mismatch; it never writes into the installed package.
+        ignore_patterns=(),
     ),
 )
 

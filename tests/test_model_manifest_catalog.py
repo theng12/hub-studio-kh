@@ -83,7 +83,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def test_manifest_contents_match_the_captured_inventory(self):
         expected_digests = {
             # Updated only by a deliberate recapture of the exact pinned revisions.
-            "ace-step-1-5-turbo": "967bdde4b85602d6a18392bd8faaab84abd6edae2142249596021f2f5565d652",
+            "ace-step-1-5-turbo": "0e06526df7a27784c28f9e0e40dbc71a4392c9f0cfbbfb538bb9c0b43f16e0f6",
             "flux2-klein-4b-mlx-4bit": "d49528a1b5da899519099f3312a7d1a60174c5f6c0858a6ac35daf16d1e0012d",
             "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
             "qwen3-tts-12hz-0-6b-base-4bit": "30cd91171bb5c1e63e5d7fb66aa4de16400fe77f2a0ebf6480e706ce4285a45b",
@@ -145,8 +145,15 @@ class ModelManifestCatalogTests(unittest.TestCase):
                 self.assertRegex(file["sha256"], SHA256)
                 self.assertEqual(len(file["urls"]), 1)
                 source_revisions = {item["revision"] for item in manifest["source"]["sources"]}
-                self.assertTrue(any(f"/resolve/{revision}/" in file["urls"][0]
-                                    for revision in source_revisions))
+                if file.get("provider", "huggingface") == "github":
+                    self.assertIn(file["revision"], source_revisions)
+                    self.assertEqual(
+                        file["urls"][0],
+                        f"https://raw.githubusercontent.com/{file['repo']}/"
+                        f"{file['revision']}/{file['source_path']}")
+                else:
+                    self.assertTrue(any(f"/resolve/{revision}/" in file["urls"][0]
+                                        for revision in source_revisions))
                 if file["path"].startswith("model/"):
                     self.assertNotIn("README", file["source_path"])
                     self.assertNotIn(".gitattributes", file["source_path"])

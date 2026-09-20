@@ -143,7 +143,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                 "qualification": {
                     "historical_source_workload":
                         "30 s instrumental, 8 steps, turbo DiT + 0.6B LM, MLX backend, tier4",
-                    "packaged_inference": "single standalone generation proof on this Mac"},
+                    "packaged_inference": "unqualified; source contract only"},
             })
             models.append(entry)
         return {"models": models,
