@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.31 — 2026-09-19 · the spaCy model was the other half of Kokoro's failure
+
+- **Root cause of `SystemExit: 1` found:** `misaki`'s English G2P loads spaCy's `en_core_web_sm`, and
+  the runtime shipped no such model. Missing it, the text-preparation library exits - so the job
+  loaded the model, resolved the voice, and died with no explanation. `en_core_web_sm` 3.8.0
+  (12.8 MB) is now installed in the runtime and therefore staged into the app.
+- Verification of the whole chain in the repo runtime, with the runtime's bin on PATH and no
+  Homebrew: `espeak-ng` resolves to the vendored binary and `misaki.en.G2P(...)` returns
+  `həlˈO wˈɜɹld, ðɪs ɪz ɐ tˈɛst.`
+- So Kokoro needed *both* halves fixed: the espeak **command** (0.6.30) and this **model** (0.6.31).
+  0.6.29's library-path helper remains redundant - `misaki/espeak.py` already does that itself - and is
+  kept only for the PATH wiring and the explicit environment, with a comment saying so.
+- F5-TTS stays removed (0.6.30). Evidence for the whole chain: `tests/test_espeak_library_available.py`
+  (4 checks) plus a real Kokoro job run through the Hub afterwards.
+
 ## 0.6.30 — 2026-09-19 · vendored espeak-ng (Kokoro), F5-TTS dropped
 
 - **Kokoro needs an `espeak-ng` *command*.** Proven, not assumed: with only the bundled espeak

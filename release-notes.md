@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.31 — 2026-09-19
+
+### Kokoro speaks
+
+Kokoro needed two things this app did not carry, and both are now inside it, so nothing has to be
+installed on your Macs:
+
+- **espeak** — the program that turns text into sounds. Vendored into the app's runtime, with its
+  libraries rewritten to load from beside themselves and signed so macOS runs them on a Mac that has
+  never had Homebrew.
+- **a small language model for English text** (12.8 MB) that the text-preparation library needs before
+  espeak can be used. Its absence was the actual cause of the silent failure: the preparation library
+  exits when it cannot find it, which is why every Kokoro job stopped with no explanation while the
+  model itself loaded fine.
+
 ## 0.6.30 — 2026-09-19
 
 ### Kokoro works: the app now carries its own espeak
