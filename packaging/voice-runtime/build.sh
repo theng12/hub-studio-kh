@@ -110,7 +110,8 @@ FFMPEG_SOURCE="$FFMPEG_BUILD/ffmpeg-${FFMPEG_VERSION}"
 FFMPEG_DESTDIR="$FFMPEG_BUILD/install"
 (
   cd "$FFMPEG_SOURCE"
-  env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" ./configure \
+  export MACOSX_DEPLOYMENT_TARGET
+  ./configure \
     --prefix=/ \
     --disable-shared \
     --enable-static \
