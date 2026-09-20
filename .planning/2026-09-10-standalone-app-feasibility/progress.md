@@ -2,6 +2,21 @@
 
 ## 2026-09-21 — ordered remaining-work execution
 
+Latest: R01 and R02 source/test repairs independently reviewed with no actionable
+findings. Root separately re-ran full native build/boundary/API and lifecycle
+harness: all passed (`.build/root-native-final.log`). Source is frozen for ordered
+R01 then R02 commits and a clean current-source artifact gate before publishing.
+The first full Python run used the older explicit artifact; its single identity
+failure remains unresolved until the new artifact/run, not waived. Impeccable
+informed native offline/concurrent-state review without visual redesign; context
+launcher was not executable, so existing PRODUCT.md/DESIGN.md were read directly.
+
+Review rulings: R02 explicit corrupt deadlines remain preserved rather than
+silently deleted; missing deadlines retain prior expiry behavior. R03 preserves
+stable-ID replays and generated-but-unverified compatibility. Independent review
+declined broad changes to those contracts; root agrees for the reasons and costs
+recorded in r02-report.md and task_plan.md. No deferred minor code findings.
+
 Owner authorized planning all remaining work and starting top to bottom. Root
 extended the existing `task_plan.md` with R01–R10, ownership, dependencies, proving
 checks and explicit physical/deployment gates; no parallel planning system was created.
@@ -17,8 +32,32 @@ support these paths; use verified current-source callers. Existing artifacts,
 installed app and protected model library remain unchanged.
 
 R01: IN PROGRESS — native health ownership/rejoin reproduction then minimal repair.
-R02: READY — finite ordered timing and controlled corrupt-expiry refusal.
+R02: IN PROGRESS — root inline fallback after second worker/follow-up dispatch
+failed with agent-service task limit; executing-plans applies within this canonical
+ledger. Real authenticated endpoint regressions reproduced 20 failures/1 error
+(accepted invalid timing, invalid stored expiry); purge regression reproduced
+4 deletions instead of 1 for empty-container/null deadlines. Minimal shared parser
+now refuses corrupt stored expiry without mutation, including purge skip-invalid.
+Ruling: distinguish explicit invalid null/container from absent deadline; preserve
+the latter's existing expired-cleanup contract. Cost: corrupt explicit deadlines
+need deliberate repair/removal rather than automatic deletion.
 R03–R10: queued; missing physical hardware/authority is not a completed test.
+
+R02 implementation: focused 19 passed (28 child HTTP tests), broader isolated Hub
+85 passed. Independent `music_recovery_read` reviewer traced callers, re-ran 19
+focused checks and found no actionable findings. Ordered integration waits for
+R01 native lifecycle proof/review; no DONE card or installed-app change yet.
+R03 read-only preflight completed to distinguish malformed terminal receipts from
+the existing done-but-unbillable metadata fallback and stable-ID idempotent repost
+contract. No broker implementation is authorized from an unverified assumption.
+
+[MEASURED] Broad preliminary Python run: 632 tests in 388.394s, seven skips,
+one source-identity assertion failed because the explicitly selected prior
+reviewed artifact names `c9eadca`, while this branch names `0ec3b3b`. All other
+assertions passed; nested Voice 722 passed/19 skipped, Hub 85 passed. This is
+not a passing final gate: rebuild from the reviewed final source and rerun the
+source-bound release checks without weakening the assertion. Local log:
+`.build/r02-full-regression.log`. Dependency/resource warnings remain visible.
 
 Follow-up framework decision: owner accepted native SwiftUI/AppKit with WKWebView and disclosed no Apple Developer account. Verified Apple membership and Gatekeeper guidance; recorded that paid enrollment is unnecessary for local development/internal testing, while Developer ID/notarization need membership and transferred internal builds may require normal per-app approval. No runtime changes, login registration, enrollment or distribution performed in this discussion turn. Updated the existing design and owner direction only; documentation diff checked.
 

@@ -74,6 +74,20 @@ def _read(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _expires_at(metadata: dict[str, Any]) -> float:
+    try:
+        deadline = float(metadata.get("expires_at", 0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ExecutionAssetError(
+            "VOICE_REFERENCE_ASSET_INACCESSIBLE", "The staged reference expiry is invalid."
+        ) from exc
+    if not math.isfinite(deadline):
+        raise ExecutionAssetError(
+            "VOICE_REFERENCE_ASSET_INACCESSIBLE", "The staged reference expiry is invalid."
+        )
+    return deadline
+
+
 def _segments(value: object) -> list[dict[str, Any]]:
     if value in (None, ""):
         return []
@@ -91,10 +105,15 @@ def _segments(value: object) -> list[dict[str, Any]]:
         try:
             start = float(raw.get("start_seconds", raw.get("start")))
             end = float(raw.get("end_seconds", raw.get("end")))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ExecutionAssetError(
                 "REFERENCE_TRANSCRIPT_SEGMENTS_INVALID", "A transcript timestamp is invalid."
             ) from exc
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            raise ExecutionAssetError(
+                "REFERENCE_TRANSCRIPT_SEGMENTS_INVALID",
+                "Transcript timestamps must be finite with 0 <= start < end.",
+            )
         text = str(raw.get("text") or "").strip()
         result.append({"start": start, "end": end, "text": text[:10_000]})
     return result
@@ -192,7 +211,7 @@ def _stage_voice_reference(
         expires_at = time.time() + ttl
         existing = _read(target / "metadata.json") if target.is_dir() else None
         if existing:
-            existing["expires_at"] = max(float(existing.get("expires_at") or 0), expires_at)
+            existing["expires_at"] = max(_expires_at(existing), expires_at)
             existing["updated_at"] = time.time()
             _atomic_json(target / "metadata.json", existing)
             return existing
@@ -245,7 +264,7 @@ def resolve_voice_reference(asset_id: str, *, now: float | None = None) -> tuple
                 "VOICE_REFERENCE_ASSET_MISSING",
                 "The private voice reference is missing. Upload it again before generating.",
             )
-        if float(metadata.get("expires_at") or 0) <= (time.time() if now is None else now):
+        if _expires_at(metadata) <= (time.time() if now is None else now):
             raise ExecutionAssetError(
                 "VOICE_REFERENCE_ASSET_EXPIRED",
                 "The private voice reference has expired. Upload it again before generating.",
@@ -292,10 +311,10 @@ def cleanup_expired(now: float | None = None) -> int:
                 continue
             metadata = _read(child / "metadata.json") or {}
             try:
-                expires_at = float(metadata.get("expires_at") or 0)
-            except (TypeError, ValueError):
+                expires_at = _expires_at(metadata)
+            except ExecutionAssetError:
                 continue  # An unreadable deadline cannot establish expiry.
-            if math.isfinite(expires_at) and expires_at <= current:
+            if expires_at <= current:
                 shutil.rmtree(child, ignore_errors=True)
                 removed += 1
         return removed

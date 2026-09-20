@@ -13,6 +13,10 @@ validation C-01/C-02. Independent non-overlapping implementations may run togeth
 review/integration follows that order. Root owns the board, plan and Git integration.
 Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
 branch `codex/handoff-completion`. Nothing later is marked qualified by this batch.
+Both repairs now have RED→GREEN evidence and clean independent review. Root's
+native build/boundary/API/lifecycle rerun passed. Current phase: clean-source
+packaging and full release gate, then authorized feature PR integration. R03
+Voice receipt/payload negatives are the next implementation task, not yet started.
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.

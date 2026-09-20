@@ -262,6 +262,43 @@ class VoiceReferenceRouteTests(unittest.TestCase):
         self.assertEqual(metadata["transcript_segments"][0]["text"], "Exact words.")
         self.assertTrue(payload["transcript_supplied"])
 
+    def test_invalid_segment_intervals_are_refused_without_changing_assets(self) -> None:
+        intervals = [(float("nan"), 1), (0, float("nan")),
+                     (float("inf"), 1), (0, float("inf")),
+                     (float("-inf"), 1), (-1, 1), (2, 1), (1, 1)]
+        for origin in ({}, {"source_asset_id": "invalid-interval-source"}):
+            for start, end in intervals:
+                with self.subTest(origin=origin, start=start, end=end):
+                    before = {str(p): p.read_bytes() for p in execution_assets.ROOT.rglob("*")
+                              if p.is_file()}
+                    response = self._stage(transcript_segments=json.dumps([
+                        {"start": start, "end": end, "text": "Invalid interval."}
+                    ]), **origin)
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(response.json()["detail"]["code"],
+                                     "REFERENCE_TRANSCRIPT_SEGMENTS_INVALID")
+                    self.assertEqual(before, {str(p): p.read_bytes()
+                                             for p in execution_assets.ROOT.rglob("*")
+                                             if p.is_file()})
+
+    def test_corrupt_stored_expiry_refuses_status_and_restage_without_mutation(self) -> None:
+        for index, expiry in enumerate(("invalid-deadline", "NaN", "Infinity", [], {})):
+            with self.subTest(expiry=expiry):
+                form = {"transcript": f"Corrupt deadline fixture {index}"}
+                payload = self._stage(**form).json()
+                folder = execution_assets.ROOT / payload["asset_id"]
+                metadata_path = folder / "metadata.json"
+                metadata = json.loads(metadata_path.read_text())
+                metadata["expires_at"] = expiry
+                metadata_path.write_text(json.dumps(metadata))
+                before = {str(p): p.read_bytes() for p in folder.iterdir()}
+                for response in (self.client.get(f"{ROUTE}/{payload['asset_id']}", headers=HEADERS),
+                                 self._stage(**form)):
+                    self.assertIn(response.status_code, (400, 409))
+                    self.assertEqual(response.json()["detail"]["code"],
+                                     "VOICE_REFERENCE_ASSET_INACCESSIBLE")
+                self.assertEqual(before, {str(p): p.read_bytes() for p in folder.iterdir()})
+
     def test_expiry_is_clamped_to_the_declared_bounds(self) -> None:
         import time
         short = self._stage(ttl_seconds=1).json()

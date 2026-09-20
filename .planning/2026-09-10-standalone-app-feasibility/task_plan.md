@@ -47,12 +47,13 @@ branch `codex/handoff-completion`. Existing worktrees remain preserved.
 
 1. Late/cancelled responses cannot revive a stopped/replaced process or stale connection (R01).
 2. Malformed inputs/metadata never erase original reference bytes or weaken valid inputs (R02).
-3. Lost/malformed acceptance never causes untracked duplicate generation or false completion (R03).
+3. Lost/malformed acceptance never causes untracked duplicate generation or false completion (R03);
+   stable-ID idempotent reposts and the existing unverified-output fallback are distinct contracts.
 4. Remote dispatch must preserve local pause/storage/physical-machine safeguards (R04).
 5. New UI and artifact export remain source-bound, authenticated, keyboard-usable and truthful
    about missing models, uncertain jobs and unsupported hardware (R06–R10).
 
-### R01 — Native lifecycle/rejoin correctness [IN PROGRESS]
+### R01 — Native lifecycle/rejoin correctness [REVIEWED; final gate pending]
 
 **Owner:** Sol/high worker; root independent review/integration.
 **Owned files:** `native/StudioHub.swift`, `native/StartupRecovery.swift`,
@@ -62,54 +63,73 @@ cannot be exercised through existing fixtures (coordinator approves exact path f
 **Interface:** Existing `StartupRecovery`, `adoptStartupMembership`, `refresh`,
 `rejoinControllerIfNeeded`, process ownership and authenticated health polling.
 
-- [ ] Reproduce N-01 with ready-but-unhealthy uptime ≥60 seconds (controlled clock,
+- [x] Reproduce N-01 with ready-but-unhealthy uptime ≥60 seconds (controlled clock,
   no real wait): crash budget must not reset; actual healthy uptime may reset it.
-- [ ] Reproduce N-03: hold a health response, terminate/replace its owning process,
+- [x] Reproduce N-03: hold a health response, terminate its owning process,
   then deliver it; stopped/error/new-process state must win over the old response.
-- [ ] Reproduce N-02: first identity or version request fails then succeeds;
+- [x] Reproduce N-02: first identity request fails then succeeds (paired version
+  path inspected, not separately fault-injected);
   membership recovers without manual join or restart, with no duplicate successful
   rejoin, no enrollment for minted/standalone identity, no retry after disconnect/leave.
-- [ ] Fix the existing lifecycle: successful-health interval, post-await ownership
+- [x] Fix the existing lifecycle: successful-health interval, post-await ownership
   guards and bounded/idempotent retry through existing polling. No generic scheduler.
-- [ ] Run native boundary/API fixtures and `bash native/build.sh`; review delayed,
+- [x] Run native boundary/API fixtures and `bash native/build.sh`; review delayed,
   disconnected, token-changed and explicit-stop cases before integrating.
 
-### R02 — Reference boundary integrity [READY, wave 1]
+### R02 — Reference boundary integrity [REVIEWED; final gate pending]
 
-**Owner:** separate Sol/high worker. **Owned files:**
+**Owner:** coordinator inline fallback after second worker service rejection;
+independent review by `music_recovery_read`. **Owned files:**
 `components/hub/backend/execution_assets.py`, `tests/test_hub_voice_references.py`,
 `tests/test_execution_asset_purge.py`; root owns canonical records.
 **Interface:** Existing ExecutionAssetError and reference stage/read/purge contract.
 
-- [ ] Reproduce C-01 through the real temporary authenticated endpoint with
+- [x] Reproduce C-01 through the real temporary authenticated endpoint with
   `NaN`, `Infinity`, `-1`, reversed and zero-length intervals. Valid intervals
   have finite start ≥0, finite end >start; preserve existing segment ordering rules.
-- [ ] Require a controlled machine-readable 400 before creating/altering an asset;
+- [x] Require a controlled machine-readable 400 before creating/altering an asset;
   valid local/GenStudio roundtrips and model-specific preparation remain unchanged.
-- [ ] Reproduce C-02 by corrupting only stored expiry to `invalid-deadline` and
+- [x] Reproduce C-02 by corrupting only stored expiry to `invalid-deadline` and
   restaging/reading it. Choose controlled refusal (not silent metadata repair),
   preserving original clip/metadata and unrelated assets; reject non-finite expiry too.
-- [ ] Fix shared parsing/validation, not each route separately; preserve purge's
+- [x] Fix shared parsing/validation, not each route separately; preserve purge's
   existing skip-invalid behavior and transaction/locking/symlink safeguards.
-- [ ] Run `PYTHONPATH=.build/test-deps .build/voice-runtime/bin/python3 -B -m pytest
+- [x] Run `PYTHONPATH=.build/test-deps .build/voice-runtime/bin/python3 -B -m pytest
   -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
   tests/test_hub_standalone.py`, then independent fault-injection review.
 
 ### R03 — Voice acceptance/completion fault matrix [QUEUED]
 
 **Owned scope:** `components/hub/backend/broker.py`,
+`components/hub/backend/artifact_metadata.py`, its existing tests, and
 `tests/hub_regression/cases/test_voice_durability.py`, reference existing
 `test_image_uncertainty.py`/`test_music_durability.py`; Sol/high implementation.
 
 - [ ] Return missing ID, non-object receipt, unknown state, missing output URL,
   invalid bytes/hash/media and changed identity from a fake Voice worker.
-- [ ] Count generation POSTs and inspect live/disk receipts after failure/restart:
-  no duplicate accepted attempt, no DONE without verified final receipt.
+- [ ] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
+  reposts are permitted by the existing Voice worker idempotency contract. One
+  worker attempt/result must remain; changed body with same ID remains a conflict.
+- [ ] Reproduce unknown live-poll state and done-without-output-URL in both live
+  and reconcile paths. Keep these uncertain rather than publishing false completion.
+- [ ] Preserve valid terminal receipt plus failed artifact fetch/verification as
+  the existing `done + artifact_metadata_error` compatibility path; do not rewrite
+  billing semantics. No missing-URL bypass and no falsely verified metadata.
+- [ ] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
+  truncated to 64 bytes still claiming 0.1s; require full declared PCM frame bytes
+  before reporting verified audio metadata, using the existing standard-library parser.
 - [ ] Fix only reproduced gaps using existing identity/receipt validation and
   Voice's stable client-request recovery; preserve Image/Music behavior.
 - [ ] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
   independent review and a model-free packaged Hub gate. If no failure reproduces,
   retain the negative tests and close the candidate with evidence, not a rewrite.
+
+Preflight ruling: the original shorthand “one POST/no DONE without verified
+receipt” was too broad for the inherited contract. Preserve deliberate stable-ID
+reposts and generated-but-unverified results; fix false terminal states, absent
+artifact references and falsely verified payloads. Cost if wrong: callers still
+need to check metadata availability before treating a generated result as verified;
+this task does not certify or change the external billing counterpart.
 
 ### R04 — Peer admission negative qualification [QUEUED]
 
