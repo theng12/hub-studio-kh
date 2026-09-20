@@ -146,6 +146,26 @@ def ensure_espeak_available() -> bool:
         espeakng_loader.make_library_available()
     except Exception:
         pass
+    # The phonemizer runs the `espeak-ng` *command*, and it finds it on PATH. This app ships that
+    # command in its own tools directory (vendored: the binary, its two libraries rewritten to
+    # `@loader_path`, and an ad-hoc signature so macOS will run it on a Mac with no Homebrew), so the
+    # directory goes on PATH here rather than relying on the operator having espeak installed.
+    candidates = []
+    try:
+        from . import paths
+        candidates.append(str(paths.tools_dir()))
+    except Exception:
+        pass
+    # The interpreter that runs this IS the app's runtime, so its own directory is where the vendored
+    # command lives in both the developer checkout and the packaged app - `paths.tools_dir()` points
+    # at the bundle's tools folder, which does not exist until the app is staged.
+    candidates.append(os.path.dirname(os.path.abspath(sys.executable)))
+    for candidate in candidates:
+        command = os.path.join(candidate, "espeak-ng")
+        if os.path.isfile(command) and os.access(command, os.X_OK):
+            if candidate not in os.environ.get("PATH", "").split(os.pathsep):
+                os.environ["PATH"] = candidate + os.pathsep + os.environ.get("PATH", "")
+            return True
     return bool(library)
 
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.30 — 2026-09-19 · vendored espeak-ng (Kokoro), F5-TTS dropped
+
+- **Kokoro needs an `espeak-ng` *command*.** Proven, not assumed: with only the bundled espeak
+  *library* available, `phonemizer` **hung** for ten minutes rather than erroring, and
+  `misaki/espeak.py` already wires that library itself (`EspeakWrapper.set_library(...)`), so 0.6.29's
+  helper was redundant. The owner asked for Kokoro, so the command is now vendored:
+  `.build/voice-runtime/bin/espeak-ng` plus `libespeak-ng.1.dylib` and `libpcaudio.0.dylib`, with every
+  Homebrew path rewritten to `@loader_path/<name>` and both the binary and the libraries
+  **ad-hoc signed** (without that, macOS kills the modified arm64 binary with `Killed: 9` — which is
+  how the first vendoring attempt failed). Verified under `env -i PATH=/usr/bin:/bin` with Homebrew
+  absent: `espeak-ng -q --ipa "hello world"` → `həlˈəʊ wˈɜːld`. Voice data comes from the
+  `espeakng_loader` package the app already shipped (same 1.52.0 version).
+- `ensure_espeak_available()` now also puts the command's directory on `PATH`, because `phonemizer`
+  finds it with `shutil.which`. It looks beside the running interpreter, which is the runtime's bin
+  directory in both a checkout and the packaged app; `paths.tools_dir()` is the bundle's tools folder
+  and does not exist until the app is staged.
+- **F5-TTS removed** on the owner's instruction: `model-manifests/f5-tts.json` deleted and its two
+  entries dropped from the catalogue gate. `umt5-base` **stays** — it is LongCat's companion, not
+  F5's (F5 declares no dependencies).
+- Evidence: `tests/test_espeak_library_available.py` (4 checks: helper finds a real library, an
+  operator's own espeak survives, it is wired at import, and the vendored command is findable on PATH
+  and runs in a stripped environment) and `tests/test_model_manifest_catalog.py` (the pinned catalogue
+  now has 33 entries). Verified afterwards by running a Kokoro job through the Hub.
+
 ## 0.6.29 — 2026-09-19 · Kokoro: the bundled espeak library was never used
 
 - **Kokoro died with `SystemExit: 1` on every job.** The worker log shows it resolving the voice

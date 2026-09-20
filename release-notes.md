@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.30 — 2026-09-19
+
+### Kokoro works: the app now carries its own espeak
+
+Kokoro needs espeak to turn text into sounds, and espeak's default is to call a program that the app
+never shipped — so every Kokoro job loaded the model, found the voice, and then stopped with no
+explanation. The app now carries that program itself: the espeak-ng binary and its two libraries live
+in the app's runtime, with their library references rewritten so they load from beside themselves,
+and signed so macOS will run them **on a Mac that has never had Homebrew installed**. Nothing needs to
+be installed or downloaded on your Macs.
+
+### F5-TTS has been removed
+
+You don't need it, and its engine isn't part of this app — the Hub reported it as unavailable in the
+packaged build, so its files could verify but no job could ever run. Its entry is gone from the
+catalogue and the app will no longer offer it.
+
 ## 0.6.29 — 2026-09-19
 
 ### Kokoro works now — the app had everything it needed
