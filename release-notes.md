@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.33 — 2026-09-19
+
+### Kokoro, by naming the program rather than hoping to find it
+
+Kokoro's speech still failed inside the part of the app that does the actual generating, even though
+the same request succeeded when run by hand with everything in place. The difference is that
+generation happens in a *separate process*, and that process did not resolve the espeak program from
+the search path the way the rest of the app did. The app now hands the program's exact location to the
+text-to-speech library instead of relying on it being found.
+
+In plain terms: the app knows where its own espeak is, and now says so.
+
 ## 0.6.32 — 2026-09-19
 
 ### Kokoro, finished

@@ -165,6 +165,10 @@ def ensure_espeak_available() -> bool:
         if os.path.isfile(command) and os.access(command, os.X_OK):
             if candidate not in os.environ.get("PATH", "").split(os.pathsep):
                 os.environ["PATH"] = candidate + os.pathsep + os.environ.get("PATH", "")
+            # Name the executable outright as well. Generation runs in a *spawned* child process, and
+            # a PATH entry alone left it failing there with `SystemExit: 1` while the very same call
+            # succeeded in-process - the phonemizer's own path setting is not inferred from PATH.
+            os.environ.setdefault("PHONEMIZER_ESPEAK_PATH", command)
             return True
     return bool(library)
 

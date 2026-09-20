@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.33 — 2026-09-19 · the spawned child did not resolve espeak from PATH
+
+- **Narrowed to the child process.** Replaying the exact payload the worker sends
+  (`_native_dispatch_payload({"action": "generate", ...})`) under the worker's own conditions -
+  `PYTHONNOUSERSITE=1`, the runtime's `bin` first on `PATH`, no Homebrew - **returned a normal result
+  with no `SystemExit`**, while a fresh job through the Hub still failed. Generation runs in a
+  `multiprocessing` **spawn** child, so a PATH entry is not sufficient there.
+- Fix: `ensure_espeak_available()` now also sets `PHONEMIZER_ESPEAK_PATH` to the vendored
+  `espeak-ng`, naming the executable outright rather than relying on a search path.
+- This is the fourth distinct cause in this sequence and each was real: (1) espeak was shipped as a
+  *library* only and `phonemizer` hangs without a command; (2) `misaki` needs spaCy's
+  `en_core_web_sm`, without which the job exits silently; (3) that model landed in `~/.local`, which
+  the packaged worker ignores (`PYTHONNOUSERSITE=1`), so the job tried to download into the read-only
+  bundle; (4) the spawned child needs the executable named, not found.
+
 ## 0.6.32 — 2026-09-19 · the spaCy model must be inside the runtime
 
 - **Why Kokoro still failed after 0.6.30/0.6.31.** The packaged worker runs with `PYTHONNOUSERSITE=1`
