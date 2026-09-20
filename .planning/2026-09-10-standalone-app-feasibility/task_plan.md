@@ -3,8 +3,9 @@
 ## Active takeover — new computer, 2026-09-20
 
 [MEASURED] Codex `/root` owns the current continuation. The integration/default branch
-is `implementation/voice-runtime`, continued through reviewed PR #7. Read
-`docs/tasks/BOARD.md`, `docs/NEW-COMPUTER-HANDOFF.md`, and
+is `implementation/voice-runtime`. Reviewed PR #6 is integrated at `47e7e1c`, and
+reviewed PR #7 carries the H-03 fix. Read `docs/tasks/BOARD.md`,
+`docs/NEW-COMPUTER-HANDOFF.md`, and
 `qualification/bug-audit-2026-09-20.md`; this section and the board's TAKE OVER HERE
 block are the only current plan. Later sections are historical evidence.
 
@@ -12,7 +13,7 @@ block are the only current plan. Later sections are historical evidence.
 Line Tools, and no repo-local runtime. The pinned Voice runtime now builds locally.
 Reviewed PR #3 fixed FFmpeg/FFprobe deployment metadata to macOS 14.0. Reviewed PR #4
 closed H-01; reviewed PR #6 closed H-02 accepted-Voice receipt durability; reviewed
-PR #7 closed H-03 cancellation truthfulness and lease-expiry fencing.
+PR #7 carries the H-03 cancellation-truthfulness and lease-expiry-fencing fix.
 
 [MEASURED] H-04 and H-05 remain OPEN. Execute them in that order: deny-by-default
 fleet worker routes, then truthful Subtitle artifact disposition. H-03 passed 73 Hub
