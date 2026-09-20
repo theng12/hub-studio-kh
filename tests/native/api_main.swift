@@ -6,6 +6,15 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
 }
 
+func eventually(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return condition()
+}
+
 final class FixtureProtocol: URLProtocol {
     static let lock = NSLock()
     static var lastGenerateBody: [String: Any]?
@@ -56,6 +65,7 @@ final class FixtureProtocol: URLProtocol {
     /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
     /// The app re-joins on start only for the second kind, so the fixture has to be able to be both.
     static var credentialOrigin = "minted"
+    static var identityFailuresRemaining = 0
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
     static var storagePreviewRejects = false
@@ -87,6 +97,9 @@ final class FixtureProtocol: URLProtocol {
     static var catalogPorts: [Int] = []
     static let catalogStarted = DispatchSemaphore(value: 0)
     static let releaseCatalog = DispatchSemaphore(value: 0)
+    static var holdNextJoin = false
+    static var heldJoinStarted = false
+    static let releaseJoin = DispatchSemaphore(value: 0)
     static var lastMemoryBody: [String: Any]?
     static var lastMemoryMethod = ""
     static var lastMemoryToken = ""
@@ -117,6 +130,7 @@ final class FixtureProtocol: URLProtocol {
     static func roleRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return roleChanges }
     static func fleetRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return fleetCalls }
     static func setCredentialOrigin(_ value: String) { lock.lock(); defer { lock.unlock() }; credentialOrigin = value }
+    static func failNextIdentityRead() { lock.lock(); defer { lock.unlock() }; identityFailuresRemaining = 1 }
     static func resetFleetRequests() { lock.lock(); defer { lock.unlock() }; fleetCalls = [] }
     static func joinPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return joinBody }
     static func adoptPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return adoptBody }
@@ -134,6 +148,10 @@ final class FixtureProtocol: URLProtocol {
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
     static func catalogCount(on port: Int) -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.filter { $0 == port }.count }
+    static func catalogCount() -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.count }
+    static func holdJoin() { lock.lock(); defer { lock.unlock() }; holdNextJoin = true; heldJoinStarted = false }
+    static func joinHasStarted() -> Bool { lock.lock(); defer { lock.unlock() }; return heldJoinStarted }
+    static func releaseHeldJoin() { releaseJoin.signal() }
 
     private func requestBody() -> Data {
         if let body = request.httpBody { return body }
@@ -275,7 +293,16 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock()
             Self.fleetCalls.append("join")
             Self.joinBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            let hold = Self.holdNextJoin
+            if hold { Self.holdNextJoin = false; Self.heldJoinStarted = true }
             Self.lock.unlock()
+            if hold {
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseJoin.wait(timeout: .now() + 5)
+                    finish((201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8)))
+                }
+                return
+            }
             result = (201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8))
         case ("POST", "/api/hub/fleet/adopt"):
             let body = requestBody()
@@ -370,8 +397,15 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/controller"):
-            Self.lock.lock(); let roleNow = Self.currentRole; let originNow = Self.credentialOrigin; Self.lock.unlock()
-            result = (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\",\"fleet_credential_origin\":\"\(originNow)\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
+            Self.lock.lock()
+            let roleNow = Self.currentRole
+            let originNow = Self.credentialOrigin
+            let fail = Self.identityFailuresRemaining > 0
+            if fail { Self.identityFailuresRemaining -= 1 }
+            Self.lock.unlock()
+            result = fail
+                ? (503, "application/json", Data(#"{"detail":"identity temporarily unavailable"}"#.utf8))
+                : (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\",\"fleet_credential_origin\":\"\(originNow)\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
         case ("GET", "/api/version"):
             result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
@@ -754,6 +788,102 @@ struct NativeAPITests {
                 "a node must re-join its controller on start: \(FixtureProtocol.fleetRequests())")
         require(store.fleetNote?.contains("Joined") == true,
                 "a re-join needs a visible result, got: \(store.fleetNote ?? "nil")")
+
+        // The startup identity/version pair can be briefly unavailable while the Hub finishes
+        // coming up. The regular two-second lifecycle refresh must retry the pending membership;
+        // otherwise this Mac stays detached until the operator restarts or joins by hand.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.failNextIdentityRead()
+        await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        require(!FixtureProtocol.fleetRequests().contains("join"),
+                "a failed identity read must not guess that this Mac is a node")
+        await store.refresh()
+        let recoveredJoin = await eventually {
+            FixtureProtocol.fleetRequests().filter { $0 == "join" }.count == 1
+        }
+        require(recoveredJoin,
+                "the lifecycle refresh must recover one pending re-join: \(FixtureProtocol.fleetRequests())")
+        await store.refresh()
+        require(FixtureProtocol.fleetRequests().filter { $0 == "join" }.count == 1,
+                "a successful re-join must be idempotent: \(FixtureProtocol.fleetRequests())")
+
+        // An offline controller may take the full remote timeout, but it must not freeze the local
+        // two-second catalog/jobs refresh while that retry is outstanding.
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.failNextIdentityRead()
+        await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        FixtureProtocol.holdJoin()
+        let retryingRefresh = Task { @MainActor in await store.refresh() }
+        for _ in 0..<100 where !FixtureProtocol.joinHasStarted() {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(FixtureProtocol.joinHasStarted(), "the pending controller retry did not start")
+        let catalogsBefore = FixtureProtocol.catalogCount()
+        await store.refresh()
+        require(FixtureProtocol.catalogCount() > catalogsBefore,
+                "a held controller retry stalled the local lifecycle refresh")
+        FixtureProtocol.releaseHeldJoin()
+        await retryingRefresh.value
+
+        // An explicit manual join supersedes a pending automatic one, including its saved token.
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.failNextIdentityRead()
+        await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.22:8080", token: "stale-fleet-token",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        await store.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                   boundHosts: LocalAddresses.current().map(\.address))
+        let joinsAfterManualChoice = FixtureProtocol.fleetRequests().filter { $0 == "join" }.count
+        await store.refresh()
+        try? await Task.sleep(for: .milliseconds(100))
+        require(FixtureProtocol.fleetRequests().filter { $0 == "join" }.count == joinsAfterManualChoice,
+                "the stale automatic membership retried after a manual join: \(FixtureProtocol.fleetRequests())")
+
+        // Disconnect/token replacement invalidates the old startup attempt. A fresh connection
+        // cannot send the credential remembered by the connection that ended.
+        let replacedConnection = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await replacedConnection.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                         dataDirectory: temporary.appendingPathComponent("replaced-connection"),
+                                         token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.failNextIdentityRead()
+        await replacedConnection.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.22:8080", token: "stale-fleet-token",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        replacedConnection.disconnect()
+        await replacedConnection.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                         dataDirectory: temporary.appendingPathComponent("replaced-connection"),
+                                         token: "replacement-local-token")
+        await replacedConnection.refresh()
+        try? await Task.sleep(for: .milliseconds(100))
+        require(FixtureProtocol.fleetRequests().isEmpty,
+                "a disconnected startup attempt used its stale token: \(FixtureProtocol.fleetRequests())")
+        replacedConnection.disconnect()
+
+        // Leaving is also final for a pending startup attempt: after the Hub mints its own token,
+        // a later local refresh must not re-enrol this Mac with the former controller.
+        let leavingStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await leavingStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                   dataDirectory: temporary.appendingPathComponent("pending-leave"),
+                                   token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.failNextIdentityRead()
+        await leavingStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.22:8080", token: "stale-fleet-token",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        await leavingStore.leaveGroup()
+        await leavingStore.refresh()
+        try? await Task.sleep(for: .milliseconds(100))
+        require(!FixtureProtocol.fleetRequests().contains("join"),
+                "a pending startup attempt rejoined after leave: \(FixtureProtocol.fleetRequests())")
+        leavingStore.disconnect()
 
         // A Mac running its own group has no controller to re-join, and must not call one.
         FixtureProtocol.setCredentialOrigin("minted")

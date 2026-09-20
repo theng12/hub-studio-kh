@@ -40,10 +40,19 @@ final class StudioController: ObservableObject {
     private var healthySince: Date?
     private var startupTimedOut = false
     private var instanceLock: InstanceLock?
+    private let serviceExecutable: URL
+    private let now: () -> Date
+    private let healthRequest: (URLRequest, URLSession) async throws -> (Data, URLResponse)
     var onStopped: (() -> Void)?
 
-    init(configuration: ShellConfiguration) {
+    init(configuration: ShellConfiguration, serviceExecutable: URL? = nil,
+         now: @escaping () -> Date = Date.init,
+         healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil) {
         self.configuration = configuration
+        self.serviceExecutable = serviceExecutable
+            ?? Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
+        self.now = now
+        self.healthRequest = healthRequest ?? { request, session in try await session.data(for: request) }
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
         catch { failure = error.localizedDescription; status = "Unable to open" }
         // The workspace knows when a join succeeded; only the app owns the preferences file the
@@ -140,7 +149,7 @@ final class StudioController: ObservableObject {
                 }
                 try? FileManager.default.removeItem(at: configuration.readyFile)
             }
-            let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
+            let executable = serviceExecutable
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
                 throw ShellFailure(message: "The bundled local services are missing. Replace this app with a complete build.")
             }
@@ -159,7 +168,7 @@ final class StudioController: ObservableObject {
             process.standardError = log
             process.terminationHandler = { [weak self] process in
                 let code = process.terminationStatus
-                Task { @MainActor in self?.workerExited(code: code) }
+                Task { @MainActor in self?.workerExited(process: process, code: code) }
             }
             failure = nil
             starting = true
@@ -174,9 +183,9 @@ final class StudioController: ObservableObject {
                     if let data = readPrivateRegularFile(self.configuration.readyFile),
                        let ready = try? WorkerReady.decode(data, expectedPID: process.processIdentifier,
                                                            expectedHost: configuration.clientHost) {
-                        guard !Task.isCancelled, !self.stopping, process.isRunning else { return }
+                        guard !Task.isCancelled, !self.stopping, process.isRunning,
+                              self.worker === process else { return }
                         self.starting = false
-                        self.healthySince = Date()
                         self.readyURL = ready.url
                         self.connectionToken = ready.token
                         self.readFleetToken()
@@ -185,6 +194,8 @@ final class StudioController: ObservableObject {
                                                      dataDirectory: self.configuration.dataDirectory,
                                                      token: ready.token,
                                                      allowedHost: self.configuration.clientHost)
+                        guard !Task.isCancelled, !self.stopping, process.isRunning,
+                              self.worker === process else { return }
                         // Read again now that the Hub has answered: the fleet credential is minted
                         // by the first authenticated request, so the earlier read could predate it.
                         // Connections offers this value to a joining Mac, and it has to be on screen.
@@ -197,6 +208,8 @@ final class StudioController: ObservableObject {
                             controllerAddress: self.configuration.controllerAddress ?? "",
                             token: self.fleetToken,
                             boundHosts: self.configuration.listenHosts))
+                        guard !Task.isCancelled, !self.stopping, process.isRunning,
+                              self.worker === process else { return }
                         let session = URLSession(configuration: .ephemeral)
                         defer { session.invalidateAndCancel() }
                         while !Task.isCancelled && process.isRunning && !self.stopping {
@@ -204,13 +217,19 @@ final class StudioController: ObservableObject {
                                 var request = URLRequest(url: ready.url.appendingPathComponent("api/health"))
                                 request.setValue("Bearer \(ready.token)", forHTTPHeaderField: "Authorization")
                                 request.timeoutInterval = 5
-                                let (body, response) = try await session.data(for: request)
+                                let (body, response) = try await self.healthRequest(request, session)
                                 guard (response as? HTTPURLResponse)?.statusCode == 200,
                                       let health = try JSONSerialization.jsonObject(with: body) as? [String: Any],
                                       health["ok"] as? Bool == true else { throw ShellFailure(message: "Health check failed") }
-                                if !self.stopping { self.status = health["busy"] as? Bool == true ? "Local services working" : "Local services ready" }
+                                guard !Task.isCancelled, !self.stopping, process.isRunning,
+                                      self.worker === process else { return }
+                                if self.healthySince == nil { self.healthySince = self.now() }
+                                self.status = health["busy"] as? Bool == true ? "Local services working" : "Local services ready"
                             } catch {
-                                if !Task.isCancelled && !self.stopping { self.status = "Local services not responding" }
+                                guard !Task.isCancelled, !self.stopping, process.isRunning,
+                                      self.worker === process else { return }
+                                self.healthySince = nil
+                                self.status = "Local services not responding"
                             }
                             try? await Task.sleep(nanoseconds: 3_000_000_000)
                         }
@@ -238,14 +257,15 @@ final class StudioController: ObservableObject {
             if automaticRecovery { scheduleRecovery() }
         }
     }
-    private func workerExited(code: Int32) {
+    private func workerExited(process: Process, code: Int32) {
+        guard worker === process else { return }
         pollTask?.cancel()
         forceStopTask?.cancel()
         forceStopTask = nil
         let expectedStop = stopping
         let startupFailure = startupTimedOut
         automaticRestartAttempts = StartupRecovery.attemptsAfterHealthyUptime(
-            automaticRestartAttempts, readyAt: healthySince)
+            automaticRestartAttempts, readyAt: healthySince, now: now())
         healthySince = nil
         worker = nil
         readyURL = nil
@@ -634,6 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+#if !LIFECYCLE_TESTING
 @main
 struct StudioHubApplication {
     @MainActor static func main() {
@@ -644,3 +665,4 @@ struct StudioHubApplication {
         withExtendedLifetime(delegate) { app.run() }
     }
 }
+#endif

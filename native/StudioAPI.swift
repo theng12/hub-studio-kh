@@ -760,6 +760,8 @@ final class NativeWorkspaceStore: ObservableObject {
         let boundHosts: [String]
     }
     var storedMembership: FleetMembership?
+    private var startupMembershipAttemptID: UUID?
+    private var startupRejoinTask: Task<Bool, Never>?
     /// Called once a join succeeds, so the app can save the controller for the next start; called
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
@@ -861,6 +863,7 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func disconnect() {
+        invalidateStartupMembershipAttempt()
         finishedJobCache.removeAll()
         pollTask?.cancel()
         pollTask = nil
@@ -1008,6 +1011,7 @@ final class NativeWorkspaceStore: ObservableObject {
             await reconcileTranscription()
             isReachable = true
             if reportErrors { error = nil }
+            await retryStartupMembershipIfNeeded()
         } catch {
             guard connectionID == requestConnection else { return }
             isReachable = false
@@ -2294,9 +2298,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The request leaves this Mac for another one, so it does not go through the helper that
     /// targets our own Hub — and the address is validated here as well as on the controller,
     /// because a token must never be sent to a host that was not checked first.
+    @discardableResult
     func joinController(address: String, token: String, boundHosts: [String] = [],
-                        quiet: Bool = false) async {
-        guard let requestConnection = connectionID else { return }
+                        quiet: Bool = false, startupAttemptID: UUID? = nil) async -> Bool {
+        if startupAttemptID == nil { invalidateStartupMembershipAttempt() }
+        guard let requestConnection = connectionID,
+              startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
         fleetNote = nil
         do {
             let target = try Self.privateHTTPAddress(address)
@@ -2318,7 +2325,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // Report what this Mac actually runs, from its own Hub rather than an assumption:
             // a Mac whose Image worker failed to start must not be handed image work.
             let workers: HubWorkersResponse = try await get(["api", "hub", "workers"])
-            guard connectionID == requestConnection else { return }
+            guard connectionID == requestConnection,
+                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             let studios = workers.workers.map { JoinStudio(id: $0.id, modality: $0.modality) }
             guard !studios.isEmpty else {
                 throw NativeAPIError.message("This Mac is not running any studios yet, so there is nothing to offer a controller.")
@@ -2331,9 +2339,15 @@ final class NativeWorkspaceStore: ObservableObject {
             request.httpBody = try encoder.encode(JoinRequest(
                 nodeId: nodeID, name: name, address: ownAddress, studios: studios))
             joiningFleet = true
-            defer { if connectionID == requestConnection { joiningFleet = false } }
+            defer {
+                if connectionID == requestConnection,
+                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID {
+                    joiningFleet = false
+                }
+            }
             let (_, response) = try await session.data(for: request)
-            guard connectionID == requestConnection else { return }
+            guard connectionID == requestConnection,
+                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard let http = response as? HTTPURLResponse else {
                 throw NativeAPIError.message("The controller returned no response.")
             }
@@ -2347,8 +2361,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 //
                 // Registration first, adoption second: the controller has to accept the node before
                 // the node stops accepting its own credential.
-                try? await adoptClusterCredential(secret)
+                do { try await adoptClusterCredential(secret) }
+                catch { if startupAttemptID != nil { throw error } }
             }
+            guard connectionID == requestConnection,
+                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard (200..<300).contains(http.statusCode) else {
                 throw NativeAPIError.message(http.statusCode == 401
                     ? "The controller refused this Mac's join: check its Hub token."
@@ -2360,8 +2377,10 @@ final class NativeWorkspaceStore: ObservableObject {
             // Remember it, so this Mac's services can re-join by themselves after a restart
             // instead of waiting for someone to retype an address that may have changed.
             onControllerJoined?(controllerAddress)
+            return true
         } catch {
-            guard connectionID == requestConnection else { return }
+            guard connectionID == requestConnection,
+                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             if quiet {
                 // A start that cannot reach its controller is still a working Mac: the operator
                 // gets a line to read, not a modal failure over a machine that is fine.
@@ -2369,10 +2388,11 @@ final class NativeWorkspaceStore: ObservableObject {
             } else {
                 self.error = Self.actionable(error, action: "Join the controller")
             }
+            return false
         }
     }
 
-    /// Re-join the controller this Mac belongs to, once per start.
+    /// Re-join the controller this Mac belongs to during startup.
     ///
     /// A node's own address changes when its Hub restarts, and a controller's address changed on
     /// every restart before the port was pinned, so a group that had ever restarted was held
@@ -2382,6 +2402,43 @@ final class NativeWorkspaceStore: ObservableObject {
     ///
     /// Only a Mac that adopted someone else's credential belongs to a group; a controller's own
     /// credential is minted, and its place is not inside another controller.
+    private func retryStartupMembershipIfNeeded(waitForJoin: Bool = false) async {
+        guard startupRejoinTask == nil, let attemptID = startupMembershipAttemptID,
+              let requestConnection = connectionID else { return }
+        await refreshConnection()
+        guard startupRejoinTask == nil, connectionID == requestConnection,
+              startupMembershipAttemptID == attemptID else { return }
+        guard let identity = controllerIdentity else { return }
+        guard identity.settings.fleetCredentialOrigin == "adopted" else {
+            invalidateStartupMembershipAttempt()
+            return
+        }
+        guard let membership = storedMembership, let token = membership.token, !token.isEmpty else {
+            invalidateStartupMembershipAttempt()
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            let joined = await self.joinController(address: membership.controllerAddress, token: token,
+                                                   boundHosts: membership.boundHosts, quiet: true,
+                                                   startupAttemptID: attemptID)
+            guard self.connectionID == requestConnection,
+                  self.startupMembershipAttemptID == attemptID else { return joined }
+            self.startupRejoinTask = nil
+            if joined { self.startupMembershipAttemptID = nil }
+            return joined
+        }
+        startupRejoinTask = task
+        if waitForJoin { _ = await task.value }
+    }
+
+    private func invalidateStartupMembershipAttempt() {
+        startupRejoinTask?.cancel()
+        startupRejoinTask = nil
+        startupMembershipAttemptID = nil
+        joiningFleet = false
+    }
+
     func rejoinControllerIfNeeded() async {
         guard let membership = storedMembership, let token = membership.token, !token.isEmpty else { return }
         guard controllerIdentity?.settings.fleetCredentialOrigin == "adopted" else { return }
@@ -2397,11 +2454,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// fetched the identity yet - so the guard saw nil and returned silently on every Mac. The test
     /// passed only because it called `refreshConnection()` by hand first.
     func adoptStartupMembership(_ membership: FleetMembership) async {
+        invalidateStartupMembershipAttempt()
         storedMembership = membership
+        startupMembershipAttemptID = UUID()
         // Read the identity before deciding: the credential origin is what says whether this Mac
         // borrowed somebody else's token and therefore belongs to a group.
-        await refreshConnection()
-        await rejoinControllerIfNeeded()
+        await retryStartupMembershipIfNeeded(waitForJoin: true)
     }
 
     /// Leave the group this Mac belongs to: stop carrying its token and run on this Mac's own.
@@ -2412,6 +2470,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// gone, leaving is still this Mac's decision and goes ahead with a line saying so.
     func leaveGroup() async {
         guard let requestConnection = connectionID else { return }
+        invalidateStartupMembershipAttempt()
         fleetNote = nil
         var controllerNote = ""
         if let membership = storedMembership, let token = membership.token, !token.isEmpty,
