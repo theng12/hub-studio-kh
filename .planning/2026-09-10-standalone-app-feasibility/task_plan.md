@@ -1,5 +1,20 @@
 # Standalone Studio App Planning
 
+## Active takeover — 2026-09-20
+
+[MEASURED] Codex `/root` recovered the project at `415df68` (installed 0.6.38).
+The interrupted Music draft is preserved at `0eebc42` on `codex/recovered-music-draft`
+and backed up to `icloud`; it is not integrated or qualified. The main checkout's
+catalog failures disappear when that draft is separated (10 checks pass).
+
+The bounded recovery/cleanup repair lives on `codex/takeover-storage-repair`.
+Use `docs/tasks/BOARD.md` and `qualification/takeover-2026-09-20.md` for its verification
+and integration state. The older milestones below remain historical evidence, not a
+reason to repeat already integrated implementation. No release, deployment, model
+download, or real fleet enrollment is part of this takeover.
+
+## Historical planning state
+
 Updated: 2026-09-15. Canonical planning directory remains this directory.
 
 ## Current goal

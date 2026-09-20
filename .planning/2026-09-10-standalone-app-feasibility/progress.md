@@ -377,3 +377,34 @@ This makes the half-built reference path found earlier the centre of the Voice f
 than an edge case: today neither origin can stage a reference in production, so clone-based
 TTS cannot work from the app at all. Native Audio UI (reference picker + optional transcript,
 Base model choices) remains coordinator-owned and will follow the settled wire contract.
+
+## 2026-09-20 — Codex takeover and recoverable development baseline
+
+[MEASURED] Start 415df68 on implementation/voice-runtime; installed app 0.6.38.
+The installed bundle started and answered authenticated health. The original source
+checkout had 584 tests with 2 failures/2 errors (all Music manifest contract checks),
+7 skips, plus a passing 722-test Voice suite and 54-test Hub suite.
+
+[MEASURED] Root preserved 17 unfinished Music files by byte/SHA comparison, committed
+them with a recovery card as 0eebc42 on codex/recovered-music-draft, verified the same
+commit at icloud, and retained the original in a named stash. The main checkout's ten
+catalog tests then passed. The unrelated untracked .serena configuration was preserved.
+
+[MEASURED] Logs exposed job_storage's missing execution_assets import and cancellation
+escaping the retry wait. Executable regressions reproduced both. Independent review
+identified additional races and containment failures in the newly reactivated purge;
+root reproduced them and protected stage/read/delete/purge with one store transaction
+lock, skipped invalid deadlines, and refused symlink roots. The production consumers
+now copy validated reference bytes before expiry can remove their file. Source is on
+codex/takeover-storage-repair in the named Codex repair worktree.
+
+Final gate, packaged proof and integration state are recorded in
+qualification/takeover-2026-09-20.md and docs/tasks/BOARD.md. This is recovery and a
+maintenance repair, not new Music completion or physical hardware qualification.
+
+[MEASURED] Final source/test commit: 5892089. Fresh final root suite: 584 tests OK
+(7 skipped, 427.715 s); nested Voice 722 passed/19 skipped; retained Hub 54 passed.
+Native build passed. The final development bundle passed seven authenticated endpoints,
+401 unauthenticated refusal, three studio modalities, scheduled temporary-asset expiry,
+live-copy preservation and owned shutdown. Evidence is tracked under
+qualification/evidence/takeover-2026-09-20/. The local installed app remains unchanged.

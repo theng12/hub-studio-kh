@@ -2,6 +2,11 @@
 
 Independent native macOS application project for local creation on Apple Silicon. Existing Pinokio installations and their maintenance flow remain untouched.
 
+**Current handoff:** start at [the task board](docs/tasks/BOARD.md) and the
+[2026-09-20 takeover evidence](qualification/takeover-2026-09-20.md). The installed
+version observed during takeover is 0.6.38. The 0.4.0 instructions below are historical;
+unfinished Music work is preserved separately on `codex/recovered-music-draft`.
+
 ## Current direction — 2026-09-15
 
 The focused release is **Hub + Image Studio + Voice Studio + Subtitle Studio**.

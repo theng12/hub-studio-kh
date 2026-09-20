@@ -1,0 +1,845 @@
+[gen] loaded 166 jobs from history
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+test_a_hub_that_has_not_checked_its_studio_yet_still_accepts (test_admission_requires_a_studio.AdmissionRequiresAStudioTests.test_a_hub_that_has_not_checked_its_studio_yet_still_accepts)
+`unknown` means the health check has not run, which must not refuse work at startup. ... ok
+test_a_remote_studio_counts (test_admission_requires_a_studio.AdmissionRequiresAStudioTests.test_a_remote_studio_counts)
+A controller may have no local Studio of that modality and send the work to a node. ... ok
+test_a_studio_that_is_not_answering_is_refused_by_name (test_admission_requires_a_studio.AdmissionRequiresAStudioTests.test_a_studio_that_is_not_answering_is_refused_by_name) ... ok
+test_another_modality_running_does_not_count (test_admission_requires_a_studio.AdmissionRequiresAStudioTests.test_another_modality_running_does_not_count) ... ok
+test_no_studio_for_this_modality_is_refused_by_name (test_admission_requires_a_studio.AdmissionRequiresAStudioTests.test_no_studio_for_this_modality_is_refused_by_name) ... ok
+test_a_url_with_no_path_yields_the_original (test_artifact_url_durability.RelativeWorkerUrlTests.test_a_url_with_no_path_yields_the_original) ... ok
+test_a_worker_origin_is_stripped_and_the_path_kept (test_artifact_url_durability.RelativeWorkerUrlTests.test_a_worker_origin_is_stripped_and_the_path_kept) ... ok
+test_an_already_relative_path_is_untouched (test_artifact_url_durability.RelativeWorkerUrlTests.test_an_already_relative_path_is_untouched) ... ok
+test_nothing_and_nonsense_are_returned_as_they_are (test_artifact_url_durability.RelativeWorkerUrlTests.test_nothing_and_nonsense_are_returned_as_they_are) ... ok
+test_an_absolute_url_is_only_accepted_at_the_current_worker (test_artifact_url_durability.RouteOriginTests.test_an_absolute_url_is_only_accepted_at_the_current_worker) ... ok
+test_the_dispatch_no_longer_stores_a_worker_port (test_artifact_url_durability.RouteOriginTests.test_the_dispatch_no_longer_stores_a_worker_port) ... ok
+test_a_stale_absolute_url_reads_back_as_a_path (test_artifact_url_durability.StoredBatchTests.test_a_stale_absolute_url_reads_back_as_a_path) ... ok
+test_an_unknown_batch_is_still_none (test_artifact_url_durability.StoredBatchTests.test_an_unknown_batch_is_still_none) ... ok
+test_the_stored_row_is_not_rewritten_by_reading_it (test_artifact_url_durability.StoredBatchTests.test_the_stored_row_is_not_rewritten_by_reading_it)
+Normalisation happens on read, so a rollback would still find the original. ... ok
+test_a_failed_write_leaves_the_previous_content_intact (test_atomic_settings_write.AtomicSettingsWriteTests.test_a_failed_write_leaves_the_previous_content_intact) ... ok
+test_a_successful_write_replaces_it_whole_and_privately (test_atomic_settings_write.AtomicSettingsWriteTests.test_a_successful_write_replaces_it_whole_and_privately) ... ok
+test_no_temporary_file_is_left_behind (test_atomic_settings_write.AtomicSettingsWriteTests.test_no_temporary_file_is_left_behind) ... ok
+test_the_identity_file_is_not_written_directly_any_more (test_atomic_settings_write.AtomicSettingsWriteTests.test_the_identity_file_is_not_written_directly_any_more) ... ok
+test_captions_wrap_rather_than_being_clipped (test_audio_layout.AudioLayoutTests.test_captions_wrap_rather_than_being_clipped) ... ok
+test_no_page_pushes_its_notes_to_the_foot_of_the_window (test_audio_layout.AudioLayoutTests.test_no_page_pushes_its_notes_to_the_foot_of_the_window)
+A flexible split pushes anything after it down, which reads as a stray footer. ... ok
+test_the_page_can_be_looked_at_without_a_screen (test_audio_layout.AudioLayoutTests.test_the_page_can_be_looked_at_without_a_screen)
+The tool that found this, kept so the next layout change is not written blind. ... ok
+test_the_result_column_holds_the_result (test_audio_layout.AudioLayoutTests.test_the_result_column_holds_the_result)
+The history/preview belongs to the result side, and the form to the form side. ... ok
+test_the_script_editor_cannot_eat_the_window (test_audio_layout.AudioLayoutTests.test_the_script_editor_cannot_eat_the_window)
+An unbounded TextEditor is the original cause: it starved the controls column. ... ok
+test_the_voice_tabs_are_labelled_short_enough_to_fit (test_audio_layout.AudioLayoutTests.test_the_voice_tabs_are_labelled_short_enough_to_fit)
+Three long titles could not fit the column, so the tabs themselves were cut off. ... ok
+test_the_window_floor_is_at_least_what_the_columns_need (test_audio_layout.AudioLayoutTests.test_the_window_floor_is_at_least_what_the_columns_need)
+The floor is arithmetic: below this the split has to clip a column, and it does. ... ok
+test_the_workspace_pages_share_one_shape (test_audio_layout.AudioLayoutTests.test_the_workspace_pages_share_one_shape)
+Form on the left, result on the right - the Image page's shape, on all three. ... ok
+test_a_failing_write_is_reported_and_survived (test_dispatch_bookkeeping_writes.BookkeepingWriteTests.test_a_failing_write_is_reported_and_survived) ... Could not persist batch batch-1; continuing
+Traceback (most recent call last):
+  File "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/components/hub/backend/transcription_jobs.py", line 80, in _save_quietly
+    _save(batch)
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+OSError: disk full
+ok
+test_a_good_write_still_reports_success (test_dispatch_bookkeeping_writes.BookkeepingWriteTests.test_a_good_write_still_reports_success) ... ok
+test_the_note_paths_go_through_the_quiet_helper (test_dispatch_bookkeeping_writes.BookkeepingWriteTests.test_the_note_paths_go_through_the_quiet_helper) ... ok
+test_the_bar_is_drawn_only_when_there_are_real_numbers (test_download_progress_honesty.DownloadProgressHonestyTests.test_the_bar_is_drawn_only_when_there_are_real_numbers) ... ok
+test_the_hub_really_has_no_byte_counts_to_show (test_download_progress_honesty.DownloadProgressHonestyTests.test_the_hub_really_has_no_byte_counts_to_show)
+Why the app cannot show a percentage: the run record the Hub returns has none. ... ok
+test_the_unknown_case_says_what_is_known (test_download_progress_honesty.DownloadProgressHonestyTests.test_the_unknown_case_says_what_is_known) ... ok
+test_the_zero_bar_is_gone_from_the_download_row (test_download_progress_honesty.DownloadProgressHonestyTests.test_the_zero_bar_is_gone_from_the_download_row) ... ok
+test_an_operators_own_espeak_is_not_overridden (test_espeak_library_available.EspeakLibraryTests.test_an_operators_own_espeak_is_not_overridden)
+`setdefault`, not assignment: someone with their own espeak keeps it. ... ok
+test_it_is_wired_at_import_so_no_job_has_to_remember (test_espeak_library_available.EspeakLibraryTests.test_it_is_wired_at_import_so_no_job_has_to_remember) ... ok
+test_the_helper_reports_and_points_at_a_real_library (test_espeak_library_available.EspeakLibraryTests.test_the_helper_reports_and_points_at_a_real_library) ... ok
+test_the_vendored_command_is_on_path_and_runs (test_espeak_library_available.EspeakLibraryTests.test_the_vendored_command_is_on_path_and_runs)
+The phonemizer runs a command; this app ships it, so the tools directory must be on PATH. ... ok
+test_a_copy_with_no_readable_deadline_is_cleared_out (test_execution_asset_purge.StagedAssetPurgeTests.test_a_copy_with_no_readable_deadline_is_cleared_out)
+Metadata that cannot say when it expires describes an asset nothing can use. ... ok
+test_a_live_copy_is_kept (test_execution_asset_purge.StagedAssetPurgeTests.test_a_live_copy_is_kept) ... ok
+test_a_reader_copies_bytes_before_expiry_cleanup (test_execution_asset_purge.StagedAssetPurgeTests.test_a_reader_copies_bytes_before_expiry_cleanup) ... ok
+test_a_refresh_and_sweep_cannot_delete_the_refreshed_copy (test_execution_asset_purge.StagedAssetPurgeTests.test_a_refresh_and_sweep_cannot_delete_the_refreshed_copy) ... ok
+test_a_symlinked_store_does_not_purge_its_target (test_execution_asset_purge.StagedAssetPurgeTests.test_a_symlinked_store_does_not_purge_its_target) ... ok
+test_an_expired_copy_is_deleted (test_execution_asset_purge.StagedAssetPurgeTests.test_an_expired_copy_is_deleted) ... ok
+test_an_invalid_deadline_does_not_block_other_expired_copies (test_execution_asset_purge.StagedAssetPurgeTests.test_an_invalid_deadline_does_not_block_other_expired_copies) ... ok
+test_the_storage_sweep_purges_them (test_execution_asset_purge.StagedAssetPurgeTests.test_the_storage_sweep_purges_them)
+Execute the sweep: a textual import can be in the wrong function. ... ok
+test_a_mac_can_serve_its_lan_and_its_tailscale_address_at_once (test_fleet_binding.BindHostTests.test_a_mac_can_serve_its_lan_and_its_tailscale_address_at_once) ... ok
+test_a_wildcard_request_supersedes_the_rest (test_fleet_binding.BindHostTests.test_a_wildcard_request_supersedes_the_rest) ... ok
+test_anything_that_is_not_an_address_is_refused (test_fleet_binding.BindHostTests.test_anything_that_is_not_an_address_is_refused) ... ok
+test_loopback_is_always_bound_and_never_duplicated (test_fleet_binding.BindHostTests.test_loopback_is_always_bound_and_never_duplicated) ... ok
+test_loopback_wildcard_and_a_single_address_are_accepted (test_fleet_binding.BindHostTests.test_loopback_wildcard_and_a_single_address_are_accepted) ... ok
+test_the_app_always_reaches_its_own_hub_on_loopback (test_fleet_binding.BindHostTests.test_the_app_always_reaches_its_own_hub_on_loopback) ... ok
+test_the_default_is_loopback (test_fleet_binding.BindHostTests.test_the_default_is_loopback) ... ok
+test_a_healthy_node_is_still_reachable (test_fleet_credential_refusal.CredentialRefusalTests.test_a_healthy_node_is_still_reachable) ... ok
+test_a_rejected_credential_is_its_own_state_with_an_actionable_detail (test_fleet_credential_refusal.CredentialRefusalTests.test_a_rejected_credential_is_its_own_state_with_an_actionable_detail) ... ok
+test_forbidden_reads_the_same_way (test_fleet_credential_refusal.CredentialRefusalTests.test_forbidden_reads_the_same_way) ... ok
+test_other_failures_stay_errors (test_fleet_credential_refusal.CredentialRefusalTests.test_other_failures_stay_errors) ... ok
+test_the_summary_counts_it_separately (test_fleet_credential_refusal.CredentialRefusalTests.test_the_summary_counts_it_separately) ... ok
+test_a_controller_can_do_the_work_it_exists_for (test_fleet_credentials.FleetPermissionTests.test_a_controller_can_do_the_work_it_exists_for) ... ok
+test_a_controller_cannot_change_this_mac_or_delete_its_things (test_fleet_credentials.FleetPermissionTests.test_a_controller_cannot_change_this_mac_or_delete_its_things) ... ok
+test_a_path_that_merely_starts_the_same_is_not_granted (test_fleet_credentials.FleetPermissionTests.test_a_path_that_merely_starts_the_same_is_not_granted) ... ok
+test_editing_a_saved_voice_is_allowed_but_creating_one_is_not (test_fleet_credentials.FleetPermissionTests.test_editing_a_saved_voice_is_allowed_but_creating_one_is_not)
+A voice's metadata is the node owner's, but a transcript typo has to be fixable ... ok
+test_every_entry_is_a_method_and_an_anchored_pattern (test_fleet_credentials.FleetPermissionTests.test_every_entry_is_a_method_and_an_anchored_pattern) ... ok
+test_the_method_is_part_of_the_permission (test_fleet_credentials.FleetPermissionTests.test_the_method_is_part_of_the_permission) ... ok
+test_a_credential_this_hub_minted_survives_a_role_change (test_fleet_credentials_origin.FleetCredentialTests.test_a_credential_this_hub_minted_survives_a_role_change)
+A role change must never invalidate a group that is already running. ... ok
+test_a_machine_that_joined_a_fleet_replaces_that_credential_on_promotion (test_fleet_credentials_origin.FleetCredentialTests.test_a_machine_that_joined_a_fleet_replaces_that_credential_on_promotion) ... ok
+test_absent_origin_is_treated_as_this_hubs_own (test_fleet_credentials_origin.FleetCredentialTests.test_absent_origin_is_treated_as_this_hubs_own)
+Settings written before the field existed must not cause a silent rotation. ... ok
+test_adoption_alone_forces_a_rotation_on_promotion (test_fleet_credentials_origin.FleetCredentialTests.test_adoption_alone_forces_a_rotation_on_promotion)
+Containment must not depend on an operator having set the role by hand. ... ok
+test_adoption_is_persisted_where_the_app_reads_it (test_fleet_credentials_origin.FleetCredentialTests.test_adoption_is_persisted_where_the_app_reads_it)
+The app re-joins on start by reading this field, so it has to survive a settings write. ... ok
+test_an_unknown_origin_is_refused_rather_than_stored (test_fleet_credentials_origin.FleetCredentialTests.test_an_unknown_origin_is_refused_rather_than_stored) ... ok
+test_every_default_survives_a_settings_write (test_fleet_credentials_origin.FleetCredentialTests.test_every_default_survives_a_settings_write)
+The shape of the omission above: a key in `defaults()` missing from `save_settings`. ... ok
+test_joining_records_that_the_credential_is_not_ours (test_fleet_credentials_origin.FleetCredentialTests.test_joining_records_that_the_credential_is_not_ours)
+The promotion rule can only fire if adoption is written down where it happens. ... ok
+test_leaving_mints_a_fresh_credential (test_fleet_credentials_origin.FleetCredentialTests.test_leaving_mints_a_fresh_credential)
+The half of leaving that only the Hub can do, pinned at the source. ... ok
+test_leaving_needs_the_local_hub_token_not_the_groups (test_fleet_credentials_origin.FleetCredentialTests.test_leaving_needs_the_local_hub_token_not_the_groups)
+A controller must not be able to un-join a node: it cannot remove another owner's Mac. ... ok
+test_probes_start_together (test_fleet_inventory_concurrent.FleetInventoryConcurrencyTests.test_probes_start_together)
+Measured from inside: every probe begins before the first one ends. ... ok
+test_the_probe_still_reports_state_and_detail (test_fleet_inventory_concurrent.FleetInventoryConcurrencyTests.test_the_probe_still_reports_state_and_detail) ... ok
+test_the_whole_inventory_costs_one_probe_wait_not_one_per_node (test_fleet_inventory_concurrent.FleetInventoryConcurrencyTests.test_the_whole_inventory_costs_one_probe_wait_not_one_per_node)
+Four nodes that each take 0.15 s must finish in about 0.15 s, not about 0.6 s. ... ok
+test_a_corrupt_registry_reads_as_empty_rather_than_crashing (test_fleet_nodes.FleetNodeStoreTests.test_a_corrupt_registry_reads_as_empty_rather_than_crashing) ... ok
+test_a_join_is_refused_rather_than_trusted (test_fleet_nodes.FleetNodeStoreTests.test_a_join_is_refused_rather_than_trusted) ... ok
+test_a_node_joins_with_an_address_and_can_leave (test_fleet_nodes.FleetNodeStoreTests.test_a_node_joins_with_an_address_and_can_leave) ... ok
+test_a_node_that_answers_nonsense_is_an_error_not_a_success (test_fleet_nodes.FleetNodeStoreTests.test_a_node_that_answers_nonsense_is_an_error_not_a_success) ... ok
+test_private_loopback_and_tailscale_addresses_are_accepted (test_fleet_nodes.FleetNodeStoreTests.test_private_loopback_and_tailscale_addresses_are_accepted) ... ok
+test_status_comes_from_asking_the_node (test_fleet_nodes.FleetNodeStoreTests.test_status_comes_from_asking_the_node) ... ok
+test_the_registry_never_grows_past_its_bound (test_fleet_nodes.FleetNodeStoreTests.test_the_registry_never_grows_past_its_bound) ... ok
+test_a_node_row_reports_what_the_node_is_and_runs (test_fleet_nodes.FleetRoleTests.test_a_node_row_reports_what_the_node_is_and_runs)
+A roster row must answer "what is this Mac and what can it run". ... ok
+test_a_standalone_hub_does_not_call_itself_a_controller (test_fleet_nodes.FleetRoleTests.test_a_standalone_hub_does_not_call_itself_a_controller) ... ok
+test_the_roster_and_the_saved_setting_always_agree (test_fleet_nodes.FleetRoleTests.test_the_roster_and_the_saved_setting_always_agree)
+One role per Hub, whichever endpoint is asked. ... ok
+test_this_test_never_writes_into_the_source_tree (test_fleet_nodes.FleetRoleTests.test_this_test_never_writes_into_the_source_tree)
+The guard for the mistake this file already made once. ... ok
+test_a_joined_node_becomes_one_entry_per_studio (test_fleet_nodes.RemoteStudioTests.test_a_joined_node_becomes_one_entry_per_studio) ... ok
+test_a_node_cannot_claim_a_studio_it_may_not_run (test_fleet_nodes.RemoteStudioTests.test_a_node_cannot_claim_a_studio_it_may_not_run) ... ok
+test_a_node_with_no_studios_contributes_nothing (test_fleet_nodes.RemoteStudioTests.test_a_node_with_no_studios_contributes_nothing) ... ok
+test_a_remote_entry_routes_over_the_peer_path (test_fleet_nodes.RemoteStudioTests.test_a_remote_entry_routes_over_the_peer_path)
+The point of the entry shape: the request must go to the node, not a local worker. ... ok
+test_a_clip_length_is_never_mistaken_for_the_generation_time (test_generation_time.GenerationTimeTests.test_a_clip_length_is_never_mistaken_for_the_generation_time)
+They are different numbers and both are useful: 4.6 s of audio, 52 s to make it. ... ok
+test_every_job_row_shows_it (test_generation_time.GenerationTimeTests.test_every_job_row_shows_it)
+One suffix, three row styles, both pages: the generator and Jobs cannot disagree. ... ok
+test_the_app_parses_both (test_generation_time.GenerationTimeTests.test_the_app_parses_both) ... ok
+test_the_hub_sends_how_long_a_job_took_and_how_long_it_has_run (test_generation_time.GenerationTimeTests.test_the_hub_sends_how_long_a_job_took_and_how_long_it_has_run) ... ok
+test_hub_owned_voice_requires_token_for_local_generation (test_hub_bundle.HubBundleTests.test_hub_owned_voice_requires_token_for_local_generation) ... ok
+test_hub_readiness_contains_existing_token_only_in_private_file (test_hub_bundle.HubBundleTests.test_hub_readiness_contains_existing_token_only_in_private_file) ... ok
+test_worker_token_rejects_link_public_permissions_and_wrong_directory (test_hub_bundle.HubBundleTests.test_worker_token_rejects_link_public_permissions_and_wrong_directory) ... ok
+test_worker_failure_preserves_receipt_and_completed_ack_is_idempotent (test_hub_delivery.HubDeliveryTests.test_worker_failure_preserves_receipt_and_completed_ack_is_idempotent) ... ok
+test_subtitle_delivery_uses_the_same_acknowledgement_contract (test_hub_delivery.HubTranscriptionDeliveryTests.test_subtitle_delivery_uses_the_same_acknowledgement_contract) ... ok
+test_the_dispatch_proof_and_rollback_test_pass_in_isolation (test_hub_dispatch_proof_gate.HubDispatchProofGate.test_the_dispatch_proof_and_rollback_test_pass_in_isolation) ... ok
+test_authenticated_health_and_rejected_status (test_hub_image_health.PrivateImageHealthTests.test_authenticated_health_and_rejected_status) ... ok
+test_old_finished_batches_leave_memory_but_recent_and_running_ones_stay (test_hub_jobs.FinishedBatchMemoryTests.test_old_finished_batches_leave_memory_but_recent_and_running_ones_stay) ... ok
+test_real_broker_lifecycle_proof (test_hub_jobs.HubJobProofTests.test_real_broker_lifecycle_proof) ... ok
+test_a_top_level_reference_asset_is_still_lifted (test_hub_jobs.VoiceChoiceLiftingTests.test_a_top_level_reference_asset_is_still_lifted) ... ok
+test_a_top_level_saved_voice_is_lifted (test_hub_jobs.VoiceChoiceLiftingTests.test_a_top_level_saved_voice_is_lifted) ... ok
+test_an_absent_choice_adds_nothing (test_hub_jobs.VoiceChoiceLiftingTests.test_an_absent_choice_adds_nothing) ... ok
+test_an_explicit_shared_param_is_not_overwritten (test_hub_jobs.VoiceChoiceLiftingTests.test_an_explicit_shared_param_is_not_overwritten) ... ok
+test_both_choices_travel_together (test_hub_jobs.VoiceChoiceLiftingTests.test_both_choices_travel_together) ... ok
+test_pause_resume_is_persistent_scheduler_only_control (test_hub_operator_controls.HubOperatorControlsTests.test_pause_resume_is_persistent_scheduler_only_control) ... ok
+test_abrupt_hub_death_triggers_voice_parent_watchdog (test_hub_process.HubProcessTests.test_abrupt_hub_death_triggers_voice_parent_watchdog) ... ok
+test_graceful_hub_sigterm_removes_readiness_and_stops_voice (test_hub_process.HubProcessTests.test_graceful_hub_sigterm_removes_readiness_and_stops_voice) ... ok
+test_hub_owns_image_and_voice_and_stops_both_after_image_crash (test_hub_process.HubProcessTests.test_hub_owns_image_and_voice_and_stops_both_after_image_crash) ... ok
+test_hub_publishes_private_readiness_and_worker_identity (test_hub_process.HubProcessTests.test_hub_publishes_private_readiness_and_worker_identity) ... ok
+test_owned_voice_crash_stops_hub_and_removes_worker_descriptor (test_hub_process.HubProcessTests.test_owned_voice_crash_stops_hub_and_removes_worker_descriptor) ... ok
+test_voice_startup_failure_never_publishes_hub_readiness (test_hub_process.HubProcessTests.test_voice_startup_failure_never_publishes_hub_readiness) ... ok
+test_allows_a_truthful_subset_while_later_engines_are_not_running (test_hub_standalone.StandaloneHubConfigTests.test_allows_a_truthful_subset_while_later_engines_are_not_running) ... ok
+test_loads_three_private_dynamic_workers_without_pinokio_defaults (test_hub_standalone.StandaloneHubConfigTests.test_loads_three_private_dynamic_workers_without_pinokio_defaults) ... ok
+test_packaged_api_requires_existing_hub_token_on_loopback (test_hub_standalone.StandaloneHubConfigTests.test_packaged_api_requires_existing_hub_token_on_loopback) ... ok
+test_packaged_artifact_metadata_never_sends_token_to_foreign_url (test_hub_standalone.StandaloneHubConfigTests.test_packaged_artifact_metadata_never_sends_token_to_foreign_url) ... ok
+test_persists_editable_device_defaults_with_effective_values (test_hub_standalone.StandaloneHubConfigTests.test_persists_editable_device_defaults_with_effective_values) ... ok
+test_rejects_boolean_device_settings (test_hub_standalone.StandaloneHubConfigTests.test_rejects_boolean_device_settings) ... ok
+test_rejects_insecure_worker_manifest_before_dispatch (test_hub_standalone.StandaloneHubConfigTests.test_rejects_insecure_worker_manifest_before_dispatch) ... ok
+test_rejects_symlink_worker_manifest (test_hub_standalone.StandaloneHubConfigTests.test_rejects_symlink_worker_manifest) ... ok
+test_runtime_readiness_keeps_os_ineligibility_separate_from_model_files (test_hub_standalone.StandaloneHubConfigTests.test_runtime_readiness_keeps_os_ineligibility_separate_from_model_files) ... ok
+test_stats_route_counts_items_and_preserves_fleet_freshness (test_hub_statistics.HubStatisticsTests.test_stats_route_counts_items_and_preserves_fleet_freshness) ... ok
+test_a_completed_subtitle_job_reaches_the_statistics (test_hub_statistics.HubTranscriptionStatisticsTests.test_a_completed_subtitle_job_reaches_the_statistics) ... ok
+test_real_reference_asset_route_in_packaged_hub (test_hub_voice_references.HubVoiceReferenceRouteTests.test_real_reference_asset_route_in_packaged_hub) ... ok
+test_isolated_private_server_requires_token_and_model_files (test_image_bundle.ImageBundleTests.test_isolated_private_server_requires_token_and_model_files) ... ok
+test_isolated_wrapper_check_uses_private_external_paths (test_image_bundle.ImageBundleTests.test_isolated_wrapper_check_uses_private_external_paths) ... ok
+test_a_job_cancelled_while_queued_releases_its_event (test_image_cancel_event_release.CancelEventReleaseTests.test_a_job_cancelled_while_queued_releases_its_event) ... ok
+test_cancel_still_marks_a_queued_job_cancelled (test_image_cancel_event_release.CancelEventReleaseTests.test_cancel_still_marks_a_queued_job_cancelled) ... ok
+test_many_cancellations_do_not_accumulate (test_image_cancel_event_release.CancelEventReleaseTests.test_many_cancellations_do_not_accumulate) ... ok
+test_a_mac_at_the_qualified_tier_gets_no_warning (test_image_standalone.ImageStandaloneTests.test_a_mac_at_the_qualified_tier_gets_no_warning) ... ok
+test_a_mac_that_cannot_run_at_all_is_still_refused (test_image_standalone.ImageStandaloneTests.test_a_mac_that_cannot_run_at_all_is_still_refused)
+Capability is not memory: this is what the refusals are for. ... ok
+test_a_small_mac_is_warned_about_not_refused (test_image_standalone.ImageStandaloneTests.test_a_small_mac_is_warned_about_not_refused)
+A model's published RAM floor is a tier, not a wall. ... ok
+test_ack_persistence_failure_remains_retryable (test_image_standalone.ImageStandaloneTests.test_ack_persistence_failure_remains_retryable) ... ok
+test_auth_readiness_and_missing_text_encoder_blocks_dispatch (test_image_standalone.ImageStandaloneTests.test_auth_readiness_and_missing_text_encoder_blocks_dispatch) ... ok
+test_cancelled_generation_never_publishes_final_png (test_image_standalone.ImageStandaloneTests.test_cancelled_generation_never_publishes_final_png) ... ok
+test_failed_final_persist_discards_png_and_failed_submit_is_not_accepted (test_image_standalone.ImageStandaloneTests.test_failed_final_persist_discards_png_and_failed_submit_is_not_accepted) ... ok
+test_invalid_controls_and_unqualified_modes (test_image_standalone.ImageStandaloneTests.test_invalid_controls_and_unqualified_modes) ... ok
+test_memory_policy_publishes_the_fleet_contract (test_image_standalone.ImageStandaloneTests.test_memory_policy_publishes_the_fleet_contract)
+Image holds no model between jobs, but the Hub still inventories it. ... ok
+test_memory_release_never_reports_a_running_generation_as_freed (test_image_standalone.ImageStandaloneTests.test_memory_release_never_reports_a_running_generation_as_freed) ... ok
+test_native_style_dimensions_infer_preset_and_editable_controls_reach_mflux (test_image_standalone.ImageStandaloneTests.test_native_style_dimensions_infer_preset_and_editable_controls_reach_mflux) ... ok
+test_png_evidence_ack_and_restart_identity (test_image_standalone.ImageStandaloneTests.test_png_evidence_ack_and_restart_identity) ... ok
+test_restart_with_unreceipted_final_png_marks_uncertain (test_image_standalone.ImageStandaloneTests.test_restart_with_unreceipted_final_png_marks_uncertain) ... ok
+test_running_receipt_failure_stops_before_inference (test_image_standalone.ImageStandaloneTests.test_running_receipt_failure_stops_before_inference) ... ok
+test_cached_jobs_are_shown_without_a_request (test_job_detail_cache_is_safe.JobDetailCacheTests.test_cached_jobs_are_shown_without_a_request) ... ok
+test_only_final_states_are_remembered (test_job_detail_cache_is_safe.JobDetailCacheTests.test_only_final_states_are_remembered) ... ok
+test_the_assumption_holds_no_route_can_re_open_a_finished_job (test_job_detail_cache_is_safe.JobDetailCacheTests.test_the_assumption_holds_no_route_can_re_open_a_finished_job)
+The Hub's retry/remove/clear functions exist; none of them is reachable over HTTP. ... ok
+test_the_cache_is_dropped_when_the_connection_changes (test_job_detail_cache_is_safe.JobDetailCacheTests.test_the_cache_is_dropped_when_the_connection_changes) ... ok
+test_the_hub_functions_really_have_no_caller (test_job_detail_cache_is_safe.JobDetailCacheTests.test_the_hub_functions_really_have_no_caller) ... ok
+test_a_studio_still_starting_does_not_make_the_mac_look_down (test_machine_health_summary.MachineHealthTests.test_a_studio_still_starting_does_not_make_the_mac_look_down) ... ok
+test_every_studio_down_reads_down_and_names_them (test_machine_health_summary.MachineHealthTests.test_every_studio_down_reads_down_and_names_them) ... ok
+test_every_studio_up_reads_up (test_machine_health_summary.MachineHealthTests.test_every_studio_up_reads_up) ... ok
+test_one_studio_down_reads_degraded_and_names_it (test_machine_health_summary.MachineHealthTests.test_one_studio_down_reads_degraded_and_names_it) ... ok
+test_the_route_uses_it (test_machine_health_summary.MachineHealthTests.test_the_route_uses_it) ... ok
+test_unknown_statuses_alone_read_unknown_not_down (test_machine_health_summary.MachineHealthTests.test_unknown_statuses_alone_read_unknown_not_down)
+A Hub that has not run its first health check must not report a Mac as sick. ... ok
+test_the_app_exposes_it (test_machine_name_and_restart.MachineNameTests.test_the_app_exposes_it) ... ok
+test_the_hub_offers_a_rename_and_it_is_what_the_fleet_reads (test_machine_name_and_restart.MachineNameTests.test_the_hub_offers_a_rename_and_it_is_what_the_fleet_reads) ... ok
+test_a_change_that_waits_for_a_restart_says_so_and_offers_one_press (test_machine_name_and_restart.RestartNoticeTests.test_a_change_that_waits_for_a_restart_says_so_and_offers_one_press) ... ok
+test_restarting_actually_stops_and_starts (test_machine_name_and_restart.RestartNoticeTests.test_restarting_actually_stops_and_starts) ... ok
+test_the_notice_sits_with_the_controls_that_need_it (test_machine_name_and_restart.RestartNoticeTests.test_the_notice_sits_with_the_controls_that_need_it)
+Not at the foot of the page: it belongs above the network and port controls. ... ok
+test_the_role_choice_explains_itself (test_machine_name_and_restart.RestartNoticeTests.test_the_role_choice_explains_itself)
+Controller/Node/Standalone are Hub words, not operator words. ... ok
+test_a_still_resident_model_is_reported_as_failed_not_released (test_memory_policy_contract.FleetReleaseTests.test_a_still_resident_model_is_reported_as_failed_not_released)
+A Studio that answers 200 while still holding its model must not read as freed. ... ok
+test_active_work_is_reported_busy_rather_than_freed (test_memory_policy_contract.FleetReleaseTests.test_active_work_is_reported_busy_rather_than_freed) ... ok
+test_release_frees_the_subtitle_model_and_a_second_pass_is_a_no_op (test_memory_policy_contract.FleetReleaseTests.test_release_frees_the_subtitle_model_and_a_second_pass_is_a_no_op) ... ok
+test_unknown_studio_ids_are_refused (test_memory_policy_contract.FleetReleaseTests.test_unknown_studio_ids_are_refused) ... ok
+test_a_fixed_studio_is_reported_not_changed (test_memory_policy_contract.FleetSetModeTests.test_a_fixed_studio_is_reported_not_changed)
+Image has no idle timer; asking it to change would fail the whole operation. ... ok
+test_set_mode_reaches_every_changeable_studio (test_memory_policy_contract.FleetSetModeTests.test_set_mode_reaches_every_changeable_studio) ... ok
+test_set_mode_rejects_an_unknown_mode_before_any_request (test_memory_policy_contract.FleetSetModeTests.test_set_mode_rejects_an_unknown_mode_before_any_request) ... ok
+test_an_unrelated_modality_is_left_alone (test_memory_policy_contract.FleetTargetTests.test_an_unrelated_modality_is_left_alone) ... ok
+test_every_shipped_studio_is_inventoried (test_memory_policy_contract.FleetTargetTests.test_every_shipped_studio_is_inventoried) ... ok
+test_transcription_is_a_fleet_target (test_memory_policy_contract.FleetTargetTests.test_transcription_is_a_fleet_target)
+The packaged Subtitle worker's modality must be in the release pass. ... ok
+test_a_second_handoff_on_the_same_machine_is_deferred (test_memory_policy_contract.HandoffTests.test_a_second_handoff_on_the_same_machine_is_deferred)
+Three scheduler lanes must not all clear the same Mac in the same instant. ... ok
+test_a_sibling_that_is_generating_is_never_preempted (test_memory_policy_contract.HandoffTests.test_a_sibling_that_is_generating_is_never_preempted)
+Releasing a model out from under running work would kill the job, not the model. ... ok
+test_an_idle_sibling_releases_its_model_for_the_incoming_job (test_memory_policy_contract.HandoffTests.test_an_idle_sibling_releases_its_model_for_the_incoming_job)
+The FLUX model Image is holding must not make the Voice job wait for a human. ... ok
+test_routes_serve_the_worker_contract_end_to_end (test_memory_policy_contract.HubMemoryRouteTests.test_routes_serve_the_worker_contract_end_to_end) ... ok
+test_an_interrupted_copy_leaves_the_previous_folder_in_place (test_model_copy_script.CopyTests.test_an_interrupted_copy_leaves_the_previous_folder_in_place)
+The failure that matters is a half-written model. The old one must survive it. ... ok
+test_no_staging_or_backup_folders_are_left_behind (test_model_copy_script.CopyTests.test_no_staging_or_backup_folders_are_left_behind) ... ok
+test_replace_removes_files_the_new_model_no_longer_has (test_model_copy_script.CopyTests.test_replace_removes_files_the_new_model_no_longer_has)
+Updating is a replacement, not a merge: a renamed file must not linger twice. ... ok
+test_a_copy_that_stopped_early_is_repaired_by_running_it_again (test_model_copy_script.EndToEndTests.test_a_copy_that_stopped_early_is_repaired_by_running_it_again)
+The repair path the owner asked for: a model folder that is *missing files*, not changed. ... ok
+test_a_library_the_earlier_kit_left_in_downloads_is_moved_not_copied (test_model_copy_script.EndToEndTests.test_a_library_the_earlier_kit_left_in_downloads_is_moved_not_copied)
+The old kit filled ~/Downloads/model-library, which macOS protects. ... ok
+test_a_missing_record_is_repaired_without_recopying_the_model (test_model_copy_script.EndToEndTests.test_a_missing_record_is_repaired_without_recopying_the_model)
+Running the copy step is the repair path for "not installed" - and must stay cheap. ... ok
+test_a_model_too_big_for_this_mac_is_never_copied (test_model_copy_script.EndToEndTests.test_a_model_too_big_for_this_mac_is_never_copied) ... ok
+test_a_second_library_in_downloads_is_reported_and_left_alone (test_model_copy_script.EndToEndTests.test_a_second_library_in_downloads_is_reported_and_left_alone)
+A Mac that already has both keeps using the home-folder library. ... ok
+test_new_models_are_added_and_changed_models_are_corrected (test_model_copy_script.EndToEndTests.test_new_models_are_added_and_changed_models_are_corrected) ... ok
+test_running_it_twice_copies_nothing_the_second_time (test_model_copy_script.EndToEndTests.test_running_it_twice_copies_nothing_the_second_time) ... ok
+test_updated_models_are_recorded_so_the_app_sees_them_as_installed (test_model_copy_script.EndToEndTests.test_updated_models_are_recorded_so_the_app_sees_them_as_installed) ... ok
+test_a_missing_git_does_not_break_the_manifest (test_model_copy_script.KitManifestTests.test_a_missing_git_does_not_break_the_manifest)
+The manifest describes an artifact, so it must build without git metadata. ... ok
+test_operator_steps_describe_the_launchers_not_a_manual_copy (test_model_copy_script.KitManifestTests.test_operator_steps_describe_the_launchers_not_a_manual_copy) ... ok
+test_the_kit_records_the_commit_that_built_it (test_model_copy_script.KitManifestTests.test_the_kit_records_the_commit_that_built_it) ... ok
+test_each_launcher_is_a_valid_shell_script (test_model_copy_script.LauncherTests.test_each_launcher_is_a_valid_shell_script) ... ok
+test_messages_name_the_files_as_they_are_named_on_the_drive (test_model_copy_script.LauncherTests.test_messages_name_the_files_as_they_are_named_on_the_drive)
+The operator sees files with a number and spaces, so the help must say those names. ... ok
+test_the_copy_launcher_finds_its_helper_in_either_location (test_model_copy_script.LauncherTests.test_the_copy_launcher_finds_its_helper_in_either_location) ... ok
+test_the_copy_launcher_finds_the_app_in_the_root_or_next_to_it (test_model_copy_script.LauncherTests.test_the_copy_launcher_finds_the_app_in_the_root_or_next_to_it) ... ok
+test_the_install_launcher_finds_the_app_from_the_root_too (test_model_copy_script.LauncherTests.test_the_install_launcher_finds_the_app_from_the_root_too) ... ok
+test_the_launchers_ship_in_the_kit_next_to_the_app (test_model_copy_script.LauncherTests.test_the_launchers_ship_in_the_kit_next_to_the_app) ... skipped 'the SSD is not mounted on this machine'
+test_anything_that_is_not_a_revision_folder_is_left_alone (test_model_copy_script.PruneTests.test_anything_that_is_not_a_revision_folder_is_left_alone) ... ok
+test_the_previous_revision_is_removed_and_reported (test_model_copy_script.PruneTests.test_the_previous_revision_is_removed_and_reported)
+Keeping the old revision next to the new one would double what every Mac carries. ... ok
+test_there_is_nothing_to_prune_on_a_first_copy (test_model_copy_script.PruneTests.test_there_is_nothing_to_prune_on_a_first_copy) ... ok
+test_a_changed_weight_file_is_a_change (test_model_copy_script.SignatureTests.test_a_changed_weight_file_is_a_change)
+A corrected or re-exported weight is the update this script exists to notice. ... ok
+test_a_missing_model_is_copied (test_model_copy_script.SignatureTests.test_a_missing_model_is_copied) ... ok
+test_a_new_file_in_a_new_revision_is_a_change (test_model_copy_script.SignatureTests.test_a_new_file_in_a_new_revision_is_a_change) ... ok
+test_a_same_size_edit_is_left_to_the_apps_own_verifier (test_model_copy_script.SignatureTests.test_a_same_size_edit_is_left_to_the_apps_own_verifier)
+The limit of a size-based comparison, pinned so it is a known cost and not a surprise. ... ok
+test_a_symlink_shape_survives_the_comparison (test_model_copy_script.SignatureTests.test_a_symlink_shape_survives_the_comparison) ... ok
+test_a_truncated_copy_on_this_mac_is_a_change (test_model_copy_script.SignatureTests.test_a_truncated_copy_on_this_mac_is_a_change) ... ok
+test_an_unfinished_download_is_not_part_of_the_model (test_model_copy_script.SignatureTests.test_an_unfinished_download_is_not_part_of_the_model)
+The app's own partial download must not make a complete model look out of date. ... ok
+test_identical_trees_are_current (test_model_copy_script.SignatureTests.test_identical_trees_are_current) ... ok
+test_a_folder_without_metadata_is_not_a_voice (test_model_copy_script.VoiceCopyTests.test_a_folder_without_metadata_is_not_a_voice) ... ok
+test_a_missing_voice_is_added (test_model_copy_script.VoiceCopyTests.test_a_missing_voice_is_added) ... ok
+test_a_voice_already_on_this_mac_is_left_exactly_as_it_is (test_model_copy_script.VoiceCopyTests.test_a_voice_already_on_this_mac_is_left_exactly_as_it_is)
+A locally corrected transcript must survive the kit being copied again. ... ok
+test_running_it_twice_adds_nothing_the_second_time (test_model_copy_script.VoiceCopyTests.test_running_it_twice_adds_nothing_the_second_time) ... ok
+test_the_kit_can_carry_voices_the_app_can_read (test_model_copy_script.VoiceCopyTests.test_the_kit_can_carry_voices_the_app_can_read)
+The real kit folder, loaded the way the Voice worker loads it. ... ok
+test_timings_are_added_to_a_voice_that_is_already_here (test_model_copy_script.VoiceCopyTests.test_timings_are_added_to_a_voice_that_is_already_here)
+A measured file the app needs must not be skipped along with the operator's own clip. ... ok
+test_timings_are_not_overwritten_if_this_mac_already_has_them (test_model_copy_script.VoiceCopyTests.test_timings_are_not_overwritten_if_this_mac_already_has_them) ... ok
+test_crash_recovery_retry_and_owned_shutdown (test_model_downloads.ModelDownloadLifecycleTests.test_crash_recovery_retry_and_owned_shutdown) ... ok
+test_capture_rejects_missing_processor_assets_without_fetching_models (test_model_manifest_catalog.CaptureBoundaryTests.test_capture_rejects_missing_processor_assets_without_fetching_models) ... ok
+test_lfs_metadata_digest_never_requests_a_weight_payload (test_model_manifest_catalog.CaptureBoundaryTests.test_lfs_metadata_digest_never_requests_a_weight_payload) ... ok
+test_metadata_body_is_read_with_a_bounded_limit_and_rejects_excess (test_model_manifest_catalog.CaptureBoundaryTests.test_metadata_body_is_read_with_a_bounded_limit_and_rejects_excess) ... ok
+test_small_file_body_is_bounded_and_git_blob_oid_is_verified (test_model_manifest_catalog.CaptureBoundaryTests.test_small_file_body_is_bounded_and_git_blob_oid_is_verified) ... ok
+test_snapshot_rejects_a_revision_mismatch (test_model_manifest_catalog.CaptureBoundaryTests.test_snapshot_rejects_a_revision_mismatch) ... ok
+test_catalog_is_the_exact_release_menu (test_model_manifest_catalog.ModelManifestCatalogTests.test_catalog_is_the_exact_release_menu) ... ok
+test_dependencies_and_layout_are_explicit (test_model_manifest_catalog.ModelManifestCatalogTests.test_dependencies_and_layout_are_explicit) ... ok
+test_every_imported_file_has_an_immutable_hash_and_source_mapping (test_model_manifest_catalog.ModelManifestCatalogTests.test_every_imported_file_has_an_immutable_hash_and_source_mapping) ... ok
+test_manifest_contents_match_the_captured_inventory (test_model_manifest_catalog.ModelManifestCatalogTests.test_manifest_contents_match_the_captured_inventory) ... ok
+test_required_generation_assets_and_shared_whisper_processors_are_present (test_model_manifest_catalog.ModelManifestCatalogTests.test_required_generation_assets_and_shared_whisper_processors_are_present) ... ok
+test_a_receipt_from_an_older_build_repairs_itself (test_model_packages.ModelPackageTests.test_a_receipt_from_an_older_build_repairs_itself)
+A stale cache must repair, not accuse. ... ok
+test_a_verified_library_stays_verified_after_being_copied (test_model_packages.ModelPackageTests.test_a_verified_library_stays_verified_after_being_copied)
+A copied library must not read as damaged. ... ok
+test_changed_mirror_does_not_change_expected_content_identity (test_model_packages.ModelPackageTests.test_changed_mirror_does_not_change_expected_content_identity) ... ok
+test_cli_verify_full_rehashes_indexed_install (test_model_packages.ModelPackageTests.test_cli_verify_full_rehashes_indexed_install) ... ok
+test_companion_download_uses_explicit_catalog_and_is_cycle_safe (test_model_packages.ModelPackageTests.test_companion_download_uses_explicit_catalog_and_is_cycle_safe) ... ok
+test_companion_package_required_and_checked_again_before_use (test_model_packages.ModelPackageTests.test_companion_package_required_and_checked_again_before_use) ... ok
+test_copy_import_and_offline_preflight (test_model_packages.ModelPackageTests.test_copy_import_and_offline_preflight) ... ok
+test_corrupt_index_does_not_discard_existing_files (test_model_packages.ModelPackageTests.test_corrupt_index_does_not_discard_existing_files) ... ok
+test_directory_swap_cannot_redirect_writes_outside_library (test_model_packages.ModelPackageTests.test_directory_swap_cannot_redirect_writes_outside_library) ... ok
+test_download_and_folder_import_have_identical_identity (test_model_packages.ModelPackageTests.test_download_and_folder_import_have_identical_identity) ... ok
+test_download_rejects_oversized_or_wrong_hash_bytes (test_model_packages.ModelPackageTests.test_download_rejects_oversized_or_wrong_hash_bytes) ... ok
+test_failed_new_revision_download_preserves_previous_receipt (test_model_packages.ModelPackageTests.test_failed_new_revision_download_preserves_previous_receipt) ... ok
+test_failed_new_revision_preserves_previous_install (test_model_packages.ModelPackageTests.test_failed_new_revision_preserves_previous_install) ... ok
+test_full_verify_refreshes_receipt_after_valid_file_touch (test_model_packages.ModelPackageTests.test_full_verify_refreshes_receipt_after_valid_file_touch) ... ok
+test_full_verify_rejects_installed_ancestor_symlink (test_model_packages.ModelPackageTests.test_full_verify_rejects_installed_ancestor_symlink) ... ok
+test_in_library_registration_never_makes_second_copy (test_model_packages.ModelPackageTests.test_in_library_registration_never_makes_second_copy) ... ok
+test_incompatible_manifest_does_not_reuse_verified_receipt (test_model_packages.ModelPackageTests.test_incompatible_manifest_does_not_reuse_verified_receipt) ... ok
+test_interrupted_download_resumes_and_does_not_repeat_completed_files (test_model_packages.ModelPackageTests.test_interrupted_download_resumes_and_does_not_repeat_completed_files) ... ok
+test_invalid_or_traversing_manifest_rejected (test_model_packages.ModelPackageTests.test_invalid_or_traversing_manifest_rejected) ... ok
+test_invalid_partial_content_range_is_rejected_and_partial_removed (test_model_packages.ModelPackageTests.test_invalid_partial_content_range_is_rejected_and_partial_removed) ... ok
+test_lfs_pointer_is_rejected_even_if_manifest_hash_matches (test_model_packages.ModelPackageTests.test_lfs_pointer_is_rejected_even_if_manifest_hash_matches) ... ok
+test_missing_companion_does_not_publish_install (test_model_packages.ModelPackageTests.test_missing_companion_does_not_publish_install) ... ok
+test_missing_library_is_not_silently_recreated (test_model_packages.ModelPackageTests.test_missing_library_is_not_silently_recreated) ... ok
+test_preflight_is_explicit_cached_receipt_check_not_full_rehash (test_model_packages.ModelPackageTests.test_preflight_is_explicit_cached_receipt_check_not_full_rehash) ... ok
+test_preflight_rejects_changed_bytes_even_when_size_is_unchanged (test_model_packages.ModelPackageTests.test_preflight_rejects_changed_bytes_even_when_size_is_unchanged)
+A same-size rewrite is caught, and the cache has to be older than the rewrite. ... ok
+test_preflight_rejects_unreadable_file_and_directory_symlink (test_model_packages.ModelPackageTests.test_preflight_rejects_unreadable_file_and_directory_symlink) ... ok
+test_publication_syncs_directory_and_recovers_failed_index_replace (test_model_packages.ModelPackageTests.test_publication_syncs_directory_and_recovers_failed_index_replace) ... ok
+test_refresh_recognizes_copied_folder_without_manifest_file (test_model_packages.ModelPackageTests.test_refresh_recognizes_copied_folder_without_manifest_file) ... ok
+test_resume_restarts_when_server_returns_full_response (test_model_packages.ModelPackageTests.test_resume_restarts_when_server_returns_full_response) ... ok
+test_safe_https_redirect_is_followed (test_model_packages.ModelPackageTests.test_safe_https_redirect_is_followed) ... ok
+test_source_alias_imports_raw_publisher_layout (test_model_packages.ModelPackageTests.test_source_alias_imports_raw_publisher_layout) ... ok
+test_source_cache_links_are_materialized_and_relocatable (test_model_packages.ModelPackageTests.test_source_cache_links_are_materialized_and_relocatable) ... ok
+test_source_link_to_unrelated_file_and_state_symlink_are_rejected (test_model_packages.ModelPackageTests.test_source_link_to_unrelated_file_and_state_symlink_are_rejected) ... ok
+test_unsafe_url_and_redirect_are_rejected (test_model_packages.ModelPackageTests.test_unsafe_url_and_redirect_are_rejected) ... ok
+test_zero_byte_download_without_partial_file (test_model_packages.ModelPackageTests.test_zero_byte_download_without_partial_file) ... ok
+test_an_unusable_model_is_marked_and_explained_where_it_is_chosen (test_model_reasons.ModelReasonTests.test_an_unusable_model_is_marked_and_explained_where_it_is_chosen) ... ok
+test_every_gate_has_its_own_sentence (test_model_reasons.ModelReasonTests.test_every_gate_has_its_own_sentence) ... ok
+test_generate_says_the_reason_rather_than_staying_disabled (test_model_reasons.ModelReasonTests.test_generate_says_the_reason_rather_than_staying_disabled) ... ok
+test_readiness_is_no_longer_computed_from_a_subset (test_model_reasons.ModelReasonTests.test_readiness_is_no_longer_computed_from_a_subset)
+`ready` used to ignore the gates entirely for audio and subtitle. ... ok
+test_the_app_decodes_the_published_long_form_policy (test_model_reasons.ModelReasonTests.test_the_app_decodes_the_published_long_form_policy)
+The worker publishes the policy per model; the app decoded none of it before. ... ok
+test_the_models_page_names_the_gate_too (test_model_reasons.ModelReasonTests.test_the_models_page_names_the_gate_too)
+The page an operator opens to ask exactly this question. ... ok
+test_the_models_page_shows_how_a_model_is_sectioned_and_speeded (test_model_reasons.ModelReasonTests.test_the_models_page_shows_how_a_model_is_sectioned_and_speeded)
+The owner asked how chunking is applied per model. Answering it needs no terminal. ... ok
+test_the_package_row_decodes_every_gate_the_hub_sends (test_model_reasons.ModelReasonTests.test_the_package_row_decodes_every_gate_the_hub_sends)
+The bug, pinned at its source: four fields decoded where the Hub sends eleven. ... ok
+test_a_down_transition_survives_a_broken_alert (test_monitor_alert_isolation.AlertIsolationTests.test_a_down_transition_survives_a_broken_alert) ... ok
+test_a_recovery_transition_survives_a_broken_alert (test_monitor_alert_isolation.AlertIsolationTests.test_a_recovery_transition_survives_a_broken_alert) ... ok
+test_every_alert_call_goes_through_the_guarded_helper (test_monitor_alert_isolation.AlertIsolationTests.test_every_alert_call_goes_through_the_guarded_helper) ... ok
+test_no_alert_for_the_first_poll_or_an_unchanged_state (test_monitor_alert_isolation.AlertIsolationTests.test_no_alert_for_the_first_poll_or_an_unchanged_state) ... ok
+test_the_alert_is_still_sent_when_it_can_be (test_monitor_alert_isolation.AlertIsolationTests.test_the_alert_is_still_sent_when_it_can_be) ... ok
+test_the_restart_alert_is_guarded_too (test_monitor_alert_isolation.AlertIsolationTests.test_the_restart_alert_is_guarded_too) ... ok
+test_a_raising_native_call_reports_its_traceback (test_native_executor_reports_cause.NativeExecutorReportingTests.test_a_raising_native_call_reports_its_traceback) ... ok
+test_the_original_exception_type_is_visible (test_native_executor_reports_cause.NativeExecutorReportingTests.test_the_original_exception_type_is_visible) ... ok
+test_the_traceback_is_bounded (test_native_executor_reports_cause.NativeExecutorReportingTests.test_the_traceback_is_bounded)
+A deep or repetitive failure must not put an unbounded string in the job record. ... ok
+test_shared_cleanup_fixture_contract (test_output_policy.OutputPolicyTests.test_shared_cleanup_fixture_contract) ... ok
+test_a_failed_but_unblocked_model_is_not_reported_as_paused (test_paused_model_recovery.ModelBlockStateTests.test_a_failed_but_unblocked_model_is_not_reported_as_paused)
+One failure is not a pause, and reporting it as one would hide a working model. ... ok
+test_a_model_that_has_not_failed_reports_no_pause (test_paused_model_recovery.ModelBlockStateTests.test_a_model_that_has_not_failed_reports_no_pause) ... ok
+test_a_paused_model_reports_the_reason_a_person_can_act_on (test_paused_model_recovery.ModelBlockStateTests.test_a_paused_model_reports_the_reason_a_person_can_act_on) ... ok
+test_the_pause_snapshot_is_paused_models_only (test_paused_model_recovery.ModelBlockStateTests.test_the_pause_snapshot_is_paused_models_only) ... ok
+test_a_paused_model_is_marked_in_the_package_row (test_paused_model_recovery.PauseIsReachableTests.test_a_paused_model_is_marked_in_the_package_row) ... ok
+test_a_recheck_reports_what_happened (test_paused_model_recovery.PauseIsReachableTests.test_a_recheck_reports_what_happened) ... ok
+test_the_app_decodes_the_pause (test_paused_model_recovery.PauseIsReachableTests.test_the_app_decodes_the_pause) ... ok
+test_the_hub_offers_a_recheck_route_and_calls_the_real_clearer (test_paused_model_recovery.PauseIsReachableTests.test_the_hub_offers_a_recheck_route_and_calls_the_real_clearer)
+The bug, pinned where it happened: the clearer existed but nothing called it. ... ok
+test_the_models_page_shows_the_pause_and_the_way_out (test_paused_model_recovery.PauseIsReachableTests.test_the_models_page_shows_the_pause_and_the_way_out) ... ok
+test_the_pause_outranks_the_other_gates_when_explaining_a_refusal (test_paused_model_recovery.PauseIsReachableTests.test_the_pause_outranks_the_other_gates_when_explaining_a_refusal) ... ok
+test_nothing_is_reported_when_every_pause_is_still_relevant (test_paused_model_recovery.StalePauseTests.test_nothing_is_reported_when_every_pause_is_still_relevant) ... ok
+test_pauses_for_unshipped_models_are_forgotten (test_paused_model_recovery.StalePauseTests.test_pauses_for_unshipped_models_are_forgotten) ... ok
+test_every_way_to_be_blocked_is_named (test_peer_path_contract.AudioBlockageTests.test_every_way_to_be_blocked_is_named) ... ok
+test_the_audio_page_loads_the_voice_library_itself (test_peer_path_contract.AudioBlockageTests.test_the_audio_page_loads_the_voice_library_itself)
+Loading it only on the Voices page left the picker empty on a fresh launch. ... ok
+test_the_generate_button_is_disabled_by_one_named_reason (test_peer_path_contract.AudioBlockageTests.test_the_generate_button_is_disabled_by_one_named_reason) ... ok
+test_the_reason_is_shown_next_to_the_button (test_peer_path_contract.AudioBlockageTests.test_the_reason_is_shown_next_to_the_button) ... ok
+test_every_audio_submission_sends_the_chosen_speed (test_peer_path_contract.AudioSpeedWireTests.test_every_audio_submission_sends_the_chosen_speed)
+All four voice paths: clone-from-library, clone-from-clip, preset and design. ... ok
+test_the_audio_params_carry_a_speed (test_peer_path_contract.AudioSpeedWireTests.test_the_audio_params_carry_a_speed) ... ok
+test_the_slider_uses_the_audited_range (test_peer_path_contract.AudioSpeedWireTests.test_the_slider_uses_the_audited_range)
+0.5-2.0 comes from the contract, and is declared once. ... ok
+test_the_connections_screen_offers_the_fleet_token_for_joining (test_peer_path_contract.FleetCredentialWiringTests.test_the_connections_screen_offers_the_fleet_token_for_joining) ... ok
+test_the_fleet_credential_is_read_from_its_own_file (test_peer_path_contract.FleetCredentialWiringTests.test_the_fleet_credential_is_read_from_its_own_file)
+Two tokens means two files, and reading the wrong one is invisible until a node joins. ... ok
+test_every_subtitle_list_is_drawn_with_the_subtitle_row (test_peer_path_contract.JobRowContractTests.test_every_subtitle_list_is_drawn_with_the_subtitle_row) ... ok
+test_the_audio_row_is_never_handed_a_subtitle_job (test_peer_path_contract.JobRowContractTests.test_the_audio_row_is_never_handed_a_subtitle_job) ... ok
+test_the_audio_row_still_plays_audio (test_peer_path_contract.JobRowContractTests.test_the_audio_row_still_plays_audio) ... ok
+test_the_subtitle_row_offers_no_playback (test_peer_path_contract.JobRowContractTests.test_the_subtitle_row_offers_no_playback) ... ok
+test_the_subtitle_row_opens_the_transcript (test_peer_path_contract.JobRowContractTests.test_the_subtitle_row_opens_the_transcript) ... ok
+test_every_studio_path_the_app_builds_is_routed (test_peer_path_contract.LiveRouterTests.test_every_studio_path_the_app_builds_is_routed) ... ok
+test_every_studio_path_in_the_app_names_a_routed_modality (test_peer_path_contract.PeerPathContractTests.test_every_studio_path_in_the_app_names_a_routed_modality) ... ok
+test_subtitle_is_never_used_as_a_peer_modality_again (test_peer_path_contract.PeerPathContractTests.test_subtitle_is_never_used_as_a_peer_modality_again)
+The exact regression: the worker's name is not the modality. ... ok
+test_the_routing_table_is_what_the_app_expects (test_peer_path_contract.PeerPathContractTests.test_the_routing_table_is_what_the_app_expects) ... ok
+test_the_swift_fixture_refuses_a_studio_the_hub_does_not_route (test_peer_path_contract.PeerPathContractTests.test_the_swift_fixture_refuses_a_studio_the_hub_does_not_route)
+The fixture must be able to fail, or it is not a gate. ... ok
+test_hub_json_is_encoded_as_snake_case (test_peer_path_contract.WireEncodingTests.test_hub_json_is_encoded_as_snake_case) ... ok
+test_no_request_struct_hand_maps_a_key_the_encoder_already_handles (test_peer_path_contract.WireEncodingTests.test_no_request_struct_hand_maps_a_key_the_encoder_already_handles)
+A hand-written `voice_reference_asset_id` mapping is what disguised the bug. ... ok
+test_the_audio_envelope_puts_the_reference_key_the_hub_reads_on_the_wire (test_peer_path_contract.WireEncodingTests.test_the_audio_envelope_puts_the_reference_key_the_hub_reads_on_the_wire)
+Encode the app's own struct and read the key back out, case for case. ... ok
+test_evidence_still_refuses_when_no_voice_is_supplied (test_preset_voice_field_alias.RevisionEvidenceTests.test_evidence_still_refuses_when_no_voice_is_supplied) ... ok
+test_kokoro_evidence_accepts_the_client_voice_field (test_preset_voice_field_alias.RevisionEvidenceTests.test_kokoro_evidence_accepts_the_client_voice_field) ... ok
+test_the_family_native_field_still_wins_for_evidence (test_preset_voice_field_alias.RevisionEvidenceTests.test_the_family_native_field_still_wins_for_evidence) ... ok
+test_an_unknown_vibevoice_voice_is_still_refused (test_preset_voice_field_alias.VoiceFieldAliasTests.test_an_unknown_vibevoice_voice_is_still_refused) ... ok
+test_no_voice_at_all_still_refuses_with_the_actionable_message (test_preset_voice_field_alias.VoiceFieldAliasTests.test_no_voice_at_all_still_refuses_with_the_actionable_message) ... ok
+test_preset_speaker_is_accepted_for_a_picker_family (test_preset_voice_field_alias.VoiceFieldAliasTests.test_preset_speaker_is_accepted_for_a_picker_family) ... ok
+test_the_family_native_field_still_wins (test_preset_voice_field_alias.VoiceFieldAliasTests.test_the_family_native_field_still_wins) ... ok
+test_cached_reference_evidence_skips_whisper_entirely (test_qwen_base_standalone.QualityCheckLeaseTests.test_cached_reference_evidence_skips_whisper_entirely) ... [gen] loaded 166 jobs from history
+[gen] loaded 166 jobs from history
+ok
+test_quality_check_never_posts_a_second_subtitle_job (test_qwen_base_standalone.QualityCheckLeaseTests.test_quality_check_never_posts_a_second_subtitle_job)
+No HTTP self-call, so no second queued job and no second memory lease. ... [gen] loaded 166 jobs from history
+ok
+test_reference_check_runs_in_process_under_the_parent_lock (test_qwen_base_standalone.QualityCheckLeaseTests.test_reference_check_runs_in_process_under_the_parent_lock) ... [gen] loaded 166 jobs from history
+ok
+test_rejected_transcript_is_terminal_without_a_second_attempt (test_qwen_base_standalone.QualityCheckLeaseTests.test_rejected_transcript_is_terminal_without_a_second_attempt) ... [gen] loaded 166 jobs from history
+ok
+test_base_reference_contract_is_audit_bound_and_reports_its_source (test_qwen_base_standalone.QwenBaseCatalogTests.test_base_reference_contract_is_audit_bound_and_reports_its_source) ... ok
+test_both_base_tiers_are_cataloged_as_voice_cloning (test_qwen_base_standalone.QwenBaseCatalogTests.test_both_base_tiers_are_cataloged_as_voice_cloning) ... ok
+test_both_base_tiers_require_an_audited_reference_profile (test_qwen_base_standalone.QwenBaseCatalogTests.test_both_base_tiers_require_an_audited_reference_profile) ... ok
+test_no_preset_model_is_forced_through_the_clone_contract (test_qwen_base_standalone.QwenBaseCatalogTests.test_no_preset_model_is_forced_through_the_clone_contract)
+The 0.6B Base audit must not leak onto unrelated Qwen entries. ... ok
+test_only_base_tiers_are_qwen_clone_jobs (test_qwen_base_standalone.QwenBaseCatalogTests.test_only_base_tiers_are_qwen_clone_jobs) ... ok
+test_preset_and_design_models_are_not_marked_as_cloning (test_qwen_base_standalone.QwenBaseCatalogTests.test_preset_and_design_models_are_not_marked_as_cloning) ... ok
+test_quality_guardrails_are_attached_only_to_cloning_models (test_qwen_base_standalone.QwenBaseCatalogTests.test_quality_guardrails_are_attached_only_to_cloning_models) ... ok
+test_a_jobs_private_reference_is_registered_media_not_an_output (test_qwen_base_standalone.ReferenceCleanupTests.test_a_jobs_private_reference_is_registered_media_not_an_output)
+Job details expose the reference for playback; they never register it. ... ok
+test_cleanup_never_deletes_an_unexpired_or_unreadable_entry (test_qwen_base_standalone.ReferenceCleanupTests.test_cleanup_never_deletes_an_unexpired_or_unreadable_entry) ... ok
+test_expired_reference_cleanup_is_separate_and_expiry_driven (test_qwen_base_standalone.ReferenceCleanupTests.test_expired_reference_cleanup_is_separate_and_expiry_driven) ... ok
+test_reference_cache_is_outside_the_managed_output_root (test_qwen_base_standalone.ReferenceCleanupTests.test_reference_cache_is_outside_the_managed_output_root) ... ok
+test_base_preparation_refuses_generic_defaults_without_an_audit (test_qwen_base_standalone.ReferenceContractTests.test_base_preparation_refuses_generic_defaults_without_an_audit) ... ok
+test_base_preparation_requires_a_transcript_when_the_audit_demands_it (test_qwen_base_standalone.ReferenceContractTests.test_base_preparation_requires_a_transcript_when_the_audit_demands_it) ... ok
+test_prepared_reference_is_deterministic_and_reused (test_qwen_base_standalone.ReferenceContractTests.test_prepared_reference_is_deterministic_and_reused) ... ok
+test_preset_model_still_accepts_its_generic_fallback (test_qwen_base_standalone.ReferenceContractTests.test_preset_model_still_accepts_its_generic_fallback)
+The stricter Base rule must not tighten unrelated families. ... ok
+test_directory_is_not_treated_as_audio (test_qwen_base_standalone.ReferenceFailureCodeTests.test_directory_is_not_treated_as_audio) ... ok
+test_empty_file_is_reported_as_empty (test_qwen_base_standalone.ReferenceFailureCodeTests.test_empty_file_is_reported_as_empty) ... ok
+test_evidence_never_retains_a_path_or_transcript (test_qwen_base_standalone.ReferenceFailureCodeTests.test_evidence_never_retains_a_path_or_transcript) ... ok
+test_missing_transcript_demands_the_exact_transcript (test_qwen_base_standalone.ReferenceFailureCodeTests.test_missing_transcript_demands_the_exact_transcript) ... [gen] loaded 166 jobs from history
+ok
+test_not_selected_is_distinct_from_absent (test_qwen_base_standalone.ReferenceFailureCodeTests.test_not_selected_is_distinct_from_absent) ... ok
+test_unreadable_file_is_reported_as_unreadable (test_qwen_base_standalone.ReferenceFailureCodeTests.test_unreadable_file_is_reported_as_unreadable) ... ok
+test_a_first_run_does_not_announce_itself (test_release_notes.ReleaseNotesScreenTests.test_a_first_run_does_not_announce_itself)
+A new install is not an upgrade. ... ok
+test_the_page_exists_and_is_reachable_without_knowing_a_version (test_release_notes.ReleaseNotesScreenTests.test_the_page_exists_and_is_reachable_without_knowing_a_version) ... ok
+test_the_screen_reads_the_bundled_file (test_release_notes.ReleaseNotesScreenTests.test_the_screen_reads_the_bundled_file) ... ok
+test_the_version_comes_from_the_bundle_not_a_constant (test_release_notes.ReleaseNotesScreenTests.test_the_version_comes_from_the_bundle_not_a_constant) ... ok
+test_the_notes_are_readable_from_inside_the_bundle (test_release_notes.StagedBundleTests.test_the_notes_are_readable_from_inside_the_bundle) ... ok
+test_the_packaged_plist_carries_the_current_version (test_release_notes.StagedBundleTests.test_the_packaged_plist_carries_the_current_version) ... ok
+test_the_app_does_not_carry_a_version_in_its_name (test_release_notes.VersionAgreementTests.test_the_app_does_not_carry_a_version_in_its_name)
+A version in the folder name invalidates every launcher and instruction on a bump. ... ok
+test_the_changelog_has_an_entry_for_this_version (test_release_notes.VersionAgreementTests.test_the_changelog_has_an_entry_for_this_version) ... ok
+test_the_launchers_prefer_the_unversioned_app_name (test_release_notes.VersionAgreementTests.test_the_launchers_prefer_the_unversioned_app_name) ... ok
+test_the_notes_and_the_changelog_are_different_audiences (test_release_notes.VersionAgreementTests.test_the_notes_and_the_changelog_are_different_audiences)
+The notes are read by the operator; the changelog is the engineering record. ... ok
+test_the_notes_are_shipped_where_the_app_reads_them (test_release_notes.VersionAgreementTests.test_the_notes_are_shipped_where_the_app_reads_them)
+`Bundle.main` looks in Resources, not in the Voice worker's subtree. ... ok
+test_the_owner_facing_notes_have_an_entry_for_this_version (test_release_notes.VersionAgreementTests.test_the_owner_facing_notes_have_an_entry_for_this_version) ... ok
+test_the_version_looks_like_a_version (test_release_notes.VersionAgreementTests.test_the_version_looks_like_a_version) ... ok
+test_dependency_audit_rejects_non_system_absolute_paths (test_runtime_packaging.RuntimePackagingTests.test_dependency_audit_rejects_non_system_absolute_paths) ... ok
+test_file_manifest_is_independent_of_bundle_location (test_runtime_packaging.RuntimePackagingTests.test_file_manifest_is_independent_of_bundle_location) ... ok
+test_macho_detection_uses_magic_bytes_and_universal_can_include_arm64 (test_runtime_packaging.RuntimePackagingTests.test_macho_detection_uses_magic_bytes_and_universal_can_include_arm64) ... ok
+test_macos_minimum_parser_handles_both_load_command_formats (test_runtime_packaging.RuntimePackagingTests.test_macos_minimum_parser_handles_both_load_command_formats) ... ok
+test_manifest_records_links_and_audit_rejects_external_links (test_runtime_packaging.RuntimePackagingTests.test_manifest_records_links_and_audit_rejects_external_links) ... ok
+test_manifest_verification_detects_runtime_mutation (test_runtime_packaging.RuntimePackagingTests.test_manifest_verification_detects_runtime_mutation) ... ok
+test_prefix_audit_finds_file_content_and_absolute_symlink (test_runtime_packaging.RuntimePackagingTests.test_prefix_audit_finds_file_content_and_absolute_symlink) ... ok
+test_python_entrypoint_shebangs_become_bundle_relative (test_runtime_packaging.RuntimePackagingTests.test_python_entrypoint_shebangs_become_bundle_relative) ... ok
+test_rpath_audit_rejects_build_host_search_paths (test_runtime_packaging.RuntimePackagingTests.test_rpath_audit_rejects_build_host_search_paths) ... ok
+test_rpath_dependency_must_resolve_inside_bundle (test_runtime_packaging.RuntimePackagingTests.test_rpath_dependency_must_resolve_inside_bundle) ... ok
+test_write_manifest_uses_relative_paths_only (test_runtime_packaging.RuntimePackagingTests.test_write_manifest_uses_relative_paths_only) ... ok
+test_a_family_with_its_own_evidence_keeps_its_own_number (test_section_policy.SectionBudgetTests.test_a_family_with_its_own_evidence_keeps_its_own_number) ... ok
+test_an_audit_cannot_raise_a_family_past_its_engine_cliff (test_section_policy.SectionBudgetTests.test_an_audit_cannot_raise_a_family_past_its_engine_cliff)
+A model audit may pick a finer section. It may never send an engine past its own limit. ... ok
+test_an_unknown_family_gets_the_conservative_default (test_section_policy.SectionBudgetTests.test_an_unknown_family_gets_the_conservative_default)
+A newly adopted family must inherit sectioning rather than skip it. ... ok
+test_engine_cliffs_are_the_section_budget_and_are_published_as_a_cap (test_section_policy.SectionBudgetTests.test_engine_cliffs_are_the_section_budget_and_are_published_as_a_cap) ... ok
+test_every_family_has_a_section_budget (test_section_policy.SectionBudgetTests.test_every_family_has_a_section_budget)
+No family may fall back to "one request for the whole script". ... ok
+test_the_runtime_actually_uses_the_published_budget (test_section_policy.SectionBudgetTests.test_the_runtime_actually_uses_the_published_budget)
+The number the catalogue shows is the number the sectioner is given. ... ok
+test_a_caller_can_tighten_a_section_but_not_exceed_an_engine_cliff (test_section_policy.SectionSizeControlTests.test_a_caller_can_tighten_a_section_but_not_exceed_an_engine_cliff) ... ok
+test_an_undeclared_section_size_uses_the_family_budget (test_section_policy.SectionSizeControlTests.test_an_undeclared_section_size_uses_the_family_budget) ... ok
+test_every_sectioned_model_offers_a_viewable_and_adjustable_section_size (test_section_policy.SectionSizeControlTests.test_every_sectioned_model_offers_a_viewable_and_adjustable_section_size)
+Only Qwen 1.7B Base had a control, so every other family's chunking was invisible. ... ok
+test_the_hand_declared_qwen_control_still_wins (test_section_policy.SectionSizeControlTests.test_the_hand_declared_qwen_control_still_wins) ... ok
+test_the_measured_family_keeps_its_measurement (test_section_policy.SectionSizeControlTests.test_the_measured_family_keeps_its_measurement)
+Voxtral's 800 comes from a measurement, not from the shared default. ... ok
+test_a_tempo_family_is_never_handed_a_speed_argument (test_section_policy.SpeedDeliveryTests.test_a_tempo_family_is_never_handed_a_speed_argument)
+The dispatcher decides from the policy, so a new family cannot be forgotten. ... ok
+test_a_tempo_pass_says_so_in_the_log (test_section_policy.SpeedDeliveryTests.test_a_tempo_pass_says_so_in_the_log)
+A working speed control that logs nothing is indistinguishable from a broken one. ... ok
+test_every_family_states_how_speed_is_delivered (test_section_policy.SpeedDeliveryTests.test_every_family_states_how_speed_is_delivered) ... ok
+test_only_the_engines_that_apply_a_multiplier_get_it_natively (test_section_policy.SpeedDeliveryTests.test_only_the_engines_that_apply_a_multiplier_get_it_natively)
+Audited against the installed mlx-audio source: these predict their own durations. ... ok
+test_the_families_that_ignore_or_misread_speed_get_the_tempo_pass (test_section_policy.SpeedDeliveryTests.test_the_families_that_ignore_or_misread_speed_get_the_tempo_pass) ... ok
+test_the_policy_is_published_with_the_section_control (test_section_policy.SpeedDeliveryTests.test_the_policy_is_published_with_the_section_control) ... ok
+test_the_tempo_pass_runs_for_every_family_that_needs_it (test_section_policy.SpeedDeliveryTests.test_the_tempo_pass_runs_for_every_family_that_needs_it)
+Both places that can apply the pass ask the policy, not a hand-kept list. ... ok
+test_a_single_voice_still_resolves_to_the_voice_handler (test_seed_catalog_route.SeedCatalogRouteTests.test_a_single_voice_still_resolves_to_the_voice_handler) ... ok
+test_the_catalog_answers_with_entries (test_seed_catalog_route.SeedCatalogRouteTests.test_the_catalog_answers_with_entries) ... ok
+test_the_literal_path_is_registered_before_the_parameterised_one (test_seed_catalog_route.SeedCatalogRouteTests.test_the_literal_path_is_registered_before_the_parameterised_one) ... ok
+test_the_route_resolves_to_the_catalog_handler (test_seed_catalog_route.SeedCatalogRouteTests.test_the_route_resolves_to_the_catalog_handler)
+The real question: which handler answers that URL? ... ok
+test_a_caller_may_name_the_clip_by_its_own_hash (test_shared_voices.SharedVoiceTests.test_a_caller_may_name_the_clip_by_its_own_hash)
+One id across six controllers, which is what the gateway derives today. ... ok
+test_a_listing_reports_the_timings_without_carrying_them (test_shared_voices.SharedVoiceTests.test_a_listing_reports_the_timings_without_carrying_them)
+A hundred voices' worth of segments must not be in every status read. ... ok
+test_a_metadata_only_push_keeps_the_transcript_and_timings (test_shared_voices.SharedVoiceTests.test_a_metadata_only_push_keeps_the_transcript_and_timings)
+Omitted is 'keep', not 'clear'. The gateway re-pushes on every edit, so a rename used to ... ok
+test_a_node_that_does_not_confirm_the_count_is_not_called_synchronized (test_shared_voices.SharedVoiceTests.test_a_node_that_does_not_confirm_the_count_is_not_called_synchronized) ... ok
+test_a_node_that_drops_the_timings_is_a_failed_sync_not_a_silent_one (test_shared_voices.SharedVoiceTests.test_a_node_that_drops_the_timings_is_a_failed_sync_not_a_silent_one)
+200 with the clip and no timings is the exact shape that only fails later, per node. ... ok
+test_a_refresh_can_correct_a_transcript_and_its_timings (test_shared_voices.SharedVoiceTests.test_a_refresh_can_correct_a_transcript_and_its_timings) ... ok
+test_a_refresh_may_arrive_under_a_different_id (test_shared_voices.SharedVoiceTests.test_a_refresh_may_arrive_under_a_different_id)
+Identity is the bytes: a caller that changes its naming must not fork the voice. ... ok
+test_a_target_that_is_off_is_pending_rather_than_failed (test_shared_voices.SharedVoiceTests.test_a_target_that_is_off_is_pending_rather_than_failed) ... ok
+test_a_transcript_without_its_timings_is_refused (test_shared_voices.SharedVoiceTests.test_a_transcript_without_its_timings_is_refused)
+The shape that must never be stored: it installs everywhere and clones nowhere. ... ok
+test_a_voice_pushed_again_after_removal_comes_back (test_shared_voices.SharedVoiceTests.test_a_voice_pushed_again_after_removal_comes_back)
+A removal must not be permanent. The gateway names a clip by its content hash, so the ... ok
+test_a_voice_with_no_transcript_needs_no_timings (test_shared_voices.SharedVoiceTests.test_a_voice_with_no_transcript_needs_no_timings) ... ok
+test_an_explicit_empty_transcript_still_clears_it (test_shared_voices.SharedVoiceTests.test_an_explicit_empty_transcript_still_clears_it) ... ok
+test_an_id_that_already_holds_other_audio_is_a_conflict (test_shared_voices.SharedVoiceTests.test_an_id_that_already_holds_other_audio_is_a_conflict) ... ok
+test_an_id_that_is_not_twelve_hex_is_refused (test_shared_voices.SharedVoiceTests.test_an_id_that_is_not_twelve_hex_is_refused) ... ok
+test_malformed_timings_are_refused (test_shared_voices.SharedVoiceTests.test_malformed_timings_are_refused) ... ok
+test_one_target_per_machine (test_shared_voices.SharedVoiceTests.test_one_target_per_machine)
+A node with several voice studios must not be pushed to several times. ... ok
+test_pushing_the_same_clip_again_refreshes_it_instead_of_duplicating (test_shared_voices.SharedVoiceTests.test_pushing_the_same_clip_again_refreshes_it_instead_of_duplicating) ... ok
+test_the_fan_out_carries_the_timings_to_the_node (test_shared_voices.SharedVoiceTests.test_the_fan_out_carries_the_timings_to_the_node) ... ok
+test_the_hub_mints_an_id_a_node_accepts (test_shared_voices.SharedVoiceTests.test_the_hub_mints_an_id_a_node_accepts) ... ok
+test_the_timings_are_stored_and_read_back (test_shared_voices.SharedVoiceTests.test_the_timings_are_stored_and_read_back) ... ok
+test_contract_distinguishes_full_image_audit_and_qwen3_tts_base_loader (test_st01_runtime_contracts.ST01RuntimeContractTests.test_contract_distinguishes_full_image_audit_and_qwen3_tts_base_loader) ... ok
+test_contract_records_clean_exact_read_only_source_inputs (test_st01_runtime_contracts.ST01RuntimeContractTests.test_contract_records_clean_exact_read_only_source_inputs) ... ok
+test_each_engine_records_a_locked_arm64_macos14_import_surface (test_st01_runtime_contracts.ST01RuntimeContractTests.test_each_engine_records_a_locked_arm64_macos14_import_surface) ... ok
+test_image_contract_keeps_mflux_separate_and_pins_macos14_mlx_wheels (test_st01_runtime_contracts.ST01RuntimeContractTests.test_image_contract_keeps_mflux_separate_and_pins_macos14_mlx_wheels) ... ok
+test_voice_runtime_subject_matches_adopted_component (test_st01_runtime_contracts.ST01RuntimeContractTests.test_voice_runtime_subject_matches_adopted_component) ... ok
+test_a_joined_node_appears_as_remote_studios (test_standalone_connections.ControllerRegistryTests.test_a_joined_node_appears_as_remote_studios) ... ok
+test_a_node_with_no_studios_is_not_dispatchable (test_standalone_connections.ControllerRegistryTests.test_a_node_with_no_studios_is_not_dispatchable) ... ok
+test_the_overview_shows_every_machine_in_one_row (test_standalone_connections.ControllerRegistryTests.test_the_overview_shows_every_machine_in_one_row)
+One place to see the fleet: is each Mac there, what is it running, how fast is it. ... ok
+test_cancelling_on_the_controller_stops_the_node (test_standalone_connections.FleetCancelTests.test_cancelling_on_the_controller_stops_the_node) ... ok
+test_a_job_submitted_to_the_controller_runs_on_the_node (test_standalone_connections.FleetDispatchTests.test_a_job_submitted_to_the_controller_runs_on_the_node)
+Almost there, and the remaining step is precise. ... ok
+test_the_controllers_artifact_comes_back_from_the_node (test_standalone_connections.FleetDispatchTests.test_the_controllers_artifact_comes_back_from_the_node)
+The work runs on the node; the operator must still be able to collect it. ... ok
+test_a_node_that_dies_mid_job_requeues_it_rather_than_waiting (test_standalone_connections.FleetNodeDeathTests.test_a_node_that_dies_mid_job_requeues_it_rather_than_waiting) ... /build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:447: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 55323)>
+  def __fspath__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:447: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 55396)>
+  def __fspath__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:447: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 55405)>
+  def __fspath__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:447: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 55577)>
+  def __fspath__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/pathlib.py:447: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 55585)>
+  def __fspath__(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 99238 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_a_machine_pin_beats_the_automatic_choice (test_standalone_connections.FleetPinTests.test_a_machine_pin_beats_the_automatic_choice) ... ok
+test_pinning_a_machine_that_is_not_here_is_refused_with_the_list (test_standalone_connections.FleetPinTests.test_pinning_a_machine_that_is_not_here_is_refused_with_the_list) ... ok
+test_pinning_this_mac_keeps_the_work_here (test_standalone_connections.FleetPinTests.test_pinning_this_mac_keeps_the_work_here) ... ok
+test_a_credential_this_controller_does_not_know_is_refused (test_standalone_connections.FleetSharedVoiceTests.test_a_credential_this_controller_does_not_know_is_refused)
+Pushing a voice is fleet administration, and only a credential this Mac issued may do it. ... ok
+test_a_node_that_drops_the_timings_is_reported_as_a_failure (test_standalone_connections.FleetSharedVoiceTests.test_a_node_that_drops_the_timings_is_reported_as_a_failure)
+A node that answers 200 after losing the timings must not read as synchronized. ... /build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 56648)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 56649)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 56933)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 56934)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 57067)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=0, laddr=('127.0.0.1', 57068)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=0, laddr=('127.0.0.1', 57106)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/socketserver.py:846: ResourceWarning: unclosed <socket.socket fd=16, family=2, type=1, proto=0, laddr=('127.0.0.1', 57126)>
+  with memoryview(b) as view:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_a_pushed_voice_arrives_on_the_node_with_its_timings (test_standalone_connections.FleetSharedVoiceTests.test_a_pushed_voice_arrives_on_the_node_with_its_timings) ... ok
+test_a_transcript_without_timings_is_refused_before_it_reaches_a_node (test_standalone_connections.FleetSharedVoiceTests.test_a_transcript_without_timings_is_refused_before_it_reaches_a_node)
+The whole point: a voice that would install everywhere and clone nowhere is not stored. ... ok
+test_re_pushing_the_same_clip_refreshes_it_rather_than_adding_one (test_standalone_connections.FleetSharedVoiceTests.test_re_pushing_the_same_clip_refreshes_it_rather_than_adding_one) ... ok
+test_removing_a_voice_tombstones_it_across_the_fleet (test_standalone_connections.FleetSharedVoiceTests.test_removing_a_voice_tombstones_it_across_the_fleet) ... ok
+test_a_subtitle_job_submitted_to_the_controller_runs_on_the_node (test_standalone_connections.FleetSubtitleDispatchTests.test_a_subtitle_job_submitted_to_the_controller_runs_on_the_node) ... ok
+test_a_subtitle_pin_names_a_machine_and_a_bad_pin_is_refused (test_standalone_connections.FleetSubtitlePinTests.test_a_subtitle_pin_names_a_machine_and_a_bad_pin_is_refused) ... ok
+test_a_voice_clone_submitted_to_the_controller_runs_on_the_node (test_standalone_connections.FleetVoiceDispatchTests.test_a_voice_clone_submitted_to_the_controller_runs_on_the_node) ... /build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 57234)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 57241)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 57321)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=0, laddr=('127.0.0.1', 57329)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 57412)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=0, laddr=('127.0.0.1', 57422)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=0, laddr=('127.0.0.1', 57496)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=17, family=2, type=1, proto=0, laddr=('127.0.0.1', 57516)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=16, family=2, type=1, proto=0, laddr=('127.0.0.1', 57574)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/threading.py:1050: ResourceWarning: unclosed <socket.socket fd=21, family=2, type=1, proto=0, laddr=('127.0.0.1', 57581)>
+  self._tstate_lock = _set_sentinel()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_identity_survives_an_address_change (test_standalone_connections.IdentityScopeTests.test_identity_survives_an_address_change) ... ok
+test_rotating_the_credential_refuses_the_old_one_and_keeps_the_state (test_standalone_connections.IdentityScopeTests.test_rotating_the_credential_refuses_the_old_one_and_keeps_the_state) ... ok
+test_a_fleet_credential_can_work_but_not_own_the_mac (test_standalone_connections.IndependentClientTests.test_a_fleet_credential_can_work_but_not_own_the_mac)
+The credential a controller is given must be narrower than the Hub's own. ... ok
+test_a_mac_that_joins_another_controller_answers_only_its_new_one (test_standalone_connections.IndependentClientTests.test_a_mac_that_joins_another_controller_answers_only_its_new_one)
+Re-pointing a Mac at a new controller must not leave the old one with a key. ... ok
+test_a_mac_that_leaves_a_group_stops_carrying_its_credential (test_standalone_connections.IndependentClientTests.test_a_mac_that_leaves_a_group_stops_carrying_its_credential)
+Leaving is the action for a Mac that is being retired, sold or moved. ... ok
+test_a_node_can_join_a_controller_and_is_reported_honestly (test_standalone_connections.IndependentClientTests.test_a_node_can_join_a_controller_and_is_reported_honestly)
+One app is the controller; another joins it by address. ... ok
+test_identity_and_capability_contracts_are_served (test_standalone_connections.IndependentClientTests.test_identity_and_capability_contracts_are_served) ... ok
+test_no_browser_session_is_required (test_standalone_connections.IndependentClientTests.test_no_browser_session_is_required)
+The credential header alone is enough; nothing about this needs a login page. ... ok
+test_the_hub_address_is_loopback_only (test_standalone_connections.IndependentClientTests.test_the_hub_address_is_loopback_only)
+There is no cloud-domain assumption to make; the app talks to a private address. ... ok
+test_without_a_credential_the_hub_refuses_private_state (test_standalone_connections.IndependentClientTests.test_without_a_credential_the_hub_refuses_private_state) ... ok
+test_the_hub_answers_on_every_address_it_was_given (test_standalone_connections.MultiAddressTests.test_the_hub_answers_on_every_address_it_was_given) ... ok
+test_a_fleet_credential_may_read_voices_but_not_create_them (test_standalone_connections.VoiceLibraryTests.test_a_fleet_credential_may_read_voices_but_not_create_them)
+Reading the library is how a controller shows what a node can clone; writing is ... ok
+test_the_app_can_add_list_edit_and_remove_a_voice (test_standalone_connections.VoiceLibraryTests.test_the_app_can_add_list_edit_and_remove_a_voice) ... ok
+test_abrupt_hub_death_triggers_voice_parent_watchdog (test_hub_process.HubProcessTests.test_abrupt_hub_death_triggers_voice_parent_watchdog) ... ok
+test_graceful_hub_sigterm_removes_readiness_and_stops_voice (test_hub_process.HubProcessTests.test_graceful_hub_sigterm_removes_readiness_and_stops_voice) ... ok
+test_hub_owns_image_and_voice_and_stops_both_after_image_crash (test_hub_process.HubProcessTests.test_hub_owns_image_and_voice_and_stops_both_after_image_crash) ... ok
+test_hub_publishes_private_readiness_and_worker_identity (test_hub_process.HubProcessTests.test_hub_publishes_private_readiness_and_worker_identity) ... ok
+test_owned_voice_crash_stops_hub_and_removes_worker_descriptor (test_hub_process.HubProcessTests.test_owned_voice_crash_stops_hub_and_removes_worker_descriptor) ... ok
+test_voice_startup_failure_never_publishes_hub_readiness (test_hub_process.HubProcessTests.test_voice_startup_failure_never_publishes_hub_readiness) ... ok
+test_missing_selected_volume_fails_before_state_replacement (test_startup_recovery.StartupRecoveryTests.test_missing_selected_volume_fails_before_state_replacement) ... ok
+test_occupied_hub_port_fails_without_adopting_the_port (test_startup_recovery.StartupRecoveryTests.test_occupied_hub_port_fails_without_adopting_the_port) ... ok
+test_operator_pause_persists_and_restart_preserves_active_voice_identity (test_startup_recovery.StartupRecoveryTests.test_operator_pause_persists_and_restart_preserves_active_voice_identity)
+The existing Hub pause flag stops admission but never drops active work. ... ok
+test_relaunch_after_owned_crash_reuses_one_state_and_worker_descriptor (test_startup_recovery.StartupRecoveryTests.test_relaunch_after_owned_crash_reuses_one_state_and_worker_descriptor) ... ok
+test_stale_readiness_is_replaced_by_current_owner (test_startup_recovery.StartupRecoveryTests.test_stale_readiness_is_replaced_by_current_owner) ... ok
+test_a_caller_cannot_corrupt_the_cached_answer (test_storage_admission_cache.AdmissionCacheTests.test_a_caller_cannot_corrupt_the_cached_answer) ... ok
+test_a_different_policy_is_asked_about_separately (test_storage_admission_cache.AdmissionCacheTests.test_a_different_policy_is_asked_about_separately) ... ok
+test_repeated_questions_are_answered_from_one_sweep (test_storage_admission_cache.AdmissionCacheTests.test_repeated_questions_are_answered_from_one_sweep) ... ok
+test_the_refusal_still_uses_the_real_numbers (test_storage_admission_cache.AdmissionCacheTests.test_the_refusal_still_uses_the_real_numbers) ... ok
+test_the_snapshot_expires (test_storage_admission_cache.AdmissionCacheTests.test_the_snapshot_expires) ... ok
+test_a_failing_sweep_does_not_kill_the_loop (test_storage_budget_loop.StorageBudgetLoopTests.test_a_failing_sweep_does_not_kill_the_loop) ... ok
+test_cancelling_a_failed_sweeps_retry_returns_cleanly (test_storage_budget_loop.StorageBudgetLoopTests.test_cancelling_a_failed_sweeps_retry_returns_cleanly) ... ok
+test_one_pass_enforces_the_budget (test_storage_budget_loop.StorageBudgetLoopTests.test_one_pass_enforces_the_budget) ... ok
+test_the_app_starts_the_sweep_and_the_policy_is_the_owners_numbers (test_storage_budget_loop.StorageBudgetLoopTests.test_the_app_starts_the_sweep_and_the_policy_is_the_owners_numbers) ... ok
+test_the_sweep_runs_on_a_timer_and_stops_when_cancelled (test_storage_budget_loop.StorageBudgetLoopTests.test_the_sweep_runs_on_a_timer_and_stops_when_cancelled) ... ok
+test_a_dataclass_entry_is_read_by_attribute (test_storage_memory_verdict.FamilyMemoryTests.test_a_dataclass_entry_is_read_by_attribute) ... ok
+test_a_mapping_entry_still_works (test_storage_memory_verdict.FamilyMemoryTests.test_a_mapping_entry_still_works) ... ok
+test_a_model_missing_from_the_catalogue_is_skipped_not_fatal (test_storage_memory_verdict.FamilyMemoryTests.test_a_model_missing_from_the_catalogue_is_skipped_not_fatal) ... ok
+test_companions_do_not_contribute_a_floor (test_storage_memory_verdict.FamilyMemoryTests.test_companions_do_not_contribute_a_floor) ... ok
+test_no_floor_or_no_memory_means_no_verdict (test_storage_memory_verdict.FamilyMemoryTests.test_no_floor_or_no_memory_means_no_verdict) ... ok
+test_the_highest_floor_wins_within_a_family (test_storage_memory_verdict.FamilyMemoryTests.test_the_highest_floor_wins_within_a_family) ... ok
+test_a_catalogued_model_with_a_floor_is_not_left_without_a_verdict (test_storage_memory_verdict.LiveStorageReportTests.test_a_catalogued_model_with_a_floor_is_not_left_without_a_verdict) ... skipped "no catalogued model is visible in this process's cache"
+test_a_verdict_always_follows_from_the_numbers_it_reports (test_storage_memory_verdict.LiveStorageReportTests.test_a_verdict_always_follows_from_the_numbers_it_reports) ... ok
+test_this_macs_memory_is_plausible (test_storage_memory_verdict.LiveStorageReportTests.test_this_macs_memory_is_plausible) ... ok
+test_a_peer_path_reaches_the_local_worker (test_studio_proxy.StudioProxyTests.test_a_peer_path_reaches_the_local_worker) ... /build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/inspect.py:2513: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=0, laddr=('127.0.0.1', 57852)>
+  _get_signature_of = functools.partial(_signature_from_callable,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/inspect.py:2513: ResourceWarning: unclosed <socket.socket fd=8, family=2, type=1, proto=0, laddr=('127.0.0.1', 57859)>
+  _get_signature_of = functools.partial(_signature_from_callable,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 55311)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=10, family=2, type=1, proto=0, laddr=('127.0.0.1', 55665)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=0, laddr=('127.0.0.1', 55682)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=15, family=2, type=1, proto=0, laddr=('127.0.0.1', 57176)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=18, family=2, type=1, proto=0, laddr=('127.0.0.1', 57189)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=22, family=2, type=1, proto=0, laddr=('127.0.0.1', 57700)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/contextlib.py:108: ResourceWarning: unclosed <socket.socket fd=19, family=2, type=1, proto=0, laddr=('127.0.0.1', 57651)>
+  doc = getattr(func, "__doc__", None)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_a_peer_submission_carries_its_body_and_reaches_the_worker (test_studio_proxy.StudioProxyTests.test_a_peer_submission_carries_its_body_and_reaches_the_worker) ... ok
+test_a_traversal_or_an_absolute_url_is_refused (test_studio_proxy.StudioProxyTests.test_a_traversal_or_an_absolute_url_is_refused) ... ok
+test_a_worker_error_is_passed_back_rather_than_hidden (test_studio_proxy.StudioProxyTests.test_a_worker_error_is_passed_back_rather_than_hidden) ... ok
+test_an_artifact_comes_back_byte_for_byte_with_its_receipt (test_studio_proxy.StudioProxyTests.test_an_artifact_comes_back_byte_for_byte_with_its_receipt) ... ok
+test_the_proxy_needs_the_credential_like_everything_else (test_studio_proxy.StudioProxyTests.test_the_proxy_needs_the_credential_like_everything_else) ... ok
+test_worker_transcribes_real_speech_and_acknowledges (test_subtitle_bundle.SubtitleBundleRealModelTests.test_worker_transcribes_real_speech_and_acknowledges) ... skipped 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper'
+test_isolated_wrapper_check_uses_private_external_paths (test_subtitle_bundle.SubtitleBundleTests.test_isolated_wrapper_check_uses_private_external_paths) ... ok
+test_private_server_requires_the_owner_token (test_subtitle_bundle.SubtitleBundleTests.test_private_server_requires_the_owner_token) ... ok
+test_a_cancel_before_decoding_is_still_a_cancel (test_subtitle_cancel_wins.CancelWinsTests.test_a_cancel_before_decoding_is_still_a_cancel) ... ok
+test_a_cancel_during_publishing_ends_as_cancelled (test_subtitle_cancel_wins.CancelWinsTests.test_a_cancel_during_publishing_ends_as_cancelled) ... ok
+test_a_job_without_a_cancel_still_finishes (test_subtitle_cancel_wins.CancelWinsTests.test_a_job_without_a_cancel_still_finishes) ... ok
+test_a_small_mac_is_warned_about_not_refused (test_subtitle_standalone.CatalogContractTests.test_a_small_mac_is_warned_about_not_refused)
+Whisper's 8 GB floor is a tier, not a wall, exactly as FLUX's 16 GB is. ... ok
+test_catalog_pins_the_three_whisper_models (test_subtitle_standalone.CatalogContractTests.test_catalog_pins_the_three_whisper_models) ... ok
+test_media_extension_and_filename_guards (test_subtitle_standalone.CatalogContractTests.test_media_extension_and_filename_guards) ... ok
+test_npz_only_packages_are_reported_not_runnable (test_subtitle_standalone.CatalogContractTests.test_npz_only_packages_are_reported_not_runnable)
+Base/Small ship weights.npz, which this mlx-audio loader cannot read. ... ok
+test_request_validation_rejects_bad_input (test_subtitle_standalone.CatalogContractTests.test_request_validation_rejects_bad_input) ... ok
+test_submitting_a_non_runnable_package_is_refused (test_subtitle_standalone.CatalogContractTests.test_submitting_a_non_runnable_package_is_refused) ... ok
+test_unknown_or_unpackaged_model_is_refused (test_subtitle_standalone.CatalogContractTests.test_unknown_or_unpackaged_model_is_refused) ... ok
+test_decode_uses_the_pinned_options_and_normalizes_output (test_subtitle_standalone.DecodePathTests.test_decode_uses_the_pinned_options_and_normalizes_output) ... ok
+test_language_is_forwarded (test_subtitle_standalone.DecodePathTests.test_language_is_forwarded) ... ok
+test_missing_input_file_fails_the_job (test_subtitle_standalone.DecodePathTests.test_missing_input_file_fails_the_job) ... ok
+test_export_behavior_comes_from_the_voice_source (test_subtitle_standalone.ExportSourceTests.test_export_behavior_comes_from_the_voice_source) ... ok
+test_exports_match_the_voice_functions_exactly (test_subtitle_standalone.ExportSourceTests.test_exports_match_the_voice_functions_exactly) ... ok
+test_no_formatter_is_reimplemented_in_subtitle (test_subtitle_standalone.ExportSourceTests.test_no_formatter_is_reimplemented_in_subtitle)
+The Subtitle tree must not carry its own cue formatters. ... ok
+test_text_srt_vtt_are_published_together (test_subtitle_standalone.ExportSourceTests.test_text_srt_vtt_are_published_together) ... ok
+test_the_export_helpers_honour_the_directory_they_are_given (test_subtitle_standalone.ExportSourceTests.test_the_export_helpers_honour_the_directory_they_are_given)
+Passing the Voice app path must be enough; the environment is only a fallback. ... ok
+test_ack_is_idempotent_and_requires_real_bytes (test_subtitle_standalone.LifecycleTests.test_ack_is_idempotent_and_requires_real_bytes) ... ok
+test_ack_rejects_unfinished_jobs (test_subtitle_standalone.LifecycleTests.test_ack_rejects_unfinished_jobs) ... ok
+test_artifacts_without_a_receipt_are_uncertain_not_won (test_subtitle_standalone.LifecycleTests.test_artifacts_without_a_receipt_are_uncertain_not_won) ... ok
+test_cancel_is_idempotent_and_unknown_ids_are_none (test_subtitle_standalone.LifecycleTests.test_cancel_is_idempotent_and_unknown_ids_are_none) ... ok
+test_cancel_stops_the_job_and_publishes_nothing (test_subtitle_standalone.LifecycleTests.test_cancel_stops_the_job_and_publishes_nothing) ... ok
+test_history_is_separate_and_survives_restart (test_subtitle_standalone.LifecycleTests.test_history_is_separate_and_survives_restart) ... ok
+test_restart_marks_in_flight_jobs_uncertain (test_subtitle_standalone.LifecycleTests.test_restart_marks_in_flight_jobs_uncertain) ... ok
+test_create_app_requires_a_token (test_subtitle_standalone.OwnerTokenTests.test_create_app_requires_a_token) ... ok
+test_every_endpoint_rejects_a_foreign_or_missing_token (test_subtitle_standalone.OwnerTokenTests.test_every_endpoint_rejects_a_foreign_or_missing_token) ... ok
+test_a_view_can_be_rebuilt_after_its_library_moves (test_subtitle_standalone.SnapshotViewReuseTests.test_a_view_can_be_rebuilt_after_its_library_moves)
+The whole point: a second attempt must succeed, not stay broken. ... ok
+test_a_view_with_dangling_links_is_rejected_and_removed (test_subtitle_standalone.SnapshotViewReuseTests.test_a_view_with_dangling_links_is_rejected_and_removed) ... ok
+test_an_empty_view_is_not_a_finished_view (test_subtitle_standalone.SnapshotViewReuseTests.test_an_empty_view_is_not_a_finished_view)
+What actually went wrong: a view that exists but holds nothing. ... ok
+test_catalog_and_availability_expose_the_same_models (test_subtitle_standalone.SubtitleApiTests.test_catalog_and_availability_expose_the_same_models) ... ok
+test_health_reports_busy_state_and_runtime_identity (test_subtitle_standalone.SubtitleApiTests.test_health_reports_busy_state_and_runtime_identity) ... ok
+test_hub_transcription_contract_returns_srt_and_identity (test_subtitle_standalone.SubtitleApiTests.test_hub_transcription_contract_returns_srt_and_identity) ... ok
+test_hub_transcription_refuses_a_non_runnable_model (test_subtitle_standalone.SubtitleApiTests.test_hub_transcription_refuses_a_non_runnable_model) ... ok
+test_hub_transcription_rejects_a_foreign_extension (test_subtitle_standalone.SubtitleApiTests.test_hub_transcription_rejects_a_foreign_extension) ... ok
+test_studio_submit_requires_a_file (test_subtitle_standalone.SubtitleApiTests.test_studio_submit_requires_a_file) ... ok
+test_studio_submit_status_cancel_and_artifact (test_subtitle_standalone.SubtitleApiTests.test_studio_submit_status_cancel_and_artifact) ... ok
+test_unknown_job_returns_404 (test_subtitle_standalone.SubtitleApiTests.test_unknown_job_returns_404) ... ok
+test_uploads_never_overwrite_each_other (test_subtitle_standalone.SubtitleApiTests.test_uploads_never_overwrite_each_other) ... ok
+test_active_work_is_never_released (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_active_work_is_never_released) ... ok
+test_an_operator_choice_beats_the_machine_default (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_an_operator_choice_beats_the_machine_default) ... ok
+test_modes_match_the_voice_worker (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_modes_match_the_voice_worker) ... ok
+test_release_refuses_while_transcription_is_running (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_release_refuses_while_transcription_is_running) ... ok
+test_release_reports_residency_the_hub_can_read_back (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_release_reports_residency_the_hub_can_read_back)
+`loaded_models` must show what is resident, not just that a release was asked for. ... ok
+test_small_machines_default_to_immediate_release (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_small_machines_default_to_immediate_release) ... ok
+test_the_idle_timer_starts_from_the_job_records (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_the_idle_timer_starts_from_the_job_records)
+Activity is derived from job history so no endpoint can forget to report it. ... ok
+test_worker_publishes_the_fleet_paths_and_field_shape (test_subtitle_standalone.SubtitleMemoryPolicyTests.test_worker_publishes_the_fleet_paths_and_field_shape)
+The Hub reaches every Studio by these exact names; a rename silently breaks it. ... ok
+test_an_unpackaged_model_is_still_refused (test_subtitle_standalone.SubtitleModelIdentifierTests.test_an_unpackaged_model_is_still_refused) ... ok
+test_engine_publishes_repository_aliases (test_subtitle_standalone.SubtitleModelIdentifierTests.test_engine_publishes_repository_aliases)
+The alias map must be derived from the real manifests, not hard-coded. ... ok
+test_model_repository_resolves_to_its_package (test_subtitle_standalone.SubtitleModelIdentifierTests.test_model_repository_resolves_to_its_package) ... ok
+test_package_id_still_resolves_to_itself (test_subtitle_standalone.SubtitleModelIdentifierTests.test_package_id_still_resolves_to_itself) ... ok
+test_base_and_small_are_not_claimed_as_runnable (test_subtitle_standalone.SubtitleRealModelTests.test_base_and_small_are_not_claimed_as_runnable) ... skipped 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper'
+test_cancel_during_real_decoding_publishes_no_artifact (test_subtitle_standalone.SubtitleRealModelTests.test_cancel_during_real_decoding_publishes_no_artifact) ... skipped 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper'
+test_turbo_transcribes_and_exports_from_the_verified_package (test_subtitle_standalone.SubtitleRealModelTests.test_turbo_transcribes_and_exports_from_the_verified_package) ... skipped 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper'
+test_verified_package_tree_is_never_modified_by_decoding (test_subtitle_standalone.SubtitleRealModelTests.test_verified_package_tree_is_never_modified_by_decoding)
+Loading must not disturb the pinned package the ST-01 receipt covers. ... skipped 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper'
+test_a_body_within_the_limit_is_returned_whole (test_subtitle_upload_limit.UploadLimitTests.test_a_body_within_the_limit_is_returned_whole) ... ok
+test_an_empty_body_is_not_an_error (test_subtitle_upload_limit.UploadLimitTests.test_an_empty_body_is_not_an_error) ... ok
+test_an_oversized_body_is_refused (test_subtitle_upload_limit.UploadLimitTests.test_an_oversized_body_is_refused) ... ok
+test_both_upload_handlers_use_the_limited_reader (test_subtitle_upload_limit.UploadLimitTests.test_both_upload_handlers_use_the_limited_reader) ... ok
+test_the_refusal_stops_reading_instead_of_buffering_everything (test_subtitle_upload_limit.UploadLimitTests.test_the_refusal_stops_reading_instead_of_buffering_everything) ... ok
+test_a_missing_ffmpeg_names_the_reason (test_subtitle_video_audio.VideoAudioExtractionTests.test_a_missing_ffmpeg_names_the_reason) ... ok
+test_a_video_file_yields_the_extracted_audio_track (test_subtitle_video_audio.VideoAudioExtractionTests.test_a_video_file_yields_the_extracted_audio_track) ... ok
+test_an_audio_file_is_handed_straight_to_the_decoder (test_subtitle_video_audio.VideoAudioExtractionTests.test_an_audio_file_is_handed_straight_to_the_decoder) ... ok
+test_mov_is_extracted_too (test_subtitle_video_audio.VideoAudioExtractionTests.test_mov_is_extracted_too) ... ok
+test_the_formats_the_app_offers_are_the_ones_this_handles (test_subtitle_video_audio.VideoAudioExtractionTests.test_the_formats_the_app_offers_are_the_ones_this_handles)
+The upload list and the extraction list must not drift apart again. ... ok
+test_a_fresh_uncertain_transcription_is_left_alone (test_uncertain_recovery.UncertainRecoveryTests.test_a_fresh_uncertain_transcription_is_left_alone)
+Still inside the window: the worker may genuinely be working. ... ok
+test_a_running_or_done_transcription_is_never_touched (test_uncertain_recovery.UncertainRecoveryTests.test_a_running_or_done_transcription_is_never_touched) ... ok
+test_a_stale_uncertain_transcription_is_queued_again (test_uncertain_recovery.UncertainRecoveryTests.test_a_stale_uncertain_transcription_is_queued_again) ... ok
+test_the_window_is_a_real_time_frame (test_uncertain_recovery.UncertainRecoveryTests.test_the_window_is_a_real_time_frame) ... ok
+test_parent_monitor_stops_during_normal_worker_shutdown (test_voice_bundle.BundleTests.test_parent_monitor_stops_during_normal_worker_shutdown) ... ok
+test_real_uvicorn_sigterm_removes_readiness_before_signal_reraise (test_voice_bundle.BundleTests.test_real_uvicorn_sigterm_removes_readiness_before_signal_reraise) ... ok
+test_worker_check_uses_bundle_paths_after_relocation (test_voice_bundle.BundleTests.test_worker_check_uses_bundle_paths_after_relocation) ... ok
+test_worker_exits_and_clears_readiness_when_parent_is_killed (test_voice_bundle.BundleTests.test_worker_exits_and_clears_readiness_when_parent_is_killed) ... ok
+test_worker_publishes_readiness_after_startup_and_removes_it_on_shutdown (test_voice_bundle.BundleTests.test_worker_publishes_readiness_after_startup_and_removes_it_on_shutdown) ... ok
+test_worker_rejects_parent_pid_that_is_not_its_actual_parent (test_voice_bundle.BundleTests.test_worker_rejects_parent_pid_that_is_not_its_actual_parent) ... ok
+test_worker_rejects_readiness_outside_data_directory (test_voice_bundle.BundleTests.test_worker_rejects_readiness_outside_data_directory) ... ok
+test_worker_rejects_state_inside_immutable_bundle (test_voice_bundle.BundleTests.test_worker_rejects_state_inside_immutable_bundle) ... ok
+test_worker_removes_stale_readiness_before_server_load (test_voice_bundle.BundleTests.test_worker_removes_stale_readiness_before_server_load) ... ok
+test_worker_removes_stale_readiness_when_startup_fails (test_voice_bundle.BundleTests.test_worker_removes_stale_readiness_when_startup_fails) ... ok
+test_worker_validates_missing_selected_model_library_without_creating_it (test_voice_bundle.BundleTests.test_worker_validates_missing_selected_model_library_without_creating_it) ... ok
+test_complete_stage_excludes_untracked_state_and_hashes_the_payload (test_voice_bundle.StagingTests.test_complete_stage_excludes_untracked_state_and_hashes_the_payload) ... ok
+test_native_shell_stage_includes_separate_image_runtime_and_source (test_voice_bundle.StagingTests.test_native_shell_stage_includes_separate_image_runtime_and_source) ... ok
+test_native_shell_stage_keeps_cli_and_creates_foreground_app (test_voice_bundle.StagingTests.test_native_shell_stage_keeps_cli_and_creates_foreground_app) ... ok
+test_native_shell_stage_rejects_missing_binary (test_voice_bundle.StagingTests.test_native_shell_stage_rejects_missing_binary) ... ok
+test_staging_refuses_external_runtime_symlinks_and_existing_output (test_voice_bundle.StagingTests.test_staging_refuses_external_runtime_symlinks_and_existing_output) ... ok
+test_voice_studio_product_suite_in_isolated_subprocess (test_voice_product_suite.VoiceProductSuiteTests.test_voice_studio_product_suite_in_isolated_subprocess) ... ok
+test_pilot_inputs_require_exact_refs_and_file_checksums (test_voice_smoke.ModelSmokeContractTests.test_pilot_inputs_require_exact_refs_and_file_checksums) ... ok
+test_public_job_id_is_used_for_poll_audio_and_transcription (test_voice_smoke.ModelSmokeContractTests.test_public_job_id_is_used_for_poll_audio_and_transcription) ... ok
+test_a_missing_cache_still_says_what_to_do (test_voice_snapshot_revision.SnapshotRevisionTests.test_a_missing_cache_still_says_what_to_do) ... ok
+test_a_single_cached_revision_needs_no_choice (test_voice_snapshot_revision.SnapshotRevisionTests.test_a_single_cached_revision_needs_no_choice) ... ok
+test_the_verified_revision_wins_over_the_cache (test_voice_snapshot_revision.SnapshotRevisionTests.test_the_verified_revision_wins_over_the_cache) ... ok
+test_without_a_verified_package_the_newest_cached_revision_is_used (test_voice_snapshot_revision.SnapshotRevisionTests.test_without_a_verified_package_the_newest_cached_revision_is_used) ... ok
+test_clearing_the_words_drops_the_timings_too (test_voice_timings_invalidation.TranscriptEditTests.test_clearing_the_words_drops_the_timings_too) ... ok
+test_correcting_the_words_drops_the_timings_measured_against_the_old_ones (test_voice_timings_invalidation.TranscriptEditTests.test_correcting_the_words_drops_the_timings_measured_against_the_old_ones) ... ok
+test_editing_anything_else_keeps_them (test_voice_timings_invalidation.TranscriptEditTests.test_editing_anything_else_keeps_them) ... ok
+test_re_saving_the_same_words_keeps_them (test_voice_timings_invalidation.TranscriptEditTests.test_re_saving_the_same_words_keeps_them)
+A no-op edit (the operator pressed save without changing anything) must not cost the ... ok
+
+----------------------------------------------------------------------
+Ran 584 tests in 427.715s
+
+OK (skipped=7)
+sys:1: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=0, laddr=('127.0.0.1', 57922)>

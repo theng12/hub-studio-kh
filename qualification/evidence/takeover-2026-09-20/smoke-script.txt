@@ -1,0 +1,110 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+root = Path(__file__).resolve().parents[1]
+app = root / 'dist/Studio Hub.app'
+resources = app / 'Contents/Resources'
+receipt = {'app': str(app), 'checks': {}, 'inference_run': False}
+manifest = json.loads((resources / 'release-manifest.json').read_text())
+receipt['identity'] = {k: manifest[k] for k in ('version', 'implementation_commit', 'development_build')}
+for name in ('job_storage.py', 'execution_assets.py', 'broker.py'):
+    relative = Path('components/hub/backend') / name
+    assert (root / relative).read_bytes() == (resources / relative).read_bytes()
+    receipt['checks'][name] = hashlib.sha256((resources / relative).read_bytes()).hexdigest()
+
+assert (root / 'components/hub/standalone.py').read_bytes() == (resources / 'components/hub/standalone.py').read_bytes()
+
+with tempfile.TemporaryDirectory(prefix='studiohub-takeover-smoke-') as tmp:
+    data = Path(tmp)
+    hub = data / 'hub'
+    hub.mkdir(mode=0o700)
+    (hub / 'device_settings.json').write_text(json.dumps({'cleanup_interval_seconds': 60}))
+    assets = hub / 'execution_assets/voice_references'
+    for name, deadline in [('expired', time.time() - 3600), ('live', time.time() + 3600)]:
+        folder = assets / name
+        folder.mkdir(parents=True)
+        (folder / 'metadata.json').write_text(json.dumps({'expires_at': deadline}))
+        (folder / 'reference.wav').write_bytes(b'RIFF____WAVE')
+    ready = data / 'hub-ready.json'
+    log_path = root / '.build/takeover-packaged-service.log'
+    with log_path.open('w') as log:
+        process = subprocess.Popen([
+            str(app / 'Contents/MacOS/StudioHubService'), '--data-dir', str(data),
+            '--models-dir', str(Path.home() / 'StudioHubModels'), '--ready-file', str(ready),
+            '--parent-pid', str(os.getpid()), '--host', '127.0.0.1', '--port', '0', '--offline',
+        ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        started = time.monotonic()
+        owned_pids = set()
+        try:
+            while not ready.exists():
+                assert process.poll() is None, 'service exited before readiness'
+                assert time.monotonic() - started < 90, 'startup timed out'
+                time.sleep(0.2)
+            identity = json.loads(ready.read_text())
+            receipt['ready_seconds'] = round(time.monotonic() - started, 2)
+            headers = {'Authorization': 'Bearer ' + identity['token']}
+            for endpoint in ('/api/health', '/api/hub/workers', '/api/hub/model-packages',
+                             '/api/hub/fleet/nodes', '/studio/image/api/catalog',
+                             '/studio/voice/api/catalog', '/studio/transcription/api/transcribe/availability'):
+                request = urllib.request.Request(identity['url'] + endpoint, headers=headers)
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    value = json.loads(response.read())
+                    assert response.status == 200
+                    receipt['checks'][endpoint] = response.status
+                    if endpoint == '/api/health':
+                        assert value['ok'] is True
+                    if endpoint == '/api/hub/workers':
+                        modalities = {w['modality'] for w in value['workers']}
+                        assert {'image', 'voice', 'transcription'} <= modalities
+                        receipt['modalities'] = sorted(modalities)
+            try:
+                urllib.request.urlopen(identity['url'] + '/api/hub/workers', timeout=10)
+                raise AssertionError('private route allowed unauthenticated access')
+            except urllib.error.HTTPError as error:
+                assert error.code in (401, 403)
+                receipt['checks']['unauthenticated_workers'] = error.code
+            while (assets / 'expired').exists():
+                assert process.poll() is None, 'service exited during sweep'
+                assert time.monotonic() - started < 100, 'background sweep did not purge expired copy'
+                time.sleep(0.2)
+            assert (assets / 'live/reference.wav').read_bytes() == b'RIFF____WAVE'
+            receipt['checks']['background_expired_removed_live_preserved'] = True
+            receipt['sweep_seconds'] = round(time.monotonic() - started, 2)
+        finally:
+            for path in data.glob('*ready.json'):
+                try:
+                    owned_pids.add(json.loads(path.read_text())['pid'])
+                except (ValueError, KeyError):
+                    pass
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            receipt['service_exit'] = process.returncode
+    assert 'Application shutdown failed' not in log_path.read_text()
+    assert 'Traceback (most recent call last)' not in log_path.read_text()
+    remaining = set(owned_pids)
+    until = time.monotonic() + 10
+    while remaining and time.monotonic() < until:
+        for pid in list(remaining):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                remaining.remove(pid)
+        time.sleep(0.1)
+    assert not remaining, f'owned processes remain: {remaining}'
+    receipt['checks']['owned_processes_stopped'] = True
+receipt['ok'] = True
+(root / '.build/takeover-packaged-smoke.json').write_text(json.dumps(receipt, indent=2) + '\n')
+print(json.dumps(receipt, indent=2))

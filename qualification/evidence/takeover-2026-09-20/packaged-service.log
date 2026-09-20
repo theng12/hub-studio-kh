@@ -1,0 +1,123 @@
+INFO:     Started server process [23424]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Started server process [23423]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Started server process [23422]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Started server process [19630]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:56299 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56300 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56300 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56300 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56304 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56307 - "GET /api/hub/workers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56308 - "GET /api/hub/model-packages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56310 - "GET /api/hub/fleet/nodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56300 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56311 - "GET /studio/image/api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56313 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56312 - "GET /studio/voice/api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56303 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56331 - "GET /studio/transcription/api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56332 - "GET /api/hub/workers HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:56299 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56302 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56300 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56302 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56300 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56301 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56300 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56302 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/catalog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/transcribe/availability HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56477 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56299 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56476 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56477 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56476 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56299 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56563 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56564 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56562 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56563 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56564 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56562 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56595 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56596 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56594 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56595 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56596 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56594 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56600 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56601 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56602 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56600 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56602 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56601 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56606 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56605 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56607 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56606 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56605 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56607 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56638 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56637 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56639 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56638 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56637 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56639 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56712 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56711 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56713 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56712 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56713 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56711 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56844 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56845 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56843 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56844 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56843 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:56845 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57057 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57058 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57059 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57058 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57057 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57059 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57077 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57078 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57079 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57078 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57077 - "GET /api/fleet/activity HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57079 - "GET /api/fleet/activity HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [23424]
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [23423]
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [23422]
+INFO:     Finished server process [19630]
