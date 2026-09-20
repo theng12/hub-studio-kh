@@ -26,6 +26,7 @@ belongs in this repair. Full root gate: **584 tests OK, 7 skipped**; Voice:
 **722 passed, 19 skipped**; Hub: **54 passed**. Native build and the final packaged
 scheduled-cleanup/API/shutdown probe passed. Check Git for the integration of `5892089`
 before applying anything from the repair branch again.
+[Integration PR #1](https://github.com/theng12/Studio-Hub-KH/pull/1) records merge state.
 
 [MEASURED] **Remotes:** `origin` is `https://github.com/theng12/Studio-Hub-KH.git`;
 `icloud` remains the backup. GitHub's default branch is `implementation/voice-runtime`.
