@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.6.34 — 2026-09-20 · the paused model, the missing budgets, and the silent speed control
+
+- **Kokoro root cause: a field name, not the engine.** `_record_local_revision_evidence` read
+  `job.params["voice"]`; every client (the app, the gateway, the smoke script) sends `preset_speaker`,
+  which is the field the app's audio request has always carried. The fence therefore raised "Kokoro
+  preset voice evidence is unavailable" before the engine loaded, 3 failures in 5 s tripped the Hub's
+  circuit breaker, and every later retest was refused pre-dispatch — which is why the reported cause
+  never changed through three releases. Both the picker path and the evidence fence now accept either
+  name, with Kokoro's `voice_revision` still versioned by the model snapshot plus preset key.
+- **The native child now reports its traceback.** The spawned generation process caught `BaseException`
+  and returned `f"{type(exc).__name__}: {exc}"` — the string "SystemExit: 1" was, literally, the whole
+  diagnosis. The child now sends the formatted traceback as a separate bounded field (6000 chars) and
+  the parent folds it into `NativeRunOutcome.error`, so the job record, the log and the operator see
+  the frame that raised. Test: `tests/test_native_executor_reports_cause.py`.
+- **Paused models are visible and releasable.** `broker.recheck_model_protection` existed with no
+  caller. Added `GET /api/hub/model-health`, `POST /api/hub/model-health/recheck`,
+  `broker.model_block_state`, `broker.prune_model_protection` (startup, for models this build no
+  longer ships), `paused`/`paused_reason`/`paused_studio`/`paused_failures` on every
+  `/api/hub/model-packages` row, native decoding plus the Models-page marker and Recheck button.
+  Tests: `tests/test_paused_model_recovery.py`, native fixture `fixture/paused`.
+- **Long-form coverage completed.** `_runtime_default` returned None for seven families
+  (orpheus, bark, voxtral-tts, marvis, kittentts, spark-tts-mlx, f5-tts), and None meant "one request
+  for the whole script". Added `CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS = 280` as a fallback that
+  cannot be skipped, explicit policies for orpheus (170) and bark (150) with
+  `hard_cap_characters` set, and voxtral-tts at the conservative default pending measurement. Audit
+  overrides can tighten a section but can no longer exceed an engine's input limit.
+- **Section-size control derived for every sectioning model.** Only Qwen 1.7B Base declared one, so
+  every other family's chunking was invisible and unchangeable; `section_size_control_for` now derives
+  the control from the same policy the runtime obeys (min 40, max = engine cap or 3000, default =
+  family budget). `resolve_section_budget` therefore accepts a caller's override for any family, which
+  is also what makes the per-budget quality measurement possible through the public API.
+- **Speed delivery is one policy, published per model.** `long_form_policy.speed_policy_for` returns
+  `native` (engine applies the multiplier: kokoro-mlx, kittentts) or `tempo` (one pitch-preserving
+  FFmpeg pass on the finished artifact). `generation.py` passes `speed` upstream only for native
+  families and asks the same policy at both pass sites, replacing the hand-kept exclusion list plus
+  `_POSTPROCESSED_SPEED_FAMILIES` membership test — which is how Bark's speed control had no path at
+  all, and how Spark-TTS would have raised `KeyError` on any value but its five levels. Clamps now
+  come from the shared `SPEED_MINIMUM`/`SPEED_MAXIMUM`. The tempo label table falls back to the
+  catalogue label instead of raising "not configured for this family".
+- **The app shows the policy.** `long_form_delivery` (section size, join pause, hard cap, source, note,
+  speed delivery and range, section-size range) is decoded into `NativeLongFormDelivery` and shown on
+  the Models page and in the list, so "how is this model chunked, and how does its speed work?" needs
+  no terminal.
+- Tests: `tests/test_section_policy.py` (16) pins every family's budget, the engine cliffs and the
+  audit ceiling, the speed deliveries, the dispatcher's use of them, and the derived controls.
+  `tests/native/api_main.swift` covers the paused row and the recheck request.
+
 ## 0.6.33 — 2026-09-19 · the spawned child did not resolve espeak from PATH
 
 - **Narrowed to the child process.** Replaying the exact payload the worker sends

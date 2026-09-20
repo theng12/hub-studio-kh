@@ -60,6 +60,7 @@ final class FixtureProtocol: URLProtocol {
     static var storageLimits: [String: Any]?
     static var storagePreviewRejects = false
     static var modelImportBody: [String: Any]?
+    static var modelHealthBody: [String: Any]?
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     /// One frame of 16-bit mono 8 kHz PCM: the smallest thing that is still a WAV.
@@ -122,6 +123,7 @@ final class FixtureProtocol: URLProtocol {
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
+    static func recheckBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return modelHealthBody }
     static func setModelVerifyRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; modelVerifyRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
     static func memoryBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastMemoryBody }
@@ -218,7 +220,13 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
+        case ("POST", "/api/hub/model-health/recheck"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.modelHealthBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"studio":"voice","model":"fixture/paused"}"#.utf8))
         case ("GET", "/api/hub/settings"):
             Self.lock.lock(); Self.storageCalls.append("get"); Self.lock.unlock()
             result = (200, "application/json", Self.settingsFixture)
@@ -538,7 +546,7 @@ final class FixtureProtocol: URLProtocol {
 
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
     private static let catalogFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -568,7 +576,7 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
-        require(store.models.count == 6, "combined model catalog")
+        require(store.models.count == 7, "combined model catalog")
 
         // Fleet: one app can be told what it is. The role is the Hub's own setting, saved
         // through its controller route, and the screen shows the Hub's answer rather than the
@@ -602,6 +610,23 @@ struct NativeAPITests {
                 "an unusable model must be marked in the picker")
         let healthy = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
         require(healthy?.blockReason == nil, "a model that can run must carry no reason")
+
+        // A model the Hub has paused after repeated failures must say so, and must offer the one
+        // action that releases the pause. Until this existed, a paused model was refused before
+        // dispatch, nothing in the app changed, and the only way back was editing the Hub's state
+        // file by hand - which is how one wrong field name read as "this model does not work".
+        let paused = store.models.first { $0.repo == "fixture/paused" }
+        require(paused?.paused == true, "a paused model must report the pause")
+        require(paused?.blockReason?.contains("Paused by the Hub") == true
+                && paused?.blockReason?.contains("SystemExit") == true,
+                "a pause must name the Hub's own reason, got: \(paused?.blockReason ?? "nil")")
+        await store.recheckModel(paused!)
+        require(FixtureProtocol.recheckBody()?["model"] as? String == "fixture/paused",
+                "the recheck must name the model, got: \(String(describing: FixtureProtocol.recheckBody()))")
+        require(FixtureProtocol.recheckBody()?["studio"] as? String == "voice",
+                "the recheck must name the paused Studio, or the Hub cannot tell which pause to lift")
+        require(store.modelNote?.contains("Rechecked") == true,
+                "a recheck must report its result, got: \(store.modelNote ?? "nil")")
 
         // A damaged file of the app's own must not stop it connecting. This used to throw out of
         // `connect()`, which cleared the Hub address and left every page on the setup screen, with

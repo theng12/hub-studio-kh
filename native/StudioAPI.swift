@@ -65,6 +65,17 @@ struct NativeModel: Identifiable, Equatable {
     var memoryWarning: String? = nil
     /// Why this model cannot run here, in the operator's words, or nil when it can.
     var blockReason: String? = nil
+    /// The Hub paused this model after repeated terminal failures. Pausing is automatic and is not
+    /// the same as the model being broken: it is a circuit breaker, and it stays shut until someone
+    /// says the cause is fixed. The app has to show that state, or a paused model looks like a model
+    /// that silently does nothing.
+    var paused: Bool = false
+    var pausedReason: String? = nil
+    /// How this model sections a long script and how its speed control is delivered, as published
+    /// by the runtime that will actually do the work.
+    var longForm: NativeLongFormDelivery? = nil
+    /// Which Studio paused it, so the recheck names the exact pause to release.
+    var pausedStudio: String? = nil
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
 }
@@ -2005,6 +2016,31 @@ final class NativeWorkspaceStore: ObservableObject {
         await refresh()
     }
 
+    /// Release the Hub's pause on a model whose failure has been fixed.
+    ///
+    /// The Hub pauses a model automatically after repeated terminal failures, and while it is paused
+    /// every job for it is refused before dispatch. That refusal was visible nowhere in the app, and
+    /// nothing could lift it: the only way back was to edit the Hub's own state file and relaunch.
+    func recheckModel(_ model: NativeModel) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            updatingModels = true
+            defer { if connectionID == requestConnection { updatingModels = false } }
+            let _: HubModelRecheck = try await sendJSON(
+                ["api", "hub", "model-health", "recheck"], method: "POST",
+                body: ModelHealthRecheck(model: model.repo, studio: model.pausedStudio))
+            guard connectionID == requestConnection else { return }
+            modelNote = "Rechecked \(model.label). It can take jobs again."
+            modelNoteRepo = model.repo
+            error = nil
+            await refresh()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Recheck the model")
+            }
+        }
+    }
+
     func cancelAudio(_ job: NativeJob) async {
         guard let requestConnection = connectionID else { return }
         do {
@@ -2807,7 +2843,10 @@ final class NativeWorkspaceStore: ObservableObject {
                 // Without this every model kept the struct's default of `.cloning`, so the preset
                 // and design tabs were empty and a CustomVoice model was sent down the clone path -
                 // which asked for a reference voice it does not have.
-                voiceMode: mode, requiresTranscript: transcriptRequired, blockReason: block
+                voiceMode: mode, requiresTranscript: transcriptRequired, blockReason: block,
+                paused: package?.paused == true, pausedReason: package?.pausedReason,
+                longForm: NativeLongFormDelivery(item.longFormDelivery),
+                pausedStudio: package?.pausedStudio
             )
         }
         let transcriptionModels = transcription.map { item in
@@ -2833,7 +2872,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 function: .transcription, cached: item.cached ?? false, supported: supported, supportNote: note,
                 sizeGB: item.sizeGb, capabilities: ["transcription"], languages: item.languageList,
                 runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: [],
-                blockReason: block
+                blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
+                pausedStudio: package?.pausedStudio
             )
         }
         let imageModels = audio.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
@@ -2847,7 +2887,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 supported: supported, supportNote: ready && supported ? "Ready for local image generation." : "Verify the image model files and runtime in Models.",
                 sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
-                blockReason: block)
+                blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
+                pausedStudio: package?.pausedStudio)
         }
         return audioModels + transcriptionModels + imageModels
     }
@@ -2871,6 +2912,12 @@ final class NativeWorkspaceStore: ObservableObject {
         if let warning = memoryWarning, !warning.isEmpty { return warning }
         if memoryEligible == false { return "This Mac does not have enough memory for this model." }
         guard let package else { return "This model is not part of the packaged catalog." }
+        // A pause outranks the other gates: while it is set the Hub refuses every job, whatever the
+        // files and the runtime say, and the only way back is the recheck button next to it.
+        if package.paused == true {
+            let why = package.pausedReason ?? "it failed repeatedly"
+            return "Paused by the Hub after repeated failures — \(why). Fix the cause, then press Recheck."
+        }
         if let detail = package.reason, !detail.isEmpty { return detail }
         if let files = package.filesState, files != "files_verified" {
             return "Its files are not verified. Open Models and press Verify Files."
@@ -3217,6 +3264,10 @@ private struct HubModelPackage: Decodable {
     let minimumMacos: String?
     let macosVersion: String?
     let reason: String?
+    /// Set by the Hub's own circuit breaker, not by this worker.
+    let paused: Bool?
+    let pausedReason: String?
+    let pausedStudio: String?
 }
 /// How the Voice worker groups its cached files, and the memory each family's model declares.
 private struct HubStorageGroups: Decodable { let groups: [HubStorageGroup] }
@@ -3234,6 +3285,8 @@ private struct HubStorageMemory: Decodable {
 private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
 private struct RenameRequest: Codable { let name: String }
+private struct ModelHealthRecheck: Encodable { let model: String; let studio: String? }
+private struct HubModelRecheck: Decodable { let ok: Bool }
 
 private struct RoleChange: Encodable { let role: String }
 private struct JoinRequest: Encodable {
@@ -3307,6 +3360,11 @@ private struct CatalogModel: Decodable {
     /// Family capability claim from the runtime, so clone vs preset is decided by the catalog
     /// rather than by guessing from the model name.
     let referenceAudio: CatalogReferenceAudio?
+    /// How this model is sectioned, how its speed reaches the engine, and the range a person may
+    /// choose. Published per model by the worker; it was in the payload all along and the app
+    /// decoded none of it, so "how is a long script chunked for this model?" had no answer in the
+    /// app at all.
+    let longFormDelivery: HubLongFormDelivery?
     var imageConfiguration: NativeImageConfiguration? {
         guard let defaults = generationDefaults, let limits = generationLimits,
               let sizes = imageSizes, !sizes.isEmpty,
@@ -3318,6 +3376,61 @@ private struct CatalogModel: Decodable {
         return value.accepts(defaults) ? value : nil
     }
 }
+/// How one model is sectioned and how its speed control is delivered.
+struct HubLongFormDelivery: Decodable {
+    let sectionMaxCharacters: Int?
+    let joinPauseMilliseconds: Int?
+    let hardCapCharacters: Int?
+    let source: String?
+    let note: String?
+    let speed: HubSpeedPolicy?
+    let sectionSizeControl: HubSectionSizeControl?
+}
+struct HubSpeedPolicy: Decodable {
+    let delivery: String?
+    let minimum: Double?
+    let maximum: Double?
+    let note: String?
+}
+struct HubSectionSizeControl: Decodable {
+    let minimum: Int
+    let maximum: Int
+    let step: Int
+    let defaultCustom: Int
+    let runtimeDefault: Int
+}
+
+struct NativeLongFormDelivery: Equatable {
+    let sectionMaxCharacters: Int
+    let joinPauseMilliseconds: Int
+    let hardCapCharacters: Int?
+    let source: String
+    let note: String
+    let speedDelivery: String
+    let speedMinimum: Double
+    let speedMaximum: Double
+    let chosenSectionMaxCharacters: Int
+    let sectionMinimum: Int
+    let sectionMaximum: Int
+
+    /// The model's default, or nil when the payload has no sectioning policy at all.
+    init?(_ wire: HubLongFormDelivery?) {
+        guard let wire, let section = wire.sectionMaxCharacters else { return nil }
+        sectionMaxCharacters = section
+        joinPauseMilliseconds = wire.joinPauseMilliseconds ?? 0
+        hardCapCharacters = wire.hardCapCharacters
+        source = wire.source ?? "runtime_default"
+        note = wire.note ?? ""
+        speedDelivery = wire.speed?.delivery ?? "tempo"
+        speedMinimum = wire.speed?.minimum ?? 0.5
+        speedMaximum = wire.speed?.maximum ?? 2.0
+        let control = wire.sectionSizeControl
+        chosenSectionMaxCharacters = control?.runtimeDefault ?? section
+        sectionMinimum = control?.minimum ?? section
+        sectionMaximum = control?.maximum ?? section
+    }
+}
+
 private struct TranscriptionAvailability: Decodable {
     let available: Bool?
     let defaultModel: String?

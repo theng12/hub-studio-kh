@@ -1034,8 +1034,20 @@ struct StudioContent: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(model.label).fontWeight(.medium)
                             Text(model.function.rawValue).font(.caption).foregroundStyle(.secondary)
+                            // Scanning the library, "how is this one chunked?" should not need a
+                            // click per model: the section size and the speed route are the two
+                            // facts that differ between families and decide how a long script runs.
+                            if let longForm = model.longForm {
+                                Text("Sections of \(longForm.chosenSectionMaxCharacters) chars · speed: \(longForm.speedDelivery == "native" ? "engine" : "post-pass")")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
                         }
                         Spacer()
+                        if model.paused {
+                            Label("Paused", systemImage: "pause.circle.fill")
+                                .labelStyle(.titleAndIcon)
+                                .font(.callout).foregroundStyle(.orange)
+                        }
                         Text(model.cached ? "Installed" : "Not installed").font(.callout).foregroundStyle(.secondary)
                     }.padding(.vertical, 7).tag(model.repo)
                 }.listStyle(.inset).frame(minWidth: 380)
@@ -1047,6 +1059,29 @@ struct StudioContent: View {
                             LabeledContent("Function", value: model.function.rawValue)
                             LabeledContent("Storage", value: model.cached ? "Installed" : "Not installed")
                             if let size = model.sizeGB { LabeledContent("Estimated size", value: String(format: "%.2f GB", size)) }
+                            // How a long script is cut up for this model, and how its speed control
+                            // reaches the engine. Both are per-family decisions the runtime makes,
+                            // and both were previously answerable only by reading the worker source.
+                            if let longForm = model.longForm {
+                                Divider()
+                                Text("Long-form delivery").font(.headline)
+                                LabeledContent("Section size", value: "\(longForm.chosenSectionMaxCharacters) characters")
+                                if let cap = longForm.hardCapCharacters {
+                                    Label("This engine stops reading past \(cap) characters, so sections are held at or below it.",
+                                          systemImage: "exclamationmark.triangle")
+                                        .font(.caption).foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                LabeledContent("Adjustable range", value: "\(longForm.sectionMinimum)–\(longForm.sectionMaximum) characters")
+                                LabeledContent("Between sections", value: String(format: "%.0f ms", Double(longForm.joinPauseMilliseconds)))
+                                LabeledContent("Speed control", value: longForm.speedDelivery == "native"
+                                    ? String(format: "the engine's own pace (%.1f–%.1fx)", longForm.speedMinimum, longForm.speedMaximum)
+                                    : String(format: "one pitch-preserving pass after rendering (%.1f–%.1fx)", longForm.speedMinimum, longForm.speedMaximum))
+                                Text(longForm.note).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text("Source: \(longForm.source.replacingOccurrences(of: "_", with: " "))")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
                             Divider()
                             // The Models page is where an operator comes to find out why something
                             // will not run, so the gate that is shut is named here as well.
@@ -1056,6 +1091,20 @@ struct StudioContent: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             } else {
                                 Text(model.supportNote).font(.callout).foregroundStyle(.secondary)
+                            }
+                            // A paused model is refused before dispatch, so no job will ever show
+                            // its error. The pause has to be visible and releasable here, where the
+                            // operator comes to find out why a model will not run.
+                            if model.paused {
+                                HStack {
+                                    Button(workspace.updatingModels ? "Rechecking…" : "Recheck Readiness") {
+                                        Task { await workspace.recheckModel(model) }
+                                    }
+                                    .help("Ask the Hub to verify this model's files, runtime and cached dependencies, then let it take jobs again")
+                                    .disabled(!connected || workspace.updatingModels)
+                                    Text("The Hub is holding this model until you confirm it is repaired.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                             if model.cached {
                                 if model.supported { Button("Use in \(model.function.rawValue)") { if model.function == .audio { workspace.audioModel = model.repo; studio.select(.audio) } else { workspace.transcriptionModel = model.repo; studio.select(.transcription) } }.buttonStyle(.borderedProminent) }

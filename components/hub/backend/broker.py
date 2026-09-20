@@ -569,6 +569,43 @@ def model_protection_snapshot() -> list[dict]:
                 for row in _model_protection.values() if row.get("blocked")]
 
 
+def prune_model_protection(known_models: set[str]) -> list[str]:
+    """Forget pauses for models this build no longer ships, and say which.
+
+    A pause row for a model with no manifest can never be cleared: `recheck_model_protection` verifies
+    readiness through the worker catalogue, and a model that is not packaged is not in it, so the
+    check can only fail. Removing F5-TTS left exactly such a row - a permanent "paused" for a model
+    that cannot be installed - on every Hub that had ever run it.
+    """
+    with _model_protection_lock:
+        stale = sorted({model for _studio, model in _model_protection if model not in known_models})
+        for key in [key for key in _model_protection if key[1] not in known_models]:
+            _model_protection.pop(key, None)
+        if stale:
+            _save_model_protection()
+    return stale
+
+
+def model_block_state(studio_id: str, model: str) -> dict | None:
+    """The pause row for one Studio's model, or None when it is running normally.
+
+    `recheck_model_protection` could always clear a pause, but nothing in the product called it, so a
+    paused model was unreachable: the Hub refused every job for it, the reason lived only in this
+    process, and the only way back was to edit `model_protection.json` and restart. That is how a
+    single wrong field name looked like "Kokoro does not work" for a whole release cycle.
+    """
+    with _model_protection_lock:
+        row = _model_protection.get((studio_id, model)) or {}
+    if not row.get("blocked"):
+        return None
+    return {
+        "studio": studio_id, "model": model, "revision": row.get("revision"),
+        "reason": _sanitize_public_error(row.get("reason", "")),
+        "error_code": row.get("error_code"), "failures": int(row.get("failures") or 0),
+        "blocked_at": row.get("blocked_at"), "last_failure_at": row.get("last_failure_at"),
+    }
+
+
 def _model_file_failure(message: str, code: str | None) -> bool:
     return code == "MODEL_FILES_UNAVAILABLE" or (
         "load_safetensors" in message.lower() and "failed to open" in message.lower()

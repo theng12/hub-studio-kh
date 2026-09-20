@@ -2,6 +2,56 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.34 — 2026-09-20
+
+### Kokoro works, and the real reason it did not
+
+Kokoro's last failure was a single field name. Every request the app and the gateway send names the
+chosen voice `preset_speaker`; one check inside the worker looked only for `voice`, found nothing, and
+refused the job *before the model was ever loaded*. It failed three times in five seconds, each time
+with "Kokoro preset voice evidence is unavailable", and then the Hub did what it is designed to do: it
+paused the model. Every retest after that was refused before it ran, so the same old message kept
+coming back no matter what was fixed underneath it.
+
+Both halves are fixed. The voice check accepts either name, and Kokoro now renders and is verified
+end to end — the tenth and last of the local models adopted onto this Mac.
+
+### A paused model is no longer a dead end
+
+Pausing is automatic and correct: after repeated failures the Hub stops sending work to a model until
+someone says the cause is fixed. But nothing in the app could *unpause* one — the Hub function that
+clears a pause existed and was never called by anything, so in practice a pause was permanent and its
+reason was invisible. The Models page now marks a paused model, says why the Hub paused it, and offers
+Recheck, which re-verifies the model's files, runtime and cached companions and lets it take jobs
+again. Pauses for models this build no longer ships are forgotten instead of showing forever.
+
+### Long scripts, per model — the 15,000-character ceiling
+
+Every local voice model now has a section budget, and none can be forgotten: a model with no measured
+budget inherits a conservative one instead of being handed the whole script in one request. Seven
+families had no budget at all, including Orpheus, which is why the gateway measured a ~170-character
+ceiling for it — that is Orpheus's own input limit, and whole scripts were still being sent to it.
+
+- Orpheus sections at 170 characters and Bark at 150: those are the points where the engines stop
+  working, published as hard caps, and no setting can raise them.
+- Everything else keeps its own measured budget, from OmniVoice's 288 up to Kokoro's 3000.
+- A family with no evidence of its own uses 280 characters — the smallest budget any measured family
+  uses — and says so.
+- Every model now has an adjustable Section size with its default, its range and its engine cap
+  visible on the Models page, so how a long script is cut up is a fact you can see rather than infer.
+
+### Speed, for every model
+
+The speed control is now supplied by one rule instead of a hand-kept list. Kokoro and KittenTTS apply
+it themselves, because they predict their own durations. Every other engine either ignores the
+argument or misreads it — Chatterbox documents speed as "Ignored", LongCat calls it "Unused", Bark
+still carries the original "# TODO: adjust speed", and Spark-TTS would raise on any value but its five
+fixed levels — so for those the app renders at the model's natural pace and applies one
+pitch-preserving pass to the finished audio. Passing a speed that an engine silently discards was
+worse than refusing it, because there was no way to tell.
+
+Models page shows, per model, which of the two applies.
+
 ## 0.6.33 — 2026-09-19
 
 ### Kokoro, by naming the program rather than hoping to find it

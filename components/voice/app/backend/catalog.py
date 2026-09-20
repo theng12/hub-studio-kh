@@ -1618,13 +1618,42 @@ def _audited_long_form_policy(family: str, repo: str) -> dict | None:
     )
 
 
+def _derived_section_size_control(policy: dict) -> dict[str, int | str]:
+    """The section-size control every sectioning family gets, whether or not one was declared.
+
+    Only the Qwen 1.7B Base model carried a control, so every other family's sectioning was
+    invisible and unchangeable: the budget it used was published nowhere an operator could act on,
+    and no caller could tighten it. Deriving the control from the same policy the runtime obeys
+    means the number a person sees is the number the engine is given.
+
+    The range is deliberate. `minimum` is the floor `policy_for` already accepts from an audit
+    (40 characters), and `maximum` is the engine's own input limit where it has one - Orpheus stops
+    reading at 170 characters and Bark fails past 150, so no control may offer more than that - or
+    the largest budget any measured family sustains (Kokoro's and VibeVoice's 3000) where the
+    engine has no cliff. A larger section than that is a claim nobody has evidence for.
+    """
+    budget = int(policy["section_max_characters"])
+    hard_cap = policy.get("hard_cap_characters")
+    maximum = int(hard_cap) if hard_cap else max(budget, 3000)
+    return {
+        "minimum": 40,
+        "maximum": maximum,
+        "step": 10,
+        "default_custom": budget,
+        "runtime_default": budget,
+        "source": str(policy.get("source") or "runtime_default"),
+    }
+
+
 def section_size_control_for(repo: str) -> dict[str, int | str] | None:
     entry = get_model(repo)
-    if entry is None or entry.section_size_control is None:
+    if entry is None:
         return None
     policy = _audited_long_form_policy(entry.family, entry.repo)
     if policy is None:
         return None
+    if entry.section_size_control is None:
+        return _derived_section_size_control(policy)
     control = entry.section_size_control.serialize()
     if policy["section_max_characters"] != control["runtime_default"]:
         return None

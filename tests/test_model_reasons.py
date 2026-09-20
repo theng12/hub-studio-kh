@@ -57,6 +57,25 @@ class ModelReasonTests(unittest.TestCase):
         models = models[:models.index("private var ", 10)]
         self.assertIn("model.blockReason", models)
 
+    def test_the_models_page_shows_how_a_model_is_sectioned_and_speeded(self) -> None:
+        """The owner asked how chunking is applied per model. Answering it needs no terminal."""
+        models = VIEWS[VIEWS.index("private var modelsWorkspace"):]
+        models = models[:models.index("private var ", 10)]
+        for phrase in ("Section size", "Adjustable range", "Speed control", "Long-form delivery"):
+            self.assertIn(phrase, models, f"the Models page never shows {phrase!r}")
+        self.assertIn("model.longForm", models, "the list must mark sectioning without a click")
+
+    def test_the_app_decodes_the_published_long_form_policy(self) -> None:
+        """The worker publishes the policy per model; the app decoded none of it before."""
+        wire = API[API.index("struct HubLongFormDelivery: Decodable"):]
+        wire = wire[:wire.index("struct NativeLongFormDelivery")]
+        for field in ("sectionMaxCharacters", "hardCapCharacters", "speed", "sectionSizeControl"):
+            self.assertIn(f"let {field}", wire, f"{field} must be decoded, not discarded")
+        resolved = API[API.index("struct NativeLongFormDelivery"):]
+        resolved = resolved[:resolved.index("private struct TranscriptionAvailability")]
+        self.assertIn("hardCapCharacters", resolved)
+        self.assertIn("speedDelivery", resolved)
+
     def test_readiness_is_no_longer_computed_from_a_subset(self) -> None:
         """`ready` used to ignore the gates entirely for audio and subtitle."""
         for function in ("voiceMode(repo", "blockReason(memoryWarning"):

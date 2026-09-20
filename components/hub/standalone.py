@@ -70,6 +70,10 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], m
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
     worker_id = {"image-mflux": "image", "voice-mlx": "voice", "subtitle-mlx": "subtitle"}[manifest["engine"]]
     worker = next((item for item in monitor.registry if item["id"] == worker_id), None)
+    # A paused model still reports verified files and a compatible runtime; it is the Hub's own
+    # circuit breaker that refuses it. Without this the app showed every gate open and the job was
+    # then declined before dispatch, which read as the model silently not working.
+    paused = broker.model_block_state(worker_id, manifest["model_id"])
     return {
         **receipt,
         **standalone_config.model_readiness({
@@ -86,6 +90,10 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], m
         "dependencies": list(manifest.get("dependencies") or ()),
         "worker_id": worker_id,
         "worker_state": "running" if worker else "unavailable",
+        "paused": paused is not None,
+        "paused_reason": (paused or {}).get("reason"),
+        "paused_studio": (paused or {}).get("studio"),
+        "paused_failures": (paused or {}).get("failures"),
     }
 
 
@@ -205,6 +213,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         output_storage.recover_process_leases()
         broker.restore_batches()
         transcription_jobs.restore_batches()
+        # A pause this build can never clear is not a safety feature, it is a permanent refusal.
+        try:
+            manifests = _model_catalog().values()
+            known = {str(manifest.get("model_id") or "") for manifest in manifests}
+            known |= {alias for manifest in manifests for alias in (manifest.get("aliases") or [])}
+            forgotten = broker.prune_model_protection({name for name in known if name})
+            if forgotten:
+                print(f"[hub] forgot pauses for models this build does not ship: "
+                      f"{', '.join(forgotten)}", flush=True)
+        except ValueError:
+            pass
         storage_sweep = None
         if start_background:
             # 50 GB or 30 days, whichever comes first, enforced for every studio - not only in
@@ -388,6 +407,34 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def catalog() -> dict[str, Any]:
         """Existing Hub aggregate contract, gathered only through private workers."""
         return await monitor.aggregate_catalog()
+
+    @app.get("/api/hub/model-health")
+    def model_health() -> dict[str, Any]:
+        """Models the Hub has paused, and why. A pause is Hub state, not worker state, so it is
+        reported here rather than inferred from a catalogue that still calls the model ready."""
+        return {"paused": broker.model_protection_snapshot()}
+
+    @app.post("/api/hub/model-health/recheck")
+    async def model_health_recheck(body: dict[str, Any]) -> dict[str, Any]:
+        """Let a repaired model back into service without restarting the Hub.
+
+        Pausing is automatic after repeated terminal failures; until now *unpausing* was only
+        possible by editing the Hub's own state file and relaunching the app.
+        """
+        model = str(body.get("model") or "").strip()
+        if not model:
+            raise HTTPException(400, "model is required")
+        studio = str(body.get("studio") or "").strip()
+        if not studio:
+            matching = [row["studio"] for row in broker.model_protection_snapshot()
+                        if row.get("model") == model]
+            if len(matching) != 1:
+                raise HTTPException(409, "Name the paused Studio for this model")
+            studio = matching[0]
+        try:
+            return await broker.recheck_model_protection(studio, model)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     async def worker_read(worker_id: str, path: str) -> dict[str, Any]:
         """Authenticated pass-through read from one named worker.

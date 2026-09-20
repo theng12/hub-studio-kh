@@ -10,9 +10,12 @@ good one under the other name.
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from components.voice.app.backend import generation as generation_module  # noqa: E402
 from components.voice.app.backend.generation import GenerationManager  # noqa: E402
 
 MANAGER = GenerationManager.__new__(GenerationManager)
@@ -38,6 +41,41 @@ class VoiceFieldAliasTests(unittest.TestCase):
     def test_an_unknown_vibevoice_voice_is_still_refused(self):
         with self.assertRaises(ValueError):
             MANAGER._mlx_kwargs_voice_picker("vibevoice", {"preset_speaker": "not-a-voice"}, {})
+
+
+class RevisionEvidenceTests(unittest.TestCase):
+    """The evidence fence is a second reader of the same field, and it failed closed.
+
+    Generation proved the picker resolves both names, but the fence that stamps immutable voice
+    evidence ran first and only read `voice`. A client-submitted Kokoro job therefore ended as a
+    terminal "preset voice evidence is unavailable" three times in five seconds, which paused the
+    model in the Hub before the engine had loaded once.
+    """
+
+    REPO = "mlx-community/Kokoro-82M-bf16"
+
+    def _job(self, **params):
+        return SimpleNamespace(params={"repo": self.REPO, **params},
+                               model_revision=None, voice_revision=None)
+
+    def test_kokoro_evidence_accepts_the_client_voice_field(self):
+        job = self._job(preset_speaker="af_heart")
+        with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
+            GenerationManager._record_local_revision_evidence(job)
+        self.assertEqual(job.voice_revision, "abc123:preset:af_heart")
+
+    def test_the_family_native_field_still_wins_for_evidence(self):
+        job = self._job(voice="af_bella", preset_speaker="af_heart")
+        with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
+            GenerationManager._record_local_revision_evidence(job)
+        self.assertEqual(job.voice_revision, "abc123:preset:af_bella")
+
+    def test_evidence_still_refuses_when_no_voice_is_supplied(self):
+        job = self._job()
+        with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
+            with self.assertRaises(RuntimeError) as caught:
+                GenerationManager._record_local_revision_evidence(job)
+        self.assertIn("Kokoro preset voice evidence", str(caught.exception))
 
 
 if __name__ == "__main__":

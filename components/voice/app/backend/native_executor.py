@@ -16,6 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
+import traceback
 
 
 @dataclass(frozen=True)
@@ -68,8 +69,14 @@ def _worker_main(commands, results, cancel_requested, generation: int, native_ca
             value = native_call(command["payload"], cancel_requested)
             results.put({"run_id": run_id, "generation": generation, "value": value})
         except BaseException as exc:
+            # Keep the child's traceback. Reporting only `SystemExit: 1` is what made a generation
+            # failure in this process undiagnosable from the outside: the parent had nothing to
+            # forward, so the job, the log and the operator all saw the same six characters while the
+            # actual cause (a missing model, a bad path, a library that exits) stayed in the child.
+            detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             results.put({"run_id": run_id, "generation": generation,
-                         "error": f"{type(exc).__name__}: {exc}"})
+                         "error": f"{type(exc).__name__}: {exc}",
+                         "traceback": detail[-6000:]})
 
 
 class ExclusiveNativeExecutor:
@@ -196,8 +203,15 @@ class ExclusiveNativeExecutor:
                         return NativeRunOutcome("cancelled", run_id, generation,
                                                 value=result.get("value"))
                     if "error" in result:
+                        # The child sends its traceback separately so the message stays one line for
+                        # log scanners. Fold it in here: `SystemExit: 1` alone names no cause, and
+                        # every consumer of `NativeRunOutcome.error` is a human or a log line.
+                        detail = result.get("traceback") or ""
+                        message = result["error"]
+                        if detail and detail.strip() not in message:
+                            message = f"{message}\n{detail.strip()}"
                         return NativeRunOutcome("error", run_id, generation,
-                                                error=result["error"])
+                                                error=message)
                     return NativeRunOutcome("done", run_id, generation, value=result.get("value"))
                 if cancel_at is not None and time.monotonic() - cancel_at >= self._grace:
                     # `_active` is the exact identity checked before touching a process.

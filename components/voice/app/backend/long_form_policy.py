@@ -90,6 +90,65 @@ MOSS_TTS_NANO_SECTION_MAX_CHARACTERS = 300
 # is 768 characters). 300 sits comfortably inside both, and a 287-character
 # section was verified end-to-end as semantically complete via transcribe-back.
 ECHO_TTS_SECTION_MAX_CHARACTERS = 300
+# ── families with no measurement of their own ────────────────────────────────
+# A family without a policy used to fall out of `_runtime_default` as None, and the caller read
+# "None" as "send the whole script in one call". That is how the gateway came to see an engine
+# cliff - orpheus stops at ~170 characters - instead of a section budget: seven families
+# (orpheus, bark, voxtral-tts, marvis, kittentts, spark-tts-mlx, f5-tts) had no sectioning at all,
+# so a 2,000-character script was one request to an engine that cannot take it.
+#
+# 280 is therefore the floor, not a guess at the best value: it is the smallest of the established
+# family budgets (Audio8 and LongCat, both measured), so no family is sectioned more coarsely than
+# a family we have actually measured. A family with its own evidence keeps its own number.
+CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS = 280
+# Two engines refuse input past their own hard limit rather than degrading. These are not quality
+# budgets and must never be raised by an audit or a caller: they are the point at which the engine
+# stops working. Orpheus truncates and Bark fails past these inputs.
+ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS = 170
+BARK_ENGINE_INPUT_LIMIT_CHARACTERS = 150
+# The public speed control, one range for every family.
+SPEED_MINIMUM = 0.5
+SPEED_MAXIMUM = 2.0
+# Kokoro and KittenTTS predict their own durations from a speed factor
+# (`duration = sigmoid(duration).sum() / speed`), which is the model's own idea of pace and beats a
+# resampled one. Every other engine either ignores the argument outright (Chatterbox documents
+# "Ignored", LongCat and OmniVoice never read it), reads it as a discrete level rather than a
+# multiplier (Spark-TTS indexes SPEED_MAP[float] and would raise KeyError on any other value), or
+# applies it per section in a way that would fight the joined-WAV pass (Fish). Those families get
+# one pitch-preserving tempo pass on the finished artifact instead - applied exactly once, from the
+# parent, where cancellation custody already lives.
+NATIVE_SPEED_FAMILIES = frozenset({"kokoro-mlx", "kittentts"})
+
+
+@dataclass(frozen=True)
+class SpeedPolicy:
+    """How the public speed control reaches one family's engine.
+
+    `delivery` is "native" (the engine scales its own durations) or "tempo" (Voice Studio applies
+    one pitch-preserving FFmpeg pass to the finished WAV). Publishing it per family is what makes
+    "the speed control is supplied for this model" checkable instead of assumed.
+    """
+    delivery: str
+    minimum: float = SPEED_MINIMUM
+    maximum: float = SPEED_MAXIMUM
+    note: str = ""
+
+
+SPEED_NATIVE = SpeedPolicy(
+    delivery="native",
+    note=("The engine scales its own predicted durations, so the requested pace is part of "
+          "synthesis rather than applied to the result."),
+)
+SPEED_TEMPO = SpeedPolicy(
+    delivery="tempo",
+    note=("The engine does not apply a speed multiplier, so Voice Studio renders at its native "
+          "pace and applies one pitch-preserving tempo pass to the joined artifact."),
+)
+
+
+def speed_policy_for(family: str, repo: str = "") -> SpeedPolicy:
+    """The speed contract for one family. Never None: every family has a way to honour speed."""
+    return SPEED_NATIVE if family in NATIVE_SPEED_FAMILIES else SPEED_TEMPO
 
 
 @dataclass(frozen=True)
@@ -99,6 +158,11 @@ class LongFormPolicy:
     note: str
     split_method: str = "sentence_safe"
     customer_submits_complete_script: bool = True
+    # Set only where the engine itself stops working past a limit. The Models page and the gateway
+    # both need to tell "our chosen budget" apart from "the engine's own cliff".
+    hard_cap_characters: Optional[int] = None
+    # "family_policy" (measured or engine-derived for this family) or "conservative_default".
+    origin: str = "family_policy"
 
     def serialize(self, *, source: str = "runtime_default") -> dict:
         payload = asdict(self)
@@ -279,7 +343,51 @@ def _runtime_default(family: str, repo: str) -> Optional[LongFormPolicy]:
                 "while reusing the same reference clip for every section."
             ),
         )
-    return None
+    if family == "orpheus":
+        return LongFormPolicy(
+            section_max_characters=ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS,
+            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
+            hard_cap_characters=ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS,
+            origin="engine_input_limit",
+            note=(
+                "Orpheus does not degrade past its input limit, it stops: the engine drops the "
+                "rest of the text, which is why the gateway measured a ~170-character ceiling "
+                "while Voice Studio was still sending whole scripts. Sections are held at the "
+                "engine's own limit and can never be raised."
+            ),
+        )
+    if family == "bark":
+        return LongFormPolicy(
+            section_max_characters=BARK_ENGINE_INPUT_LIMIT_CHARACTERS,
+            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
+            hard_cap_characters=BARK_ENGINE_INPUT_LIMIT_CHARACTERS,
+            origin="engine_input_limit",
+            note=(
+                "Bark's own pipeline budget is shorter than any other family's, and it fails "
+                "rather than truncating past it. Held at the engine limit, never raised."
+            ),
+        )
+    if family == "voxtral-tts":
+        return LongFormPolicy(
+            section_max_characters=CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
+            note=(
+                "Voxtral is autoregressive with a per-call cap of 4096 audio tokens (~5 minutes), "
+                "so its own limit is far above any narration section. No coverage measurement "
+                "exists for this family yet, so it starts at the conservative shared default."
+            ),
+        )
+    return LongFormPolicy(
+        section_max_characters=CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+        join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
+        origin="conservative_default",
+        note=(
+            "This family has no section-size measurement of its own yet, so Voice Studio renders "
+            "conservative 280-character sections instead of sending a whole script to an engine "
+            "whose input limit is unknown. 280 is the smallest budget any measured family uses, "
+            "so no family is sectioned more coarsely than one we have evidence for."
+        ),
+    )
 
 
 def policy_for(
@@ -289,10 +397,14 @@ def policy_for(
     audited_section_max_characters: object = None,
     audited_default_section_max_characters: object = None,
 ) -> Optional[dict]:
-    """Return the effective runtime policy, including a valid audit override."""
+    """Return the effective runtime policy, including a valid audit override.
+
+    Never None for a known family: a missing policy used to mean "one request for the whole
+    script", which is the failure this function exists to prevent.
+    """
     policy = _runtime_default(family, repo)
-    if policy is None:
-        return None
+    source = ("conservative_default" if policy.origin == "conservative_default"
+              else "runtime_default")
 
     if repo == QWEN_17B_BASE_REPO:
         if (
@@ -306,24 +418,37 @@ def policy_for(
             policy = LongFormPolicy(
                 section_max_characters=audited_default_section_max_characters,
                 join_pause_seconds=policy.join_pause_seconds,
+                hard_cap_characters=policy.hard_cap_characters,
+                origin=policy.origin,
                 note="The exact production-v2 audit sets the Auto section size. " + policy.note,
             )
-            return policy.serialize(source="model_audit")
-        return policy.serialize(source="runtime_default")
+            return _published_policy(policy, family, source="model_audit")
 
-    source = "runtime_default"
     try:
         audited_limit = int(audited_section_max_characters)
     except (TypeError, ValueError):
         audited_limit = 0
-    if 40 <= audited_limit <= 20_000:
+    # An audit may choose a finer section, but never past an engine's own input limit: that is the
+    # point where the engine stops working, not a quality preference.
+    hard_cap = policy.hard_cap_characters
+    if 40 <= audited_limit <= 20_000 and (hard_cap is None or audited_limit <= hard_cap):
         policy = LongFormPolicy(
             section_max_characters=audited_limit,
             join_pause_seconds=policy.join_pause_seconds,
+            hard_cap_characters=hard_cap,
+            origin=policy.origin,
             note=(
                 "The exact model audit overrides the family default. "
                 + policy.note
             ),
         )
         source = "model_audit"
-    return policy.serialize(source=source)
+    return _published_policy(policy, family, source=source)
+
+
+def _published_policy(policy: LongFormPolicy, family: str, *, source: str) -> dict:
+    """One policy, as the catalogue publishes it: the section budget, the engine's limit if it has
+    one, and how this family's speed control is delivered."""
+    payload = policy.serialize(source=source)
+    payload["speed"] = asdict(speed_policy_for(family))
+    return payload

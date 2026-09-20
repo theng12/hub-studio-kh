@@ -1111,7 +1111,8 @@ def _production_join_pauses_s(text: str, chunks: list[str], speed: float) -> lis
     """Keep production narration boundaries stable after final tempo adjustment."""
     pauses: list[float] = []
     cursor = 0
-    speed = max(0.5, min(float(speed), 2.0))
+    speed = max(long_form_policy.SPEED_MINIMUM,
+                min(float(speed), long_form_policy.SPEED_MAXIMUM))
     for index, chunk in enumerate(chunks[:-1]):
         start = text.find(chunk, cursor)
         end = start + len(chunk) if start >= 0 else cursor
@@ -1209,23 +1210,37 @@ def _find_ffmpeg_executable() -> Optional[Path]:
     return media_tools.find_executable("ffmpeg")
 
 
+def _speed_delivery(family: str) -> str:
+    """``native`` when the engine applies the multiplier itself, ``tempo`` when Voice Studio does.
+
+    One decision, made once, from the same table the catalogue publishes - so "the speed control
+    works for this model" is a fact about the shipped policy rather than a property of whichever
+    branch of the dispatcher happens to run.
+    """
+    return long_form_policy.speed_policy_for(family).delivery
+
+
+# Engine labels for the error text of a tempo pass, where the family name alone is not what the
+# operator sees in the model list. This is a LABEL table, not the list of families that receive a
+# tempo pass - that is `long_form_policy.speed_policy_for(family).delivery`, so a family can never
+# be missing from the mechanism the way Bark was: it accepted no speed argument (excluded from the
+# pass-through) and was absent from this map, so the public speed control did nothing at all.
 _POSTPROCESSED_SPEED_FAMILIES = {
     "qwen3-tts": "Qwen",
     "voxcpm-mlx": "VoxCPM2",
     "vibevoice": "VibeVoice",
     "fish-audio-mlx": "Fish Audio S2 Pro",
-    # Neither engine's generate() accepts a speed kwarg (verified against the
-    # installed mlx-audio source) — the public speed control is applied here
-    # as one pitch-preserving tempo pass on the finished WAV, same as Fish.
     "arktts": "Audio8 TTS Preview",
     "moss-tts-nano": "MOSS-TTS-Nano",
     "echo-tts": "Echo-TTS",
-    # OmniVoice.generate() takes no speed argument either (verified against the
-    # installed mlx-audio source: it declares **kwargs and never reads it), so a
-    # passed speed was accepted and silently discarded. It was missing from this
-    # map AND from the pass-through exclusion below, which made the public speed
-    # control a no-op for every API caller.
     "omnivoice": "OmniVoice",
+    "bark": "Bark",
+    "longcat-audiodit": "LongCat AudioDiT",
+    "chatterbox-mlx": "Chatterbox",
+    "orpheus": "Orpheus",
+    "marvis": "Marvis TTS",
+    "voxtral-tts": "Voxtral-4B-TTS",
+    "spark-tts-mlx": "Spark-TTS",
 }
 
 
@@ -1406,7 +1421,8 @@ def _clean_omnivoice_section_edges(
     speed = float(speed)
     if not math.isfinite(speed):
         raise ValueError("OmniVoice speed must be finite")
-    speed = max(0.5, min(speed, 2.0))
+    speed = max(long_form_policy.SPEED_MINIMUM,
+                min(speed, long_form_policy.SPEED_MAXIMUM))
     fade_frames = min(
         round(info.samplerate * _OMNIVOICE_EDGE_FADE_SECONDS * speed),
         cleaned_frames // 2,
@@ -1471,10 +1487,11 @@ def _apply_mlx_output_speed(output_path: Path, speed: float, family: str,
     both short and already-joined long-form output obey one exact public speed
     control. Returns False for the 1.0 no-op.
     """
-    engine = _POSTPROCESSED_SPEED_FAMILIES.get(family)
-    if engine is None:
-        raise ValueError(f"Pitch-preserving output speed is not configured for {family}")
-    speed = max(0.5, min(float(speed), 2.0))
+    engine = (_POSTPROCESSED_SPEED_FAMILIES.get(family)
+              or (MLX_AUDIO_FAMILIES.get(family) or {}).get("label")
+              or family)
+    speed = max(long_form_policy.SPEED_MINIMUM,
+                min(float(speed), long_form_policy.SPEED_MAXIMUM))
     if abs(speed - 1.0) < 1e-6:
         return False
     ffmpeg = _find_ffmpeg_executable()
@@ -2877,7 +2894,11 @@ class GenerationManager:
             raise RuntimeError("Local TTS model revision evidence is unavailable")
         job.model_revision = revision
         if is_kokoro:
-            voice = str(job.params.get("voice") or "").strip().lower()
+            # `preset_speaker` is the field the app's own audio request carries; `voice` is the
+            # internal name the picker resolvers use. Reading only `voice` here rejected every
+            # client-submitted Kokoro job with a terminal error before the engine was ever loaded.
+            voice = str(job.params.get("voice")
+                        or job.params.get("preset_speaker") or "").strip().lower()
             if not voice:
                 raise RuntimeError("Kokoro preset voice evidence is unavailable")
             job.voice_revision = f"{revision}:preset:{voice}"
@@ -3128,7 +3149,7 @@ class GenerationManager:
     def _apply_parent_output_speed(job: GenerationJob, output_path: Path) -> None:
         """Keep the FFmpeg child under the server job's cancellation custody."""
         model = catalog.get_model(str(job.params.get("repo") or ""))
-        if model is not None and model.family in _POSTPROCESSED_SPEED_FAMILIES:
+        if model is not None and _speed_delivery(model.family) == "tempo":
             _apply_mlx_output_speed(
                 output_path, float(job.params.get("speed") or 1.0), model.family,
                 cancel_event=job.cancel_event,
@@ -3318,7 +3339,8 @@ class GenerationManager:
         text = _normalized_speech_text(family, text, params)
 
         speed = float(params.get("speed", 1.0))
-        speed = max(0.5, min(speed, 2.0))
+        speed = max(long_form_policy.SPEED_MINIMUM,
+                    min(speed, long_form_policy.SPEED_MAXIMUM))
 
         gen_kwargs: dict = {"text": text}
         output_duration_limit = _requested_output_duration_limit(params)
@@ -3334,18 +3356,15 @@ class GenerationManager:
                 )
         elif family == "qwen3-tts" and output_duration_limit is not None:
             gen_kwargs["max_tokens"] = _qwen_max_tokens_for_duration(output_duration_limit, speed)
-        # VoxCPM2 has no numeric speed parameter; its natural-language prompt
-        # can shape delivery, while exact requested tempo is applied to the
-        # finished WAV below. Passing speed upstream would be silently ignored.
-        if family not in {"voxcpm-mlx", "bark", "vibevoice", "fish-audio-mlx", "arktts", "moss-tts-nano", "echo-tts", "omnivoice"}:
-            # Qwen accepts this argument but does not apply it upstream. Keep
-            # native generation at 1.0 and adjust the finished WAV below.
-            gen_kwargs["speed"] = 1.0 if family == "qwen3-tts" else speed
-        elif family == "fish-audio-mlx":
-            # Fish applies its native speed per generated segment. Keep that at
-            # 1.0 so the public speed control is applied exactly once to the
-            # fully joined WAV below.
-            gen_kwargs["speed"] = 1.0
+        # Speed is passed upstream ONLY to an engine that applies the multiplier itself. For every
+        # other family the argument is omitted entirely and one pitch-preserving tempo pass is
+        # applied to the finished artifact - because the alternatives are all silent: Chatterbox
+        # documents speed as "Ignored", LongCat never reads it, OmniVoice accepts and discards it,
+        # Spark-TTS indexes SPEED_MAP[float] and raises on any value but its five levels, and Bark
+        # still carries the original "# TODO: adjust speed". A control that is accepted and dropped
+        # is worse than one that is refused, because the caller cannot tell.
+        if _speed_delivery(family) == "native":
+            gen_kwargs["speed"] = speed
         if family == "vibevoice":
             # At 7.5 acoustic frames per second this permits about nine minutes
             # per private section. The model normally stops at EOS sooner.
@@ -3470,7 +3489,8 @@ class GenerationManager:
                 sr = model_entry.sample_rate_hz or family_config["default_sample_rate"]
                 print(f"[gen] {family} saved WAV at {sr} Hz: {output_path}", flush=True)
 
-            if postprocess_speed and not job.cancel_event.is_set() and family in _POSTPROCESSED_SPEED_FAMILIES:
+            if (postprocess_speed and not job.cancel_event.is_set()
+                    and _speed_delivery(family) == "tempo"):
                 if _apply_mlx_output_speed(output_path, speed, family):
                     print(
                         f"[gen] {family} applied pitch-preserving {speed:.2f}x tempo",
@@ -4166,7 +4186,7 @@ class GenerationManager:
                                      fallback_transcript=".")
             return f"clone (voice={voice_id or 'private-reference'})"
 
-        voice = (params.get("voice") or "").strip()
+        voice = (params.get("voice") or params.get("preset_speaker") or "").strip()
         if voice:
             gen_kwargs["voice"] = voice
             return f"voice={voice}"
@@ -4317,7 +4337,8 @@ class GenerationManager:
             )
 
         speed = float(params.get("speed", 1.0))
-        speed = max(0.5, min(speed, 2.0))
+        speed = max(long_form_policy.SPEED_MINIMUM,
+                    min(speed, long_form_policy.SPEED_MAXIMUM))
 
         # F5-TTS knobs we surface via existing UI controls:
         # - inference_timesteps → nfe_step (flow-matching steps, default 32)
