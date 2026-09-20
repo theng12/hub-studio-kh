@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.29 — 2026-09-19 · Kokoro: the bundled espeak library was never used
+
+- **Kokoro died with `SystemExit: 1` on every job.** The worker log shows it resolving the voice
+  (`voices/af_heart.safetensors`, language `a`), starting `Creating new KokoroPipeline`, and exiting.
+  Cause: espeak's phonemizer defaults to running an `espeak-ng` *command*, and none is installed -
+  while the app's runtime already ships `espeakng_loader` with `libespeak-ng.dylib` and 400 files of
+  `espeak-ng-data`. Nothing was missing; nothing pointed at what was there.
+- New `ensure_espeak_available()` in `generation.py`, run at import: it uses the loader's own
+  `get_library_path()`/`get_data_path()`/`make_library_available()` and sets
+  `PHONEMIZER_ESPEAK_LIBRARY` and `ESPEAK_DATA_PATH` with `setdefault`, so an operator who has their
+  own espeak keeps it. Returns whether a library was found; a missing loader is not an error.
+- Evidence: `tests/test_espeak_library_available.py` (3 checks) - the helper finds a real library and
+  data directory, an operator's own `PHONEMIZER_ESPEAK_LIBRARY` survives, and it is wired at import so
+  a job cannot forget it. Verified by running a Kokoro job through the Hub afterwards.
+
 ## 0.6.28 — 2026-09-19 · the dispatch rollback was unreachable
 
 - **The rollback added in 0.6.19 could never execute.** It wrapped the lease-time write in

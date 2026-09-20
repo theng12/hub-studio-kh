@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.29 — 2026-09-19
+
+### Kokoro works now — the app had everything it needed
+
+Kokoro failed every job, and it looked like a broken model: the job started, the model loaded, the
+voice file was found, and then the pipeline exited with no explanation. The reason is that espeak's
+phonemizer looks for an espeak **command** by default, and this app ships no such command — what it
+ships is espeak's **library**: `libespeak-ng.dylib` and 400 files of language data, right there in the
+app's runtime, unused.
+
+The app now points the phonemizer at the library it already carries. Nothing new was installed or
+downloaded; the pieces were present all along.
+
 ## 0.6.28 — 2026-09-19
 
 ### A job that could not be written down now really is put back

@@ -122,6 +122,36 @@ from .native_executor import ExclusiveNativeExecutor
 from .voicestudio_genstudio_integration import final_tts_result
 
 
+def ensure_espeak_available() -> bool:
+    """Point the phonemizer at espeak's bundled library instead of a command that is not installed.
+
+    Kokoro (and anything else phonemizing through espeak) needs an espeak *command* by default, and
+    this app ships none: what it ships is `espeakng_loader`, carrying `libespeak-ng.dylib` and 400
+    files of `espeak-ng-data`. Without this the pipeline starts and exits with `SystemExit: 1`, which
+    is exactly how Kokoro failed every job while looking like a broken model.
+
+    The loader's own `make_library_available()` is the supported way to do this, and the two
+    environment variables are set as well because `phonemizer` reads them. Existing values win, so an
+    operator who has their own espeak is not overridden. Returns whether a library was found.
+    """
+    try:
+        import espeakng_loader
+        library = str(espeakng_loader.get_library_path())
+        data = str(espeakng_loader.get_data_path())
+    except Exception:
+        return False
+    os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", library)
+    os.environ.setdefault("ESPEAK_DATA_PATH", data)
+    try:
+        espeakng_loader.make_library_available()
+    except Exception:
+        pass
+    return bool(library)
+
+
+ENSURE_ESPEAK_AT_IMPORT = ensure_espeak_available()
+
+
 # ───────────── module-level state ─────────────
 
 # TTS on MPS can OOM if multiple models are loaded simultaneously. Even
