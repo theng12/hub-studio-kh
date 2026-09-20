@@ -1,0 +1,52 @@
+[
+  {
+    "path": "/build/Projects/studiohub-standalone",
+    "commit": "f6362e0b5dcb71231d8023f9e9cbc06be0a55267",
+    "status": " M .planning/2026-09-10-standalone-app-feasibility/progress.md\n M .planning/2026-09-10-standalone-app-feasibility/task_plan.md\n M README.md\n M docs/tasks/BOARD.md\n?? .serena/\n?? docs/NEW-COMPUTER-HANDOFF.md\n?? qualification/bug-audit-2026-09-20.md\n?? qualification/evidence/handoff-2026-09-20/\n"
+  },
+  {
+    "path": "/build/.codex/worktrees/studiohub-music-recovery/studiohub-standalone",
+    "commit": "0eebc424f8a74b2b95ec4f9b90fccb32aae0f718",
+    "status": ""
+  },
+  {
+    "path": "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone",
+    "commit": "a896568682470cb24e3662bcb89108a49da22b93",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-01",
+    "commit": "c16833c91635744a1583a8430ba5051cac8b0016",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-02",
+    "commit": "5358a528bbb5ae160a5d49b9701854b8817f4687",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-03",
+    "commit": "371daff4d6baa407c53fe85a3a0b7d45602d2be3",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-04",
+    "commit": "4939329dce4268f4b63aa19fe711eda285288be6",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-06",
+    "commit": "9c0f676382e8362bb8effb9ac02ddb3b5f0fc0b0",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-07",
+    "commit": "8978aa04e926a8bb57a3c7a949ba0264b709a00f",
+    "status": ""
+  },
+  {
+    "path": "/build/Projects/studiohub-standalone/.worktrees/st-09",
+    "commit": "c0855d420eb9ad4dcdc3401ddf96e5977d8979ab",
+    "status": ""
+  }
+]

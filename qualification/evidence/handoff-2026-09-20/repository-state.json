@@ -1,0 +1,150 @@
+{
+  "observed_at_utc": "2026-09-20T12:40:57Z",
+  "source_baseline": "f6362e0b5dcb71231d8023f9e9cbc06be0a55267",
+  "repository": "https://github.com/theng12/Studio-Hub-KH",
+  "visibility": "private",
+  "default_branch": "implementation/voice-runtime",
+  "branches": [
+    {
+      "branch": "backup/pre-handoff-7aa7775",
+      "local_commit": "7aa7775d4e600f4b1bc07eb978d6f7f64baa6c71",
+      "github_commit": "7aa7775d4e600f4b1bc07eb978d6f7f64baa6c71"
+    },
+    {
+      "branch": "codex/recovered-music-draft",
+      "local_commit": "0eebc424f8a74b2b95ec4f9b90fccb32aae0f718",
+      "github_commit": "0eebc424f8a74b2b95ec4f9b90fccb32aae0f718"
+    },
+    {
+      "branch": "codex/takeover-storage-repair",
+      "local_commit": "a896568682470cb24e3662bcb89108a49da22b93",
+      "github_commit": "a896568682470cb24e3662bcb89108a49da22b93"
+    },
+    {
+      "branch": "implementation/st-01",
+      "local_commit": "c16833c91635744a1583a8430ba5051cac8b0016",
+      "github_commit": "c16833c91635744a1583a8430ba5051cac8b0016"
+    },
+    {
+      "branch": "implementation/st-02",
+      "local_commit": "5358a528bbb5ae160a5d49b9701854b8817f4687",
+      "github_commit": "5358a528bbb5ae160a5d49b9701854b8817f4687"
+    },
+    {
+      "branch": "implementation/st-03",
+      "local_commit": "371daff4d6baa407c53fe85a3a0b7d45602d2be3",
+      "github_commit": "371daff4d6baa407c53fe85a3a0b7d45602d2be3"
+    },
+    {
+      "branch": "implementation/st-04",
+      "local_commit": "4939329dce4268f4b63aa19fe711eda285288be6",
+      "github_commit": "4939329dce4268f4b63aa19fe711eda285288be6"
+    },
+    {
+      "branch": "implementation/st-06",
+      "local_commit": "9c0f676382e8362bb8effb9ac02ddb3b5f0fc0b0",
+      "github_commit": "9c0f676382e8362bb8effb9ac02ddb3b5f0fc0b0"
+    },
+    {
+      "branch": "implementation/st-07",
+      "local_commit": "8978aa04e926a8bb57a3c7a949ba0264b709a00f",
+      "github_commit": "8978aa04e926a8bb57a3c7a949ba0264b709a00f"
+    },
+    {
+      "branch": "implementation/st-09",
+      "local_commit": "c0855d420eb9ad4dcdc3401ddf96e5977d8979ab",
+      "github_commit": "c0855d420eb9ad4dcdc3401ddf96e5977d8979ab"
+    },
+    {
+      "branch": "implementation/voice-runtime",
+      "local_commit": "f6362e0b5dcb71231d8023f9e9cbc06be0a55267",
+      "github_commit": "f6362e0b5dcb71231d8023f9e9cbc06be0a55267"
+    }
+  ],
+  "runtime_manifest_checksums": {
+    ".build/voice-runtime/manifest/runtime-files.json": {
+      "manifest_sha256": "ca0514095cc3f641a5e557407983b6f9051636af80eb66cff67da328cedd9ec6",
+      "path_type": "regular file"
+    },
+    ".build/st03-image-runtime-worker/manifest/runtime-files.json": {
+      "manifest_sha256": "461a3e6bffe7f52e81e7b3278ea5c96d335bae9bc8c23998fda681ae15f24175",
+      "path_type": "regular file"
+    }
+  },
+  "test_dependencies": [
+    {
+      "name": "iniconfig",
+      "version": "2.3.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0"
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1"
+    }
+  ],
+  "source_host": {
+    "architecture": "arm64",
+    "macos": "26.6.2",
+    "python": "3.12.14"
+  },
+  "new_computer": {
+    "hardware": "not stated in the input",
+    "macos": "not stated in the input"
+  },
+  "note": "Branch equality observed before the handoff commit; these refs include all pre-existing local branches. Manifest checksums identify receipts, not a fresh full runtime file verification.",
+  "transfer_allocated_sizes_du_sh": [
+    {
+      "size": "1.7G",
+      "path": "/build/Projects/studiohub-standalone/.build/voice-runtime"
+    },
+    {
+      "size": "1.1G",
+      "path": "/build/Projects/studiohub-standalone/.build/st03-image-runtime-worker"
+    },
+    {
+      "size": "9.4M",
+      "path": "/build/Projects/studiohub-standalone/.build/test-deps"
+    },
+    {
+      "size": " 58M",
+      "path": "/build/Projects/studiohub-standalone/.build/downloads"
+    },
+    {
+      "size": "3.2G",
+      "path": "/build/Projects/studiohub-standalone/.build/uv-cache"
+    },
+    {
+      "size": "130G",
+      "path": "/build/StudioHubModels"
+    },
+    {
+      "size": "2.8G",
+      "path": "/build/Applications/Studio Hub.app"
+    }
+  ],
+  "locks": {
+    "voice": {
+      "tracked": "packaging/voice-runtime/requirements.lock.txt",
+      "runtime": ".build/voice-runtime/manifest/requirements.lock.txt",
+      "equal": true,
+      "sha256": "93766f4e6572d9db7aca649a758b1a7b655755d0d5fd670df657b7c64f40ef66"
+    },
+    "image": {
+      "tracked": "packaging/image-runtime/requirements.lock.txt",
+      "runtime": ".build/st03-image-runtime-worker/manifest/requirements.lock.txt",
+      "equal": true,
+      "sha256": "5fd5e79db7f8bec7dfa5c3ebc0fd1495ba7460138b44caf06bb6c0346c186b4f"
+    }
+  }
+}

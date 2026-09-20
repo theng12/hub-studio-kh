@@ -1,0 +1,80 @@
+VOICE CANCEL: {"state": "cancelled", "cancel_error": "worker returned HTTP 500"}
+FLEET MATCHER: {"GET /studio/voice/api/settings": true, "GET /studio/voice/api/not-yet-classified": true, "PATCH /studio/voice/api/not-yet-classified": true}
+VERIFIER OUTPUT:
+app:     /var/folders/c7/84mt7mc151914_z_2m5jt3sc0000gn/T/hub-handoff-verifier-i0oj0zyu/Fixture.app
+library: /var/folders/c7/84mt7mc151914_z_2m5jt3sc0000gn/T/hub-handoff-verifier-i0oj0zyu/models
+
+identity: fixture fixture development_build: True
+quarantined files: 0
+
+starting.
+
+RESULT: PASS — this copy starts, becomes ready and answers its health check.
+You can delete this temporary state; the app uses its own when you launch it normally.
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 214, in urlopen
+    return opener.open(url, data, timeout)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 517, in open
+    response = self._open(req, data)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 539, in _open
+    return self._call_chain(self.handle_open, 'unknown',
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 494, in _call_chain
+    result = func(*args)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 1417, in unknown_open
+    raise URLError('unknown url type: %s' % type)
+urllib.error.URLError: <urlopen error unknown url type: invalid>
+/build/Projects/studiohub-standalone/qualification/verify-launch.sh: line 81: 84684 Terminated: 15          "$SVC" --data-dir "$TMP" --models-dir "$LIB" --ready-file "$TMP/hub-ready.json" --parent-pid "$$" --host "127.0.0.1" --port "$PORT" > "$TMP/start.log" 2>&1
+
+SUBTITLE DISPOSITION: {"error_code": "JOB_PERSISTENCE_FAILED", "error": "Final artifact could not be persisted; artifacts were discarded", "remaining_artifacts": ["fixture.srt"]}
+VOICE ACCEPTANCE: {"live_id": "accepted-voice-job", "persisted_ids_before_poll": []}
+test_failed_voice_cancel_does_not_claim_terminal_cancellation (__main__.HandoffRegressions.test_failed_voice_cancel_does_not_claim_terminal_cancellation) ... FAIL
+test_fleet_permission_denies_unclassified_worker_routes (__main__.HandoffRegressions.test_fleet_permission_denies_unclassified_worker_routes) ... FAIL
+test_launch_verifier_rejects_failed_health_probe (__main__.HandoffRegressions.test_launch_verifier_rejects_failed_health_probe) ... FAIL
+test_subtitle_final_persistence_failure_has_truthful_artifact_disposition (__main__.HandoffRegressions.test_subtitle_final_persistence_failure_has_truthful_artifact_disposition) ... FAIL
+test_voice_acceptance_id_is_persisted_before_polling (__main__.HandoffRegressions.test_voice_acceptance_id_is_persisted_before_polling) ... FAIL
+
+======================================================================
+FAIL: test_failed_voice_cancel_does_not_claim_terminal_cancellation (__main__.HandoffRegressions.test_failed_voice_cancel_does_not_claim_terminal_cancellation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/qualification/evidence/handoff-2026-09-20/reproduce_findings.py", line 88, in test_failed_voice_cancel_does_not_claim_terminal_cancellation
+    self.assertNotEqual(item["state"], "cancelled",
+AssertionError: 'cancelled' == 'cancelled' : Worker refused cancellation but Hub claims terminal cancelled
+
+======================================================================
+FAIL: test_fleet_permission_denies_unclassified_worker_routes (__main__.HandoffRegressions.test_fleet_permission_denies_unclassified_worker_routes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/qualification/evidence/handoff-2026-09-20/reproduce_findings.py", line 34, in test_fleet_permission_denies_unclassified_worker_routes
+    self.assertFalse(any(checks.values()), "Unclassified worker routes are granted by default")
+AssertionError: True is not false : Unclassified worker routes are granted by default
+
+======================================================================
+FAIL: test_launch_verifier_rejects_failed_health_probe (__main__.HandoffRegressions.test_launch_verifier_rejects_failed_health_probe)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/qualification/evidence/handoff-2026-09-20/reproduce_findings.py", line 120, in test_launch_verifier_rejects_failed_health_probe
+    self.assertNotEqual(result.returncode, 0,
+AssertionError: 0 == 0 : Verifier reported success after its health probe failed
+
+======================================================================
+FAIL: test_subtitle_final_persistence_failure_has_truthful_artifact_disposition (__main__.HandoffRegressions.test_subtitle_final_persistence_failure_has_truthful_artifact_disposition)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/qualification/evidence/handoff-2026-09-20/reproduce_findings.py", line 158, in test_subtitle_final_persistence_failure_has_truthful_artifact_disposition
+    self.assertTrue(not remaining or job["error_code"] == "JOB_PERSISTENCE_UNCERTAIN",
+AssertionError: False is not true : Published artifact remains while receipt says it was discarded
+
+======================================================================
+FAIL: test_voice_acceptance_id_is_persisted_before_polling (__main__.HandoffRegressions.test_voice_acceptance_id_is_persisted_before_polling)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/build/Projects/studiohub-standalone/qualification/evidence/handoff-2026-09-20/reproduce_findings.py", line 81, in test_voice_acceptance_id_is_persisted_before_polling
+    self.assertIn("accepted-voice-job", persisted_ids,
+AssertionError: 'accepted-voice-job' not found in [] : Accepted Voice identity is not saved in its batch before first poll
+
+----------------------------------------------------------------------
+Ran 5 tests in 4.034s
+
+FAILED (failures=5)

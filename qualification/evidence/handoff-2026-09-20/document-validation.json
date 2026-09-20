@@ -1,0 +1,74 @@
+{
+  "files_checked": [
+    "docs/NEW-COMPUTER-HANDOFF.md",
+    "qualification/bug-audit-2026-09-20.md",
+    "README.md",
+    "docs/tasks/BOARD.md",
+    ".planning/2026-09-10-standalone-app-feasibility/task_plan.md",
+    ".planning/2026-09-10-standalone-app-feasibility/progress.md"
+  ],
+  "local_links_checked": 55,
+  "shell_blocks": [
+    {
+      "block": 1,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 2,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 3,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 4,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 5,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 6,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 7,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 8,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 9,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 10,
+      "returncode": 0,
+      "error": ""
+    },
+    {
+      "block": 11,
+      "returncode": 0,
+      "error": ""
+    }
+  ],
+  "python_syntax": "passed",
+  "audit_probes": {
+    "returncode": 1,
+    "expected_five_failures_observed": true
+  },
+  "problems": []
+}

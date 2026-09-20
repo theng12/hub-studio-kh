@@ -2,6 +2,35 @@
 
 ## ▶ TAKE OVER HERE
 
+### New-computer handoff — 2026-09-20
+
+[MEASURED] **Current holder:** Codex orchestrator `/root`. Owner requested a bug/fix
+audit, a portable handoff, and an up-to-date GitHub repository. Start commit:
+`f6362e0` (cleanup repair merged through PR #1). Working branch:
+`codex/new-computer-handoff` in the main checkout. Owned files: the new handoff,
+audit/evidence, README links, this board and canonical planning status.
+
+**START:** [New-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
+[bug/fix backlog](../../qualification/bug-audit-2026-09-20.md).
+These supersede the earlier "next Music" direction for the move: establish the new
+computer's inputs first, then fix the verifier and job lifecycle findings.
+
+[MEASURED] **GitHub recovery is complete for pre-existing branch tips:** all match
+`origin`, including `codex/recovered-music-draft` at `0eebc42`. The private repository
+is `theng12/Studio-Hub-KH`; default branch remains `implementation/voice-runtime`.
+Music is WIP on its own branch, not integrated. Old worktrees, stash, runtimes,
+model assets and installed app are preserved.
+
+[MEASURED] **Audit evidence:** five offline failing regressions are retained, plus
+three native source findings, four follow-up candidates and six migration/integration
+items. These are OPEN, not fixed by the documentation pass. Product source is unchanged;
+the earlier 584-test root gate/native/package proof remains the most recent full
+baseline. New computer hardware and actual migration are not yet observed.
+
+**Completion proof for this handoff:** independent evidence/document review, valid
+local links and shell snippets, expected audit probe failures, reviewed PR merge,
+and exact GitHub/local integration SHA equality. No ST card is newly DONE.
+
 ### Current takeover — 2026-09-20
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Start: `415df68` on
@@ -267,7 +296,11 @@ are current; the longer narrative under it is historical and is kept for provena
   every result in a committed file — not in a chat message.
   true, and put every result in a committed file — not in a chat message.
 
-## ▶ FIRST TASKS FOR THE NEXT SESSION (specific, verified starting points)
+## Historical first tasks — superseded
+
+These commands and status claims belong to the earlier handoff. Follow
+[the new-computer guide](../NEW-COMPUTER-HANDOFF.md) and the current takeover block
+at the top of this board; do not run the versioned paths below as current instructions.
 
 1. **Run the kit on the owner's machines.** `dist/Studio Hub 0.4.0.app` plus `model-library/`,
    right-click → Open, choose the library, then

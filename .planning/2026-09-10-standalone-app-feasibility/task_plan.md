@@ -1,5 +1,15 @@
 # Standalone Studio App Planning
 
+## Current continuation — new computer, 2026-09-20
+
+[MEASURED] Owner requested an audit/fix backlog and portable handoff with GitHub up
+to date. Baseline `f6362e0` includes the completed cleanup repair. Read
+`docs/NEW-COMPUTER-HANDOFF.md` and `qualification/bug-audit-2026-09-20.md`; the board
+owns current status. Five new fixture failures are OPEN. All prior branch tips,
+including the Music WIP, match GitHub. Runtimes/models remain external inputs;
+new-machine acceptance is pending. This documentation pass does not change product
+source or complete a model/fleet qualification card.
+
 ## Active takeover — 2026-09-20
 
 [MEASURED] Codex `/root` recovered the project at `415df68` (installed 0.6.38).
