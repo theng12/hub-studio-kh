@@ -90,6 +90,28 @@ MOSS_TTS_NANO_SECTION_MAX_CHARACTERS = 300
 # is 768 characters). 300 sits comfortably inside both, and a 287-character
 # section was verified end-to-end as semantically complete via transcribe-back.
 ECHO_TTS_SECTION_MAX_CHARACTERS = 300
+# Voxtral, measured 2026-09-20 through the app's own Hub (`qualification/measure_section_budget.py`).
+#
+# The per-budget comparison could not run: the private override never reached the engine, so every
+# budget produced byte-identical audio (one call). What the measurement did establish is the
+# one-call behaviour, by varying the script instead (same voice, same seed):
+#
+#   1162 chars / 215 words -> 51.92 s audio, 100.0% coverage, 0 words lost
+#   1685 chars / 314 words -> 73.60 s audio,  96.8% coverage, 10 words lost
+#   2463 chars / 466 words -> 96.00 s audio,  80.3% coverage, 92 words lost
+#   3205 chars / 604 words -> 96.00 s audio,  64.1% coverage, 217 words lost
+#
+# Two facts come out of that. Word loss begins somewhere between 1162 and 1685 characters, well
+# before any limit, so one-call rendering was already losing words on a normal paragraph. And the
+# 2463- and 3205-character renders are both exactly 96.0000 s - the app does not pass `max_tokens`
+# for this family, so mlx-audio's wrapper default of 1200 audio frames applies instead of the
+# model's own 4096, and everything past that is silently dropped.
+#
+# 800 is chosen as the largest candidate budget that is unambiguously safe on both counts: below the
+# largest verified-perfect single call (1162), well below the onset of word loss (~1685), and about
+# 36 s of speech per section against the 96 s truncation. It is a measured choice, not the shared
+# default, and it is deliberately not raised to the truncation limit: the evidence stops at 1162.
+VOXTRAL_SECTION_MAX_CHARACTERS = 800
 # ── families with no measurement of their own ────────────────────────────────
 # A family without a policy used to fall out of `_runtime_default` as None, and the caller read
 # "None" as "send the whole script in one call". That is how the gateway came to see an engine
@@ -369,12 +391,15 @@ def _runtime_default(family: str, repo: str) -> Optional[LongFormPolicy]:
         )
     if family == "voxtral-tts":
         return LongFormPolicy(
-            section_max_characters=CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+            section_max_characters=VOXTRAL_SECTION_MAX_CHARACTERS,
             join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
+            origin="measured",
             note=(
-                "Voxtral is autoregressive with a per-call cap of 4096 audio tokens (~5 minutes), "
-                "so its own limit is far above any narration section. No coverage measurement "
-                "exists for this family yet, so it starts at the conservative shared default."
+                "Measured on this fleet: a single call still reproduced every word at 1162 "
+                "characters and began losing words by 1685, so sections are held at 800 - about 36 "
+                "seconds of speech, clear of both the loss onset and the 96-second point where the "
+                "engine silently drops the rest of the text. Voxtral also cannot apply a speed "
+                "multiplier, so pacing is a tempo pass on the finished audio."
             ),
         )
     return LongFormPolicy(

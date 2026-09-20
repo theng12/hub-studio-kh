@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.35 — 2026-09-20 · voxtral-tts measured: 800-character sections, and a 96-second truncation found
+
+- **Measured voxtral-tts through the app's own Hub** with the new
+  `qualification/measure_section_budget.py` (transcribe-back word coverage, same voice and seed).
+  The per-budget axis could not be exercised - the private `_resolved_section_max_characters` override
+  is not a member of the worker's `Txt2SpeechBody` and is dropped by Pydantic, and the public
+  `section_max_characters` was refused for every family without a declared section-size control
+  (0.6.34 fixed the second half) - so the same evidence was produced by varying the script length
+  instead: 1162 chars / 215 words → 100.0% coverage; 1685 → 96.8% (10 words lost); 2463 → 80.3%;
+  3205 → 64.1%.
+- **The 96-second truncation.** The 2463- and 3205-character renders are both exactly 96.0000 s
+  (2,304,000 frames = 1200 audio frames), because the worker passes no `max_tokens` for this family
+  and `mlx_audio/tts/generate.py` defaults it to 1200, overriding the model's own 4096. Sections of
+  800 characters (~36 s) stay far inside it, so the cap is no longer reachable; the underlying
+  wrapper default is recorded in `VOXTRAL_SECTION_MAX_CHARACTERS` rather than changed, because the
+  measured evidence for a longer single call does not exist.
+- `VOXTRAL_SECTION_MAX_CHARACTERS = 800` with `origin: "measured"` and the full table in the policy
+  comment. Tests updated: the measured family keeps its measurement, stays below the verified-perfect
+  1162, and its declared control publishes 800.
+
 ## 0.6.34 — 2026-09-20 · the paused model, the missing budgets, and the silent speed control
 
 - **Kokoro root cause: a field name, not the engine.** `_record_local_revision_evidence` read

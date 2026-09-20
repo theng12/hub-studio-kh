@@ -146,7 +146,19 @@ class SectionSizeControlTests(unittest.TestCase):
     def test_an_undeclared_section_size_uses_the_family_budget(self) -> None:
         repo = "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
         resolved = catalog.resolve_section_budget("voxtral-tts", repo, None)
-        self.assertEqual(resolved["section_max_characters"], 280)
+        self.assertEqual(resolved["section_max_characters"],
+                         long_form_policy.VOXTRAL_SECTION_MAX_CHARACTERS)
+
+    def test_the_measured_family_keeps_its_measurement(self) -> None:
+        """Voxtral's 800 comes from a measurement, not from the shared default."""
+        policy = long_form_policy.policy_for("voxtral-tts", "x")
+        self.assertEqual(policy["section_max_characters"], 800)
+        self.assertEqual(policy["origin"], "measured")
+        self.assertNotEqual(policy["section_max_characters"],
+                            long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS)
+        # The evidence: a single call still held every word at 1162 characters, and began losing
+        # words by 1685. The budget must stay under the point that was verified perfect.
+        self.assertLess(policy["section_max_characters"], 1162)
 
     def test_the_hand_declared_qwen_control_still_wins(self) -> None:
         control = catalog.section_size_control_for("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")

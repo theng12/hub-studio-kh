@@ -2,6 +2,33 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.35 — 2026-09-20
+
+### How long a script each voice model can actually take
+
+0.6.34 gave every model a section budget. This release replaces the one placeholder in that set with
+a measured number, and it settles the question the gateway raised.
+
+Voxtral had no budget of its own, so it started at the conservative shared default. Measuring it —
+rendering the same script and transcribing the result back to count the words that survived — gave
+two answers that matter:
+
+- A single call still reproduced **every** word at 1,162 characters, and began losing words by 1,685.
+  So the loss was real and it started inside a normal paragraph, not at some far-away limit.
+- Past **96 seconds** of speech the engine silently drops whatever is left: the 2,463- and
+  3,205-character renders both came out at exactly 96.0000 s. The app was never passing this family a
+  generation ceiling, so the library's own short default was in force instead of the model's far
+  larger one.
+
+Voxtral now sections at **800 characters** — about 36 seconds of speech, comfortably inside the
+verified-perfect length and well clear of both the point where words start disappearing and the
+96-second cut-off. The measurement script ships with the app's qualification tools so the same
+evidence can be produced for any other family.
+
+Nothing else changed. The rest of the budgets were already measured or derived from each engine's own
+input limit, and every model still shows its section size, its adjustable range and its engine's cap
+on the Models page.
+
 ## 0.6.34 — 2026-09-20
 
 ### Kokoro works, and the real reason it did not
