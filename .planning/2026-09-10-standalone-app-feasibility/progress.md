@@ -1,5 +1,25 @@
 # Progress
 
+## 2026-09-21 — ordered remaining-work execution
+
+Owner authorized planning all remaining work and starting top to bottom. Root
+extended the existing `task_plan.md` with R01–R10, ownership, dependencies, proving
+checks and explicit physical/deployment gates; no parallel planning system was created.
+Base integration `1267a51`; isolated worktree `handoff-completion`, branch
+`codex/handoff-completion`. Native build/boundary/API baseline passed; reference,
+purge and standalone baseline passed 18 tests with two dependency deprecation warnings.
+
+Preflight: R01 native and R02 execution-assets have disjoint source/tests and can
+run concurrently in the first wave. Broker (R03/R04), shared native (R01/R06/R08/R09)
+and build/staging/model boundaries are serialized as recorded in the plan's
+ownership table. Current Graphify CLI is absent and the old Voice graph cannot
+support these paths; use verified current-source callers. Existing artifacts,
+installed app and protected model library remain unchanged.
+
+R01: IN PROGRESS — native health ownership/rejoin reproduction then minimal repair.
+R02: READY — finite ordered timing and controlled corrupt-expiry refusal.
+R03–R10: queued; missing physical hardware/authority is not a completed test.
+
 Follow-up framework decision: owner accepted native SwiftUI/AppKit with WKWebView and disclosed no Apple Developer account. Verified Apple membership and Gatekeeper guidance; recorded that paid enrollment is unnecessary for local development/internal testing, while Developer ID/notarization need membership and transferred internal builds may require normal per-app approval. No runtime changes, login registration, enrollment or distribution performed in this discussion turn. Updated the existing design and owner direction only; documentation diff checked.
 
 2026-09-10: Read requested skills. Created isolated planning project at /build/Projects/studiohub-standalone. Initialized PLAN_ID 2026-09-10-standalone-app-feasibility. No source repositories changed. Parent Pinokio instructions inspected in earlier work; launcher creation rules do not apply to this standalone planning project. Existing source graphs will be copied into this project before querying so generated research state stays isolated. Optional first-version Studio scope clarification sent to owner.

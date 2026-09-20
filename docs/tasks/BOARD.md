@@ -4,6 +4,16 @@
 
 ### Active takeover — new computer, resumed 2026-09-21
 
+[MEASURED] **Ordered execution authorized:** the owner asked to plan all remaining
+work and start fixing top to bottom. The full R01–R10 completion plan is at the
+top of [the canonical plan](../../.planning/2026-09-10-standalone-app-feasibility/task_plan.md).
+PR #11 is merged; integration is `1267a51170503a7801786c021a16b6a6a3d3b8af`.
+**Current batch:** R01 native lifecycle N-01/N-02/N-03, then R02 reference
+validation C-01/C-02. Independent non-overlapping implementations may run together;
+review/integration follows that order. Root owns the board, plan and Git integration.
+Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
+branch `codex/handoff-completion`. Nothing later is marked qualified by this batch.
+
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.
 This takeover started from `ca7928a`. H-02 through H-04 are integrated through reviewed
@@ -78,7 +88,7 @@ modified. `~/StudioHubModels`, `dist`, and a staged build are absent at intake. 
 draft remains unintegrated at `0eebc42` on `codex/recovered-music-draft`; its read-only
 audit worktree is `/build/.codex/worktrees/music-recovery-audit/studio-hub-kh`.
 Do not merge it wholesale: its package/engine contract was recovered separately;
-the current runtime integration is under review and native workflow integration remains open.
+the runtime segment is integrated through PR #11; native workflow integration remains open.
 
 ### Historical handoff (superseded where the current takeover differs)
 
