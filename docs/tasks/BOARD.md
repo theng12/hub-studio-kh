@@ -6,10 +6,11 @@
 
 [MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
 `theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.
-This takeover started from `ca7928a` and is integrated through `d1db940`. The local
-integration branch and `origin/implementation/voice-runtime` matched at that commit
-before this documentation update. GitHub reports zero Actions workflows and the tree
-contains no workflow directory; keep hosted compute disabled.
+This takeover started from `ca7928a`. H-02 is integrated through reviewed
+[PR #6](https://github.com/theng12/Studio-Hub-KH/pull/6) at `47e7e1c`; H-03 is fixed
+by reviewed [PR #7](https://github.com/theng12/Studio-Hub-KH/pull/7). GitHub reports
+zero Actions workflows and the tree contains no workflow directory; keep hosted
+compute disabled.
 
 **START:** [new-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
 [bug/fix backlog](../../qualification/bug-audit-2026-09-20.md). This block and the
@@ -23,15 +24,17 @@ and FFprobe now record macOS 14.0 as their minimum after reviewed
 [PR #3](https://github.com/theng12/Studio-Hub-KH/pull/3). This is deployment-metadata
 evidence, not physical macOS 14 qualification.
 
-[MEASURED] **Audit progress:** H-01 is fixed by reviewed
-[PR #4](https://github.com/theng12/Studio-Hub-KH/pull/4). The existing regression plus
-seven behavioral tests pass with the bundled runtime. H-02 through H-05 remain OPEN.
-The next implementation unit is H-02 (persist an accepted Voice worker identity before
-polling), followed by H-03 cancellation truthfulness, then H-04 and H-05. Music waits
-until these higher-risk defects are closed.
+[MEASURED] **Audit progress:** H-01, H-02 and H-03 are fixed by reviewed PRs
+[#4](https://github.com/theng12/Studio-Hub-KH/pull/4),
+[#6](https://github.com/theng12/Studio-Hub-KH/pull/6), and
+[#7](https://github.com/theng12/Studio-Hub-KH/pull/7). H-03 verification passed 73
+Hub regressions, nine Hub lifecycle/audit tests, and 17 startup/fleet-auth tests; the
+broader 51-test fleet/auth/startup/connection set also passed before the final focused
+expiry case was added. H-04 and H-05 remain OPEN. The next implementation unit is H-04
+deny-by-default fleet worker routing, followed by H-05. Music waits until both close.
 
-[MEASURED] **Current gate boundary:** root discovery ran 591 tests: the H-01 tests
-passed, but the checkout is not globally green. Remaining failures are an absent
+[MEASURED] **Current gate boundary:** root discovery before H-02/H-03 ran 591 tests:
+the H-01 tests passed, but the checkout was not globally green. Remaining failures are an absent
 `espeak-ng` command in the freshly built Voice runtime and a stale staged 0.5.4 app
 being selected while source is 0.6.38; an isolated worktree also lacked its own ignored
 `.build` tree. Record those as migration/baseline work, not H-01 regressions.
