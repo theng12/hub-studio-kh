@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -23,11 +24,14 @@ class StopDispatch(BaseException):
 
 
 class WorkerClient:
-    def __init__(self, accepted: dict | None = None, polled: dict | None = None):
+    def __init__(self, accepted: dict | None = None, polled: dict | None = None,
+                 cancel_status: int = 200):
         self.accepted = accepted
         self.polled = polled
+        self.cancel_status = cancel_status
         self.posts = 0
         self.gets = 0
+        self.deletes = 0
 
     async def post(self, *args, **kwargs):
         self.posts += 1
@@ -36,6 +40,10 @@ class WorkerClient:
     async def get(self, *args, **kwargs):
         self.gets += 1
         return response(200, {"job": self.polled})
+
+    async def delete(self, *args, **kwargs):
+        self.deletes += 1
+        return response(self.cancel_status, {})
 
 
 def response(status: int, payload: dict) -> httpx.Response:
@@ -144,6 +152,283 @@ def test_voice_acceptance_persistence_failure_never_requeues(
     assert item["state"] == "uncertain"
     assert item["retry_at"] is None
     assert studio["machine"] in broker.busy_machines()
+
+
+def test_failed_voice_cancel_after_acceptance_waits_for_worker_truth(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    client = WorkerClient(accepted, cancel_status=500)
+    original_post = client.post
+
+    async def cancel_after_acceptance(*args, **kwargs):
+        reply = await original_post(*args, **kwargs)
+        batch["cancelled"] = True
+        return reply
+
+    async def noop(*args):
+        return None
+
+    monkeypatch.setattr(client, "post", cancel_after_acceptance)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert client.deletes == 1
+    assert item["state"] == "uncertain"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item["error_code"] == "VOICE_CANCEL_OUTCOME_UNCERTAIN"
+    assert item["retry_at"] is None
+    assert studio["machine"] in broker.busy_machines()
+
+
+def test_confirmed_voice_cancel_preserves_worker_terminal_error(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    worker_error = {
+        **accepted,
+        "state": "error",
+        "error": "fixture generation failed",
+        "error_code": "FIXTURE_FAILURE",
+    }
+    client = WorkerClient(accepted, polled=worker_error)
+    original_post = client.post
+
+    async def cancel_after_acceptance(*args, **kwargs):
+        reply = await original_post(*args, **kwargs)
+        batch["cancelled"] = True
+        return reply
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args):
+        return None
+
+    monkeypatch.setattr(client, "post", cancel_after_acceptance)
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert client.deletes == 1
+    assert client.gets == 1
+    assert item["state"] == "error"
+    assert item["error"] == worker_error["error"]
+    assert item["error_code"] == worker_error["error_code"]
+
+
+def test_voice_cancel_during_polling_waits_for_worker_truth(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    client = WorkerClient(accepted, cancel_status=500)
+
+    async def cancel_while_waiting(*args):
+        batch["cancelled"] = True
+
+    async def noop(*args):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", cancel_while_waiting)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert client.gets == 0
+    assert client.deletes == 1
+    assert item["state"] == "uncertain"
+    assert item["studio_job_id"] == accepted["id"]
+    assert studio["machine"] in broker.busy_machines()
+
+
+def test_voice_cancel_racing_failed_poll_waits_for_worker_truth(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    client = WorkerClient(accepted)
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def fail_while_cancelled(*args, **kwargs):
+        client.gets += 1
+        batch["cancelled"] = True
+        raise httpx.ConnectError("fixture: worker unavailable")
+
+    async def noop(*args):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(client, "get", fail_while_cancelled)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert client.gets == 1
+    assert item["state"] == "uncertain"
+    assert item["studio_job_id"] == accepted["id"]
+    assert studio["machine"] in broker.busy_machines()
+
+
+@pytest.mark.parametrize("has_receipt", (True, False))
+def test_restart_keeps_expired_dispatched_voice_job_uncertain_and_fenced(
+    fixture_monitor, has_receipt
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    batch["genstudio_execution"] = {
+        "lease_expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+    }
+    item.update(
+        machine=studio["machine"],
+        worker_id=studio["id"],
+    )
+    if has_receipt:
+        item["studio_job_id"] = accepted["id"]
+    ledger.save_batch(batch)
+    broker.batches.clear()
+    broker._busy.clear()
+
+    assert broker.restore_batches() == 1
+
+    restored = broker.batches[batch["id"]]["items"][0]
+    assert restored["state"] == "uncertain"
+    assert restored["studio_job_id"] == (accepted["id"] if has_receipt else None)
+    assert restored["error_code"] == "VOICE_CANCEL_OUTCOME_UNCERTAIN"
+    assert studio["machine"] in broker.busy_machines()
+    if not has_receipt:
+        with pytest.raises(ValueError, match="identity is unavailable"):
+            broker.voice_recovery_item(batch["id"], item["index"])
+        assert restored["recovery"]["phase"] == "manual_action_required"
+
+
+def test_worker_done_receipt_wins_lease_expiry_race(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    batch["genstudio_execution"] = {
+        "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+    }
+    done = {**accepted, "state": "done", "runtime_s": 0.1}
+    client = WorkerClient(accepted, polled=done)
+
+    async def continue_to_poll(*args):
+        return None
+
+    original_get = client.get
+
+    async def finish_as_lease_expires(*args, **kwargs):
+        batch["genstudio_execution"]["lease_expires_at"] = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        ).isoformat()
+        return await original_get(*args, **kwargs)
+
+    async def noop(*args):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(client, "get", finish_as_lease_expires)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert client.gets == 1
+    assert item["state"] == "done"
+    assert item["studio_job_id"] == accepted["id"]
+
+
+def test_cancelled_voice_batch_keeps_active_worker_fenced_during_reconcile(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    batch["cancelled"] = True
+    item.update(
+        state="uncertain",
+        studio_job_id=accepted["id"],
+        machine=studio["machine"],
+        worker_id=studio["id"],
+    )
+    broker._busy.clear()
+    active = {
+        **accepted,
+        "state": "running",
+        "params": {
+            "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
+        },
+    }
+    client = WorkerClient(polled=active)
+    leaked_error = "Authorization: Bearer fixture-secret /Users/example/model.bin"
+
+    async def fail_cancel(*args, **kwargs):
+        client.deletes += 1
+        raise httpx.ConnectError(leaked_error)
+
+    monkeypatch.setattr(client, "delete", fail_cancel)
+
+    result = asyncio.run(
+        broker.reconcile_voice_item(batch["id"], item["index"], client=client)
+    )
+
+    serialized = str(result)
+    assert result["reconciled"] is False
+    assert item["state"] == "uncertain"
+    assert item["recovery"]["phase"] == "health_wait"
+    assert studio["machine"] in broker.busy_machines()
+    assert "fixture-secret" not in serialized
+    assert "/Users/example" not in serialized
+    assert client.posts == 0
+    assert client.deletes == 1
+    assert client.gets == 1
+
+
+def test_cancelled_voice_batch_adopts_worker_cancelled_receipt(fixture_monitor):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    batch["cancelled"] = True
+    item.update(
+        state="uncertain",
+        studio_job_id=accepted["id"],
+        machine=studio["machine"],
+        worker_id=studio["id"],
+    )
+    broker._busy.clear()
+    cancelled = {
+        **accepted,
+        "state": "cancelled",
+        "error": "Cancelled by worker",
+        "params": {
+            "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
+        },
+    }
+    client = WorkerClient(polled=cancelled, cancel_status=500)
+
+    result = asyncio.run(
+        broker.reconcile_voice_item(batch["id"], item["index"], client=client)
+    )
+
+    assert result["reconciled"] is True
+    assert item["state"] == "cancelled"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item["recovery"]["phase"] == "reconciled"
+    assert studio["machine"] not in broker.busy_machines()
+    assert client.posts == 0
+    assert client.deletes == 1
+    assert client.gets == 1
 
 
 def test_voice_dispatch_is_durable_before_worker_task_starts(

@@ -171,7 +171,7 @@ def test_already_expired_assignment_is_rejected_before_dispatch(reset):
     assert broker.batches == {}
 
 
-def test_expired_batch_is_fenced_instead_of_requeued_after_hub_restart(reset):
+def test_expired_voice_dispatch_is_uncertain_instead_of_requeued_after_restart(reset):
     _configure_site()
     submitted = broker.submit_batch(_envelope(lease_expires_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat()))
     batch = broker.batches[submitted["batch_id"]]
@@ -183,8 +183,10 @@ def test_expired_batch_is_fenced_instead_of_requeued_after_hub_restart(reset):
     restored = broker.batches[submitted["batch_id"]]
     assert restored["cancelled"] is True
     assert restored["lease_expired"] is True
-    assert restored["items"][0]["state"] == "cancelled"
-    assert restored["items"][0]["error"] == "GenStudio execution lease expired"
+    assert restored["items"][0]["state"] == "uncertain"
+    assert restored["items"][0]["retry_at"] is None
+    assert restored["items"][0]["error_code"] == "VOICE_CANCEL_OUTCOME_UNCERTAIN"
+    assert restored["items"][0]["recovery"]["phase"] == "uncertain"
 
 
 def test_expired_lease_does_not_relabel_completed_batch(reset):

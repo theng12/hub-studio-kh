@@ -818,7 +818,17 @@ def _expire_genstudio_batch(batch: dict) -> bool:
     batch["governor_note"] = "GenStudio execution lease expired"
     now = time.time()
     for item in unfinished:
-        if batch.get("modality") == "image" and item.get("state") in {
+        if (batch.get("modality") == "voice"
+                and item.get("state") in {"running", "cancel_requested"}):
+            if not _mark_accepted_voice_cancel_uncertain(batch, item):
+                reason = (
+                    "The GenStudio lease expired during a dispatched Voice attempt, "
+                    "but its worker receipt is unavailable; manual action is required."
+                )
+                _mark_voice_uncertain(item, reason)
+                item["error_code"] = "VOICE_CANCEL_OUTCOME_UNCERTAIN"
+                item["error"] = reason
+        elif batch.get("modality") == "image" and item.get("state") in {
                 "running", "cancel_requested"}:
             studio = next((row for row in _monitor().registry
                            if row.get("id") == item.get("studio")), {})
@@ -898,6 +908,31 @@ def _mark_voice_uncertain(item: dict, reason: str) -> None:
         "reason": reason,
         "updated_at": time.time(),
     }
+
+
+def _mark_accepted_voice_cancel_uncertain(batch: dict, item: dict) -> bool:
+    """Keep accepted Voice work fenced until its worker reports the outcome."""
+    if batch.get("modality") != "voice" or not item.get("studio_job_id"):
+        return False
+    if batch.get("lease_expired"):
+        reason = (
+            "The GenStudio lease expired after Voice worker acceptance; "
+            "the original job outcome must be reconciled."
+        )
+    elif item.get("cancel_error"):
+        reason = (
+            "The Voice worker did not confirm cancellation; "
+            "the original job outcome must be reconciled."
+        )
+    else:
+        reason = (
+            "Voice cancellation was requested after worker acceptance; "
+            "the original job outcome must be reconciled."
+        )
+    _mark_voice_uncertain(item, reason)
+    item["error_code"] = "VOICE_CANCEL_OUTCOME_UNCERTAIN"
+    item["error"] = reason
+    return True
 
 
 def _mark_image_uncertain(item: dict, studio: dict, reason: str,
@@ -1603,6 +1638,8 @@ def public_item(b: dict, item: dict) -> dict:
     result = {k: v for k, v in item.items()
               if k not in {"artifact_path", "worker_artifact_url"}}
     result["execution_started_at"] = item.get("execution_started_at")
+    if result.get("cancel_error") is not None:
+        result["cancel_error"] = _sanitize_public_error(result["cancel_error"])
     if item.get("state") == "done":
         result["artifact_url"] = hub_artifact_url(b, item)
         result["terminal_result"] = terminal_result(b, item)
@@ -1698,9 +1735,6 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     drops after the worker finishes, recovery can record the already-produced
     artifact instead of submitting a duplicate generation.
     """
-    if _expire_genstudio_batch(b):
-        await _signal_worker_cancel(client, item)
-        return
     if b.get("modality") == "voice":
         expected_job_id = str(item.get("studio_job_id") or "")
         if not expected_job_id or str(job.get("id") or "") != expected_job_id:
@@ -2040,6 +2074,9 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         client = httpx.AsyncClient(follow_redirects=False)
     try:
         job_id = item["studio_job_id"]
+        if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
+            await _signal_worker_cancel(client, item)
+            ledger.save_batch(batch)
         try:
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
@@ -2979,8 +3016,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             logging.getLogger("studiohub.broker").exception(
                 "Could not record optional activity ownership"
             )
-        if _expire_genstudio_batch(b) or b["cancelled"]:
-            await _signal_worker_cancel(client, item)
+        lease_expired = _expire_genstudio_batch(b)
+        if lease_expired or b["cancelled"]:
+            cancel_confirmed = bool(item.get("cancel_signal_sent_at"))
+            if not cancel_confirmed:
+                cancel_confirmed = await _signal_worker_cancel(client, item)
             if b["modality"] == "image" and image_post_attempted:
                 if item.get("state") != "uncertain":
                     _mark_image_uncertain(
@@ -2989,13 +3029,22 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                         "the original worker outcome must be reconciled.",
                     )
                 return
-            item["state"] = "cancelled"
-            item["error"] = (
-                "GenStudio execution lease expired"
-                if b.get("lease_expired")
-                else "Cancelled by user"
-            )
-            return
+            if b["modality"] == "voice" and item.get("studio_job_id"):
+                if lease_expired:
+                    return
+                if not cancel_confirmed:
+                    _mark_accepted_voice_cancel_uncertain(b, item)
+                    return
+                item["state"] = "cancel_requested"
+                ledger.save_batch(b)
+            else:
+                item["state"] = "cancelled"
+                item["error"] = (
+                    "GenStudio execution lease expired"
+                    if b.get("lease_expired")
+                    else "Cancelled by user"
+                )
+                return
         # poll the studio's async job until terminal
         while True:
             await asyncio.sleep(POLL_S)
@@ -3003,8 +3052,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if b.get("modality") == "image" and b.get("cancelled") and item.get("studio_job_id"):
                     await _signal_worker_cancel(client, item)
                 return  # explicit recovery has taken ownership of this job
-            if _expire_genstudio_batch(b) or b["cancelled"]:
-                await _signal_worker_cancel(client, item)
+            lease_expired = _expire_genstudio_batch(b)
+            if lease_expired or b["cancelled"]:
+                cancel_confirmed = bool(item.get("cancel_signal_sent_at"))
+                if not cancel_confirmed:
+                    cancel_confirmed = await _signal_worker_cancel(client, item)
                 if b["modality"] == "image":
                     if item.get("state") != "uncertain":
                         _mark_image_uncertain(
@@ -3013,13 +3065,22 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                             "the original worker outcome must be reconciled.",
                         )
                     return
-                item["state"] = "cancelled"
-                item["error"] = (
-                    "GenStudio execution lease expired"
-                    if b.get("lease_expired")
-                    else "Cancelled by user"
-                )
-                return
+                if b["modality"] == "voice" and item.get("studio_job_id"):
+                    if lease_expired:
+                        return
+                    if not cancel_confirmed:
+                        _mark_accepted_voice_cancel_uncertain(b, item)
+                        return
+                    item["state"] = "cancel_requested"
+                    ledger.save_batch(b)
+                else:
+                    item["state"] = "cancelled"
+                    item["error"] = (
+                        "GenStudio execution lease expired"
+                        if b.get("lease_expired")
+                        else "Cancelled by user"
+                    )
+                    return
             url, headers = studio_request(studio, f"/api/generate/jobs/{job['id']}")
             jr = await client.get(
                 url, headers=headers)
@@ -3043,6 +3104,19 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 item["chunk_total"] = j.get("chunk_total")
                 continue
             if j.get("error") or state in ("error", "cancelled"):
+                if b["cancelled"]:
+                    _record_worker_failure(item, studio, j, t_start)
+                    terminal_state = state if state in {"error", "cancelled"} else "error"
+                    item.update(
+                        state=terminal_state,
+                        error=str(j.get("error") or terminal_state)[:500],
+                        error_code=str(
+                            j.get("error_code") or "WORKER_TERMINAL_ERROR"
+                        )[:128],
+                        finished_at=time.time(),
+                        retry_at=None,
+                    )
+                    return
                 raise _classify_worker_failure(b, item, studio, j, t_start)
             # terminal + no error = success
             await _record_worker_success(client, b, item, studio, j, body, t_start)
@@ -3067,6 +3141,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     )
                 if item.get("studio_job_id"):
                     await _signal_worker_cancel(client, item)
+            elif (b["modality"] == "voice" and item.get("studio_job_id")
+                  and not getattr(e, "worker_terminal", False)):
+                _mark_accepted_voice_cancel_uncertain(b, item)
             else:
                 item["state"] = "cancelled"
                 item["error"] = "Cancelled by user"
