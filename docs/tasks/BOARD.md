@@ -2,74 +2,47 @@
 
 ## ▶ TAKE OVER HERE
 
-### New-computer handoff — 2026-09-20
+### Active takeover — new computer, 2026-09-20
 
-[MEASURED] **Current holder:** Codex orchestrator `/root`. Owner requested a bug/fix
-audit, a portable handoff, and an up-to-date GitHub repository. Start commit:
-`f6362e0` (cleanup repair merged through PR #1). Working branch:
-`codex/new-computer-handoff` in the main checkout. Owned files: the new handoff,
-audit/evidence, README links, this board and canonical planning status.
+[MEASURED] **Holder:** Codex orchestrator `/root`. Repository:
+`theng12/Studio-Hub-KH`; integration/default branch: `implementation/voice-runtime`.
+This takeover started from `ca7928a` and is integrated through `d1db940`. The local
+integration branch and `origin/implementation/voice-runtime` matched at that commit
+before this documentation update. GitHub reports zero Actions workflows and the tree
+contains no workflow directory; keep hosted compute disabled.
 
-**START:** [New-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
-[bug/fix backlog](../../qualification/bug-audit-2026-09-20.md).
-These supersede the earlier "next Music" direction for the move: establish the new
-computer's inputs first, then fix the verifier and job lifecycle findings.
+**START:** [new-computer handoff](../NEW-COMPUTER-HANDOFF.md) →
+[bug/fix backlog](../../qualification/bug-audit-2026-09-20.md). This block and the
+canonical planning file are the current plan. Everything under Historical handoff is
+provenance, not current instruction.
 
-[MEASURED] **GitHub recovery is complete for pre-existing branch tips:** all match
-`origin`, including `codex/recovered-music-draft` at `0eebc42`. The private repository
-is `theng12/Studio-Hub-KH`; default branch remains `implementation/voice-runtime`.
-Music is WIP on its own branch, not integrated. Old worktrees, stash, runtimes,
-model assets and installed app are preserved.
+[MEASURED] **This computer:** Apple Silicon `arm64`, Mac14,13, 32 GiB RAM, macOS 27.0
+(26A428), Swift 6.4, clang 21, and 310 GiB free at intake. Command Line Tools are active;
+the full Xcode app is not selected. A pinned Voice runtime was built locally. Its FFmpeg
+and FFprobe now record macOS 14.0 as their minimum after reviewed
+[PR #3](https://github.com/theng12/Studio-Hub-KH/pull/3). This is deployment-metadata
+evidence, not physical macOS 14 qualification.
 
-[MEASURED] **Audit evidence:** five offline failing regressions are retained, plus
-three native source findings, four follow-up candidates and six migration/integration
-items. These are OPEN, not fixed by the documentation pass. Product source is unchanged;
-the earlier 584-test root gate/native/package proof remains the most recent full
-baseline. New computer hardware and actual migration are not yet observed.
+[MEASURED] **Audit progress:** H-01 is fixed by reviewed
+[PR #4](https://github.com/theng12/Studio-Hub-KH/pull/4). The existing regression plus
+seven behavioral tests pass with the bundled runtime. H-02 through H-05 remain OPEN.
+The next implementation unit is H-02 (persist an accepted Voice worker identity before
+polling), followed by H-03 cancellation truthfulness, then H-04 and H-05. Music waits
+until these higher-risk defects are closed.
 
-**Completion proof for this handoff:** independent evidence/document review, valid
-local links and shell snippets, expected audit probe failures, reviewed PR merge,
-and exact GitHub/local integration SHA equality. No ST card is newly DONE.
-[MEASURED] Reviewed handoff content is committed at `c4909a6`;
-[PR #2](https://github.com/theng12/Studio-Hub-KH/pull/2) records integration state.
-Independent review corrections are resolved; 55 local links and 11 shell blocks
-passed validation, and the five expected negative probes were observed.
+[MEASURED] **Current gate boundary:** root discovery ran 591 tests: the H-01 tests
+passed, but the checkout is not globally green. Remaining failures are an absent
+`espeak-ng` command in the freshly built Voice runtime and a stale staged 0.5.4 app
+being selected while source is 0.6.38; an isolated worktree also lacked its own ignored
+`.build` tree. Record those as migration/baseline work, not H-01 regressions.
 
-### Current takeover — 2026-09-20
-
-[MEASURED] **Holder:** Codex orchestrator `/root`. Start: `415df68` on
-`implementation/voice-runtime`. The installed app is **0.6.38**, not the historical
-0.4/0.5 builds described below. Its isolated startup and authenticated health check
-passed. This establishes a usable starting point, not all-model qualification.
-
-[MEASURED] **Interrupted work is recovered:** all 17 Music files were byte-verified,
-committed as **`0eebc42` on `codex/recovered-music-draft`**, and pushed to `icloud`.
-The worktree is `/build/.codex/worktrees/studiohub-music-recovery/studiohub-standalone`;
-read its `docs/tasks/MUSIC-RECOVERY.md` before resuming. The original copy is also
-retained in a named Git stash. Do not merge this WIP wholesale: its manifest is
-invalid under the current package contract, and packaged worker/UI wiring is absent.
-Separating it restored all ten catalog checks without weakening validation.
-
-**Verified maintenance repair:** source/test commit `5892089` on
-`codex/takeover-storage-repair`, targeting the integration line; see [takeover evidence](../../qualification/takeover-2026-09-20.md).
-The worktree is `/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone`.
-The repair covers the missing cleanup import, shutdown cancellation, and preserving
-references during refresh/read versus expiry. No new Music feature or fleet enrollment
-belongs in this repair. Full root gate: **584 tests OK, 7 skipped**; Voice:
-**722 passed, 19 skipped**; Hub: **54 passed**. Native build and the final packaged
-scheduled-cleanup/API/shutdown probe passed. Check Git for the integration of `5892089`
-before applying anything from the repair branch again.
-[Integration PR #1](https://github.com/theng12/Studio-Hub-KH/pull/1) records merge state.
-
-[MEASURED] **Remotes:** `origin` is `https://github.com/theng12/Studio-Hub-KH.git`;
-`icloud` remains the backup. GitHub's default branch is `implementation/voice-runtime`.
-Actions is enabled at the repository level, but the API lists **zero workflows** and
-the base contains no workflow files. Do not add or run hosted compute. Recheck before
-pushing if workflows change.
-
-**Next:** use the recovered Music card for the next bounded implementation decision;
-reconcile remaining model/hardware receipts against current source before treating an
-old open checkbox as current work. No card is newly marked DONE by this takeover.
+[MEASURED] **Preserved inputs:** the protected legacy library remains at
+`~/Downloads/model-library` (about 38 GiB) and has not been scanned, adopted, moved, or
+modified. `~/StudioHubModels`, `dist`, and a staged build are absent at intake. The Music
+draft remains unintegrated at `0eebc42` on `codex/recovered-music-draft`; its read-only
+audit worktree is `/build/.codex/worktrees/music-recovery-audit/studio-hub-kh`.
+Do not merge it wholesale: the package/engine contract is unresolved and packaged
+worker, supervisor, peer-routing, and native workflow integration are incomplete.
 
 ### Historical handoff (superseded where the current takeover differs)
 
