@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.26 — 2026-09-19 · package rows state model vs dependency
+
+- **`/api/hub/model-packages` rows gained `type` (`model` | `dependency`) and `dependencies`.** A
+  codec (`snac_24khz`), a tokenizer (`S3TokenizerV2`) and a real model all reported the same
+  `engine=voice-mlx`, `state=files_verified`, `runtime_state=ready`, so a consumer reading that list
+  could not tell them apart - and the gateway published five companions as clone-capable voice
+  models to Story Studio as a result. `_dependency_package_ids(catalog)` collects every package that
+  appears in another manifest's `dependencies`, and each row now states which it is, so no consumer
+  has to infer it from membership of some other list.
+- Evidence: `tests/test_hub_jobs.py` + `tests/test_model_packages.py` (42 tests) pass.
+
 ## 0.6.25 — 2026-09-19 · manifests for the 14 adopted cache models
 
 - **19 manifests generated from the cache** by `qualification/generate_manifests_from_cache.py`:

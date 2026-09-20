@@ -49,6 +49,22 @@ def _model_catalog() -> dict[str, dict[str, Any]]:
     return {manifest["package_id"]: manifest for manifest in manifests}
 
 
+def _dependency_package_ids(catalog: dict[str, dict[str, Any]]) -> set[str]:
+    """Package ids that exist only because another package needs them.
+
+    A codec, a tokenizer and a real model are indistinguishable in this row otherwise: all of them
+    report `engine=voice-mlx`, `state=files_verified` and `runtime_state=ready`, which is how a
+    tokenizer ended up offered in a voice picker on the gateway's side. The catalogue already says
+    which packages are dependencies - each manifest lists its companions in `dependencies` - so the
+    fact is stated here rather than left to be inferred from membership of some other list.
+    """
+    required: set[str] = set()
+    for entry in catalog.values():
+        for dependency in entry.get("dependencies") or ():
+            required.add(str(dependency))
+    return required
+
+
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], monitor: StudioMonitor) -> dict[str, Any]:
     from components import model_packages
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
@@ -64,6 +80,10 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], m
         "model_id": manifest["model_id"],
         "revision": manifest["revision"],
         "engine": manifest["engine"],
+        # `model` for something a person can pick; `dependency` for a package that only exists to
+        # serve another one. Consumers must not have to infer this.
+        "type": ("dependency" if manifest["package_id"] in _dependency_package_ids(catalog) else "model"),
+        "dependencies": list(manifest.get("dependencies") or ()),
         "worker_id": worker_id,
         "worker_state": "running" if worker else "unavailable",
     }

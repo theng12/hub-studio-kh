@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.26 — 2026-09-19
+
+### The Hub now says whether a package is a model or a dependency
+
+The list of installed packages described a codec, a tokenizer and a real model identically: same
+engine, same "files verified", same ready runtime. Anything reading that list had to guess which was
+which — and one guess put a tokenizer in a voice picker. Each row now states it:
+
+- `type: model` — something a person can choose
+- `type: dependency` — a package that exists only because another model needs it
+- `dependencies: [...]` — what that model requires
+
+The fact comes from the catalogue itself, where every model already lists its companions, so nothing
+downstream has to infer it.
+
 ## 0.6.25 — 2026-09-19
 
 ### Fourteen more models, adopted from what was already on disk
