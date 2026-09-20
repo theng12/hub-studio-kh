@@ -110,6 +110,179 @@ def _tokens(value: str) -> list[str]:
     return words + cjk
 
 
+# ── numeral canonicalization ────────────────────────────────────────────────
+# Whisper writes a spoken number as digits ("one two three" -> "123", "forty
+# five" -> "45", "seven forty five" -> "7.45"), while the submitted script
+# spells it out.  Scoring the two orthographies word by word charged a correct
+# reading with three "errors" on a seven-word line, so a flawless short clone
+# could cross the mismatch gate purely because of how the number was typed.
+# Both sides are folded into one comparable form before any error rate is
+# computed.  This changes only what is compared: the 0.40/0.25 gates and the
+# retry policy are untouched.
+_UNIT_NUMBERS = {
+    "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+}
+_TEEN_NUMBERS = {
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+_TENS_NUMBERS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_SCALE_NUMBERS = {
+    "hundred": 100,
+    "thousand": 1_000,
+    "million": 1_000_000,
+    "billion": 1_000_000_000,
+}
+_NUMBER_WORDS = (
+    frozenset(_UNIT_NUMBERS)
+    | frozenset(_TEEN_NUMBERS)
+    | frozenset(_TENS_NUMBERS)
+    | frozenset(_SCALE_NUMBERS)
+)
+
+
+def _canonical_digit_token(token: str) -> str:
+    """Fold a numeric token: drop leading zeros, leave codes and words alone.
+
+    ``a1b2c3`` is a code, not a number, and must survive unchanged.
+    """
+    if token.isdigit():
+        stripped = token.lstrip("0")
+        return stripped or "0"
+    return token
+
+
+def _parse_number_run(words: list[str]) -> str:
+    """Render one run of English number words as a digit string.
+
+    Values are concatenated group by group, so a year or a clock reading keeps
+    its spoken shape: "seven forty five" -> "745", "nineteen eighty four" ->
+    "1984", while a composed number stays whole: "three hundred twenty four"
+    -> "324".
+    """
+    groups: list[int] = []
+    total = 0
+    current = 0
+    has_units = False
+    has_tens = False
+
+    def flush() -> None:
+        nonlocal total, current, has_units, has_tens
+        groups.append(total + current)
+        total = 0
+        current = 0
+        has_units = False
+        has_tens = False
+
+    for word in words:
+        scale = _SCALE_NUMBERS.get(word)
+        if scale is not None:
+            if scale >= 1_000:
+                total = max(total + current, 1) * scale
+                current = 0
+            else:
+                current = max(current, 1) * scale
+            has_units = False
+            has_tens = False
+            continue
+        value = _UNIT_NUMBERS.get(word)
+        if value is None:
+            value = _TEEN_NUMBERS.get(word)
+        if value is not None:
+            # A second units/teens value starts a new group ("seven forty" -> 7,
+            # then 40), but a units word after a tens word completes it
+            # ("forty five" -> 45).
+            if has_units:
+                flush()
+            current += value
+            has_units = True
+            continue
+        value = _TENS_NUMBERS.get(word)
+        if value is not None:
+            if has_units or has_tens:
+                flush()
+            current += value
+            has_tens = True
+    flush()
+    return "".join(str(group) for group in groups)
+
+
+def _render_number_run(words: list[str]) -> str:
+    """A run of single-digit words is read digit by digit ("one two three")."""
+    if len(words) >= 2 and all(word in _UNIT_NUMBERS for word in words):
+        rendered = "".join(str(_UNIT_NUMBERS[word]) for word in words)
+    else:
+        rendered = _parse_number_run(words)
+    # "oh one five" and an observed "015" must land on the same token.
+    return _canonical_digit_token(rendered)
+
+
+def _number_token_runs(tokens: list[str]) -> dict[int, int]:
+    """Map each number-run start index to its inclusive end index.
+
+    A connective "and" joins a run only when a scale word precedes it and a
+    number word follows it, so "one hundred and five" is one run while
+    "one and two" is not silently merged.
+    """
+    runs: dict[int, int] = {}
+    index = 0
+    total = len(tokens)
+    while index < total:
+        if tokens[index] not in _NUMBER_WORDS:
+            index += 1
+            continue
+        end = index
+        while end + 1 < total:
+            following = tokens[end + 1]
+            if following in _NUMBER_WORDS:
+                end += 1
+                continue
+            if (
+                following == "and"
+                and any(word in _SCALE_NUMBERS for word in tokens[index:end + 1])
+                and end + 2 < total
+                and tokens[end + 2] in _NUMBER_WORDS
+            ):
+                end += 1
+                continue
+            break
+        runs[index] = end
+        index = end + 1
+    return runs
+
+
+def _canonical_tokens(tokens: list[str]) -> list[str]:
+    """Fold spelled numerals and digit strings into one comparable token form."""
+    if not tokens:
+        return []
+    runs = _number_token_runs(tokens)
+    canonical: list[str] = []
+    index = 0
+    while index < len(tokens):
+        end = runs.get(index)
+        if end is None:
+            canonical.append(_canonical_digit_token(tokens[index]))
+            index += 1
+            continue
+        canonical.append(
+            _render_number_run(
+                [token for token in tokens[index:end + 1] if token != "and"]
+            )
+        )
+        index = end + 1
+    return canonical
+
+
+def _canonical_characters(value: str) -> list[str]:
+    """Character stream of the canonical tokens, in the original word order."""
+    return list("".join(_canonical_tokens(_normalized_text(value).split())))
+
+
 def _distance(left: list[str], right: list[str]) -> int:
     if len(left) < len(right):
         left, right = right, left
@@ -146,10 +319,10 @@ def _error_rate(expected: list[str], observed: list[str], *, ngram_size: int) ->
 
 
 def _similarity(expected: str, observed: str) -> dict:
-    expected_tokens = _tokens(expected)
-    observed_tokens = _tokens(observed)
-    expected_chars = list(_normalized_text(expected).replace(" ", ""))
-    observed_chars = list(_normalized_text(observed).replace(" ", ""))
+    expected_tokens = _canonical_tokens(_tokens(expected))
+    observed_tokens = _canonical_tokens(_tokens(observed))
+    expected_chars = _canonical_characters(expected)
+    observed_chars = _canonical_characters(observed)
     token_error, token_method = _error_rate(expected_tokens, observed_tokens, ngram_size=2)
     character_error, character_method = _error_rate(expected_chars, observed_chars, ngram_size=4)
     return {
@@ -190,7 +363,7 @@ def _terminal_gate(expected_tokens: list[str], result: dict) -> dict:
         evidence["hard_mismatch_count"] = TERMINAL_GATE_WINDOW
         return evidence
 
-    aligned_observed_tokens: list[str] = []
+    observed_tokens: list[str] = []
     previous_start: float | None = None
     for segment in result.get("segments") or []:
         for word in segment.get("words") or []:
@@ -212,11 +385,15 @@ def _terminal_gate(expected_tokens: list[str], result: dict) -> dict:
                 evidence["hard_mismatch_count"] = TERMINAL_GATE_WINDOW
                 return evidence
             previous_start = start
-            for normalized_word in _tokens(str(word.get("word") or "")):
-                evidence["aligned_word_count"] += 1
-                if len(aligned_observed_tokens) == TERMINAL_GATE_WINDOW:
-                    aligned_observed_tokens.pop(0)
-                aligned_observed_tokens.append(normalized_word)
+            observed_tokens.extend(_tokens(str(word.get("word") or "")))
+
+    # The aligned word count stays the raw Whisper word count: it is the
+    # alignment evidence, not the comparison. Canonicalization then folds the
+    # ordered stream exactly as the expected side was folded, so a run the
+    # expected side collapsed to digits ("twenty four" -> "24") meets the same
+    # digits on the observed side instead of shifting the whole tail.
+    evidence["aligned_word_count"] = len(observed_tokens)
+    aligned_observed_tokens = _canonical_tokens(observed_tokens)[-TERMINAL_GATE_WINDOW:]
 
     if len(aligned_observed_tokens) < TERMINAL_GATE_WINDOW:
         evidence["hard_mismatch_count"] = TERMINAL_GATE_WINDOW
@@ -316,7 +493,9 @@ def validate_output(expected: str, result: dict, *, max_duration_s: float) -> di
             evidence,
         )
     if evidence["comparison_method"]["tokens"] == "2-gram-multiset":
-        evidence["terminal_gate"] = _terminal_gate(_tokens(expected), result)
+        evidence["terminal_gate"] = _terminal_gate(
+            _canonical_tokens(_tokens(expected)), result
+        )
         if not evidence["terminal_gate"]["accepted"]:
             raise QwenQualityError(
                 "QWEN_OUTPUT_TEXT_MISMATCH",

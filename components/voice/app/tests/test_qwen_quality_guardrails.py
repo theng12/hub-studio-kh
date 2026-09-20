@@ -652,3 +652,279 @@ def test_qwen_output_mismatch_on_retry_is_terminal_and_preserves_attempt_evidenc
         job.quality_retry_history
     )
     assert job.serialize()["quality_retry_history"] == job.quality_retry_history
+
+
+# ── numeral canonicalization ────────────────────────────────────────────────
+# Fixtures below are the app's own recorded transcripts for the real probes
+# (recovered exactly by verifying the `observed_sha256` the validator stored).
+# Before canonicalization every one of the first two lines was rejected: the
+# clone read the script correctly and Whisper wrote the number as digits.
+
+PROSE_372 = (
+    "The morning light came across the harbour slowly, touching the roofs of the old town "
+    "and turning the water into a sheet of pale gold. Fishermen were already moving along the "
+    "quay, coiling ropes and calling to one another in voices that carried easily over the "
+    "still air. It promised to be a warm day, the kind that makes everyone linger a little "
+    "longer than they meant to."
+)
+PROSE_372_TRANSCRIPT = PROSE_372.replace("harbour", "harbor")
+
+
+def _stt_words(words: list[str], *, duration: float = 2_400.0) -> dict:
+    """A Whisper result whose word timestamps are exactly ``words``, in order."""
+    return {
+        "text": " ".join(words),
+        "model": qwen_quality.WHISPER_REPO,
+        "duration": duration,
+        "segments": [{
+            "start": 0.0,
+            "end": duration,
+            "text": " ".join(words),
+            "words": [{"word": word, "start": 0.0, "end": 0.2} for word in words],
+        }],
+    }
+
+
+def _legacy_error_rates(expected: str, observed: str) -> tuple[float, float]:
+    """The pre-canonicalization arithmetic, so the regression stays visible."""
+    token_error, _ = qwen_quality._error_rate(
+        qwen_quality._tokens(expected), qwen_quality._tokens(observed), ngram_size=2
+    )
+    character_error, _ = qwen_quality._error_rate(
+        list(qwen_quality._normalized_text(expected).replace(" ", "")),
+        list(qwen_quality._normalized_text(observed).replace(" ", "")),
+        ngram_size=4,
+    )
+    return round(token_error, 4), round(character_error, 4)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("one two three", ["123"]),
+        ("one two three four", ["1234"]),
+        ("oh one five", ["15"]),
+        ("forty five", ["45"]),
+        ("seven forty five", ["745"]),
+        ("nineteen eighty four", ["1984"]),
+        ("three hundred twenty four", ["324"]),
+        ("one hundred and five", ["105"]),
+        ("one thousand two hundred", ["1200"]),
+        ("twenty four", ["24"]),
+        ("zero", ["0"]),
+        ("007", ["7"]),
+        ("a1b2c3", ["a1b2c3"]),
+        ("MP3 and B2B", ["mp3", "and", "b2b"]),
+        ("你好世界", ["你", "好", "世", "界"]),
+        # A number word followed by an ordinary word must not swallow it.
+        ("one silver bell", ["1", "silver", "bell"]),
+        ("twenty four silver bells", ["24", "silver", "bells"]),
+        # "and" only joins a run that a scale word opened.
+        ("one and two", ["1", "and", "2"]),
+    ],
+)
+def test_numeral_canonicalization_units(text: str, expected: list[str]) -> None:
+    assert qwen_quality._canonical_tokens(qwen_quality._tokens(text)) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "observed", "legacy", "after"),
+    [
+        (
+            "studio-short-37",
+            "Studio Hub smoke test, one two three.",
+            "Studio Hub Smoke Test 123",
+            (0.4286, 0.3793),
+            {"token_error_rate": 0.0, "character_error_rate": 0.0,
+             "expected_tokens": 5, "observed_tokens": 5},
+        ),
+        (
+            "studio-short-37-split-digits",
+            "Studio Hub smoke test, one two three.",
+            "Studio Hub Smoke Test 1 2 3",
+            (0.4286, 0.3793),
+            {"token_error_rate": 0.6, "character_error_rate": 0.0,
+             "expected_tokens": 5, "observed_tokens": 7},
+        ),
+        (
+            "capture-poller-41",
+            "Capture poller smoke test, one two three.",
+            "Capture Polar Smoke Test 123",
+            (0.5714, 0.3939),
+            {"token_error_rate": 0.2, "character_error_rate": 0.08,
+             "expected_tokens": 5, "observed_tokens": 5},
+        ),
+        (
+            "studio-nine-token-49",
+            "Studio Hub smoke test, one two three. Run a1b2c3.",
+            "Studio Hub Smoke Test 123 Run A1B2C3",
+            (0.3333, 0.2895),
+            {"token_error_rate": 0.0, "character_error_rate": 0.0,
+             "expected_tokens": 7, "observed_tokens": 7},
+        ),
+        (
+            "clean-prose-372",
+            PROSE_372,
+            PROSE_372_TRANSCRIPT,
+            (0.0147, 0.0033),
+            {"token_error_rate": 0.0147, "character_error_rate": 0.0034,
+             "expected_tokens": 68, "observed_tokens": 68},
+        ),
+        (
+            "train-time-62",
+            "The train left the station at seven forty five in the morning.",
+            "The train left the station at 7.45 in the morning.",
+            (0.25, 0.28),
+            {"token_error_rate": 0.2, "character_error_rate": 0.0,
+             "expected_tokens": 10, "observed_tokens": 11},
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_real_clone_transcripts_pass_the_unchanged_thresholds(
+    name: str, expected: str, observed: str,
+    legacy: tuple[float, float], after: dict,
+) -> None:
+    """Every one of these is correct audio; only the spelling of the number differed."""
+    similarity = qwen_quality._similarity(expected, observed)
+
+    assert _legacy_error_rates(expected, observed) == legacy, name
+    assert similarity == {**similarity, **after}, name
+
+    evidence = qwen_quality.validate_output(
+        expected,
+        _stt(observed, duration=8.0) if len(observed.split()) < 200
+        else _stt(observed, duration=17.4),
+        max_duration_s=90.0,
+    )
+
+    assert evidence["accepted"] is True, name
+    # The unchanged gate is an AND: at least one side of it must stay clear.
+    assert not (
+        evidence["token_error_rate"] > 0.40
+        and evidence["character_error_rate"] > 0.25
+    ), name
+    if name in {"studio-short-37", "studio-nine-token-49"}:
+        assert evidence["token_error_rate"] == 0.0
+        assert evidence["character_error_rate"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "observed", "code", "minimums"),
+    [
+        (
+            "unrelated-speech",
+            "Studio Hub smoke test, one two three.",
+            "Completely different words about weather and traffic patterns today.",
+            "QWEN_OUTPUT_TEXT_MISMATCH",
+            {"token_error_rate": 1.8, "character_error_rate": 2.3333},
+        ),
+        (
+            "half-the-words-missing",
+            "The morning light came across the harbour slowly, touching the roofs of the old town.",
+            "The morning light came across the harbour slowly.",
+            "QWEN_OUTPUT_TEXT_MISMATCH",
+            {"token_error_rate": 0.4667, "character_error_rate": 0.4058},
+        ),
+        (
+            "hallucinated-tail",
+            "The ship crossed the quiet sea before sunrise.",
+            "The ship crossed the quiet sea before sunrise and then it kept going on and on "
+            "about nothing at all.",
+            "QWEN_OUTPUT_TEXT_MISMATCH",
+            {"token_error_rate": 1.5, "character_error_rate": 1.1053},
+        ),
+        (
+            "repeated-output",
+            "The ship crossed the quiet sea before sunrise.",
+            " ".join(["The ship crossed the quiet sea"] * 8),
+            "QWEN_OUTPUT_TEXT_MISMATCH",
+            {"token_error_rate": 5.25, "character_error_rate": 4.3421},
+        ),
+        (
+            "unrelated-numerals-do-not-buy-a-pass",
+            "The harbour light moved slowly across the quiet water.",
+            "Seven forty five hundred unrelated spoken words were generated instead.",
+            "QWEN_OUTPUT_TEXT_MISMATCH",
+            {"token_error_rate": 1.0, "character_error_rate": 0.8444},
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_bad_output_is_still_rejected_after_canonicalization(
+    name: str, expected: str, observed: str, code: str, minimums: dict,
+) -> None:
+    similarity = qwen_quality._similarity(expected, observed)
+
+    assert similarity["token_error_rate"] == minimums["token_error_rate"], name
+    assert similarity["character_error_rate"] == minimums["character_error_rate"], name
+
+    with pytest.raises(qwen_quality.QwenQualityError) as caught:
+        qwen_quality.validate_output(
+            expected, _stt(observed, duration=8.0), max_duration_s=90.0,
+        )
+
+    assert caught.value.code == code, name
+    assert caught.value.evidence.get("accepted") is not True, name
+    assert caught.value.evidence["token_error_rate"] > 0.40, name
+
+
+def _collapse_observed_run(words: list[str], first: str, second: str, joined: str) -> list[str]:
+    """Replace a two-word observed run with the single digit token Whisper emits."""
+    observed: list[str] = []
+    index = 0
+    while index < len(words):
+        if words[index] == first and index + 1 < len(words) and words[index + 1] == second:
+            observed.append(joined)
+            index += 2
+            continue
+        observed.append(words[index])
+        index += 1
+    return observed
+
+
+def test_terminal_gate_matches_a_collapsed_run_with_its_digits() -> None:
+    """Expected spells "twenty four"; Whisper emits one token "24" for the same run."""
+    expected = _long_form_with_sentinel(repeated=True)
+    words = expected.split()
+    observed = _collapse_observed_run(words, "twenty", "four", "24")
+    assert len(observed) == len(words) - 1
+
+    evidence = qwen_quality.validate_output(
+        expected, _stt_words(observed), max_duration_s=3_000.0,
+    )
+
+    assert evidence["accepted"] is True
+    assert evidence["terminal_gate"]["hard_mismatch_count"] == 0
+    assert evidence["terminal_gate"]["spelling_variant_count"] == 0
+    # The alignment evidence stays the raw Whisper word count.
+    assert evidence["terminal_gate"]["aligned_word_count"] == len(observed)
+
+
+def test_terminal_gate_folds_spelled_words_toward_the_expected_digits() -> None:
+    """Expected already carries "24"; the observed stream still spells it out."""
+    expected = _long_form_with_sentinel(repeated=True).replace("twenty four", "24")
+    observed = _long_form_with_sentinel(repeated=True).split()
+
+    evidence = qwen_quality.validate_output(
+        expected, _stt_words(observed), max_duration_s=3_000.0,
+    )
+
+    assert evidence["accepted"] is True
+    assert evidence["terminal_gate"]["hard_mismatch_count"] == 0
+
+
+def test_canonicalized_run_does_not_shrink_the_gate_window_below_its_floor() -> None:
+    """A run just short of the window still fails closed rather than passing."""
+    expected = " ".join(
+        f"Marker {index} records a distinct harbor observation before sunset."
+        for index in range(1, 60)
+    ) + " count one two three"
+    words = expected.split()
+
+    with pytest.raises(qwen_quality.QwenQualityError) as caught:
+        qwen_quality.validate_output(
+            expected, _stt_words(words[:20]), max_duration_s=3_000.0,
+        )
+
+    assert caught.value.code == "QWEN_OUTPUT_TEXT_MISMATCH"

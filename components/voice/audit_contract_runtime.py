@@ -1010,6 +1010,46 @@ def _measured_section_override(record: dict[str, Any]) -> dict[str, int] | None:
     return None
 
 
+def _derived_section_override(record: dict[str, Any]) -> dict[str, int] | None:
+    """Section limits a record may inherit from an anchored audit — by exact copy only.
+
+    A checkpoint that shares an adapter and an audio front end with a measured
+    sibling may adopt the sibling's measured section bounds; the 4-bit Qwen Base
+    build is the case that exists. The record has to say so explicitly, in
+    ``derivation``, and it has to claim exactly the anchored numbers. That keeps
+    the property this validator exists for: a record can inherit independently
+    measured evidence, it can never author a number of its own.
+    """
+    derivation = record.get("derivation")
+    if not isinstance(derivation, dict):
+        return None
+    source_id = str(derivation.get("derived_from_audit_id") or "")
+    anchor = _MEASURED_SECTION_PROVENANCE.get(source_id)
+    if anchor is None:
+        return None
+    subject = record.get("subject") or {}
+    # The derivation must name the same upstream model, and the derived record
+    # must be a different checkpoint — inheriting your own audit is not a thing.
+    if (
+        not derivation.get("derived_from_model_id")
+        or derivation.get("derived_from_model_id") != subject.get("upstream_model_id")
+        or subject.get("model_id") == anchor["model_id"]
+    ):
+        return None
+    limits = (record.get("contract") or {}).get("input_limits") or {}
+    if limits.get("private_section_max_characters") != anchor["section_max_characters"]:
+        return None
+    result = {"maximum": anchor["section_max_characters"]}
+    if "auto_default_section_max_characters" in anchor:
+        if (
+            limits.get("default_private_section_max_characters")
+            != anchor["auto_default_section_max_characters"]
+        ):
+            return None
+        result["default"] = anchor["auto_default_section_max_characters"]
+    return result
+
+
 def _superseded_by_audit_id(record: dict[str, Any]) -> str | None:
     audit_id = str(record.get("audit_id") or "")
     for replacement_id, anchor in _MEASURED_SECTION_PROVENANCE.items():
@@ -1067,7 +1107,11 @@ def validate_record(
 
     policy: Optional[dict[str, Any]] = None
     if family:
-        measured = _measured_section_override(record) or {}
+        measured = (
+            _measured_section_override(record)
+            or _derived_section_override(record)
+            or {}
+        )
         policy = long_form_policy.policy_for(
             family,
             model_id,

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.38 — 2026-09-20 · clone validation compared spelling; the voice suite joins the gate
+
+- **Numeral canonicalization in `qwen_quality`** (root cause of the "flaky" clone rejections). The
+  validator scores Whisper's transcript against the submitted text; Whisper renders "one two three"
+  as "123", so `token_error_rate` 0.4286 / `character_error_rate` 0.3793 on a 37-character script
+  tripped the `> 0.40 and > 0.25` rule and rejected audio Whisper had transcribed correctly. Real
+  fixtures (SHA-verified against the app's stored `observed_sha256`): 37-char "…one two three." was
+  REJECTED before and now scores 0.0/0.0; the 49-char variant passes either way; the 372-char prose
+  case is unchanged (ter 0.0147, 68/68). Numbers are canonicalized on both sides of the token,
+  character and terminal-gate streams; thresholds and the retry policy are untouched, and the
+  negative fixtures (unrelated speech, half missing, hallucinated tail, 8x repetition, and unrelated
+  speech full of numerals) are all still rejected with wide margins (ter >= 1.0).
+- **`_qwen_job_duration_limit` KeyError** (shipped in 0.6.37, recorded here): it read
+  `job.params["_resolved_section_max_characters"]`, a key only 0.6B Base builds and the audited 1.7B
+  8-bit checkpoint set, so every 1.7B-Base-4bit clone generated, transcribed and then died with
+  `KeyError` reported as "Whisper Large could not validate the Qwen output" - 6 of 6 recorded
+  attempts. Now `.get()`.
+- **`audit_contract_runtime` false critical mismatch**: the derived 4-bit record declares 400/280 and
+  the catalogue applies it, but `_measured_section_override` only recognised ids listed in
+  `_MEASURED_SECTION_PROVENANCE`, so it compared the claim against the family default 288. New
+  `_derived_section_override()` allows a derived record to inherit an anchored audit's numbers only
+  when it names that audit, matches its `upstream_model_id`, and claims exactly its maximum and auto
+  default - it can inherit evidence, never author a number. `build_report`: 15 records, 0 mismatches.
+- **`components/voice/app/tests` is in the release gate.** 40 failures had accumulated invisibly
+  because `unittest discover -s tests` never collected that tree. 14 were stale assertions for the
+  long-form/section-control/speed changes in 0.6.34-0.6.37 (updated to the new intent and renamed
+  where the name had become a lie), 2 were genuine (above), 18 drove the retired Pinokio
+  launcher/service whose files exist in no commit (replaced by standalone successors or skipped with
+  a named reason; the watchdog tests also had a live `os._exit(75)` hazard, now inert). Final: 722
+  passed, 19 skipped, 0 failed. New gate test `tests/test_voice_product_suite.py` runs the developer
+  command in a clean child, fails on non-zero exit, on "no tests ran", and if fewer than 100 tests
+  pass (verified by pointing it at an empty directory).
+- **`docs/music-studio-adoption.md`**: the music-studio adoption plan - ACE-Step 1.5 as the model, why
+  the old Pinokio Music Studio's models are unusable (CC-BY-NC MusicGen weights, 30 s), which Hub
+  contracts already exist (`MODALITY["music"]`, `music.generation`, the audio priority class), and
+  what is missing (worker, catalogue, manifests, launcher, page, storage root). Runtime reuse is the
+  simplification: the Voice runtime already carries mlx + torch + diffusers + transformers.
+
 ## 0.6.37 — 2026-09-20 · the smoke harness asked every model the same question; the tempo pass was silent
 
 - **`qualification/smoke_new_models.py` built an invalid request for the Qwen tier.** `PRESET_KEY`

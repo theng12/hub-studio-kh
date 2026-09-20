@@ -68,14 +68,22 @@ def test_txt2speech_endpoint_canonicalizes_section_budget_before_queueing(
 @pytest.mark.parametrize(
     ("repo", "requested", "code"),
     [
-        (QWEN_06B_BASE, 280, "SECTION_MAX_CHARACTERS_UNSUPPORTED"),
+        (QWEN_06B_BASE, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
         (QWEN_17B_BASE, 229, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
         (QWEN_17B_BASE, 401, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (BARK, 280, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
     ],
 )
-def test_txt2speech_endpoint_rejects_unresolved_section_budget(
+def test_txt2speech_endpoint_rejects_out_of_range_section_budget(
     queued_txt2speech_params: list[dict], repo: str, requested: int, code: str,
 ) -> None:
+    """Every sectioning model now has a published control, so the bound is its own.
+
+    This used to assert ``SECTION_MAX_CHARACTERS_UNSUPPORTED`` for the 0.6B Base
+    build, because no control existed for it. Every family now publishes one, so
+    the surviving guarantee is that an override outside the published range is
+    refused while an override inside it is honoured (see the next test).
+    """
     response = _client().post("/api/generate/txt2speech", json={
         "repo": repo,
         "text": "A rejected request.",
@@ -88,11 +96,35 @@ def test_txt2speech_endpoint_rejects_unresolved_section_budget(
 
 
 @pytest.mark.parametrize(
+    ("repo", "requested"),
+    [
+        (QWEN_06B_BASE, 280),
+        (F5_TTS, 280),
+        (BARK, 150),
+    ],
+)
+def test_txt2speech_endpoint_accepts_an_override_inside_the_published_control(
+    queued_txt2speech_params: list[dict], repo: str, requested: int,
+) -> None:
+    response = _client().post("/api/generate/txt2speech", json={
+        "repo": repo,
+        "text": "A bounded request.",
+        "section_max_characters": requested,
+    })
+
+    assert response.status_code == 200
+    assert len(queued_txt2speech_params) == 1
+    assert queued_txt2speech_params[0]["_resolved_section_max_characters"] == requested
+    assert "section_max_characters" not in queued_txt2speech_params[0]
+
+
+@pytest.mark.parametrize(
     ("repo", "requested", "code"),
     [
-        (QWEN_06B_BASE, 280, "SECTION_MAX_CHARACTERS_UNSUPPORTED"),
+        (QWEN_06B_BASE, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
         (QWEN_17B_BASE, 229, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
         (QWEN_17B_BASE, 401, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (F5_TTS, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
     ],
 )
 def test_reference_endpoint_rejects_section_budget_before_preparing_audio(
@@ -290,19 +322,34 @@ def test_omitted_control_for_a_non_qwen_model_prepares_reference_audio(
     assert "_resolved_section_max_characters" not in queued_txt2speech_params[0]
 
 
-@pytest.mark.parametrize("repo", [BARK, F5_TTS])
-def test_non_qwen_section_override_remains_fail_closed(
-    queued_txt2speech_params: list[dict], repo: str,
+@pytest.mark.parametrize(
+    ("repo", "requested", "outcome"),
+    [
+        # Every sectioning model publishes a control now, and the control's range is
+        # the guarantee: inside it the caller's number is honoured, past it the
+        # request is refused. Bark's 150 is the point where the engine stops, not a
+        # quality preference, so 280 is out of range rather than unsupported.
+        (BARK, 280, "rejected"),
+        (F5_TTS, 280, "accepted"),
+    ],
+)
+def test_section_override_is_bounded_by_each_models_published_control(
+    queued_txt2speech_params: list[dict], repo: str, requested: int, outcome: str,
 ) -> None:
+    """The old name claimed non-Qwen overrides stay fail-closed; they no longer do."""
     response = _client().post("/api/generate/txt2speech", json={
         "repo": repo,
-        "text": "An unsupported override.",
-        "section_max_characters": 280,
+        "text": "A bounded override.",
+        "section_max_characters": requested,
     })
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert queued_txt2speech_params == []
+    if outcome == "rejected":
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"
+        assert queued_txt2speech_params == []
+    else:
+        assert response.status_code == 200
+        assert queued_txt2speech_params[0]["_resolved_section_max_characters"] == requested
 
 
 def test_internal_queueing_without_a_non_qwen_override_stays_accepted(
@@ -519,7 +566,8 @@ def test_custom_budget_stays_capability_gated_when_audit_and_capability_disagree
     assert queued_txt2speech_params == []
 
 
-def test_catalog_publishes_only_the_audited_qwen_17b_control() -> None:
+def test_catalog_publishes_the_hand_declared_qwen_control_and_derived_controls_for_the_rest() -> None:
+    """Only Qwen 1.7B Base is hand-declared; every other model gets a derived one."""
     payload = catalog.serialize_model(catalog.get_model(QWEN_17B_BASE))
     assert payload["long_form_delivery"]["section_size_control"] == {
         "minimum": 230,
@@ -530,7 +578,16 @@ def test_catalog_publishes_only_the_audited_qwen_17b_control() -> None:
         "source": "qwen3-17b-production-v2-audit",
     }
     other = catalog.serialize_model(catalog.get_model(QWEN_06B_BASE))
-    assert other["long_form_delivery"]["section_size_control"] is None
+    control = other["long_form_delivery"]["section_size_control"]
+    assert control == {
+        "minimum": 40,
+        "maximum": 3000,
+        "step": 10,
+        "default_custom": 288,
+        "runtime_default": 288,
+        "source": "model_audit",
+    }
+    assert control == catalog.section_size_control_for(QWEN_06B_BASE)
 
 
 def test_frontend_custom_400_is_valid_and_auto_omits_the_override() -> None:
@@ -656,10 +713,15 @@ def test_resolve_section_budget_rejects_invalid_or_out_of_range_values(
     assert error.value.code == code
 
 
-def test_resolve_section_budget_rejects_override_for_model_without_capability() -> None:
+def test_resolve_section_budget_rejects_an_override_beyond_the_published_control() -> None:
+    """The old name claimed 0.6B Base had no capability; it now publishes one."""
     with pytest.raises(catalog.SectionSizeControlError) as error:
-        catalog.resolve_section_budget("qwen3-tts", QWEN_06B_BASE, 280)
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
+        catalog.resolve_section_budget("qwen3-tts", QWEN_06B_BASE, 5_000)
+    assert error.value.code == "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"
+    # Inside the published range the same model accepts the override.
+    resolved = catalog.resolve_section_budget("qwen3-tts", QWEN_06B_BASE, 280)
+    assert resolved["section_max_characters"] == 280
+    assert resolved["source"] == "caller_override"
 
 
 def test_resolve_section_budget_rejects_capability_from_another_model() -> None:

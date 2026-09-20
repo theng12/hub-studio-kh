@@ -1,164 +1,72 @@
+"""Startup settings for the standalone worker.
+
+Every test in this module drove the retired Pinokio service install:
+`install_service.sh`, `ENVIRONMENT.example`, `voicestudio-serve.sh`,
+`voicestudio-watchdog.sh` and the launcher `install.js`/`start.js` that seeded a
+machine `ENVIRONMENT` file. None of those files exist in the standalone app, and
+the app installs no service at all — the macOS bundle's host process supervises
+the workers, which is why `GenerationManager._service_installed()` is hard-wired
+to `False` (generation.py).
+
+The surviving property is that last one, and it is a real safety property: a
+packaged worker must not discover and act on a copied Pinokio launchd marker
+inside its own bundle. The first test guards it. The four Pinokio install tests
+are skipped with a reason each.
+"""
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-import shutil
-import subprocess
+import pytest
+
+from backend import generation
 
 
-ROOT = Path(__file__).resolve().parents[2]
+def test_packaged_worker_never_acts_on_a_copied_service_marker() -> None:
+    """The host process supervises the worker; the worker must not self-manage."""
+    assert generation.GenerationManager._service_installed() is False
+
+    manager = object.__new__(generation.GenerationManager)
+    manager._consecutive_memory_failures = 0
+    manager._restart_scheduled = False
+    manager._last_memory_event = None
+    assert manager.memory_status()["service_supervised"] is False
 
 
-def _write_executable(path: Path, source: str) -> None:
-    path.write_text(source, encoding="utf-8")
-    path.chmod(0o755)
-
-
-def _run_isolated_service_install(tmp_path: Path, environment: Path) -> None:
-    commands = tmp_path / "commands"
-    commands.mkdir(exist_ok=True)
-    _write_executable(commands / "id", "#!/bin/sh\nprintf '501\\n'\n")
-    _write_executable(
-        commands / "launchctl",
-        "#!/bin/sh\n[ \"$1\" = print ] && exit 1\nexit 0\n",
+@pytest.mark.skip(
+    reason=(
+        "ENVIRONMENT.example is a Pinokio launcher template and is not shipped; the "
+        "standalone app has no machine ENVIRONMENT file to seed or ignore."
     )
-    _write_executable(commands / "lsof", "#!/bin/sh\nexit 0\n")
-    _write_executable(commands / "sleep", "#!/bin/sh\nexit 0\n")
-    subprocess.run(
-        ["/bin/bash", str(environment.parent / "install_service.sh")],
-        cwd=environment.parent,
-        env={
-            **os.environ,
-            "HOME": str(tmp_path / "home"),
-            "PATH": f"{commands}:{os.environ['PATH']}",
-        },
-        check=True,
-        text=True,
-        capture_output=True,
+)
+def test_repository_ships_template_and_ignores_machine_environment() -> None:  # pragma: no cover
+    pass
+
+
+@pytest.mark.skip(
+    reason=(
+        "install.js and start.js are retired Pinokio launcher scripts; the standalone "
+        "app is launched by its bundle and seeds no environment file."
     )
+)
+def test_install_and_start_seed_only_a_missing_machine_environment() -> None:  # pragma: no cover
+    pass
 
 
-def _launcher(name: str) -> dict:
-    result = subprocess.run(
-        ["node", "-e", f"console.log(JSON.stringify(require('./{name}')))"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
+@pytest.mark.skip(
+    reason=(
+        "install_service.sh and ENVIRONMENT.example are not part of the standalone app; "
+        "it installs no startup service and the host process owns worker supervision."
     )
-    return json.loads(result.stdout)
+)
+def test_service_install_seeds_all_defaults_when_machine_environment_is_missing() -> None:  # pragma: no cover
+    pass
 
 
-def _copy_service_fixture(tmp_path: Path) -> Path:
-    app_root = tmp_path / "app"
-    app_root.mkdir()
-    for name in (
-        "ENVIRONMENT.example",
-        "install_service.sh",
-        "voicestudio-serve.sh",
-        "voicestudio-watchdog.sh",
-    ):
-        shutil.copy2(ROOT / name, app_root / name)
-    return app_root
-
-
-def test_repository_ships_template_and_ignores_machine_environment() -> None:
-    template = ROOT / "ENVIRONMENT.example"
-
-    assert template.is_file()
-    assert not (ROOT / "ENVIRONMENT").exists()
-    assert subprocess.run(
-        ["git", "check-ignore", "--no-index", "--quiet", "ENVIRONMENT"], cwd=ROOT,
-    ).returncode == 0
-    assert subprocess.run(
-        ["git", "check-ignore", "--no-index", "--quiet", "ENVIRONMENT.example"], cwd=ROOT,
-    ).returncode == 1
-    contents = template.read_text(encoding="utf-8")
-    for key in (
-        "HF_HOME=./cache/HF_HOME\n",
-        "PINOKIO_SHARE_LOCAL=false\n",
-        "PINOKIO_SHARE_LOCAL_PORT=\n",
-        "VOICESTUDIO_EXTRA_MODEL_DIRS=\n",
-    ):
-        assert key in contents
-
-
-def test_install_and_start_seed_only_a_missing_machine_environment() -> None:
-    expected_seed = {
-        "when": "{{!exists('ENVIRONMENT')}}",
-        "method": "fs.copy",
-        "params": {"src": "ENVIRONMENT.example", "dest": "ENVIRONMENT"},
-    }
-
-    install = _launcher("install.js")
-    start = _launcher("start.js")
-
-    assert install["run"][0] == expected_seed
-    assert install["run"][1]["method"] == "shell.run"
-    assert start["run"][0] == expected_seed
-    server = start["run"][1]
-    assert server["method"] == "shell.run"
-    assert server["params"]["env"]["HF_HOME"] == (
-        "{{envs.HF_HOME || path.resolve(cwd, 'cache/HF_HOME')}}"
+@pytest.mark.skip(
+    reason=(
+        "There is no Pinokio autolaunch to disable: install_service.sh and "
+        "voicestudio-serve.sh are gone and the standalone worker refuses to read a "
+        "service marker at all (see the guard above)."
     )
-    assert start["run"][2] == {
-        "method": "local.set",
-        "params": {"url": "{{input.event[1]}}"},
-    }
-
-
-def test_service_install_seeds_all_defaults_when_machine_environment_is_missing(
-    tmp_path: Path,
-) -> None:
-    app_root = _copy_service_fixture(tmp_path)
-    environment = app_root / "ENVIRONMENT"
-
-    _run_isolated_service_install(tmp_path, environment)
-
-    contents = environment.read_text(encoding="utf-8")
-    assert "HF_HOME=./cache/HF_HOME\n" in contents
-    assert "PINOKIO_SHARE_LOCAL=false\n" in contents
-    assert "PINOKIO_SHARE_LOCAL_PORT=\n" in contents
-    assert "VOICESTUDIO_EXTRA_MODEL_DIRS=\n" in contents
-    assert contents.count("PINOKIO_SCRIPT_AUTOLAUNCH=start.js\n") == 1
-    assert contents.count("PINOKIO_SCRIPT_AUTOLAUNCH_ENABLED=false\n") == 1
-    assert contents.count("PINOKIO_SCRIPT_REQUIRES=\n") == 1
-
-
-def test_service_install_disables_pinokio_autolaunch_once_and_idempotently(
-    tmp_path: Path,
-) -> None:
-    """A sandboxed launchctl stub proves the installer's user-facing effect.
-
-    It never invokes the machine's launchd or the real Voice Studio service.
-    """
-    app_root = _copy_service_fixture(tmp_path)
-    environment = app_root / "ENVIRONMENT"
-    environment.write_text(
-        "HF_HOME=./cache/HF_HOME\n"
-        "PINOKIO_SCRIPT_AUTOLAUNCH=old-start.js\n"
-        "PINOKIO_SCRIPT_AUTOLAUNCH_ENABLED=true\n"
-        "PINOKIO_SCRIPT_AUTOLAUNCH=start.js\n"
-        "PINOKIO_SCRIPT_AUTOLAUNCH_ENABLED=true\n"
-        "PINOKIO_SCRIPT_REQUIRES=imagestudio-mac,studiohub-mac\n"
-        "PINOKIO_SCRIPT_REQUIRES=stale-studio\n",
-        encoding="utf-8",
-    )
-    before_inode = environment.stat().st_ino
-
-    _run_isolated_service_install(tmp_path, environment)
-
-    first = environment.read_text(encoding="utf-8")
-    assert environment.stat().st_ino != before_inode
-    assert first.count("PINOKIO_SCRIPT_AUTOLAUNCH=") == 1
-    assert first.count("PINOKIO_SCRIPT_AUTOLAUNCH_ENABLED=") == 1
-    assert first.count("PINOKIO_SCRIPT_REQUIRES=") == 1
-    assert "PINOKIO_SCRIPT_AUTOLAUNCH=start.js\n" in first
-    assert "PINOKIO_SCRIPT_AUTOLAUNCH_ENABLED=false\n" in first
-    assert "PINOKIO_SCRIPT_REQUIRES=\n" in first
-    assert "HF_HOME=./cache/HF_HOME\n" in first
-
-    _run_isolated_service_install(tmp_path, environment)
-
-    assert environment.read_text(encoding="utf-8") == first
+)
+def test_service_install_disables_pinokio_autolaunch_once_and_idempotently() -> None:  # pragma: no cover
+    pass

@@ -267,6 +267,12 @@ def test_qwen_17b_fleet_voice_is_prepared_before_the_adapter_and_auditable(
         get=lambda voice_id: voice if voice_id == "fleet-voice" else None,
         reference_path=lambda voice_id: source,
         transcript=lambda voice_id: "Fleet reference words.",
+        # The saved timings must travel with the voice: without them a clip longer
+        # than the model's window is refused, so a fleet-shared voice would install
+        # and then fail to clone everywhere. A library that stored none passes [].
+        segments=lambda voice_id: [
+            {"text": "Fleet reference words.", "start": 0.0, "end": 2.0},
+        ],
     )
     monkeypatch.setattr(reference_audio, "prepare", fake_prepare)
     params = {"repo": QWEN_17B_BASE, "voice_library_id": "fleet-voice"}
@@ -290,6 +296,9 @@ def test_qwen_17b_fleet_voice_is_prepared_before_the_adapter_and_auditable(
         "filename": "fleet-source.wav",
         "model_id": QWEN_17B_BASE,
         "transcript": "Fleet reference words.",
+        "transcript_segments": [
+            {"text": "Fleet reference words.", "start": 0.0, "end": 2.0},
+        ],
     }]
     assert kwargs == {"ref_audio": str(prepared), "ref_text": "Fleet reference words."}
     assert result["voice_library_id"] == "fleet-voice"
@@ -297,6 +306,47 @@ def test_qwen_17b_fleet_voice_is_prepared_before_the_adapter_and_auditable(
     assert result["reference_source_sha256"] == source_sha
     assert result["reference_preparation_revision"] == "reference-v1"
     assert result["reference_duration_s"] == 8.0
+
+
+def test_fleet_voice_without_stored_timings_still_prepares_with_an_empty_segment_list(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A voice saved before timings existed must prepare, not fail on a missing key."""
+    source = tmp_path / "fleet-source.wav"
+    source_bytes = b"fleet-owned-source-bytes"
+    source.write_bytes(source_bytes)
+    prepared = tmp_path / "prepared-reference.wav"
+    prepared.write_bytes(b"bounded-normalized-wav")
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    calls: list[dict] = []
+
+    def fake_prepare(**kwargs):
+        calls.append(kwargs)
+        return {
+            "path": str(prepared),
+            "source_sha256": source_sha,
+            "derived_sha256": "c" * 64,
+            "preparation_revision": "reference-v1",
+            "duration_seconds": 8.0,
+            "transcript": "Fleet reference words.",
+        }
+
+    library = SimpleNamespace(
+        get=lambda voice_id: SimpleNamespace(audio_sha256=source_sha),
+        reference_path=lambda voice_id: source,
+        transcript=lambda voice_id: "Fleet reference words.",
+    )
+    monkeypatch.setattr(reference_audio, "prepare", fake_prepare)
+
+    manager = object.__new__(generation.GenerationManager)
+    manager._mlx_kwargs_qwen3(
+        SimpleNamespace(repo=QWEN_17B_BASE),
+        {"repo": QWEN_17B_BASE, "voice_library_id": "fleet-voice"},
+        {},
+        SimpleNamespace(library=library),
+    )
+
+    assert calls[0]["transcript_segments"] == []
 
 
 def test_qwen_17b_fleet_voice_fails_closed_when_preparation_rejects(

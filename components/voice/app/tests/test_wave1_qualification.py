@@ -4,9 +4,28 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("wave1", ROOT / "tools" / "wave1_qualification.py")
+TOOL = ROOT / "tools" / "wave1_qualification.py"
+
+# The Wave 1 matrix planner is an upstream Voice qualification artefact. It was
+# not adopted into this repository (AGENTS.md adopts source selectively at exact
+# commits), and `components/voice/tools/` does not exist in any commit. Importing
+# it at module scope therefore aborted collection for the entire suite with a
+# FileNotFoundError. Skip the module instead, and name the artefact so nobody has
+# to guess what is missing. Do not add the tool just to make this run: it would be
+# unqualified code, and the matrix it plans is a fleet measurement, not a test.
+if not TOOL.is_file():
+    pytest.skip(
+        "qualification artefact components/voice/tools/wave1_qualification.py is not in "
+        "this repository (upstream Voice qualification tool, not adopted); the Wave 1 "
+        "matrix cannot be planned or validated here.",
+        allow_module_level=True,
+    )
+
+SPEC = importlib.util.spec_from_file_location("wave1", TOOL)
 wave1 = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(wave1)

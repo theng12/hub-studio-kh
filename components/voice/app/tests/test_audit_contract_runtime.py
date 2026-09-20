@@ -403,3 +403,81 @@ def test_expectations_are_read_from_the_code_not_retyped(sources) -> None:
         "family": "omnivoice",
         "languages": [],
     }
+
+
+# ─── derived records: inherit an anchor, never author a number ─────────────
+
+QWEN_17B_BASE_4BIT_DERIVED_RECORD = (
+    ROOT
+    / "model-audits"
+    / "2026-08-26-qwen3-17b-ten-thousand"
+    / "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-4bit.audit.json"
+)
+
+
+@pytest.fixture(scope="module")
+def derived_4bit_record() -> dict:
+    return json.loads(QWEN_17B_BASE_4BIT_DERIVED_RECORD.read_text(encoding="utf-8"))
+
+
+def test_a_record_derived_from_an_anchored_audit_may_inherit_its_section_budget(
+    derived_4bit_record, sources
+) -> None:
+    """The 4-bit sibling reproduces v3's 400/280 exactly, so it inherits the anchor.
+
+    The catalogue feeds this record's ``private_section_max_characters`` straight
+    into the runtime for the 4-bit build, so the validator has to resolve it the
+    same way the catalogue does — through the derivation, not by ignoring the
+    record's own limits and comparing against the family default.
+    """
+    assert derived_4bit_record["derivation"]["derived_from_audit_id"] == (
+        "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3"
+    )
+    assert acr._derived_section_override(derived_4bit_record) == {
+        "maximum": 400,
+        "default": 280,
+    }
+
+    result = _validate(derived_4bit_record, sources)
+    assert result["mismatches"] == []
+    section = next(c for c in result["checks"] if c["id"] == "section_budget")
+    assert section["status"] == acr.OK
+    assert section["claimed"] == 400
+    assert section["expected"] == 400
+
+
+def test_a_derived_record_can_never_author_its_own_section_number(
+    derived_4bit_record, sources
+) -> None:
+    """Copying the anchor is allowed; changing it is not."""
+    mutated = copy.deepcopy(derived_4bit_record)
+    mutated["contract"]["input_limits"]["private_section_max_characters"] = 399
+
+    assert acr._derived_section_override(mutated) is None
+    assert _status(_validate(mutated, sources), "section_budget") == acr.MISMATCH
+
+
+def test_a_derived_record_must_name_an_anchored_audit_for_the_same_model(
+    derived_4bit_record, sources
+) -> None:
+    """A derivation is authority only when it points at an independently measured run."""
+    unknown_source = copy.deepcopy(derived_4bit_record)
+    unknown_source["derivation"]["derived_from_audit_id"] = "voicestudio-does-not-exist"
+    assert acr._derived_section_override(unknown_source) is None
+    assert _status(_validate(unknown_source, sources), "section_budget") == acr.MISMATCH
+
+    other_model = copy.deepcopy(derived_4bit_record)
+    other_model["derivation"]["derived_from_model_id"] = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    assert acr._derived_section_override(other_model) is None
+
+    no_derivation = copy.deepcopy(derived_4bit_record)
+    no_derivation.pop("derivation")
+    assert acr._derived_section_override(no_derivation) is None
+
+
+def test_a_derived_record_must_copy_the_anchored_auto_default_too(
+    derived_4bit_record,
+) -> None:
+    mutated = copy.deepcopy(derived_4bit_record)
+    mutated["contract"]["input_limits"]["default_private_section_max_characters"] = 300
+    assert acr._derived_section_override(mutated) is None

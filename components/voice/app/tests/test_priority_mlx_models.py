@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from backend import catalog, generation, model_audits
+from backend import catalog, generation, long_form_policy, model_audits
 
 
 class _VoiceLibrary:
@@ -1253,9 +1253,16 @@ def test_vibevoice_long_form_uses_full_section_budget_and_applies_speed_once(
     assert sf.info(output).frames > 240
 
 
-def test_fish_audio_long_form_keeps_native_speed_at_one_and_postprocesses_once(
+def test_fish_audio_long_form_passes_no_speed_upstream_and_postprocesses_once(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Fish is a tempo family: it must not be handed `speed` at all.
+
+    It used to receive ``speed=1.0``. That looked harmless, but making the engine
+    argument part of the contract let the engine and the public control disagree.
+    The dispatcher now passes the argument only to native families and applies
+    exactly one pitch-preserving pass to the finished artifact.
+    """
     import importlib
     import soundfile as sf
 
@@ -1266,7 +1273,7 @@ def test_fish_audio_long_form_keeps_native_speed_at_one_and_postprocesses_once(
     def fake_generate_audio(*, model, output_path, join_audio, **kwargs) -> None:
         assert model == "fish-model"
         assert join_audio is True
-        assert kwargs["speed"] == 1.0
+        assert "speed" not in kwargs
         assert kwargs["chunk_length"] == 100000
         generated_sections.append(kwargs["text"])
         sf.write(
@@ -1300,6 +1307,8 @@ def test_fish_audio_long_form_keeps_native_speed_at_one_and_postprocesses_once(
         params={"text": text, "speed": 0.97, "seed": 23},
     )
     output = tmp_path / "fish-long.wav"
+
+    assert long_form_policy.speed_policy_for("fish-audio-mlx").delivery == "tempo"
 
     manager._generate_mlx_audio(
         job,
@@ -1385,15 +1394,30 @@ def test_qwen_and_voxcpm_speed_control_is_visible_and_truthful() -> None:
 def test_omnivoice_speed_is_applied_to_the_finished_wav_not_passed_upstream() -> None:
     """mlx-audio's OmniVoice.generate() has no `speed` parameter -- it declares
     **kwargs and never reads it. Speed must therefore be applied as a
-    pitch-preserving tempo pass on the finished WAV, exactly as for Audio8 and
-    Echo-TTS, and must never be handed to the engine where it vanishes."""
-    assert "omnivoice" in generation._POSTPROCESSED_SPEED_FAMILIES
+    pitch-preserving tempo pass on the finished WAV, and must never be handed to
+    the engine where it vanishes.
+
+    The authority is now `long_form_policy.speed_policy_for(family)`, published
+    per model in the catalogue, rather than a second family table in generation.py
+    that could drift from it.
+    """
+    assert long_form_policy.speed_policy_for("omnivoice").delivery == "tempo"
 
     src = inspect.getsource(generation.GenerationManager._generate_mlx_audio)
-    exclusion = src.split("if family not in {", 1)[1].split("}", 1)[0]
-    assert '"omnivoice"' in exclusion, (
-        "omnivoice must be excluded from the upstream speed pass-through"
+    assert 'if _speed_delivery(family) == "native":' in src
+    assert 'gen_kwargs["speed"] = speed' in src
+    # The upstream assignment is guarded by the policy, so no tempo family can
+    # reach it by being absent from a hand-maintained set.
+    assert src.split('gen_kwargs["speed"] = speed', 1)[0].rstrip().endswith(
+        'if _speed_delivery(family) == "native":'
     )
+    # Only the two engines that scale their own durations are native.
+    native = {
+        family
+        for family in catalog.FAMILIES
+        if long_form_policy.speed_policy_for(family).delivery == "native"
+    }
+    assert native == {"kokoro-mlx", "kittentts"}
 
 
 def test_qwen_clone_long_form_renders_each_section_and_reports_progress(tmp_path: Path) -> None:

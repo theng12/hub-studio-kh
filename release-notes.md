@@ -2,6 +2,38 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.38 — 2026-09-20
+
+### Cloning no longer fails because of how a number is written
+
+Cloning a voice with the Qwen models checks its own work: it transcribes the audio back and compares
+the words before handing you the file. That check was comparing *spelling*, and Whisper writes numbers
+as digits — so "one two three" came back as "123" and a perfectly good recording was thrown away as
+"missing, repeated, or unrelated generated speech". It only showed up on short scripts, which is why
+it looked like the model being unreliable: on a nine-word script the same three-word difference is
+33% and passes; on a seven-word script it is 43% and fails. Numbers are now compared as numbers, so a
+correct recording is accepted however the digits are written, while genuinely wrong audio is still
+refused — unrelated speech, a missing half and a repeated tail are all still rejected.
+
+Two smaller causes of the same message are also fixed: the 1.7B 4-bit clone model failed every single
+time for a missing internal value (it generated and transcribed fine, then died on a lookup), and a
+model's own audit record was being read as a mismatch when it was correct.
+
+### The check now covers our own engine tests
+
+The app's Voice engine has its own suite of 722 tests — how a long script is split, how the speed
+control reaches each engine, what the section limits are, how a task survives a restart. The release
+gate never ran them: it only looked at the app-level tests, so this suite could fail silently. It runs
+in the gate now (about 45 seconds), and it caught real problems the moment it was switched on.
+
+### Music: what we will use, written down
+
+`docs/music-studio-adoption.md` records the answer to the music-generator question: ACE-Step 1.5
+(MIT-licensed, ten minutes per request, instrumental built in, Apple-Silicon support from the project
+itself), why the old Music Studio's models cannot be reused (its MusicGen weights are
+non-commercial-only and thirty seconds long, and nothing was ever downloaded), and exactly what it
+takes to add a fourth studio to the Hub.
+
 ## 0.6.37 — 2026-09-20
 
 ### The model check was asking the wrong question

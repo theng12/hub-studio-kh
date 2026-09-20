@@ -1,162 +1,112 @@
+"""The standalone launch surface.
+
+Every test in this module used to drive the retired Pinokio launcher
+(`pinokio.js`, `start.js`, `whats_new.js`, `voicestudio-serve.sh`,
+`install_generation.js`), which is not part of the standalone app: the app is a
+macOS bundle and the host process launches the workers. Those files are gone, so
+each test failed with `CalledProcessError` or `FileNotFoundError` and the
+properties they described — menu ordering, action labels, a "What's New" screen,
+media-tool preference — were being asserted against a program that no longer
+exists.
+
+What survives is the premise itself: the voice component ships an application,
+not a Pinokio script set. The first test guards that. The rest are skipped with a
+reason each; where the standalone app has a real successor, the skip names the
+file that now covers it.
+"""
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
-import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).parents[2]
 
+# Entry points of the Pinokio launcher this project retired.
+RETIRED_LAUNCHER_FILES = (
+    "pinokio.js",
+    "install.js",
+    "install_generation.js",
+    "start.js",
+    "update.js",
+    "update_and_restart.js",
+    "reset.js",
+    "whats_new.js",
+    "voicestudio-serve.sh",
+    "voicestudio-watchdog.sh",
+    "install_service.sh",
+    "ENVIRONMENT.example",
+)
 
-def _launcher_menus() -> dict[str, list[dict]]:
-    script = r"""
-const launcher = require('./pinokio.js');
-const generationFiles = [
-  'conda_env/lib/python3.12/site-packages/transformers',
-  'conda_env/lib/python3.12/site-packages/diffusers',
-  'conda_env/lib/python3.12/site-packages/mlx_audio',
-  'conda_env/lib/python3.12/site-packages/fugashi',
-  'conda_env/lib/python3.12/site-packages/jieba',
-];
-function info({ installed = true, generation = true, service = false,
-                running = [], local = {} }) {
-  return {
-    exists(path) {
-      if (path === 'conda_env') return installed;
-      if (path === 'service/.installed') return service;
-      if (generationFiles.includes(path)) return generation;
-      return false;
-    },
-    running(path) { return running.includes(path); },
-    local(path) { return path === 'start.js' ? local : {}; },
-  };
-}
-(async () => {
-  const scenarios = {
-    installing: { running: ['install.js'] },
-    installing_generation: { running: ['install_generation.js'] },
-    service: { service: true },
-    running_ready: { running: ['start.js'], local: { url: 'http://0.0.0.0:47870' } },
-    running_starting: { running: ['start.js'] },
-    stopped_missing_generation: { generation: false },
-    updating: { running: ['update.js'] },
-    updating_restart: { running: ['update_and_restart.js'] },
-    resetting: { running: ['reset.js'] },
-    uninstalled: { installed: false, generation: false },
-  };
-  const result = {};
-  for (const [name, state] of Object.entries(scenarios)) {
-    result[name] = await launcher.menu({}, info(state));
-  }
-  console.log(JSON.stringify(result));
-})().catch(error => { console.error(error); process.exit(1); });
-"""
-    result = subprocess.run(
-        ["node", "-e", script],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
+
+def test_the_voice_component_ships_an_application_not_a_pinokio_launcher() -> None:
+    """If a launcher file came back, the skips below would be hiding it."""
+    present = [name for name in RETIRED_LAUNCHER_FILES if (ROOT / name).exists()]
+
+    assert present == [], (
+        "the retired Pinokio launcher files are back; the launcher tests must be "
+        f"reinstated rather than skipped: {present}"
     )
-    return json.loads(result.stdout)
+    assert (ROOT / "app" / "backend" / "main.py").is_file()
+    assert (ROOT / "app" / "frontend" / "app.js").is_file()
 
 
-def test_generation_action_is_persistent_in_regular_and_service_modes() -> None:
-    menus = _launcher_menus()
-
-    for state in ("service", "running_ready", "running_starting"):
-        actions = {item.get("href"): item.get("text") for item in menus[state]}
-        assert actions["install_generation.js"] == "Reinstall Generation"
-
-    missing_actions = {
-        item.get("href"): item.get("text")
-        for item in menus["stopped_missing_generation"]
-    }
-    assert missing_actions["install_generation.js"] == "Install Generation"
-
-
-def test_whats_new_is_visible_in_every_launcher_state() -> None:
-    menus = _launcher_menus()
-
-    for state, menu in menus.items():
-        assert any(
-            item.get("href") == "whats_new.js" and item.get("text") == "What's New"
-            for item in menu
-        ), state
-
-
-def test_whats_new_displays_the_local_changelog() -> None:
-    source = (ROOT / "whats_new.js").read_text(encoding="utf-8")
-
-    assert 'method: "fs.cat"' in source
-    assert 'path: "CHANGELOG.md"' in source
-
-
-def test_launchers_do_not_override_the_backend_download_transport_policy() -> None:
-    regular = (ROOT / "start.js").read_text(encoding="utf-8")
-    service = (ROOT / "voicestudio-serve.sh").read_text(encoding="utf-8")
-
-    assert "HF_XET_HIGH_PERFORMANCE" not in regular
-    assert "HF_XET_HIGH_PERFORMANCE" not in service
-
-
-def test_startup_service_prefers_app_managed_media_tools(tmp_path: Path) -> None:
-    pinokio_home = tmp_path / "pinokio"
-    app_root = pinokio_home / "api" / "voicestudio-mac.git"
-    app_root.mkdir(parents=True)
-    (app_root / "app").mkdir()
-    service = app_root / "voicestudio-serve.sh"
-    service.write_text(
-        (ROOT / "voicestudio-serve.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
+@pytest.mark.skip(
+    reason=(
+        "pinokio.js is not part of the standalone app; launcher menu construction "
+        "belongs to the retired Pinokio source and has no Python successor."
     )
-    service.chmod(0o755)
+)
+def test_generation_action_is_persistent_in_regular_and_service_modes() -> None:  # pragma: no cover
+    pass
 
-    fake_python = app_root / "conda_env" / "bin" / "python"
-    fake_python.parent.mkdir(parents=True)
-    fake_python.write_text(
-        "#!/bin/sh\ncommand -v ffprobe\n",
-        encoding="utf-8",
+
+@pytest.mark.skip(
+    reason=(
+        "What's New is now the native app screen in native/ReleaseNotes.swift, which "
+        "reads the bundled release-notes.md; covered by tests/test_release_notes.py."
     )
-    fake_python.chmod(0o755)
+)
+def test_whats_new_is_visible_in_every_launcher_state() -> None:  # pragma: no cover
+    pass
 
-    managed_ffprobe = app_root / "conda_env" / "bin" / "ffprobe"
-    managed_ffprobe.write_text("#!/bin/sh\n", encoding="utf-8")
-    managed_ffprobe.chmod(0o755)
 
-    ffprobe = pinokio_home / "bin" / "miniforge" / "bin" / "ffprobe"
-    ffprobe.parent.mkdir(parents=True)
-    ffprobe.write_text("#!/bin/sh\n", encoding="utf-8")
-    ffprobe.chmod(0o755)
-
-    result = subprocess.run(
-        [str(service)],
-        env={"PATH": "/usr/bin:/bin"},
-        check=True,
-        capture_output=True,
-        text=True,
+@pytest.mark.skip(
+    reason=(
+        "whats_new.js is gone; the owner-facing notes are release-notes.md rendered by "
+        "native/ReleaseNotes.swift, covered by tests/test_release_notes.py."
     )
+)
+def test_whats_new_displays_the_local_changelog() -> None:  # pragma: no cover
+    pass
 
-    assert result.stdout.strip() == str(managed_ffprobe)
+
+@pytest.mark.skip(
+    reason=(
+        "start.js/voicestudio-serve.sh no longer exist, so there is no launcher that "
+        "could override the backend's download transport policy."
+    )
+)
+def test_launchers_do_not_override_the_backend_download_transport_policy() -> None:  # pragma: no cover
+    pass
 
 
-def test_common_actions_use_consistent_names_and_safe_order() -> None:
-    menus = _launcher_menus()
+@pytest.mark.skip(
+    reason=(
+        "voicestudio-serve.sh is gone; the standalone worker resolves app-managed tools "
+        "through media_tools, covered by tests/test_managed_media_tools.py."
+    )
+)
+def test_startup_service_prefers_app_managed_media_tools() -> None:  # pragma: no cover
+    pass
 
-    service = [item["text"] for item in menus["service"]]
-    assert "Repair Startup Service" in service
-    assert service.index("Outputs") < service.index("HF Cache")
-    assert service.index("Update") < service.index("What's New")
-    assert service.index("What's New") < service.index("Uninstall Startup Service")
 
-    running = [item["text"] for item in menus["running_ready"]]
-    assert running.index("Terminal") < running.index("Outputs")
-    assert running.index("Outputs") < running.index("HF Cache")
-    assert running.index("Install as Startup Service") < running.index("Update")
-    assert running.index("Update") < running.index("What's New")
-
-    stopped = [item["text"] for item in menus["stopped_missing_generation"]]
-    assert stopped.index("Outputs") < stopped.index("HF Cache")
-    assert stopped.index("Update") < stopped.index("What's New")
-    assert stopped.index("What's New") < stopped.index("Reinstall") < stopped.index("Reset")
+@pytest.mark.skip(
+    reason=(
+        "Menu order and action labels were properties of pinokio.js, which the "
+        "standalone app does not ship."
+    )
+)
+def test_common_actions_use_consistent_names_and_safe_order() -> None:  # pragma: no cover
+    pass
