@@ -435,3 +435,8 @@ model inference and physical fleet/reboot acceptance remain unmeasured.
 The current full test/build baseline is the prior takeover receipt; no product
 code changed to justify repeating that full gate. Finish this handoff through
 independent documentation/evidence review, local validation and authorized PR integration.
+
+[MEASURED] Handoff content committed as `c4909a6`; independent content-review
+corrections resolved. Local validation: 55 links, 11 shell blocks, Python syntax,
+and the expected five negative-probe failures. Integration record:
+https://github.com/theng12/Studio-Hub-KH/pull/2 (use its merge state/commit).

@@ -30,6 +30,10 @@ baseline. New computer hardware and actual migration are not yet observed.
 **Completion proof for this handoff:** independent evidence/document review, valid
 local links and shell snippets, expected audit probe failures, reviewed PR merge,
 and exact GitHub/local integration SHA equality. No ST card is newly DONE.
+[MEASURED] Reviewed handoff content is committed at `c4909a6`;
+[PR #2](https://github.com/theng12/Studio-Hub-KH/pull/2) records integration state.
+Independent review corrections are resolved; 55 local links and 11 shell blocks
+passed validation, and the five expected negative probes were observed.
 
 ### Current takeover — 2026-09-20
 

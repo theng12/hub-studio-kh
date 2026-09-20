@@ -11,6 +11,11 @@ source baseline is **`f6362e0b5dcb71231d8023f9e9cbc06be0a55267`**, which merges 
 reviewed cleanup repair through [PR #1](https://github.com/theng12/Studio-Hub-KH/pull/1).
 Use the latest integration tip containing this handoff; do not reset to an older SHA.
 
+[MEASURED] Handoff content commit: `c4909a64e8178a5e24dcfc2503cf9b539f65057a`.
+[PR #2](https://github.com/theng12/Studio-Hub-KH/pull/2) records its integration and
+the final merge commit. This link also distinguishes the reviewed handoff from an
+uncommitted draft on the old machine.
+
 [MEASURED] Every pre-existing local branch tip was compared with GitHub and matched,
 including the newly uploaded **`codex/recovered-music-draft`** at
 **`0eebc424f8a74b2b95ec4f9b90fccb32aae0f718`**. Exact refs and environment receipts are in
