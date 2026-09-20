@@ -2,7 +2,9 @@
 
 Independent native macOS application project for local creation on Apple Silicon. Existing Pinokio installations and their maintenance flow remain untouched.
 
-**Current handoff:** start at [the task board](docs/tasks/BOARD.md) and the
+**Current handoff:** read the [new-computer guide](docs/NEW-COMPUTER-HANDOFF.md),
+[bug/fix backlog](qualification/bug-audit-2026-09-20.md), and
+[task board](docs/tasks/BOARD.md). Earlier verification is in the
 [2026-09-20 takeover evidence](qualification/takeover-2026-09-20.md). The installed
 version observed during takeover is 0.6.38. The 0.4.0 instructions below are historical;
 unfinished Music work is preserved separately on `codex/recovered-music-draft`.
@@ -31,6 +33,13 @@ still needs physical qualification. See the design's compatibility and OS-update
 Read the [design and flows](docs/standalone-plan.md), [build order](docs/implementation-plan.md)
 and [agent task board](docs/tasks/BOARD.md). The board separates implemented foundations
 from remaining app integration.
+
+## Historical implementation and build notes
+
+The remainder of this README records earlier artifacts and milestones. Its old
+build/install commands and model qualification statements are historical. For current
+setup, use [the new-computer handoff](docs/NEW-COMPUTER-HANDOFF.md) and its audit backlog.
+Do not use an old versioned app path below as the current release identity.
 
 ## ST-01 foundation
 
@@ -100,7 +109,7 @@ The app has no signing, notarization, login-registration or physical Sonoma test
 
 ## Running this build on a test machine
 
-The current build is `dist/Studio Hub 0.4.0.app`. It is unsigned, so:
+The build recorded in this historical section is `dist/Studio Hub 0.4.0.app`. It is unsigned, so:
 
 1. **Copy the app and the model library to the target Mac.** Copy `model-library/` as well — the
    app is offline and never downloads models by itself.

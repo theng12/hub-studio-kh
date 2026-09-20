@@ -408,3 +408,35 @@ Native build passed. The final development bundle passed seven authenticated end
 401 unauthenticated refusal, three studio modalities, scheduled temporary-asset expiry,
 live-copy preservation and owned shutdown. Evidence is tracked under
 qualification/evidence/takeover-2026-09-20/. The local installed app remains unchanged.
+
+## 2026-09-20 — portable continuation audit
+
+[MEASURED] Owner requested possible bugs/fixes, a new-computer handoff and GitHub
+synchronization. Started `f6362e0`, branch `codex/new-computer-handoff`; root owns
+docs/evidence/board, Luna workers supplied bounded read-only inventories and review.
+`docs/NEW-COMPUTER-HANDOFF.md` is the new entry point;
+`qualification/bug-audit-2026-09-20.md` records five reproduced failures plus scoped
+static candidates and migration blockers. Product source remains unchanged.
+
+[MEASURED] `codex/recovered-music-draft` at `0eebc42` is now on GitHub; every prior
+local branch tip was compared with origin and matched. Recovery worktrees, stash,
+installed app and external model/runtime inputs remain preserved. Private repo:
+`theng12/Studio-Hub-KH`, default `implementation/voice-runtime`. No Actions workflows
+exist; none were run. Repo settings otherwise preserved.
+
+[MEASURED] Offline audit probes return five expected assertion failures on the
+audited source; raw log and script are retained under
+`qualification/evidence/handoff-2026-09-20/`. Review identified import-time registry
+directory creation; the probe now sets temporary STUDIOHUB_DATA_DIR before imports.
+Current lockfiles match runtime lock receipts; approximate asset sizes and exact
+manifest/ref checksums are recorded. New-machine hardware, runtime reconstruction,
+model inference and physical fleet/reboot acceptance remain unmeasured.
+
+The current full test/build baseline is the prior takeover receipt; no product
+code changed to justify repeating that full gate. Finish this handoff through
+independent documentation/evidence review, local validation and authorized PR integration.
+
+[MEASURED] Handoff content committed as `c4909a6`; independent content-review
+corrections resolved. Local validation: 55 links, 11 shell blocks, Python syntax,
+and the expected five negative-probe failures. Integration record:
+https://github.com/theng12/Studio-Hub-KH/pull/2 (use its merge state/commit).
