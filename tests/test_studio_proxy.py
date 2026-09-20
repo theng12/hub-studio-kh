@@ -203,6 +203,27 @@ class StudioProxyTests(unittest.TestCase):
                                     headers={"X-Hub-Token": TOKEN}
                                     ).status_code, 404)
 
+    def test_the_fleet_credential_only_reaches_classified_worker_routes(self) -> None:
+        from components.hub.backend import peers
+
+        fleet_token = "fleet-controller-token-0123456789"
+        peers.set_fleet_token(fleet_token)
+        client = self.client()
+        headers = {"X-Hub-Token": fleet_token}
+
+        allowed = client.get("/studio/image/api/catalog", headers=headers)
+        self.assertEqual(allowed.status_code, 200, allowed.text)
+        self.assertEqual(self.worker.requests[-1]["path"], "/api/catalog")
+
+        for method, path in (
+            ("GET", "/studio/image/api/settings"),
+            ("GET", "/studio/image/api/not-classified"),
+            ("PATCH", "/studio/image/api/not-classified"),
+        ):
+            with self.subTest(method=method, path=path):
+                response = client.request(method, path, headers=headers)
+                self.assertEqual(response.status_code, 403, response.text)
+
     def test_a_traversal_or_an_absolute_url_is_refused(self) -> None:
         client = self.client()
         headers = {"X-Hub-Token": TOKEN}

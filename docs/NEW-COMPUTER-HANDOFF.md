@@ -228,9 +228,9 @@ The output app must not already exist. Check `release-manifest.json` for exact s
 commit and development status, retain the adjacent tree hash, and require the kit's
 `problems` list to be empty. This is local packaging, not deployment or a signed release.
 
-**Do not accept `qualification/verify-launch.sh`'s PASS as proof until audit finding
-H-01 is fixed.** Its underlying probe and exit handling are defective. After fixing
-and testing it, run it with explicit `APP`, `LIB` and an isolated port:
+Audit finding H-01 is fixed by reviewed PR #4: `qualification/verify-launch.sh` now
+fails closed on identity, readiness, health and malformed-response errors. Run it with
+explicit `APP`, `LIB` and an isolated port:
 
 ```sh
 APP="$PWD/dist/Studio Hub.app" LIB="$HOME/StudioHubModels" PORT=0 \
