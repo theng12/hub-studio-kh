@@ -2695,7 +2695,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 item["error"] = "Use either voice_library_id or voice_reference_asset_id, not both."
                 return
             try:
-                reference, reference_path = execution_assets.resolve_voice_reference(
+                reference, reference_bytes = execution_assets.read_voice_reference(
                     voice_reference_asset_id
                 )
             except execution_assets.ExecutionAssetError as exc:
@@ -2724,7 +2724,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 files={
                     "audio": (
                         f"reference{reference['audio_extension']}",
-                        reference_path.read_bytes(),
+                        reference_bytes,
                         reference["media_type"],
                     )
                 },

@@ -79,7 +79,7 @@ def _bytes_under(root: Path) -> int:
 
 
 def storage_bytes() -> int:
-    from . import execution_assets, transcription_jobs
+    from . import transcription_jobs
     return _bytes_under(transcription_jobs.ROOT)
 
 
@@ -124,15 +124,16 @@ async def budget_loop(interval_seconds: float) -> None:
     recording, every transcript and every generated file until its disk filled and it began refusing
     work it could not free.
     """
-    while True:
-        try:
-            await asyncio.sleep(max(5.0, float(interval_seconds)))
-            await sweep_once()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            # A sweep that fails must not take the Hub with it; the next one tries again.
-            await asyncio.sleep(30)
+    try:
+        while True:
+            try:
+                await asyncio.sleep(max(5.0, float(interval_seconds)))
+                await sweep_once()
+            except Exception:
+                # A sweep that fails must not take the Hub with it; the next one tries again.
+                await asyncio.sleep(30)
+    except asyncio.CancelledError:
+        return
 
 
 async def sweep_once() -> dict:
@@ -154,7 +155,7 @@ def enforce_budget(target_bytes: int | None = None) -> dict:
 
 
 def _enforce_budget(target_bytes: int | None = None) -> dict:
-    from . import transcription_jobs
+    from . import execution_assets, transcription_jobs
 
     value = _read()
     before = storage_bytes()

@@ -62,7 +62,8 @@ def test_broker_streams_staged_voice_to_worker_multipart(tmp_path: Path, monkeyp
         "transcript_segments": [{"start": 0, "end": 1, "text": "Exact words."}],
         "expires_at": time.time() + 600,
     }
-    monkeypatch.setattr(broker.execution_assets, "resolve_voice_reference", lambda _asset_id: (reference, reference_path))
+    monkeypatch.setattr(broker.execution_assets, "read_voice_reference",
+                        lambda _asset_id: (reference, reference_path.read_bytes()))
     monkeypatch.setattr(broker, "POLL_S", 0)
     monkeypatch.setattr(broker, "_expire_genstudio_batch", lambda _batch: False)
     monkeypatch.setattr(broker, "_mark_machine_success", lambda _studio: None)
@@ -126,7 +127,7 @@ def test_broker_returns_expired_reference_without_worker_call(monkeypatch, reset
             "The private voice reference has expired. Upload it again before generating.",
         )
 
-    monkeypatch.setattr(broker.execution_assets, "resolve_voice_reference", expired)
+    monkeypatch.setattr(broker.execution_assets, "read_voice_reference", expired)
     monkeypatch.setattr(broker, "_expire_genstudio_batch", lambda _batch: False)
 
     async def no_finish(*_args, **_kwargs):

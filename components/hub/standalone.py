@@ -1097,13 +1097,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Report whether a staged clone reference is still usable."""
         from .backend import execution_assets
         try:
-            metadata, path = execution_assets.resolve_voice_reference(asset_id)
+            metadata, audio_bytes = execution_assets.read_voice_reference(asset_id)
         except execution_assets.ExecutionAssetError as exc:
             raise HTTPException(409, {"code": exc.code, "detail": exc.detail}) from exc
         return {
             "asset_id": asset_id,
             "sha256": metadata.get("sha256"),
-            "bytes": path.stat().st_size,
+            "bytes": len(audio_bytes),
             "media_type": execution_assets.MIME_BY_EXTENSION.get(
                 str(metadata.get("audio_extension") or ""), "application/octet-stream"
             ),
