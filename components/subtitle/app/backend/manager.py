@@ -392,6 +392,8 @@ class SubtitleManager:
                 return
         params = job['params']
         staged: list[Path] = []
+        published: list[Path] = []
+        receipts: dict[str, dict] = {}
         try:
             if not Path(input_path).is_file():
                 raise FileNotFoundError('uploaded audio is missing')
@@ -402,7 +404,8 @@ class SubtitleManager:
                 progress=lambda value: self._progress(job_id, value))
             if event.is_set():
                 raise _Cancelled()
-            receipts = self._publish(job_id, result, params['formats'], staged)
+            receipts = self._publish(
+                job_id, result, params['formats'], staged, published, receipts)
             with self.lock:
                 if event.is_set():
                     # The cancel landed while the artifacts were being written - after the check
@@ -410,17 +413,21 @@ class SubtitleManager:
                     # stop, and recording "done" afterwards is how a job they cancelled came back
                     # finished, with the Hub's lifecycle treating it as completed work. The
                     # artifacts this call just wrote are removed with it.
-                    published = [Path(entry['path']) for entry in receipts.values()
-                                 if isinstance(entry, dict) and entry.get('path')]
-                    job.update(state='cancelled', error=None, error_code=None,
-                               finished_at=time.time(), artifacts={}, output_path=None,
-                               output_url=None, sha256=None, bytes=None)
+                    if self._discard_published(published):
+                        job.update(state='cancelled', error=None, error_code=None,
+                                   finished_at=time.time(), artifacts={}, output_path=None,
+                                   output_url=None, sha256=None, bytes=None)
+                    else:
+                        primary = receipts.get('srt') or next(iter(receipts.values()))
+                        job.update(
+                            state='error', artifacts=receipts,
+                            output_path=primary['path'],
+                            output_url=f'/api/generate/transcribe/jobs/{job_id}/artifact',
+                            sha256=primary['sha256'], bytes=primary['bytes'],
+                            error='Cancelled Subtitle artifacts could not be removed; '
+                                  'reconcile before retry',
+                            error_code='JOB_PERSISTENCE_UNCERTAIN')
                     self._persist()
-                    for path in published:
-                        try:
-                            path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
                     return
                 now = time.time()
                 job.update(
@@ -443,18 +450,15 @@ class SubtitleManager:
                 try:
                     self._persist()
                 except Exception:
-                    job.update(state='error', artifacts={}, output_path=None,
-                               output_url=None, sha256=None, bytes=None,
+                    job.update(state='error',
                                error='Final artifact could not be persisted; reconcile before retry',
                                error_code='JOB_PERSISTENCE_UNCERTAIN')
-                    try:
-                        for path in staged:
-                            path.unlink(missing_ok=True)
-                        job.update(error='Final artifact could not be persisted; '
+                    if self._discard_published(published):
+                        job.update(artifacts={}, output_path=None, output_url=None,
+                                   sha256=None, bytes=None,
+                                   error='Final artifact could not be persisted; '
                                          'artifacts were discarded',
                                    error_code='JOB_PERSISTENCE_FAILED')
-                    except OSError:
-                        pass
                     raise
         except _Cancelled:
             with self.lock:
@@ -463,10 +467,39 @@ class SubtitleManager:
                 self._persist()
         except Exception as exc:
             with self.lock:
-                if event.is_set():
+                if job.get('error_code') in ('JOB_PERSISTENCE_FAILED',
+                                              'JOB_PERSISTENCE_UNCERTAIN'):
+                    pass
+                elif published:
+                    job.update(state='error',
+                               error='Subtitle artifacts could not be published; '
+                                     'reconcile before retry',
+                               error_code='JOB_PERSISTENCE_UNCERTAIN')
+                    if self._discard_published(published):
+                        job.update(artifacts={}, output_path=None, output_url=None,
+                                   sha256=None, bytes=None,
+                                   error='Subtitle artifacts could not be published; '
+                                         'artifacts were discarded',
+                                   error_code='JOB_PERSISTENCE_FAILED')
+                    else:
+                        known_paths = {
+                            str(receipt.get('path')) for receipt in receipts.values()
+                            if isinstance(receipt, dict) and receipt.get('path')
+                        }
+                        unverified = [str(path) for path in published
+                                      if str(path) not in known_paths]
+                        primary = receipts.get('srt') or next(iter(receipts.values()), None)
+                        job.update(
+                            artifacts=dict(receipts),
+                            output_path=((primary or {}).get('path')
+                                         or (str(published[0]) if published else None)),
+                            output_url=None,
+                            sha256=(primary or {}).get('sha256'),
+                            bytes=(primary or {}).get('bytes'),
+                            unverified_artifact_paths=unverified)
+                elif event.is_set():
                     job.update(state='cancelled', error=None, error_code=None)
-                elif job.get('error_code') not in ('JOB_PERSISTENCE_FAILED',
-                                                   'JOB_PERSISTENCE_UNCERTAIN'):
+                else:
                     detail = str(exc) or type(exc).__name__
                     if isinstance(exc, FileNotFoundError):
                         code = 'INPUT_NOT_FOUND'
@@ -502,12 +535,22 @@ class SubtitleManager:
                     return
             time.sleep(0.02)
 
+    @staticmethod
+    def _discard_published(paths: list[Path]) -> bool:
+        discarded = True
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                discarded = False
+        return discarded
+
     def _publish(self, job_id: str, result: dict, formats: list[str],
-                 staged: list[Path]) -> dict:
+                 staged: list[Path], published: list[Path],
+                 receipts: dict[str, dict]) -> dict:
         """Write final artifacts atomically; never publish a partial cue file."""
         contents = {'srt': result['srt'], 'vtt': result['vtt'],
                     'text': result['text_file']}
-        receipts: dict[str, dict] = {}
         for fmt in formats:
             body = contents[fmt]
             if not str(body or '').strip():
@@ -520,6 +563,7 @@ class SubtitleManager:
             staged.append(temporary)
             temporary.write_text(body, encoding='utf-8')
             os.replace(temporary, final)
+            published.append(final)
             digest, size = _sha256_file(final)
             receipts[fmt] = {'path': str(final), 'bytes': size, 'sha256': digest,
                              'media_type': ARTIFACT_FORMATS[fmt][0]}

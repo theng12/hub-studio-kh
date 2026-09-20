@@ -66,10 +66,11 @@ class CancelWinsTests(unittest.TestCase):
             artifact = root / "data" / "artifacts" / "stt-1.srt"
             artifact.parent.mkdir(parents=True, exist_ok=True)
 
-            def publish(job_id, result, formats, staged):
+            def publish(job_id, result, formats, staged, published, receipts):
                 # The operator pressed Cancel in exactly this window.
                 event.set()
                 artifact.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+                published.append(artifact)
                 return {"srt": {"path": str(artifact), "sha256": "a" * 64, "bytes": 12}}
 
             manager._publish = publish
@@ -99,6 +100,35 @@ class CancelWinsTests(unittest.TestCase):
             manager._run(job_id, str(audio))
             self.assertEqual(manager.jobs[job_id]["state"], "done")
             self.assertTrue(artifact.exists(), "nothing is removed when nobody cancelled")
+
+    def test_failed_cancel_cleanup_is_uncertain_with_its_receipt(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            audio = root / "recording.wav"
+            audio.write_bytes(b"RIFF____WAVE")
+            manager = _manager(root, _Engine())
+            job_id = "stt-cleanup-failure"
+            manager.jobs[job_id] = _queued(job_id, audio)
+            event = threading.Event()
+            manager.cancel_events[job_id] = event
+            artifact = root / "data" / "artifacts" / f"{job_id}.srt"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+
+            def publish(job_id, result, formats, staged, published, receipts):
+                event.set()
+                artifact.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+                published.append(artifact)
+                return {"srt": {"path": str(artifact), "sha256": "a" * 64, "bytes": 12}}
+
+            manager._publish = publish
+            manager._discard_published = lambda paths: False
+            manager._run(job_id, str(audio))
+
+            job = manager.jobs[job_id]
+            self.assertEqual(job["state"], "error")
+            self.assertEqual(job["error_code"], "JOB_PERSISTENCE_UNCERTAIN")
+            self.assertEqual(job["artifacts"]["srt"]["path"], str(artifact))
+            self.assertTrue(artifact.exists())
 
     def test_a_cancel_before_decoding_is_still_a_cancel(self):
         with TemporaryDirectory() as temporary:

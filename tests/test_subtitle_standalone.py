@@ -383,6 +383,125 @@ class DecodePathTests(SubtitleFixture):
 class LifecycleTests(SubtitleFixture):
     """ST-06.2 — independent jobs, cancellation, history and restart behavior."""
 
+    def test_failed_final_receipt_discards_every_published_artifact(self) -> None:
+        from unittest.mock import patch
+
+        manager = self.manager = self.build_manager()
+        original_persist = manager._persist
+        failed = False
+
+        def fail_done_once():
+            nonlocal failed
+            if not failed and any(job['state'] == 'done' for job in manager.jobs.values()):
+                failed = True
+                raise OSError('disk full at final receipt')
+            original_persist()
+
+        with patch.object(manager, '_persist', side_effect=fail_done_once):
+            job = self.submit(manager)
+            value = self.wait(manager, job['id'])
+
+        self.assertTrue(failed)
+        self.assertEqual(value['state'], 'error')
+        self.assertEqual(value['error_code'], 'JOB_PERSISTENCE_FAILED')
+        self.assertEqual(value['artifacts'], {})
+        self.assertFalse(list(manager.artifacts.iterdir()))
+
+        restarted = SubtitleManager(self.data, self.library, self.manifests, 'b' * 64,
+                                    voice_app_dir=VOICE_APP)
+        self.assertEqual(restarted.get(job['id'])['error_code'], 'JOB_PERSISTENCE_FAILED')
+
+    def test_failure_partway_through_multi_format_publish_discards_every_final(self) -> None:
+        from unittest.mock import patch
+        from components.subtitle.app.backend import manager as manager_module
+
+        manager = self.manager = self.build_manager()
+        original_hash = manager_module._sha256_file
+        artifact_hashes = 0
+
+        def fail_second_artifact(path):
+            nonlocal artifact_hashes
+            if path.parent == manager.artifacts:
+                artifact_hashes += 1
+                if artifact_hashes == 2:
+                    raise OSError('disk full during multi-format publish')
+            return original_hash(path)
+
+        with patch.object(manager_module, '_sha256_file', side_effect=fail_second_artifact):
+            job = self.submit(manager)
+            value = self.wait(manager, job['id'])
+
+        self.assertEqual(artifact_hashes, 2)
+        self.assertEqual(value['state'], 'error')
+        self.assertEqual(value['error_code'], 'JOB_PERSISTENCE_FAILED')
+        self.assertEqual(value['artifacts'], {})
+        self.assertFalse(list(manager.artifacts.iterdir()))
+
+    def test_failed_cleanup_keeps_the_completion_receipts_uncertain(self) -> None:
+        from unittest.mock import patch
+
+        manager = self.manager = self.build_manager()
+        original_persist = manager._persist
+        failed = False
+
+        def fail_done_once():
+            nonlocal failed
+            if not failed and any(job['state'] == 'done' for job in manager.jobs.values()):
+                failed = True
+                raise OSError('disk full at final receipt')
+            original_persist()
+
+        with (patch.object(manager, '_persist', side_effect=fail_done_once),
+              patch.object(manager, '_discard_published', return_value=False)):
+            job = self.submit(manager)
+            value = self.wait(manager, job['id'])
+
+        self.assertEqual(value['state'], 'error')
+        self.assertEqual(value['error_code'], 'JOB_PERSISTENCE_UNCERTAIN')
+        self.assertEqual(sorted(value['artifacts']), ['srt', 'text', 'vtt'])
+        for receipt in value['artifacts'].values():
+            self.assertTrue(Path(receipt['path']).is_file())
+
+        restarted = SubtitleManager(self.data, self.library, self.manifests, 'b' * 64,
+                                    voice_app_dir=VOICE_APP)
+        restored = restarted.get(job['id'])
+        self.assertEqual(restored['error_code'], 'JOB_PERSISTENCE_UNCERTAIN')
+        self.assertEqual(restored['artifacts'], value['artifacts'])
+
+    def test_partial_publish_cleanup_failure_keeps_recovery_identity(self) -> None:
+        from unittest.mock import patch
+        from components.subtitle.app.backend import manager as manager_module
+
+        manager = self.manager = self.build_manager()
+        original_hash = manager_module._sha256_file
+        artifact_hashes = 0
+
+        def fail_second_artifact(path):
+            nonlocal artifact_hashes
+            if path.parent == manager.artifacts:
+                artifact_hashes += 1
+                if artifact_hashes == 2:
+                    raise OSError('disk full after second rename')
+            return original_hash(path)
+
+        with (patch.object(manager_module, '_sha256_file', side_effect=fail_second_artifact),
+              patch.object(manager, '_discard_published', return_value=False)):
+            job = self.submit(manager, formats=['srt', 'vtt'])
+            value = self.wait(manager, job['id'])
+
+        self.assertEqual(value['error_code'], 'JOB_PERSISTENCE_UNCERTAIN')
+        self.assertEqual(sorted(value['artifacts']), ['srt'])
+        self.assertTrue(Path(value['artifacts']['srt']['path']).is_file())
+        self.assertEqual(len(value['unverified_artifact_paths']), 1)
+        self.assertTrue(Path(value['unverified_artifact_paths'][0]).is_file())
+
+        restarted = SubtitleManager(self.data, self.library, self.manifests, 'b' * 64,
+                                    voice_app_dir=VOICE_APP)
+        restored = restarted.get(job['id'])
+        self.assertEqual(restored['artifacts'], value['artifacts'])
+        self.assertEqual(restored['unverified_artifact_paths'],
+                         value['unverified_artifact_paths'])
+
     def test_cancel_stops_the_job_and_publishes_nothing(self) -> None:
         manager = self.build_manager()
         job = self.submit(manager)
@@ -456,7 +575,7 @@ class LifecycleTests(SubtitleFixture):
         self.assertIsNone(manager.artifact_path(job['id'], 'srt'))
 
     def test_ack_rejects_unfinished_jobs(self) -> None:
-        manager = self.build_manager()
+        manager = self.manager = self.build_manager()
         job = self.submit(manager)
         self.assertIsNone(manager.ack(job['id']))
         self.assertIsNone(manager.artifact_path(job['id'], 'srt'))
