@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.37 — 2026-09-20
+
+### The model check was asking the wrong question
+
+The tool that proves each local voice model actually produces audio was sending every model the same
+request, so the three Qwen tiers — which need three different things (a preset speaker, a written
+voice description, and a saved reference voice) — were all failing with a complaint about a missing
+parameter. That read as "seven models are broken" when it was the test that was wrong. It now builds
+each family's real request, skips the rows this Mac has no package for, and no longer tries to sing
+through an image model. Qwen now shows **six of seven passing**; the seventh is a real finding, below.
+
+### The speed control now says when it has been applied
+
+Slowing or speeding a finished recording is a pitch-preserving pass applied after the model renders.
+It logged that on one code path and was silent on the other — the one every job from the app actually
+takes. So proving that a requested 2× had reached the file meant comparing output durations by hand
+(12.44 s at 1×, 6.29 s at 2×). It logs either way now.
+
 ## 0.6.36 — 2026-09-20
 
 ### A finished job no longer reads as unfinished

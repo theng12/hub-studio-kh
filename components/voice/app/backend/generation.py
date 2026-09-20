@@ -2470,7 +2470,12 @@ class GenerationManager:
     def _qwen_job_duration_limit(job: GenerationJob) -> float:
         text = str(job.params.get("text") or "")
         speed = float(job.params.get("speed") or 1.0)
-        budget = int(job.params["_resolved_section_max_characters"])
+        # The override is optional: only the 1.7B 8-bit checkpoint and the 0.6B
+        # builds publish a section-size control, so a 1.7B Base 4-bit clone job
+        # arrives without this key. The ceiling must describe the sectioning the
+        # engine actually used, so it reads the override exactly like
+        # _dispatch_txt2speech does and falls back to the family policy.
+        budget = job.params.get("_resolved_section_max_characters")
         chunks = _internal_mlx_text_chunks(
             "qwen3-tts",
             str(job.params.get("repo") or ""),

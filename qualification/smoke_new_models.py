@@ -31,6 +31,29 @@ PRESET_KEY = {
     "voxtral-tts": "voxtral_voices",
     "marvis": "marvis_voices",
 }
+# Bark picks its voice from its own preset list, not a shared voice field.
+BARK_PRESET_KEY = "bark_voice_presets"
+
+
+def qwen_request(repo: str, availability: dict, library_voice_id: str | None) -> dict | None:
+    """The parameters one Qwen3-TTS tier actually needs.
+
+    The three tiers are three different requests: CustomVoice needs a preset speaker, VoiceDesign a
+    written description, and Base a reference voice from the library. The smoke sent only a shared
+    `preset_speaker`, so every Qwen row failed with a message about a missing parameter rather than
+    anything about the model - which is what "13 of 25" was really reporting.
+    """
+    name = repo.rsplit("/", 1)[-1].lower()
+    if "customvoice" in name or "custom-voice" in name:
+        speakers = availability.get("qwen3_preset_speakers") or []
+        return {"preset_speaker": speakers[0]["id"]} if speakers else None
+    if "voicedesign" in name or "voice-design" in name:
+        examples = availability.get("qwen3_voice_design_examples") or []
+        return {"voice_design_prompt": examples[0]} if examples else None
+    if "base" in name:
+        # Base clones, so it needs a saved voice (with its transcript) rather than a speaker name.
+        return {"_needs_library_voice": True} if library_voice_id else None
+    return {}
 PICKER_FAMILIES = {"kokoro-mlx", "orpheus", "vibevoice", "voxtral-tts", "marvis"}
 SKIP = {  # cannot load on a 16 GB Mac; named so the report is explicit rather than a silent omission
     "mlx-community/fish-audio-s2-pro-8bit": 24,
@@ -61,6 +84,11 @@ def main() -> int:
 
     catalogue = call(base, token, "/api/hub/catalog")
     models = catalogue.get("models", catalogue)
+    # Which models this build can actually schedule. The aggregate catalogue still lists models whose
+    # manifest this release no longer ships (F5-TTS), and the Hub refuses them at submission with a
+    # 409 that says nothing about the model.
+    packages = call(base, token, "/api/hub/model-packages").get("models") or []
+    packaged = {row.get("model_id") for row in packages}
     include_all = "--all" in sys.argv
     results = []
     for row in models:
@@ -70,6 +98,16 @@ def main() -> int:
             continue
         if row.get("engine") not in (None, "voice-mlx"):
             continue
+        # Only speech models. The aggregate catalogue also carries image rows, which the Hub refuses
+        # for a voice job - reported here as "submit failed 409", which said nothing about a model.
+        if "tts" not in (row.get("capabilities") or []):
+            continue
+        # A model the Hub has no package for cannot be scheduled at all, so a failed submission
+        # would be about packaging rather than about the model. `execution_ready` is absent on some
+        # rows (the removed F5-TTS), so the Hub's own package list is the authority.
+        if repo not in packaged:
+            results.append((repo, "skipped", "no packaged manifest for this build"))
+            continue
         if "--only" in sys.argv:
             wanted = sys.argv[sys.argv.index("--only") + 1].split(",")
             if not any(token in repo for token in wanted):
@@ -78,24 +116,38 @@ def main() -> int:
             results.append((repo, "skipped", f"declares {SKIP[repo]} GB; this Mac has 16 GB"))
             continue
         family = row.get("family") or ""
+        extra: dict = {}
+        needs_library = False
         preset = ""
-        key = PRESET_KEY.get(family)
-        if key:
-            options = availability.get(key) or []
+        if family == "qwen3-tts":
+            extra = qwen_request(repo, availability, library_id)
+            if extra is None:
+                results.append((repo, "skipped", "no usable request for this tier on this Mac"))
+                continue
+            needs_library = bool(extra.get("_needs_library_voice"))
+            preset = str(extra.get("preset_speaker") or "")
+        elif family == "bark":
+            options = availability.get(BARK_PRESET_KEY) or []
+            preset = str((options[0] or {}).get("id") or "") if options else ""
+        else:
+            key = PRESET_KEY.get(family)
+            options = availability.get(key) or [] if key else []
             first = options[0] if options else None
             if isinstance(first, dict):
                 preset = first.get("id") or first.get("name") or first.get("voice") or ""
-            else:
-                preset = first or ""
+            elif first:
+                preset = first
         # `preset_speaker` only - the field the app's audio request carries - because that is the
-        # contract under test. The picker families read `voice` internally; the worker now accepts
-        # either name, so a smoke that injected the internal field would hide a client-facing break.
-        params = {"language": "en", "speed": 1.0, "preset_speaker": preset}
+        # contract under test. The picker families read `voice` internally; the worker accepts either
+        # name, so a smoke that injected the internal field would hide a client-facing break.
+        # The Qwen-only fields (a written description) are the ones that tier genuinely requires.
+        params = {"language": "en", "speed": 1.0, "preset_speaker": preset,
+                  **{k: v for k, v in extra.items() if not k.startswith("_")}}
         body = {
             "modality": "voice", "model": repo, "client_request_id": f"smoke-{uuid.uuid4().hex[:12]}",
             "items": [{"text": TEXT_TEMPLATE.format(uuid.uuid4().hex[:6]), "params": params}],
         }
-        if not preset:
+        if not preset or needs_library:
             if not library_id:
                 results.append((repo, "skipped", "needs a reference voice and the library is empty"))
                 continue

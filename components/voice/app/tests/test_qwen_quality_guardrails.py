@@ -459,6 +459,34 @@ def test_qwen_duration_validation_uses_resolved_section_budget(budget: int) -> N
     assert generation.GenerationManager._qwen_job_duration_limit(job) == expected
 
 
+def test_qwen_duration_validation_matches_the_chunker_without_a_resolved_budget() -> None:
+    """A clone tier with no published section control must still be measurable.
+
+    ``mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit`` carries no
+    ``section_size_control`` and is not a 0.6B build, so its jobs reach output
+    validation without ``_resolved_section_max_characters``. Reading that key
+    directly raised KeyError after a successful transcription, which surfaced as
+    "Whisper Large could not validate the Qwen output" on every attempt. The
+    ceiling must come from the same fallback the dispatch path used.
+    """
+    repo = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
+    job = generation.GenerationJob(
+        job_id="duration-no-resolved-budget",
+        mode="txt2speech",
+        params={"repo": repo, "text": LONG_TEXT, "speed": 1.0},
+    )
+    chunks = generation._internal_mlx_text_chunks("qwen3-tts", repo, LONG_TEXT)
+    expected = round(
+        sum(qwen_quality.automatic_duration_limit(chunk, 1.0) for chunk in chunks)
+        + (len(chunks) - 1)
+        * generation._long_form_join_pause_s("qwen3-tts", repo),
+        3,
+    )
+
+    assert len(chunks) > 1
+    assert generation.GenerationManager._qwen_job_duration_limit(job) == expected
+
+
 @pytest.mark.parametrize("initial_budget", [400, 280, 230])
 def test_rejected_local_qwen_output_retries_once_with_safer_settings(
     monkeypatch, tmp_path: Path, initial_budget: int

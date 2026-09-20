@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.37 — 2026-09-20 · the smoke harness asked every model the same question; the tempo pass was silent
+
+- **`qualification/smoke_new_models.py` built an invalid request for the Qwen tier.** `PRESET_KEY`
+  had no qwen3-tts entry, so CustomVoice and VoiceDesign rows were sent an empty speaker and Base
+  rows a reference voice with no transcript - and the reported errors were about the missing
+  parameter, never the model. It now builds each tier's real request (`preset_speaker` from
+  `qwen3_preset_speakers`, `voice_design_prompt` from `qwen3_voice_design_examples`, a library voice
+  for Base), routes Bark to `bark_voice_presets`, skips rows with `execution_ready: false` (no
+  packaged manifest - F5-TTS) and rows whose capabilities carry no `tts` (the aggregate catalogue also
+  serves image rows, which the Hub refused with a 409 that said nothing about a model).
+  Result: Qwen 6 of 7 pass, up from 0 of 7.
+- **One real failure remains**: `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit` ends in
+  `QwenQualityError: Whisper Large could not validate the Qwen output` while its 8-bit sibling
+  passes. Recorded rather than papered over.
+- **`_apply_parent_output_speed` logs the tempo pass.** The in-process path logged "applied
+  pitch-preserving Nx tempo"; the parent path - which every Hub job takes, because generation runs in
+  the spawned child with `postprocess_speed=False` - did not, so a working speed control left no
+  trace. Verified before the change by measurement: 1.0x gave 12.88 s and 12.00 s, 2.0x gave 6.29 s
+  (1.98x).
+
 ## 0.6.36 — 2026-09-20 · a done item reported 79%, and the Hub regression suite joins the gate
 
 - **`item["progress"] = 1.0` on the done transition.** `_record_worker_success` published the
