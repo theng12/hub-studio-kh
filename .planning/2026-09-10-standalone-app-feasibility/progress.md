@@ -1097,3 +1097,36 @@ playing. Root cause found Hub-side: the Music worker reports
 success path copied only `sha256`/`bytes`/`media_type`, so `terminal_result`
 carried `audio_duration_s: null`. The Hub now carries the decoded artifact facts
 through for image/music. Hub regression + jobs + dispatch gate: 116 passed.
+
+## 2026-09-22 — owner UI/UX pass implemented and installed (DeepSeek)
+
+[MEASURED] Implemented the owner's click-through feedback and installed it as
+commit `2e88fa3` (`development_build:false`; running, `/api/health` ok, 4 workers):
+- What's New appears once, in the sidebar; the footer shows only
+  `Studio Hub <version>`.
+- Sidebar reorganised: Create (Image/Audio/Subtitle/Music), Library
+  (Models/Voices/Jobs), Fleet (Connections), App (What's New/Settings),
+  Coming later (Video/Chat, dimmed).
+- Sample prompts (15 image / 14 audio incl. multilingual / 15 music) with a
+  "Surprise Me" button, an Examples menu, and a first-open prefill that never
+  auto-submits.
+- Animated (TimelineView, idle-free) colourful "ActiveAura" on Generate and the
+  preview panes; colour/icon/text state badges and honest progress (real bar only
+  when the Hub reports a %, otherwise indeterminate) across studios.
+- Model pickers show a short name; full labels remain in Models.
+- Music: duration is a typed + stepped field validated against the model limits;
+  preview has play/pause, stop, scrub bar and elapsed/total.
+- Image history rows show lazy, cached thumbnails through the verified artifact
+  route.
+- Discard abandons an uncertain attempt, clearing its worker/recovery identity so
+  it releases the Mac; operator-only (the fleet-token allowlist was deliberately
+  left unchanged).
+
+[MEASURED] Gates: `native/build.sh` exit 0 (boundary/API/lifecycle + optimized
+app); parser/hub pytest 156 passed; full root suite OK (11 skipped); all five
+reviewed pages render at 1040x680 and 1920x1053 with no clipping. Renders kept in
+`qualification/evidence/r08-ui-polish-2026-09-22/`.
+
+[GATE] The transient active states (aura, live progress, transport, thumbnails)
+cannot appear in an offline render; they are compile- and fixture-verified but not
+screenshot-verified. The owner should try them live.
