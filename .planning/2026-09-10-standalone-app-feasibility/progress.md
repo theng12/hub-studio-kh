@@ -984,3 +984,19 @@ runtime file changes.
 [MEASURED] After the shim: **ACE-Step 1.5 Turbo generated a real 30s track** -
 done in 97.35s, valid RIFF/WAVE, ~5.76 MB, engine ready in 2.24s. Receipt
 `ace-step-turbo.json`; output `ace-step-turbo-r07.wav`.
+
+## 2026-09-22 — installed app updated with the VoxCPM2 and Music fixes (DeepSeek)
+
+[MEASURED] Re-staged from the clean tree at `53ed297` and installed
+`/Applications/Studio Hub.app` = 0.6.38, `development_build:false`. The bundled
+`voice/app/backend/generation.py` keeps the reference transcript and
+`components/music/app/backend/engine_child.py` has the real-device init shim
+(both verified present in the bundle). Launched: `/api/health` returns
+`{"ok":true,"workers":4,"role":"controller"}`.
+
+[MEASURED] The swap hit a real install bug: the previous app's runtime directories
+are read-only, so `rm -rf` could not remove them and the move left a partial app.
+Recovered by `chmod -R u+w` then removing the remnant and moving the verified
+incoming copy into place. **The installer's own `rm -rf` has the same flaw when
+replacing a read-only build** - the kit's `1 - Install the app.command` should
+`chmod -R u+w` the target before removing it. Recorded as a fix for the kit rework.
