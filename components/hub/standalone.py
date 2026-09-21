@@ -11,13 +11,16 @@ from contextlib import asynccontextmanager
 import json
 import os
 import re
+import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
@@ -195,6 +198,225 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     return None
 
 
+# ── node-owned admission for fleet work ────────────────────────────────────
+# A controller dispatches by posting straight at this Mac's worker through the
+# peer proxy. The node does not own that durable batch, so this proxy is the
+# only place it can enforce its own operator pause, model protection, output
+# policy and physical heavy-work lease decisions - and it cannot queue an
+# opaque peer job, so the only way to stop a second submission overlapping on
+# the same Mac is to hold a machine lease until the accepted job is observed
+# terminal. The controller's cached capability view is never trusted for this.
+_PEER_LEASE_TTL_S = 6 * 3600.0
+_PEER_LEASE_LOCK = threading.Lock()
+_PEER_LEASES: dict[str, tuple[str, float]] = {}   # owner -> (machine, monotonic expiry)
+_PEER_JOBS: dict[tuple[str, str], str] = {}       # (worker_id, job_id) -> owner
+_PEER_TERMINAL_STATES = frozenset({
+    "done", "error", "failed", "cancelled", "canceled", "expired",
+})
+_PEER_JOB_PATH = re.compile(r"^/api/(?:generate/jobs|generate/transcribe/jobs)/([^/]+)")
+
+
+def _release_peer_lease(owner: str) -> None:
+    with _PEER_LEASE_LOCK:
+        row = _PEER_LEASES.pop(owner, None)
+        for key, value in list(_PEER_JOBS.items()):
+            if value == owner:
+                _PEER_JOBS.pop(key, None)
+    if row is not None:
+        broker.release_external_machine(row[0], owner)
+
+
+def _prune_peer_leases() -> None:
+    """Drop peer leases whose job was never observed terminal and whose safety
+    window elapsed, so a vanished controller cannot reserve a Mac for ever."""
+    now = time.monotonic()
+    with _PEER_LEASE_LOCK:
+        expired = [owner for owner, (_machine, expiry) in _PEER_LEASES.items()
+                   if expiry <= now]
+    for owner in expired:
+        _release_peer_lease(owner)
+
+
+async def _peer_lease_loop() -> None:
+    """Expire abandoned peer leases even when no further peer request arrives.
+
+    Without this, a controller that vanished mid-job would leave this Mac's own
+    scheduler treating the machine as forever busy.
+    """
+    import asyncio
+
+    try:
+        while True:
+            await asyncio.sleep(60.0)
+            _prune_peer_leases()
+    except asyncio.CancelledError:
+        return
+
+
+def _reserve_peer_machine(worker_id: str, machine: str) -> str | None:
+    owner = f"peer:{worker_id}:{uuid.uuid4().hex}"
+    if not broker.acquire_external_machine(machine, owner):
+        return None
+    with _PEER_LEASE_LOCK:
+        _PEER_LEASES[owner] = (machine, time.monotonic() + _PEER_LEASE_TTL_S)
+    return owner
+
+
+def _worker_job(payload: object) -> tuple[str, str] | None:
+    if not isinstance(payload, dict):
+        return None
+    job = payload.get("job")
+    if not isinstance(job, dict) or not isinstance(job.get("id"), str) or not job["id"]:
+        return None
+    return job["id"], str(job.get("state") or "")
+
+
+def _settle_peer_lease(owner: str, worker_id: str, response: Response) -> None:
+    """Keep the lease for an accepted asynchronous job; free it otherwise.
+
+    A synchronous route (Subtitle's ``/api/transcribe``) or a refusal is already
+    finished when the response arrives, so its lease must not outlive the call.
+    """
+    if response.status_code >= 400:
+        _release_peer_lease(owner)
+        return
+    payload = None
+    if "json" in response.headers.get("content-type", ""):
+        try:
+            payload = json.loads(response.content)
+        except (ValueError, TypeError):
+            payload = None
+    job = _worker_job(payload)
+    if job is None or job[1] in _PEER_TERMINAL_STATES:
+        _release_peer_lease(owner)
+        return
+    with _PEER_LEASE_LOCK:
+        row = _PEER_LEASES.get(owner)
+        if row is not None:
+            _PEER_LEASES[owner] = (row[0], time.monotonic() + _PEER_LEASE_TTL_S)
+        _PEER_JOBS[(worker_id, job[0])] = owner
+
+
+def _observe_peer_response(worker_id: str, tail: str, response: Response) -> None:
+    """Free a held machine once a proxied response shows its job terminal."""
+    match = _PEER_JOB_PATH.match(tail)
+    if match is None:
+        return
+    with _PEER_LEASE_LOCK:
+        owner = _PEER_JOBS.get((worker_id, match.group(1)))
+    if owner is None:
+        return
+    terminal = False
+    if "json" in response.headers.get("content-type", ""):
+        try:
+            job = _worker_job(json.loads(response.content))
+        except (ValueError, TypeError):
+            job = None
+        terminal = job is not None and job[0] == match.group(1) and job[1] in _PEER_TERMINAL_STATES
+    elif response.status_code < 400 and response.content:
+        # A raw artifact is served only for a job that has finished.
+        terminal = True
+    if terminal:
+        _release_peer_lease(owner)
+
+
+def _peer_work_request(method: str, path: str) -> bool:
+    """Whether this proxied request asks the node to create new work.
+
+    Status, cancellation, artifact and acknowledgement paths are deliberately
+    excluded: an operator pausing a mode must not lock anyone out of work this
+    Mac already accepted.
+    """
+    if method != "POST":
+        return False
+    cleaned = path.strip("/")
+    return cleaned.startswith("api/generate/") or cleaned == "api/transcribe"
+
+
+async def _request_model(request: Request, body: bytes, content_type: str) -> str:
+    """The model a work request names, or "" when it names none.
+
+    Generation submits carry it as ``repo`` in a JSON body; Subtitle carries it
+    as a multipart form field. A missing model only skips the model-specific
+    gates - the worker still validates the request it is sent.
+    """
+    if not body:
+        return ""
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    if kind == "application/json":
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return ""
+        if isinstance(payload, dict):
+            return str(payload.get("repo") or payload.get("model") or "").strip()
+        return ""
+    if kind in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        try:
+            form = await request.form()
+        except Exception:
+            return ""
+        return str(form.get("model") or form.get("repo") or "").strip()
+    return ""
+
+
+def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
+                            model: str) -> dict[str, Any] | None:
+    """This Mac's own answer, applied before its worker sees any peer request."""
+    from .backend import registry
+
+    machine = str(worker.get("machine") or "local")
+    studio_id = str(worker.get("id") or "")
+    if not registry.machine_enabled(machine):
+        return {"code": "MACHINE_DISABLED", "detail": f"{machine} is disabled on this Mac"}
+    if not registry.studio_enabled(machine, studio_id):
+        return {"code": "STUDIO_DISABLED", "detail": f"{studio_id} is disabled on this Mac"}
+    if model:
+        paused = broker.model_block_state(studio_id, model)
+        if paused is not None:
+            return {"code": "MODEL_PAUSED",
+                    "detail": str(paused.get("reason") or "model is paused on this Mac"),
+                    "readiness": paused}
+    if machine in broker.busy_machines():
+        return {"code": "MACHINE_BUSY",
+                "detail": f"{machine} is reserved for other work on this Mac"}
+    settings = standalone_config.load_device_settings()["effective"]
+    blocked = output_storage.admission(
+        machine=machine, max_bytes=settings["max_bytes"],
+        retention_days=settings["retention_days"], enabled=settings["cleanup_enabled"],
+        minimum_free_bytes=settings["minimum_free_bytes"],
+        managed_output_roots=worker.get("managed_output_roots"))
+    if blocked:
+        return blocked
+    # The packaged model gate only applies where this Hub actually owns a model
+    # library to verify against; without one the worker remains the authority on
+    # whether its own model can run.
+    if model and os.environ.get("STUDIOHUB_MODELS_DIR", "").strip():
+        try:
+            return _submission_readiness(
+                {"model": model, "modality": worker.get("modality")}, monitor)
+        except (ValueError, OSError, KeyError, TypeError):
+            return {"code": "MODEL_CATALOG_UNAVAILABLE",
+                    "detail": "model readiness could not be verified on this Mac"}
+    return None
+
+
+def _peer_refusal_response(refusal: dict[str, Any]) -> JSONResponse:
+    code = str(refusal.get("code") or "NODE_REFUSED")
+    status = 409
+    if code == "OUTPUT_STORAGE_BLOCKED":
+        status = 507
+    elif code in {"MODEL_NOT_READY", "STUDIO_NOT_RUNNING", "MODEL_CATALOG_UNAVAILABLE"}:
+        status = 503
+    body: dict[str, Any] = {
+        "detail": str(refusal.get("detail") or "this Mac refused the work"),
+        "code": code,
+    }
+    if isinstance(refusal.get("readiness"), dict):
+        body["readiness"] = refusal["readiness"]
+    return JSONResponse(body, status_code=status)
+
+
 def create_app(*, start_background: bool = True) -> FastAPI:
     """Create one owner-authenticated Hub bound to packaged worker descriptors."""
     monitor = StudioMonitor()
@@ -227,6 +449,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except ValueError:
             pass
         storage_sweep = None
+        peer_lease_sweep = None
         if start_background:
             # 50 GB or 30 days, whichever comes first, enforced for every studio - not only in
             # development. See job_storage.budget_loop.
@@ -234,6 +457,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             from .backend import job_storage
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
+            peer_lease_sweep = _asyncio.create_task(_peer_lease_loop())
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
@@ -260,6 +484,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     storage_sweep.cancel()
                     try:
                         await storage_sweep
+                    except Exception:
+                        pass
+                if peer_lease_sweep is not None:
+                    peer_lease_sweep.cancel()
+                    try:
+                        await peer_lease_sweep
                     except Exception:
                         pass
                 await shared_voices.stop()
@@ -1209,12 +1439,25 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
         if worker is None:
             raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
+        body = await request.body()
+        content_type = request.headers.get("content-type") or ""
+        owner = None
+        _prune_peer_leases()
+        if _peer_work_request(request.method, path):
+            model = await _request_model(request, body, content_type)
+            refusal = _peer_admission_refusal(worker, monitor, model)
+            if refusal is not None:
+                return _peer_refusal_response(refusal)
+            machine = str(worker.get("machine") or "local")
+            owner = _reserve_peer_machine(worker_id, machine)
+            if owner is None:
+                return _peer_refusal_response(
+                    {"code": "MACHINE_BUSY",
+                     "detail": f"{machine} is reserved for other work on this Mac"})
         url = worker["base_url"] + tail
         if request.url.query:
             url += "?" + request.url.query
-        body = await request.body()
         headers = {"X-Hub-Token": worker["hub_token"]}
-        content_type = request.headers.get("content-type")
         if content_type:
             headers["Content-Type"] = content_type
         try:
@@ -1223,7 +1466,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 timeout=httpx.Timeout(900.0, connect=5.0),
             )
         except (httpx.HTTPError, OSError) as exc:
+            if owner is not None:
+                _release_peer_lease(owner)
             raise HTTPException(502, f"{worker_id.title()} worker request failed") from exc
+        if owner is not None:
+            _settle_peer_lease(owner, worker_id, upstream)
+        _observe_peer_response(worker_id, tail, upstream)
         passthrough = {}
         for name in ("content-type", "content-disposition", "x-content-sha256"):
             if name in upstream.headers:

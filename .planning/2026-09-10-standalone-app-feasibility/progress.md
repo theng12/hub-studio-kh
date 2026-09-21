@@ -620,3 +620,33 @@ Root: 631 tests OK/7 skips; Voice: 722/19; Hub: 85. Clean-commit app
 model-free four-worker startup/authentication/identity/owned-shutdown probe.
 Exact tree digest and source hashes are in the resume receipt and sanitized JSON.
 PR #11 records integration: https://github.com/theng12/Studio-Hub-KH/pull/11.
+
+## 2026-09-21 — R04 node-owned peer admission (DeepSeek takeover)
+
+[MEASURED] Base `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged). The
+peer proxy forwarded work-submitting POSTs to local workers without any
+node-owned admission. Reproduced all four bypasses on the base: model pause,
+Studio disable, output-storage refusal and a reserved physical machine each
+returned HTTP 200 and one worker generation request.
+
+[MEASURED] Repair gated only work-submitting POSTs (`/api/generate/...`,
+`/api/transcribe`) through node-owned checks - machine/Studio disable, paused
+model, physical-machine lease, output admission and packaged readiness - and
+returned machine-readable 409/507/503 refusals. Status, cancel, artifact and
+acknowledgement paths stay reachable for accepted work. Accepted asynchronous
+peer work now holds a machine lease until observed terminal (safety TTL plus a
+60-second sweep). After repair the probe reports 409/409/507/409 with zero
+worker requests.
+
+[MEASURED] `tests/test_studio_proxy.py` 14 passed; `tests/hub_regression/cases`
+108 passed; `test_hub_jobs.py` + `test_hub_dispatch_proof_gate.py` +
+`test_hub_standalone.py` 18 passed; `test_standalone_connections.py` 32 passed
+with one pre-existing environmental failure
+(`test_the_overview_shows_every_machine_in_one_row`: `apple_chip_name()` runs
+`sysctl` by name and this harness's PATH omits `/usr/sbin`; the test passes with
+`/usr/sbin` on PATH and failed identically before the repair). Original five
+handoff probes OK. A first post-repair `test_hub_jobs` run exposed a
+`CancelledError` from the new lease-sweep task that did not swallow
+cancellation; fixed by mirroring `job_storage.budget_loop`.
+
+Self-review only; independent review of R04 remains pending.

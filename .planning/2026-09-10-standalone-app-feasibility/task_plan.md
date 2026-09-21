@@ -152,25 +152,33 @@ contract separately. Cost: receipt-less accepted work needs operator reconciliat
 instead of unsafe automatic failover. Malformed live/recovery JSON must retain the
 same classification even when preceded by a genuine transport error.
 
-### R04 — Peer admission negative qualification [READY AFTER PR #13 MERGE]
+### R04 — Peer admission negative qualification [LOCALLY VERIFIED — self-review; independent review pending]
 
-Four current-source bypasses reproduced on `936b3e5`; see `r04-preflight.md` and
+Four current-source bypasses reproduced on `9a4570d` and repaired on the same
+base; see `r04-report.md`, `r04-preflight.md` and
 `qualification/evidence/local-readiness-2026-09-21/r04_admission_probe.py`.
-No repair or full two-Hub qualification yet. Claim the latest integration commit
-before dispatching its worker; do not reuse the older R03 base.
+Two-real-Hub stale-capability proof added for the Studio-disable case; the other
+three gates are covered at the real peer HTTP route, not each at two Hubs.
 
 **Owned scope:** `tests/test_standalone_connections.py`, `tests/test_studio_proxy.py`;
 any fix in `components/hub/standalone.py`, `backend/broker.py`, worker admission
 requires root's traced-boundary decision before expansion; Sol/high.
 
-- [ ] Use two disposable Hub processes, never real enrollment. Submit via intended
+- [x] Use two disposable Hub processes, never real enrollment. Submit via intended
   peer route with node-local model paused, storage exhausted and a physical node busy.
-- [ ] Trace controller and node decisions, distinguish stale capability reports
+  All four reproduced (200 + 1 worker request each); after repair 409/409/507/409
+  with zero worker requests.
+- [x] Trace controller and node decisions, distinguish stale capability reports
   from worker refusal, and require enforced node-owned safeguards without duplicate work.
-- [ ] Preserve intended controller→node worker forwarding and separate credentials.
-  Implement the smallest shared admission repair only for a reproduced failure.
-- [ ] Prove happy dispatch, negative admission, cancellation, artifact ACK and
-  offline-node handling; independently review before closing C-04.
+- [x] Preserve intended controller→node worker forwarding and separate credentials.
+  Implemented the smallest shared admission repair: gate only work-submitting POSTs,
+  keep GET/DELETE/status/artifact/ACK reachable, never forward the caller credential.
+- [x] Prove happy dispatch, negative admission, cancellation, artifact access and
+  offline-node handling (proxy negatives plus existing controller/node tests).
+  Accepted asynchronous peer work holds a machine lease until observed terminal,
+  with a safety TTL; the POST's return does not free the machine.
+- [ ] Independent review before closing C-04. No independent review performed;
+  R04 is locally verified and self-reviewed only.
 
 ### R05 — Portable bootstrap and accurate handoff [PARTIAL — native build slice verified]
 

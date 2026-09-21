@@ -615,6 +615,69 @@ class FleetDispatchTests(unittest.TestCase):
             self.assertEqual(worker.submissions[0]["token"], node.token)
 
 
+    def test_a_node_refuses_stale_capability_work_its_owner_disabled(self) -> None:
+        """The controller's cache is not authority over another Mac's own decision.
+
+        A controller learns a node is reachable with its Image studio and keeps
+        that picture until the next poll. If the node's owner disables the studio
+        in between, the node - not the controller's stale snapshot - has to be the
+        one that refuses, before its worker is asked to generate anything.
+        """
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-stale-")
+        self.addCleanup(temporary.cleanup)
+        worker = StubImageWorker()
+        self.addCleanup(worker.stop)
+        directory = Path(temporary.name)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        fleet_value = (controller.data / ".fleet_token").read_text().strip()
+        node.post_json("/api/hub/fleet/adopt", {"token": fleet_value}, token=node.token)
+
+        # Wait until the controller has a positive, cached picture of the node.
+        node_row = None
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            status, overview, _ = controller.request("/api/hub/fleet/overview",
+                                                     token=controller.token)
+            rows = {row["machine"]: row for row in (overview or {}).get("machines", [])}
+            node_row = rows.get("node-a")
+            if node_row and node_row.get("reachable"):
+                break
+            time.sleep(0.5)
+        self.assertIsNotNone(node_row, "the controller never listed the joined node")
+        self.assertTrue(node_row.get("reachable"),
+                        "the controller never cached the node as reachable")
+
+        # The node's own owner disables the studio; the controller's cache is now stale.
+        disabled = node.post_json("/api/hub/registry/studios/image/enabled",
+                                  {"enabled": False}, token=node.token)
+        self.assertEqual(disabled[0], 200, disabled[1])
+        before = len(worker.submissions)
+        status, payload, _ = node.post_json(
+            "/studio/image/api/generate/txt2img",
+            {"repo": FLUX_MODEL_ID, "prompt": "must not run"},
+            token=fleet_value)
+        self.assertEqual(status, 409, payload)
+        self.assertEqual(payload.get("code"), "STUDIO_DISABLED", payload)
+        self.assertEqual(len(worker.submissions), before,
+                         "a stale controller capability must not override the node's disable")
+
     def test_the_controllers_artifact_comes_back_from_the_node(self) -> None:
         """The work runs on the node; the operator must still be able to collect it.
 

@@ -12,8 +12,10 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 TOKEN = "controller-token-0123456789abcdef"
 
@@ -27,6 +29,9 @@ class FakeWorker:
 
     def __init__(self):
         self.requests: list[dict] = []
+        # The job-status answer is configurable so a test can drive one job from
+        # accepted to terminal without a second stub.
+        self.poll_job: dict = {"id": "job-1", "state": "done"}
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -59,7 +64,7 @@ class FakeWorker:
                                {"X-Content-SHA256": "abc123"})
                 else:
                     self._send(200, "application/json",
-                               json.dumps({"job": {"id": "job-1", "state": "done"}}).encode())
+                               json.dumps({"job": dict(outer.poll_job)}).encode())
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
@@ -146,6 +151,24 @@ class StudioProxyTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(cls.old)
         cls.temporary.cleanup()
+
+    def setUp(self) -> None:
+        # A node holds a physical machine lease while a peer job it accepted is
+        # still running; a test that fails midway must not leave that lease to
+        # poison the next one.
+        self.addCleanup(self.release_peer_leases)
+
+    @staticmethod
+    def release_peer_leases() -> None:
+        from components.hub import standalone
+        from components.hub.backend import broker
+        release = getattr(standalone, "_release_peer_lease", None)
+        for owner in list(getattr(standalone, "_PEER_LEASES", {})):
+            if release is not None:
+                release(owner)
+        for machine, owner in list(broker._external_machine_leases.items()):
+            if str(owner).startswith("peer:"):
+                broker.release_external_machine(machine, owner)
 
     def client(self):
         from fastapi.testclient import TestClient
@@ -234,6 +257,142 @@ class StudioProxyTests(unittest.TestCase):
             with self.subTest(path=path):
                 response = client.get(path, headers=headers)
                 self.assertIn(response.status_code, (400, 404), response.text)
+
+    def test_a_paused_model_is_refused_before_the_worker(self) -> None:
+        """The node's own circuit breaker is not the controller's to override.
+
+        A pause is this Mac's memory/integrity decision. The controller's cached
+        capability view may still list the model, so the refusal has to happen at
+        the proxy, before the worker is asked to generate anything.
+        """
+        from components.hub.backend import broker
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        pause = {("image", "fixture/flux"): {
+            "studio": "image", "model": "fixture/flux", "blocked": True,
+            "reason": "fixture model pause", "failures": 3,
+        }}
+        with patch.object(broker, "_model_protection", pause):
+            before = len(self.worker.requests)
+            response = client.post("/studio/image/api/generate/txt2img",
+                                   json={"repo": "fixture/flux", "prompt": "x"},
+                                   headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("code"), "MODEL_PAUSED")
+        self.assertEqual(len(self.worker.requests), before,
+                         "a paused model must not reach the worker")
+
+    def test_a_disabled_studio_is_refused_before_the_worker(self) -> None:
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        disabled = client.post("/api/hub/registry/studios/image/enabled",
+                               json={"enabled": False}, headers=headers)
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.addCleanup(lambda: client.post("/api/hub/registry/studios/image/enabled",
+                                            json={"enabled": True}, headers=headers))
+        before = len(self.worker.requests)
+        response = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("code"), "STUDIO_DISABLED")
+        self.assertEqual(len(self.worker.requests), before,
+                         "a disabled Studio must not reach the worker")
+
+    def test_a_disabled_machine_is_refused_before_the_worker(self) -> None:
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        disabled = client.post("/api/hub/registry/machines/local/enabled",
+                               json={"enabled": False}, headers=headers)
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        self.addCleanup(lambda: client.post("/api/hub/registry/machines/local/enabled",
+                                            json={"enabled": True}, headers=headers))
+        before = len(self.worker.requests)
+        response = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("code"), "MACHINE_DISABLED")
+        self.assertEqual(len(self.worker.requests), before)
+
+    def test_blocked_output_storage_is_refused_before_the_worker(self) -> None:
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        (Path(self.temporary.name) / "out").mkdir(exist_ok=True)
+        changed = client.put("/api/hub/settings", json={"minimum_free_bytes": 10**18},
+                             headers=headers)
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.addCleanup(lambda: client.put("/api/hub/settings",
+                                           json={"minimum_free_bytes": 0}, headers=headers))
+        before = len(self.worker.requests)
+        response = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(response.status_code, 507, response.text)
+        self.assertEqual(response.json().get("code"), "OUTPUT_STORAGE_BLOCKED")
+        self.assertEqual(len(self.worker.requests), before,
+                         "blocked output storage must not reach the worker")
+
+    def test_a_reserved_machine_is_refused_before_the_worker(self) -> None:
+        from components.hub.backend import broker
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        self.assertTrue(broker.acquire_external_machine("local", "test:r04-reservation"))
+        self.addCleanup(lambda: broker.release_external_machine(
+            "local", "test:r04-reservation"))
+        before = len(self.worker.requests)
+        response = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("code"), "MACHINE_BUSY")
+        self.assertEqual(len(self.worker.requests), before,
+                         "a reserved machine must not reach the worker")
+
+    def test_an_accepted_async_job_holds_the_machine_until_it_is_terminal(self) -> None:
+        """One physical heavy-work boundary, even for work the node does not own.
+
+        A peer job is accepted opaquely, so the node cannot queue it. Holding the
+        machine lease until the job is observed terminal is what keeps a second
+        submission from overlapping on the same Mac - and releasing it on the
+        asynchronous POST's return would defeat exactly that.
+        """
+        from components.hub.backend import broker
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        first = client.post("/studio/image/api/generate/txt2img",
+                            json={"prompt": "x"}, headers=headers)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertIn("local", broker.busy_machines(),
+                      "an accepted asynchronous job must hold the machine")
+
+        second = client.post("/studio/image/api/generate/txt2img",
+                             json={"prompt": "y"}, headers=headers)
+        self.assertEqual(second.status_code, 409, second.text)
+        self.assertEqual(second.json().get("code"), "MACHINE_BUSY")
+
+        self.worker.poll_job = {"id": "job-2", "state": "done"}
+        polled = client.get("/studio/image/api/generate/jobs/job-2", headers=headers)
+        self.assertEqual(polled.status_code, 200, polled.text)
+        self.assertNotIn("local", broker.busy_machines(),
+                         "a terminal job must release the machine")
+
+    def test_an_abandoned_peer_lease_expires(self) -> None:
+        """A controller that disappears must not reserve this Mac for ever."""
+        from components.hub import standalone
+        from components.hub.backend import broker
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        accepted = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertIn("local", broker.busy_machines())
+
+        future = time.monotonic() + standalone._PEER_LEASE_TTL_S + 1
+        with patch.object(standalone.time, "monotonic", lambda: future):
+            standalone._prune_peer_leases()
+        self.assertNotIn("local", broker.busy_machines(),
+                         "an expired lease must free the machine")
 
 
 if __name__ == "__main__":

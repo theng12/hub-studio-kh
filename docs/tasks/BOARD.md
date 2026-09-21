@@ -17,10 +17,18 @@ copy/contract inventory are included; the rest of R05/R09 remains open. Worktree
 workers are finished. Root full gate: 641 tests OK/7 skips, Voice722/19, Hub108,
 native build and four-worker model-free package checks passed.
 [Exact evidence and limits](../../qualification/local-readiness-2026-09-21.md).
-**Next after PR #13 merge: R04** — four reproduced node-owned admission bypasses
-(model protection, studio disable, storage block and physical-machine reservation)
-are still unfixed. Then remaining portable/native/model work. GatewayKH still needs
-ACK/cancel/Music and end-to-end qualification; no live connection or enrollment.
+**R04 locally verified and self-reviewed on `9a4570d`** (DeepSeek autonomous
+takeover): the four node-owned admission bypasses (model protection, studio
+disable, storage block and physical-machine reservation) are repaired, with
+permanent proxy negatives, lease-lifetime coverage and a two-real-Hub
+stale-capability test. Independent review remains pending. See
+[R04 report](../../.planning/2026-09-10-standalone-app-feasibility/r04-report.md)
+and [status](../Studio%20Hub%20Project%20Status.md).
+**Next: a bounded host-identity robustness fix** (`apple_chip_name()` invokes
+`sysctl` from PATH and reports no chip when `/usr/sbin` is absent; one existing
+test fails in this harness for that reason), then remaining portable/native/model
+work. GatewayKH still needs ACK/cancel/Music and end-to-end qualification; no live
+connection or enrollment.
 All earlier "next" statements below are historical where they differ.
 
 ### Active takeover — new computer, resumed 2026-09-21
