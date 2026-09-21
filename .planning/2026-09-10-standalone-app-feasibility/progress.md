@@ -735,3 +735,12 @@ durable acknowledgement and two-machine deduplication remain unproven.
 isolation: **3 passed** (23.76s, 23.77s, 11.70s). The documented earlier
 shared-voice peer reachability failure still does not reproduce.
 **Not declared fixed**; the cause remains unproven.
+
+## 2026-09-21 — R04 two-Hub storage refusal (DeepSeek)
+
+[MEASURED] Added `test_a_node_refuses_peer_work_when_its_output_storage_is_full`
+to `tests/test_standalone_connections.py`: two real Hubs joined, the node's owner
+sets `minimum_free_bytes` out of range, and a fleet POST to the node's peer route
+is refused `507 OUTPUT_STORAGE_BLOCKED` with no worker submission. Passed (3.13s).
+R04 now has two-real-Hub proofs for Studio-disable and output-storage; model
+pause and physical-machine reservation remain proven at the peer HTTP route only.

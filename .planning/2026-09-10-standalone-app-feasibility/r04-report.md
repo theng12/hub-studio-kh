@@ -96,6 +96,9 @@ then passed 18/18.
   reachable with its Image studio, the node's owner then disables the studio, and
   the node — not the controller's stale snapshot — refuses the dispatch with no
   worker submission.
+- A second two-real-Hub test: with the node's output policy out of room
+  (`minimum_free_bytes`), a fleet POST is refused `507 OUTPUT_STORAGE_BLOCKED`
+  before the node's worker is asked.
 
 ## Preserved contracts
 
@@ -109,9 +112,9 @@ then passed 18/18.
 
 ## Limits and remaining gates
 
-- The four two-Hub cases were proven at the proxy/HTTP boundary plus one
-  controller-stale case at two processes; a two-Hub proof of each of the four is
-  not claimed.
+- Two of the four gates (Studio-disable, output-storage) are proven across two
+  real Hubs; the other two (model pause, physical-machine reservation) are proven
+  at the real peer HTTP route, not at two Hubs.
 - Node-owned state is in-process; a Hub restart forgets an in-flight peer lease
   (as it already did for other external leases). The TTL is a safety net, not
   durable recovery.

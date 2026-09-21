@@ -678,6 +678,54 @@ class FleetDispatchTests(unittest.TestCase):
         self.assertEqual(len(worker.submissions), before,
                          "a stale controller capability must not override the node's disable")
 
+    def test_a_node_refuses_peer_work_when_its_output_storage_is_full(self) -> None:
+        """Storage refusal is this Mac's own decision, enforced at the peer boundary.
+
+        The controller can still see the node and its model, but the node's output
+        policy has no room, so the node must refuse before its worker is asked.
+        """
+        temporary = tempfile.TemporaryDirectory(prefix="studiohub-storage-")
+        self.addCleanup(temporary.cleanup)
+        worker = StubImageWorker()
+        self.addCleanup(worker.stop)
+        directory = Path(temporary.name)
+        (directory / "node" / "image-outputs").mkdir(parents=True, exist_ok=True)
+        node = HubProcess(directory, "node", "node-fixture-token-0123456789ab",
+                          workers=[{"id": "image", "modality": "image", "port": worker.port}])
+        node.start()
+        self.addCleanup(node.stop)
+        node_url = urllib.parse.urlsplit(node.base)
+        manifests, library = tiny_flux_install(directory / "controller-models")
+        controller_worker = StubImageWorker(catalog=False)
+        self.addCleanup(controller_worker.stop)
+        controller = HubProcess(
+            directory, "controller", "controller-fixture-token-0123456789",
+            workers=[{"id": "image", "modality": "image", "port": controller_worker.port}],
+            env={"STUDIOHUB_MODEL_MANIFESTS": str(manifests),
+                 "STUDIOHUB_MODELS_DIR": str(library)},
+            joined=[{"node_id": "node-a", "name": "Node A",
+                     "address": f"http://127.0.0.1:{node_url.port}",
+                     "studios": [{"id": "image", "modality": "image"}]}])
+        controller.start()
+        self.addCleanup(controller.stop)
+        fleet_value = (controller.data / ".fleet_token").read_text().strip()
+        node.post_json("/api/hub/fleet/adopt", {"token": fleet_value}, token=node.token)
+
+        changed = node.request(
+            "/api/hub/settings", method="PUT", token=node.token,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"minimum_free_bytes": 10**18}).encode())
+        self.assertEqual(changed[0], 200, changed[1])
+        before = len(worker.submissions)
+        status, payload, _ = node.post_json(
+            "/studio/image/api/generate/txt2img",
+            {"repo": FLUX_MODEL_ID, "prompt": "must not run"},
+            token=fleet_value)
+        self.assertEqual(status, 507, payload)
+        self.assertEqual(payload.get("code"), "OUTPUT_STORAGE_BLOCKED", payload)
+        self.assertEqual(len(worker.submissions), before,
+                         "blocked output storage must not reach the node's worker")
+
     def test_the_controllers_artifact_comes_back_from_the_node(self) -> None:
         """The work runs on the node; the operator must still be able to collect it.
 
