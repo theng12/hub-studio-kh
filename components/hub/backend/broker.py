@@ -1837,6 +1837,14 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         item["bytes"] = job.get("bytes")
         item["media_type"] = artifact_metadata.trusted_media_type(
             job.get("media_type") or job.get("content_type"), b["modality"])
+        # Image and Music workers report the decoded artifact facts. Carry the
+        # audio ones through so the app can show the clip length and format in
+        # history without fetching and re-reading every artifact.
+        for field in ("sample_rate_hz", "channels", "audio_duration_s",
+                      "audio_duration_ms", "format", "frames"):
+            value = job.get(field)
+            if value is not None:
+                item[field] = value
     item["finished_at"] = time.time()
     item["last_progress_at"] = item["finished_at"]
     item["asset_id"] = ledger.record_asset(

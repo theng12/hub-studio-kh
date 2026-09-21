@@ -1090,3 +1090,10 @@ the queue moved (OmniVoice went `queued` -> `running`).
 a focused worker is implementing that plus the owner's UI feedback (remove the
 footer What's New duplicate, reorganize the sidebar, sample prompts, working
 progress animation, simpler model-picker names, editable Music duration).
+
+[MEASURED] Owner feedback: Music showed no clip duration in the listing or while
+playing. Root cause found Hub-side: the Music worker reports
+`audio_duration_s`/`sample_rate_hz`/`channels` on its job, but the Hub's non-voice
+success path copied only `sha256`/`bytes`/`media_type`, so `terminal_result`
+carried `audio_duration_s: null`. The Hub now carries the decoded artifact facts
+through for image/music. Hub regression + jobs + dispatch gate: 116 passed.
