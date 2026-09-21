@@ -1203,3 +1203,10 @@ live there). The "switch ACE-Step to MLX" is therefore already in place - there 
 no port to do. The only remaining saving is skipping the redundant PyTorch load on
 Apple Silicon, which needs an upstream engine change behind the digest-locked
 overlay and only helps cold start. Recorded in `r-music-mlx.md`.
+
+[MEASURED] ACE-Step backend identity formalised as a receipt
+(`qualification/evidence/music-backends-2026-09-22/ace-step-mlx-backend.json`):
+8 engine-log lines showing the macOS "mlx backend" optimisation profile, native
+MLX DiT and VAE initialisation, the LM loading via MLX in 2.17s, DCW on the
+MLX-native Haar path, and a VAE decode of 300 latent frames in 4.08s on MLX. This
+is the re-qualification evidence for the ACE-Step half of the objective.

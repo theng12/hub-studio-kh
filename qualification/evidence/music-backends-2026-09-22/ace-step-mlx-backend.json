@@ -1,0 +1,24 @@
+{
+  "probe": "ace-step-backend-identity",
+  "engine": "ace-step-1.5-turbo",
+  "claim": "On macOS the DiT and VAE compute on native MLX; PyTorch is only used to load checkpoints.",
+  "evidence_lines": [
+    "macOS MPS detected (25.0 GB unified memory, tier=unlimited). Applying Apple Silicon optimizations: no compile, no quantization, mlx backend, no CPU offload.",
+    "[MLX-DiT] Native MLX DiT decoder initialized successfully (mx.compile=False).",
+    "[MLX-VAE] Decode/encode compiled with mx.compile().",
+    "[MLX-VAE] Native MLX VAE initialized (dtype=mlx.core.float32, compiled=True).",
+    "Attempting MLX backend for Apple Silicon acceleration...",
+    "MLX model loaded successfully in 2.17s",
+    "[MLX-DiT] DCW enabled (mode=double, scaler=0.050, high_scaler=0.020, wavelet=haar, backend=MLX-native Haar).",
+    "[MLX-VAE] Decoded 1 sample(s), 300 latent frames -> audio in 4.08s (convert=0.001s, decode=4.07s, dtype=mlx.core.float32)"
+  ],
+  "warm_timing": {
+    "cold_s": 106.25,
+    "warm_s": [
+      32.93,
+      42.76
+    ],
+    "audio_seconds": 30
+  },
+  "source_log": ".build/sa3-mlx-check.log (throwaway probe log)"
+}
