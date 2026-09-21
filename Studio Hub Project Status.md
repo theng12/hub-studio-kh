@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-22 01:24 +07
+Last updated: 2026-09-22 04:20 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,7 +12,7 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `60d17ea` (docs); installed app build `ff4fd9b`
+- Current HEAD: `c6c2323`; installed app build `6eba1a5`
 - Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
   `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
   `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
@@ -155,46 +155,44 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-22 01:24 +07
+Timestamp: 2026-09-22 04:20 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `60d17ea` (docs); installed app build `ff4fd9b`
-Uncommitted changes and owners: none (clean tree).
-Current packet and objective: R07 model qualification is complete; R08 layout is
-verified and the remaining R08 step is physical GUI interaction.
-Completed changes (this session): R04 node-owned admission; host-identity PATH fix;
-R05 records + Image offline probe; R06 native Music workflow; R09 Hub-side
-selection; R10 local candidate inventory; app version + What's New footer;
-stale-listen-address recovery fix; **VoxCPM2 clone fix (4-bit/8-bit/bf16 all
-working)**; **ACE-Step Music generation (30s + 60s, ACK, cancel, restart)**;
-Whisper Base/Small/Turbo; delivery ACK for Image/Voice/Subtitle/Music; installed
-app replaced with 0.6.38.
-Model library: `~/StudioHubModels` (11 verified packages, ~30 GiB). SSD archive is
-a transport vehicle, read-only; its kit app is expired and must be rebuilt.
-Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04,r05,r06}-report.md`
-and `progress.md`; `qualification/evidence/r07-2026-09-21/` (real-model receipts +
-outputs) and `qualification/evidence/r08-2026-09-21/` (layout renders).
-Self-review findings: R04 lease-sweep CancelledError fixed; the install replace
-needs `chmod -R u+w` (or a rename-aside) because the staged app's runtime dirs are
-read-only - the kit installer has the same bug and must be fixed in R10.
+Current c6c2323: `c6c2323`; installed app build `6eba1a5` (`development_build:false`)
+Uncommitted changes and owners: none.
+Current packet: **Stable Audio 3 is installed and qualified; the ACE-Step MLX
+question is closed.**
+Completed this session: R04 admission; host identity; R05 records; R06 native Music;
+R09 selection; R10 inventory; app version + What's New footer; stale-listen-address
+fix; VoxCPM2 fix + 8-bit exposure; ACE-Step Music (30s/60s/6min, vocal, cancel,
+restart); Whisper Base/Small/Turbo; delivery ACK; the UI/UX pass (sidebar,
+samples, aura, simpler model names, editable duration, discard, player, thumbnails);
+**Stable Audio 3 Medium (MLX) as a second Music engine, verified end to end through
+the installed app.**
+Two music engines now: ACE-Step 1.5 (MIT; vocals; up to 600 s; DiT/VAE already run
+on native MLX - verified from the engine log, only the checkpoint load is PyTorch)
+and Stable Audio 3 Medium (Stability Community Licence; instrumental only; up to
+380 s; pure MLX; ~9 s per 30 s clip, ~62 s for 380 s).
+Model library: `~/StudioHubModels` now also holds `stable-audio-3-medium` (6.4 GiB).
+Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04,r05,r06}-report.md`,
+`r-music-mlx.md` and `progress.md`; `qualification/evidence/` for every real-model
+receipt; listening copies in `~/Desktop/Studio Hub Test Outputs/`.
+Self-review findings: SA3 startup defects fixed (manifest env override leaked into
+the secondary cache; the runner's symlinked tree wrote weight links into the app
+bundle). The exact-menu manifest test digest was updated deliberately for the new
+package.
 Independent review status: not performed for any packet.
-Remaining confirmed defects: none newly open. Kitty/UX gates: physical GUI
-Save-panel/ACK/keyboard/accessibility (R08).
-Unverified concerns: shared-voice flake (3x re-probe passed, cause unproven);
-deprecation/ResourceWarnings; GatewayKH counterpart ACK/cancel/Music gaps;
-R04 model-pause + physical-reservation proven only at the peer HTTP route.
-External gates and authorization needed: GatewayKH scope; Image wheel-cache
-network fetch; clean Mac/original-M1/reboot hardware; distribution authority.
-Owned processes / temporary data / cleanup: none outstanding. `.build/` holds
-ignored proof artifacts and the installed-build source; keep.
-Next smallest action: R08 - the owner opens the running app, generates in each
-studio, clicks Save, and confirms the file and ACK; or start R10 (rebuild the SSD
-kit + simplify setup). R05 Image cache and R09 need authorization.
+Remaining known gaps: SA3 has no cancel-in-flight path beyond process termination;
+Video/Chat have no engine; the R08 physical GUI click-through is the owner's;
+GatewayKH scope and the Image wheel cache need authorization.
+External gates: GatewayKH scope; Image wheel-cache network fetch; clean Mac /
+original-M1 / reboot hardware; distribution authority.
+Owned processes / temporary data / cleanup: none outstanding. `.build/` holds ignored
+proof artifacts; keep. `.build/sa3-source` holds the upstream checkout + its venv.
+Next smallest action: owner clicks through the two music models in the app (Music
+picker should now show both), or authorize the Image wheel cache / GatewayKH work.
 First command to run:
 `git status --short && git log --oneline -3`
-Acceptance criteria: measure against the current HEAD with exact commands, label
-honestly, and do not claim a gated packet as qualified.
-Important do-not-touch paths: `~/Downloads/model-library`,
-`~/StudioHubAppBackups/`, other worktrees, `codex/recovered-music-draft`,
-GatewayKH checkout.
+Important do-not-touch paths: `~/Downloads/model-library`, `~/StudioHubAppBackups/`,
+other worktrees, `codex/recovered-music-draft`, GatewayKH checkout.
