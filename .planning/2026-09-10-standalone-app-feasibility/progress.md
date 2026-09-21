@@ -1067,3 +1067,26 @@ panels, re-reading the saved bytes, watching the ACK land, and checking keyboard
 focus/order and accessibility. The code paths are covered (native API tests + the
 real Hub ACK runs in R07), but only a person at the running app can exercise the
 panels themselves. Steps for the owner are recorded in the status file.
+
+## 2026-09-22 — owner click-through: hang diagnosed and unblocked (DeepSeek)
+
+[MEASURED] Owner click-tested the installed app. Image jobs completed (56.4s,
+55.3s) but new Audio jobs sat `queued` for hundreds of seconds with `governor_note:
+null`. Cause: two earlier VoxCPM2 attempts were left `uncertain` by the pre-fix
+bug, and `busy_machines()` keeps an uncertain item's Mac reserved because the
+attempt may still be running. So every later job was silently blocked.
+
+[MEASURED] Cancelling those batches did not help: `DELETE` marks the batch
+`cancelled` but the item stays `uncertain` (deliberate - a failed cancel is not a
+confirmed terminal state), and the reservation remained. A blanket "cancelled
+batches do not reserve" change was tried and **reverted**: it broke 9 tests that
+enforce "a cancelled batch keeps a possibly-live worker fenced". Contract kept.
+
+[MEASURED] Unblocked the live app by resolving the two stuck items to `cancelled`
+in the ledger with the app stopped (targeted, not a schema change). After restart
+the queue moved (OmniVoice went `queued` -> `running`).
+
+[GATE] The lasting fix is an explicit operator "discard uncertain job" action;
+a focused worker is implementing that plus the owner's UI feedback (remove the
+footer What's New duplicate, reorganize the sidebar, sample prompts, working
+progress animation, simpler model-picker names, editable Music duration).
