@@ -670,3 +670,18 @@ path preference. New `tests/test_hardware_identity.py` proves both with
 1 failed). `test_hub_statistics.py` + `test_hub_standalone.py` +
 `test_hub_process.py` + `test_fleet_credentials.py` + `test_hardware_identity.py`
 + `test_studio_proxy.py` 40 passed with 122 subtests.
+
+## 2026-09-21 — R05 records reconciliation (DeepSeek)
+
+[MEASURED] Reconciled ST-03/04/05/06/08/10/11 against current source, focused
+tests and receipts in `r05-report.md`. ST-06 (independent Subtitle) is
+implemented locally but its card still read WAITING/0-checked; ST-04/ST-05 code
+is present with real-model receipts gated. Labeled implementation versus missing
+evidence versus hardware gates; deliberately did not bulk-tick checkboxes.
+Corrected the ST-04/ST-05/ST-06 status lines.
+
+[MEASURED] Recorded the separate test-dependency setup (`.build/test-deps`,
+exact versions) and confirmed the Image offline-build inputs remain undeclared
+and were not attempted (may need network). Graphify CLI remains unavailable; the
+saved graph predates current Hub/native/Music work and callers were inspected
+directly.

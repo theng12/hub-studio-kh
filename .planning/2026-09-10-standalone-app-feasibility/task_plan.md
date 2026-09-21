@@ -180,7 +180,7 @@ requires root's traced-boundary decision before expansion; Sol/high.
 - [ ] Independent review before closing C-04. No independent review performed;
   R04 is locally verified and self-reviewed only.
 
-### R05 — Portable bootstrap and accurate handoff [PARTIAL — native build slice verified]
+### R05 — Portable bootstrap and accurate handoff [PARTIAL — records reconciled; Image offline inputs and Graphify open]
 
 **Owned scope:** `native/build.sh`, `native/render-page.sh`,
 `packaging/image-runtime/build.sh`, related runtime tests and `docs/NEW-COMPUTER-HANDOFF.md`;
@@ -190,12 +190,21 @@ Terra for build scripts, Luna for root-approved mechanical documentation edits.
   exercise valid explicit selection and unavailable SDK failures, not blind newest-SDK fallback.
 - [ ] Establish declared CPython/wheel/cache inputs for Image; test offline rebuilding
   with an empty user cache and project inputs. Never silently use the network.
-- [ ] Record separate test-dependency setup and safe explicit paths for old qualification
+  Not attempted; may require network acquisition. See `r05-report.md`.
+- [x] Record separate test-dependency setup and safe explicit paths for old qualification
   harnesses; replace no live library and avoid ctime-changing hardlinks into verified packages.
-- [ ] Reconcile ST-03/04/05/06/08/10/11 checkboxes against current source and exact receipts.
+  `.build/test-deps` is separate from `.build/voice-runtime`; exact versions recorded in
+  `r05-report.md` and the handoff.
+- [x] Reconcile ST-03/04/05/06/08/10/11 checkboxes against current source and exact receipts.
   Preserve history; label missing evidence separately from missing implementation.
+  Delivered as [r05-report.md](r05-report.md); ST-04/05/06 status lines corrected. Individual
+  checkboxes were deliberately not bulk-ticked without per-receipt proof.
 - [ ] Check local code-only Graphify availability; restore/update an ignored code-only
   graph if possible without paid model calls or private data ingestion. Otherwise record limitation.
+  Recorded unavailable in `r05-report.md`; callers inspected directly.
+
+Also repaired here: `apple_chip_name()`/`apple_machine_type()` no longer depend on
+`sysctl`/`system_profiler` being on PATH (commit `b68e7b2`).
 
 ### R06 — Native Music workflow [QUEUED]
 

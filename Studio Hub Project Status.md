@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 12:40 +07
+Last updated: 2026-09-21 12:52 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -76,8 +76,10 @@ second planning system.
   `apple_chip_name()` / `apple_machine_type()` now prefer absolute `/usr/sbin`
   paths and fall back to `system_profiler`; the previous PATH-caused overview
   failure is closed (`test_standalone_connections.py` 33 passed).
-- R05 portable bootstrap + accurate records: partial; remaining Image inputs/
-  offline rebuild, harness paths, ST-status reconciliation, Graphify limitation.
+- **R05 portable bootstrap + accurate records — RECORDS RECONCILED / self-reviewed.**
+  ST-03/04/05/06/08/10/11 reconciled in `r05-report.md`; ST-04/05/06 status
+  lines corrected; test-dependency setup recorded. Open: Image offline-build
+  declared inputs (not attempted; may need network) and optional Graphify restore.
 - R06 native Music workflow: missing native UI (falls through to "Engine not installed").
 - R07 exact-artifact model qualification: qualification gaps; needs models/hardware.
 - R08 native usability + real export acceptance: needs real GUI/export exercise.
@@ -123,13 +125,13 @@ second planning system.
 
 ## Current packet
 
-- Objective: R05 remaining locally executable work — reconcile stale ST-03/04/05/
-  06/08/10/11 checkboxes against current source and receipts; confirm test
-  dependency setup and harness path safety; check Image offline-build declared
-  inputs; confirm Graphify limitation. R06 native Music workflow follows.
+- Objective: R06 native Music workflow. The Music backend/runtime is integrated
+  (PR #11) but the native UI still falls through to "Engine not installed".
+- Owned files (proposed): `native/StudioAPI.swift`, `native/StudioViews.swift`,
+  `native/ShellCore.swift`, `tests/native/api_main.swift`; serialize native edits.
 - State: queued (immediately next).
-- Next smallest action: read the ST cards and current receipts, and write the
-  reconciliation into `r05-report.md`.
+- Next smallest action: trace how Image/Audio forms submit and render, and where
+  the native Music branch reports "Engine not installed".
 
 ## Test processes / temp paths / cleanup
 
@@ -155,10 +157,9 @@ Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Current HEAD: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Uncommitted changes and owners: R04 product/tests/records and this status file
 (DeepSeek). See `git status`.
-Current packet and objective: R05 remaining locally executable work (records
-reconciliation, harness/test-dependency safety, Image offline inputs, Graphify).
-Completed changes: R04 node-owned admission repair; host-identity PATH fix;
-R04 report; plan/board/progress records.
+Current packet and objective: R06 native Music workflow.
+Completed changes: R04 node-owned admission repair; host-identity PATH fix; R05
+records reconciliation; R04/R05 reports; plan/board/progress records.
 Evidence: `.planning/2026-09-10-standalone-app-feasibility/r04-report.md`;
 probe logs under `.build/deepseek-r04/`.
 Self-review findings: first post-repair run exposed a `CancelledError` from the
@@ -169,12 +170,13 @@ Remaining confirmed defects: none newly confirmed open; see unverified concerns.
 Unverified concerns: see above list.
 External gates and authorization needed: see above list.
 Owned processes / temporary data / cleanup: none outstanding.
-Next smallest action: read `docs/tasks/ST-03/04/05/06/08/10/11.md` with their
-receipts and write an evidence-based reconciliation in `r05-report.md`.
+Next smallest action: find the native Music "Engine not installed" path and the
+Image/Audio form-result patterns to reuse.
 First command to run:
-`sed -n '1,80p' docs/tasks/ST-03.md`
-Acceptance criteria: each stale checkbox is labeled verified-implemented,
-implemented-unproven or gated, with an exact evidence pointer; no history erased.
+`grep -rn "Engine not installed\|Music\|music" native/StudioViews.swift | head -40`
+Acceptance criteria: Music exposes readiness, supported controls, submit/cancel,
+uncertain recovery and Open/Save with verified ACK, reusing existing patterns;
+native build passes; no new job subsystem.
 Important do-not-touch paths: `~/Downloads/model-library`,
 `/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.
