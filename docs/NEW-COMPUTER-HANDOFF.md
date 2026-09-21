@@ -5,13 +5,16 @@ This is the continuation guide for the existing canonical plan, not a second pla
 
 ## Current continuation — 2026-09-21
 
-**Latest:** PR #12 merged at `b550617`; R01 native lifecycle/rejoin and R02 reference
-validation are verified. The exact wave-1 candidate passed 632 root tests (seven
-skips); see [wave-1 evidence](../qualification/handoff-completion-wave1-2026-09-21.md).
-The owner now names **GatewayKH** as the external client instead of GenStudio.
-R03 Voice receipt/payload repair is in progress; follow the top board block and
-canonical R01–R10 plan. The older continuation below is provenance, not a request
-to redo completed native/reference repairs. No GatewayKH live connection is implied.
+**Latest:** R03 Voice integrity, R05's native SDK/lifecycle-build slice and GatewayKH
+connection copy are verified at clean candidate `936b3e5`; integration is tracked by
+[PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13) (merge state authoritative).
+641 root tests OK/7 skips; nested Voice722/19, Hub108, native and model-free packaged
+checks passed. See [exact local evidence](../qualification/local-readiness-2026-09-21.md).
+R01/R02 are already merged at `b550617` through PR #12. **Next: R04**, four reproduced
+node-owned admission bypasses; then remaining portable/native/model work.
+**GatewayKH** replaces GenStudio as the current client. Its source audit found
+ACK/cancel/Music gaps; no live connection or full compatibility is implied.
+The older continuation below is provenance, not an instruction to redo completed work.
 
 [MEASURED] The audit repairs H-01 through H-05 are integrated, followed by the
 reviewed Music package/engine contract through

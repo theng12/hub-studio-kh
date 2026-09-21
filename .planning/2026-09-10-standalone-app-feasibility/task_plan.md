@@ -106,29 +106,33 @@ independent review by `music_recovery_read`. **Owned files:**
   -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
   tests/test_hub_standalone.py`, then independent fault-injection review.
 
-### R03 — Voice acceptance/completion fault matrix [IN PROGRESS at b550617]
+### R03 — Voice acceptance/completion fault matrix [VERIFIED LOCAL — PR #13]
+
+Clean candidate `936b3e5`; [PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13)
+is the integration record. Full gate and limitations:
+`qualification/local-readiness-2026-09-21.md`. This does not qualify real models or GatewayKH.
 
 **Owned scope:** `components/hub/backend/broker.py`,
 `components/hub/backend/artifact_metadata.py`, its existing tests, and
 `tests/hub_regression/cases/test_voice_durability.py`, reference existing
 `test_image_uncertainty.py`/`test_music_durability.py`; Sol/high implementation.
 
-- [ ] Return missing ID, non-object receipt, unknown state, missing output URL,
+- [x] Return missing ID, non-object receipt, unknown state, missing output URL,
   invalid bytes/hash/media and changed identity from a fake Voice worker.
-- [ ] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
+- [x] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
   reposts are permitted by the existing Voice worker idempotency contract. One
   worker attempt/result must remain; changed body with same ID remains a conflict.
-- [ ] Reproduce unknown live-poll state and done-without-output-URL in both live
+- [x] Reproduce unknown live-poll state and done-without-output-URL in both live
   and reconcile paths. Keep these uncertain rather than publishing false completion.
-- [ ] Preserve valid terminal receipt plus failed artifact fetch/verification as
+- [x] Preserve valid terminal receipt plus failed artifact fetch/verification as
   the existing `done + artifact_metadata_error` compatibility path; do not rewrite
   billing semantics. No missing-URL bypass and no falsely verified metadata.
-- [ ] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
+- [x] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
   truncated to 64 bytes still claiming 0.1s; require full declared PCM frame bytes
   before reporting verified audio metadata, using the existing standard-library parser.
-- [ ] Fix only reproduced gaps using existing identity/receipt validation and
+- [x] Fix only reproduced gaps using existing identity/receipt validation and
   Voice's stable client-request recovery; preserve Image/Music behavior.
-- [ ] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
+- [x] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
   independent review and a model-free packaged Hub gate. If no failure reproduces,
   retain the negative tests and close the candidate with evidence, not a rewrite.
 
@@ -148,7 +152,12 @@ contract separately. Cost: receipt-less accepted work needs operator reconciliat
 instead of unsafe automatic failover. Malformed live/recovery JSON must retain the
 same classification even when preceded by a genuine transport error.
 
-### R04 — Peer admission negative qualification [QUEUED]
+### R04 — Peer admission negative qualification [READY AFTER PR #13 MERGE]
+
+Four current-source bypasses reproduced on `936b3e5`; see `r04-preflight.md` and
+`qualification/evidence/local-readiness-2026-09-21/r04_admission_probe.py`.
+No repair or full two-Hub qualification yet. Claim the latest integration commit
+before dispatching its worker; do not reuse the older R03 base.
 
 **Owned scope:** `tests/test_standalone_connections.py`, `tests/test_studio_proxy.py`;
 any fix in `components/hub/standalone.py`, `backend/broker.py`, worker admission
@@ -163,13 +172,13 @@ requires root's traced-boundary decision before expansion; Sol/high.
 - [ ] Prove happy dispatch, negative admission, cancellation, artifact ACK and
   offline-node handling; independently review before closing C-04.
 
-### R05 — Portable bootstrap and accurate handoff [QUEUED]
+### R05 — Portable bootstrap and accurate handoff [PARTIAL — native build slice verified]
 
 **Owned scope:** `native/build.sh`, `native/render-page.sh`,
 `packaging/image-runtime/build.sh`, related runtime tests and `docs/NEW-COMPUTER-HANDOFF.md`;
 Terra for build scripts, Luna for root-approved mechanical documentation edits.
 
-- [ ] Preserve macOS14 deployment target while documenting/validating SDK selection;
+- [x] Preserve macOS14 deployment target while documenting/validating SDK selection;
   exercise valid explicit selection and unavailable SDK failures, not blind newest-SDK fallback.
 - [ ] Establish declared CPython/wheel/cache inputs for Image; test offline rebuilding
   with an empty user cache and project inputs. Never silently use the network.

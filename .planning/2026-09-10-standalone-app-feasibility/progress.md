@@ -2,6 +2,17 @@
 
 ## 2026-09-21 — local verification / GatewayKH continuation
 
+[MEASURED] FINAL LOCAL GATE: clean candidate `936b3e5` passed 641 root tests
+(7 skips, 428.429s), nested Voice722/19 and fresh Hub108. Native build, 21 final-app
+release/phonemizer checks and four-worker model-free startup/auth/owned shutdown
+passed. Exact app tree `06e881146e69e88097df71291569ffa873acf541381dc3fb8010df1ec34024e7`.
+Integration: https://github.com/theng12/Studio-Hub-KH/pull/13 (merge state/hash
+authoritative). Evidence-only child preserves the exact tested source identity.
+See `qualification/local-readiness-2026-09-21.md`, including the failed first gate,
+fixture corrections, unproven intermittent peer observation and remaining warnings.
+Next after merge: R04. Its four bypasses reproduced again on this final candidate;
+they are not repaired by this batch. No installed-app/model/fleet/deployment changes.
+
 Owner requested runnable local work and changed the external integration target
 from GenStudio to GatewayKH. R03 claimed at PR #12 merge `b550617`, using preserved
 handoff-completion worktree on new branch `codex/local-readiness-gatewaykh`.

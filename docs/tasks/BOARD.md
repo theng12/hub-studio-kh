@@ -8,13 +8,19 @@ Owner direction: continue work runnable/testable on this Mac. **GatewayKH replac
 GenStudio as the current external integration target.** Historical receipts and
 legacy protocol identifiers are not evidence of GatewayKH compatibility.
 R01/R02 are merged at `b5506178cd0543a4734911c4fdb3c91d21ad271b` (PR #12).
-**IN PROGRESS: R03**, base that merge; worktree
+**R03 locally verified**, clean candidate `936b3e5`; integration is tracked by
+[PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13), whose merge state and
+merge commit are authoritative. R05's SDK/lifecycle-build slice and GatewayKH
+copy/contract inventory are included; the rest of R05/R09 remains open. Worktree:
 `/build/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
-`codex/local-readiness-gatewaykh`. Root owns review/integration and canonical
-records; the R03 worker owns only its brief's broker/parser/tests/report scope.
-Baseline: 85 Hub regression tests passed locally (two upstream warnings).
-Next: local R04 admission fixtures, then portable setup/native work. GatewayKH
-contract inspection is read-only in parallel; no real enrollment or deployment.
+`codex/local-readiness-gatewaykh`. Holder: root, completing Git integration;
+workers are finished. Root full gate: 641 tests OK/7 skips, Voice722/19, Hub108,
+native build and four-worker model-free package checks passed.
+[Exact evidence and limits](../../qualification/local-readiness-2026-09-21.md).
+**Next after PR #13 merge: R04** — four reproduced node-owned admission bypasses
+(model protection, studio disable, storage block and physical-machine reservation)
+are still unfixed. Then remaining portable/native/model work. GatewayKH still needs
+ACK/cancel/Music and end-to-end qualification; no live connection or enrollment.
 All earlier "next" statements below are historical where they differ.
 
 ### Active takeover — new computer, resumed 2026-09-21
