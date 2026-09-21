@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 12:42 +07
+Last updated: 2026-09-21 13:57 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,23 +12,26 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `9a4570da57cb9109cd7da1d06d2197f923a71139` (R04 changes uncommitted
-  at the time of writing; see RESUME)
-- Remote: `origin` = https://github.com/theng12/Studio-Hub-KH (private). No open
-  issues/PRs and zero Actions workflows at takeover; recheck before any authorized
-  remote write.
-- Dirty changes: R04 code/tests/records owned by this session, plus this file.
+- Current HEAD: `6211fbf` (R06 native Music workflow)
+- Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
+  `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
+  `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
+  `0fdfbe3` flake probe → `6b7fd94` two-Hub storage → `e0205da` connections count →
+  `1e61dea` render evidence → `6211fbf` R06.
+- Dirty changes: none after the R06 commit (this status file update follows).
+- Remote: `origin` = https://github.com/theng12/Studio-Hub-KH (private). Nothing
+  was pushed this session. No open issues/PRs; recheck before any authorized write.
 - VERSION: `0.6.38`. 0.6.38 does not uniquely identify source; use commits + hashes.
 - Preserved worktrees (do not delete/reset): `codex/local-readiness-gatewaykh`
   @ `16eba0d`, `codex/music-package-runtime` @ `5cfc171`,
   `codex/recovered-music-draft` @ `0eebc42` (do not merge wholesale), the five
   H-0x worktrees, and the Music recovery audit detached worktree.
-- Local inputs (ignored, preserved): `.build/voice-runtime`,
-  `.build/test-deps`, `.build/st03-image-runtime-worker`,
-  `.build/music-engine-source`, and
-  `/build/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/music-runtime`.
+- Local inputs (ignored, preserved): `.build/voice-runtime`, `.build/test-deps`,
+  `.build/st03-image-runtime-worker`, `.build/music-engine-source`, `.build/uv-cache`,
+  `.build/downloads`, and the Music runtime worktree overlay.
 - Protected, untouched: `/build/Downloads/model-library`,
-  `/Applications/Studio Hub.app`, installed state, Pinokio machines.
+  `/Applications/Studio Hub.app` and its running processes, installed state,
+  Pinokio machines, GatewayKH checkout (read-only).
 
 ## Product scope and non-negotiable constraints
 
@@ -39,176 +42,130 @@ second planning system.
 - Preserve credential separation, rotation, deny-by-default fleet routes; a fleet
   credential is never forwarded to workers. Hub token ≠ admin authority.
 - Persist dispatch fencing before polling; stable identity + body fingerprint
-  replays the same accepted work, changed body conflicts; worker-local idempotency
-  does not make cross-worker regeneration safe.
+  replays the same accepted work, changed body conflicts.
 - One physical heavy-work/memory admission boundary across studios. Node-owned
   pause/disable/storage/physical reservation must be enforced, not bypassed.
 - Editable defaults 50,000,000,000 bytes/device and 30 days. Protect active,
   transferring, unacknowledged outputs and reference audio.
 - A valid terminal completion whose artifact cannot be verified stays
-  `artifact_metadata_error` (completed-but-unverified); do not change billing.
+  `artifact_metadata_error`; do not change billing semantics.
 - Never forward credentials to arbitrary URLs; never expose secrets in logs.
 
-## Completed baseline (evidence pointers)
+## Completed this takeover (all locally verified / self-reviewed)
 
-- H-01–H-05 audit repairs: PRs #4, #6–#9.
-- Music contract/runtime/supervision: PRs #10, #11.
-- R01 native lifecycle N-01/N-02/N-03 + R02 reference integrity C-01/C-02: PR #12.
-- R03 malformed Voice receipt/status/recovery + WAV/PCM integrity: PR #13.
-- R05 partial (SDK selection/no silent fallback/native lifecycle gate): PR #13.
-- R04 node-owned peer admission: **locally verified/self-reviewed** on `9a4570d`;
-  independent review pending. Evidence:
-  `.planning/2026-09-10-standalone-app-feasibility/r04-report.md`.
-- Latest published evidence: `qualification/local-readiness-2026-09-21.md` —
-  root 641 tests OK/7 skips; Voice 722 passed/19 skipped; Hub regressions 108
-  passed; native build/boundary/API/lifecycle OK; build scripts 8 passed; release
-  checks 21 OK; original probes 5 OK; packaged model-free startup/auth/shutdown OK.
-  Product commit `fb36c89`, tested candidate `936b3e5`, evidence descendant `16eba0d`.
-  Proof app `.build/StudioHubLocalReadinessV2.app`, tree SHA-256
-  `06e881146e69e88097df71291569ffa873acf541381dc3fb8010df1ec34024e7`.
-- GatewayKH read-only contract inventory @ `736d7b0` (separate repo, no edits).
+- **R04 node-owned peer admission** (`e1d167a`, `678630e`, `6b7fd94`). Work-submitting
+  peer POSTs now pass machine/Studio disable, paused model, physical lease, output
+  storage and packaged readiness and return `409/507/503`; status/cancel/artifact/ACK
+  stay reachable; accepted async work holds a machine lease until terminal (TTL +
+  sweep). Permanent negatives for all four gates, lease lifetime/expiry, multipart
+  Subtitle, two-real-Hub Studio-disable and storage tests. `r04-report.md`.
+- **Host-identity PATH fix** (`b68e7b2`). `apple_chip_name()`/`apple_machine_type()`
+  prefer absolute `/usr/sbin` paths with a `system_profiler` fallback; the
+  pre-existing chip test failure is closed (`test_standalone_connections.py` 34 passed).
+- **R05 records reconciliation** (`295daf8`, `r05-report.md`). ST-03/04/05/06/08/10/11
+  labeled implemented vs missing-evidence vs gated; ST-04/05/06 status lines corrected.
+- **R05 Image offline rebuild probed** (`9f5c1a1`). Declared CPython archive + lock
+  verified; offline rebuild failed loudly (no silent network) because 21 of 73 locked
+  packages (incl. `mflux`, `matplotlib`, `opencv-python`, `contourpy`) are absent from
+  `.build/uv-cache`. Gate: an explicitly populated Image wheel cache.
+- **R09 Hub-side selected-device no-fanout** (`0004850`). `set_mode`/`release` with
+  `studio_ids` touch only the selected Studio. `test_memory_policy_contract.py` 16 passed.
+- **R06 native Music workflow** (`6211fbf`, `r06-report.md`). Full workflow with
+  runtime-decoded controls, durable Hub submit, cancel/reconcile, persisted uncertain
+  requests, and verified play/save with ACK only after a verified save. Native build
+  exit 0; renders at 1040×680/1920×1053; root suite 655 OK/11 skipped.
+- **Flake re-probe** (`0fdfbe3`). Shared-voice peer test passed 3/3 in isolation;
+  still not fixed, cause unproven.
 
 ## Packet checklist (R04–R10)
 
-- **R04 node-owned admission — LOCALLY VERIFIED / self-reviewed.** Independent
-  review pending. Four bypasses closed; lease lifetime + TTL added.
-- **Host-identity robustness — LOCALLY VERIFIED / self-reviewed.**
-  `apple_chip_name()` / `apple_machine_type()` now prefer absolute `/usr/sbin`
-  paths and fall back to `system_profiler`; the previous PATH-caused overview
-  failure is closed (`test_standalone_connections.py` 33 passed).
-- **R05 portable bootstrap + accurate records — RECORDS RECONCILED / self-reviewed.**
-  ST-03/04/05/06/08/10/11 reconciled in `r05-report.md`; ST-04/05/06 status
-  lines corrected; test-dependency setup recorded. Image offline rebuild was then
-  **attempted** with an empty user cache: declared CPython archive + lock verified,
-  build failed loudly (`contourpy==1.4.0` plus 20 other locked packages absent from
-  `.build/uv-cache`); no silent network use. Gate: an explicitly populated Image
-  wheel cache needs separate network authorization. Optional Graphify restore stays open.
-- **R06 native Music workflow — IN PROGRESS (delegated).** The Music backend/
-  runtime is integrated (PR #11) but the native UI still falls through to
-  "Engine not installed"; `StudioAPI.swift` has no Music support. A bounded
-  background implementation is adding the store, submit/poll/cancel/reconcile,
-  artifact Open/Save + verified ACK, and the workspace view.
-- R07 exact-artifact model qualification: qualification gaps; needs models/hardware.
-- R08 native usability + real export acceptance: needs real GUI/export exercise.
-- R09 GatewayKH/fleet contract qualification: needs disposable fixtures; no ACK in
-  GatewayKH, no upstream cancel, Music omitted from adapter.
-- R10 release preparation and external qualification: exact-source candidate/kit;
-  physical gates gated.
+- R04 — LOCALLY VERIFIED / self-reviewed. Independent review pending.
+- R05 — records reconciled; SDK slice done. Open: Image offline wheel cache (gated),
+  optional Graphify restore (CLI unavailable).
+- R06 — LOCALLY VERIFIED / self-reviewed. Independent review pending.
+- R07 — GATED: real model inference (FLUX, Qwen Base, VoxCPM2 4/8/bf16, OmniVoice,
+  Whisper Base/Small/Turbo, ACE-Step Turbo/0.6B planner).
+- R08 — GATED: real GUI save/ACK, keyboard/focus, restart history.
+- R09 — PARTIAL: Hub side covered (discovery/dispatch/artifact/cancel/ACK/auth,
+  selection/no-fanout). Counterpart GatewayKH ACK/cancel/Music edits need separate
+  scope authority; physical second node gated.
+- R10 — GATED: clean Mac without tools/network, original M1/Sonoma, reboot/login,
+  signing/notarization, distribution.
 
 ## Confirmed defects
 
-- **R04 (repaired locally this session):** peer generation proxy bypassed
-  node-owned model pause, studio/machine disable, output-storage refusal and
-  physical-machine reservation. Baseline probe on `9a4570d`: each case HTTP 200 +
-  1 worker request (`.build/deepseek-r04/r04-probe-baseline.log`); after repair
-  409/409/507/409 + 0 worker requests (`.build/deepseek-r04/r04-probe-after.log`).
-- **Host identity (repaired locally):** `apple_chip_name()` called `sysctl` by
-  name; a launch PATH without `/usr/sbin` yielded no chip. Now uses absolute
-  `/usr/sbin` paths plus a `system_profiler` fallback. `Apple M2 Max` / `Mac14,13`
-  reported on this host; the overview test passes under the restricted harness PATH.
+- None newly open. R04, host identity, and R06 defects are repaired locally.
 
-## Unverified concerns (do not treat as fixed/default)
+## Unverified concerns (not fixed/default)
 
-- One earlier shared-voice peer reachability failure did not recur; re-probed
-  3x in isolation this session (3 passed) and still cause-unproven, not fixed.
-- Dependency deprecations + fixture socket/process ResourceWarnings remain.
-- R09 GatewayKH reference-upload metadata/ttl and uncertain→PROVIDER_FAILED
-  recovery semantics are only partly inspected.
-- R04's four gates are proven at the peer HTTP boundary; only Studio-disable is
-  also proven across two real Hubs. A two-Hub proof of each of the four is not claimed.
+- Shared-voice peer reachability flake: re-probed 3× (3 passed), cause unproven.
+- Dependency deprecations and fixture socket/process ResourceWarnings remain.
+- GatewayKH lacks delivery ACK, upstream cancel and a Music lane; voice-reference
+  metadata partial. Counterpart edits need authorization.
+- R04's model-pause and physical-reservation gates are proven at the peer HTTP
+  route only (Studio-disable and storage also at two real Hubs).
 - Node-owned peer leases are in-process; a Hub restart forgets an in-flight lease.
 
 ## Qualification gaps (need assets/hardware/authority)
 
-- Real model inference for FLUX, Qwen Base 0.6B/1.7B, OmniVoice, Whisper
-  Base/Small/Turbo, VoxCPM2 4/8/bf16, ACE-Step Turbo/0.6B planner.
-- Physical clean-Mac, original M1/oldest Sonoma, second node, login/reboot,
-  offline kit, signing/notarization, publication.
+- Real inference for every qualified model; physical clean-Mac, original M1/oldest
+  Sonoma, second node, login/reboot, offline kit, signing/notarization, publication.
 
 ## External gates awaiting separate authorization
 
-- Remote push/PR/merge, tags/releases, Developer ID signing, notarization,
-  deployment, installed-app replacement, real fleet enrollment, live generation,
-  GatewayKH edits, paid/cloud compute, GitHub Actions, rebooting/logout.
+- Remote push/PR/merge, tags/releases, signing/notarization, deployment,
+  installed-app replacement, real enrollment, live generation, GatewayKH edits,
+  paid/hosted compute, rebooting/logout, a network fetch to populate the Image cache.
 
 ## Current packet
 
-- Objective: R06 native Music workflow. The Music backend/runtime is integrated
-  (PR #11) but the native UI still falls through to "Engine not installed".
-- Owned files (proposed): `native/StudioAPI.swift`, `native/StudioViews.swift`,
-  `native/ShellCore.swift`, `tests/native/api_main.swift`; serialize native edits.
-- State: queued (immediately next).
-- Next smallest action: trace how Image/Audio forms submit and render, and where
-  the native Music branch reports "Engine not installed".
+- Objective: none newly started. Next candidates are R07/R08/R09/R10, all gated on
+  unavailable models, hardware, GUI, counterpart authority, or distribution authority.
+- Next smallest locally executable action: reconcile the R06 evidence into the
+  release/status records and run a final clean full-gate on a clean working tree; if
+  a model package is present locally, begin the R07 requalification that needs no new
+  download; otherwise confirm the gates and leave the record truthful.
 
 ## Test processes / temp paths / cleanup
 
-- Logs: `.build/deepseek-r04/r04-probe-baseline.log`,
-  `.build/deepseek-r04/r04-probe-after.log`,
-  `.build/deepseek-r04/handoff-probes.log`.
-- Full root suite (no staged app selected): **651 tests OK, 11 skipped**,
-  443.295s; the four extra skips are app-dependent release/bundled checks.
-- `tests/test_studio_proxy.py`: 15 passed, 2 warnings, 6 subtests (2.04s).
-- `tests/hub_regression/cases`: 108 passed.
-- `tests/test_hub_jobs.py` + `test_hub_dispatch_proof_gate.py` +
-  `test_hub_standalone.py`: 18 passed.
-- `tests/test_standalone_connections.py`: **33 passed** (the pre-existing chip/PATH
-  failure is closed by the host-identity fix).
-- Original five handoff probes: 5 OK, exit 0.
-- No owned servers left running; probes used disposable temp state.
+- Logs: `.build/deepseek-r04/*`, `.build/deepseek-r05-image.log`,
+  `.build/deepseek-r06-native-build.log`, `.build/deepseek-r06-root.log`.
+- Renders: `.build/deepseek-music-render/` (2 PNGs, inspected).
+- No owned servers/processes left; disposable temp homes/stages removed.
+- The `/Applications/Studio Hub.app` processes (pids 405/809/814/815) are the user's
+  installed app and were not started or stopped by this session.
 
 ---
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-21 12:47 +07
+Timestamp: 2026-09-21 13:57 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `5cad55a` (chain: `e1d167a` R04, `b68e7b2` host identity,
-`295daf8` R05 records, `678630e` R04 multipart, `5cad55a` R09 note)
-Uncommitted changes and owners: `native/StudioAPI.swift` — reserved by the running
-R06 subagent (native Music workflow). Do not edit native files until it lands and
-is reviewed. No other dirty files.
-Current packet and objective: R06 native Music workflow, delegated to a bounded
-background implementation. It must reuse the Image/Audio patterns, add
-submit/poll/cancel/reconcile, artifact Open/Save with verified ACK, and the
-workspace view; no new job subsystem. Review and integrate its result here.
-Completed changes: R04 node-owned peer admission + all four gate negatives +
-lease lifetime/TTL + multipart Subtitle coverage + two-real-Hub stale-capability
-test; PATH-independent host identity; R05 records reconciliation; R09 Hub-side
-coverage note.
-Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04-report,r05-report}.md`;
-`.build/deepseek-r04/r04-probe-baseline.log`, `.build/deepseek-r04/r04-probe-after.log`.
-Full root suite without `STUDIOHUB_TEST_APP`: 651 OK, 11 skipped, 443.295s.
-`tests/test_studio_proxy.py` 15 passed; `test_standalone_connections.py` 33 passed;
-`test_hub_jobs.py`+`test_hub_dispatch_proof_gate.py`+`test_hub_standalone.py` 18 passed;
-`hub_regression/cases` 108 passed; handoff probes 5 OK.
-Self-review findings: the R04 lease-sweep task first propagated `CancelledError`
-at lifespan shutdown; fixed by swallowing it like `job_storage.budget_loop`
-(18/18 re-verified). Voice reference POST returns the generation job itself, so
-no lease stranding between reference prep and generation.
-Independent review status: not performed (self-review only) for R04/R05 and the
-host-identity fix.
-Remaining confirmed defects: none newly confirmed open.
-Unverified concerns: shared-voice peer flake (not reproduced, not fixed);
-dependency deprecations and fixture socket/process ResourceWarnings; GatewayKH
-counterpart ACK/cancel/Music gaps (need separate scope authority); R04's four
-gates proven at the peer HTTP boundary (only Studio-disable also at two Hubs).
-External gates and authorization needed: remote push/PR/merge, tags/releases,
-signing/notarization, deployment, installed-app replacement, real enrollment,
-live generation, GatewayKH edits, paid/hosted compute, reboot/logout.
-Owned processes / temporary data / cleanup: none outstanding. The
-`/Applications/Studio Hub.app` processes (pids 405/809/814/815) are the user's
-installed app and were NOT started or stopped by this session.
-Next smallest action: when the R06 subagent settles, review its native diff,
-run `STUDIOHUB_MACOS_SDK=macosx26.5 bash native/build.sh`, the native parser
-tests, and a Music offscreen render, then commit or send it back.
+Current HEAD: `6211fbf` (plus this status-file commit)
+Uncommitted changes and owners: this status file only (DeepSeek).
+Current packet and objective: R04–R06 locally verified and recorded; R07–R10 are
+gated on models, hardware, GUI, counterpart authority or distribution authority.
+Completed changes: R04 node-owned admission; host-identity PATH fix; R05 records +
+Image offline probe; R09 Hub-side selection/no-fanout; R06 native Music workflow.
+Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04-report,r05-report,r06-report}.md`
+and `progress.md`; logs under `.build/deepseek-*`; commits `e1d167a`…`6211fbf`.
+Self-review findings: fixed a `CancelledError` from the R04 lease sweep; R06's
+out-of-native `test_generation_time.py` change is a legitimate row-count update.
+Independent review status: not performed for R04/R05/R06/host fix.
+Remaining confirmed defects: none newly open.
+Unverified concerns: shared-voice flake (3× re-probe passed, cause unproven);
+deprecation/ResourceWarnings; GatewayKH counterpart gaps; R04 two-gate two-Hub limit.
+External gates and authorization needed: see above list.
+Owned processes / temporary data / cleanup: none outstanding.
+Next smallest action: if a qualified model package exists locally, start R07
+requalification without new downloads; otherwise verify the gates still hold and
+keep the record truthful.
 First command to run:
-`git status --short && git diff --stat -- native/`
-Acceptance criteria: Music exposes readiness, supported controls, submit/cancel,
-uncertain recovery and Open/Save with verified ACK, reusing existing patterns;
-native build passes; no new job subsystem; no existing assertion weakened.
+`ls "$HOME/StudioHubModels" 2>/dev/null && .build/voice-runtime/bin/python3 -I -B packaging/voice-runtime/runtime_packaging.py verify .build/st03-image-runtime-worker`
+Acceptance criteria: any new work is measured against the current HEAD with exact
+commands and labeled honestly; no gated packet is claimed as qualified.
 Important do-not-touch paths: `~/Downloads/model-library`,
 `/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.
