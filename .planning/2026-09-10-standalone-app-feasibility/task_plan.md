@@ -276,8 +276,10 @@ and stale-capability refusal.
   Hub side mostly covered; the *GatewayKH* timeout/retry matrix is not.
 - [ ] Prove selected-device settings with durable acknowledgement and no unselected
   fanout; node identity, freshness, attempts-versus-items and location deduplication.
-  Per-studio memory policy is proven; general per-device fanout and two-machine
-  deduplication are not.
+  Hub-side selection is now proven: `set_mode`/`release` with `studio_ids` touch only
+  the selected Studio and leave its sibling unchanged
+  (`tests/test_memory_policy_contract.py`, 16 passed). Durable acknowledgement and
+  two-machine deduplication remain unproven.
 - [ ] Pin and verify the GatewayKH counterpart contract without changing billing,
   accounts or assets. Real counterpart changes/enrollment require separate authority.
   Read-only inventory at `gatewaykh-contract-inventory.md` @ `736d7b0`: counterpart

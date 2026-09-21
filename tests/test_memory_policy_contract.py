@@ -230,6 +230,19 @@ class FleetReleaseTests(PackagedMachine):
         with self.assertRaisesRegex(ValueError, 'at least one'):
             asyncio.run(control.release([]))
 
+    def test_release_only_touches_the_selected_studios(self) -> None:
+        """A per-device release must not free a sibling the operator did not choose."""
+        control, stubs = build_fleet(('voice', 'voice', 51102),
+                                     ('subtitle', 'transcription', 51103))
+        stubs['voice'].loaded = [['qwen-base']]
+        stubs['subtitle'].loaded = [['whisper-turbo']]
+        result = asyncio.run(control.release(['voice']))
+        self.assertTrue(result['ok'])
+        self.assertEqual(stubs['voice'].releases, 1)
+        self.assertEqual(stubs['subtitle'].releases, 0,
+                         'an unselected Studio must not be released')
+        self.assertEqual(stubs['subtitle'].loaded, [['whisper-turbo']])
+
 
 class HandoffTests(PackagedMachine):
     """What happens when a job arrives on a Mac whose memory another Studio is holding.
@@ -324,6 +337,18 @@ class FleetSetModeTests(PackagedMachine):
         with self.assertRaisesRegex(ValueError, 'mode must be one of'):
             asyncio.run(control.set_mode('overnight'))
         self.assertEqual(stubs['voice'].puts, [])
+
+    def test_set_mode_only_reaches_the_selected_studios(self) -> None:
+        """A per-device mode change must not fan out to an unselected sibling."""
+        control, stubs = build_fleet(('voice', 'voice', 51102),
+                                     ('subtitle', 'transcription', 51103))
+        result = asyncio.run(control.set_mode('memory_saver', ['voice']))
+        self.assertTrue(result['ok'])
+        self.assertEqual(stubs['voice'].puts, [{'mode': 'memory_saver'}])
+        self.assertEqual(stubs['voice'].mode, 'memory_saver')
+        self.assertEqual(stubs['subtitle'].puts, [],
+                         'an unselected Studio must not be changed')
+        self.assertEqual(stubs['subtitle'].mode, 'immediate')
 class HubMemoryRouteTests(unittest.TestCase):
     """The routes the native Settings screen calls, exercised through the real Hub.
 

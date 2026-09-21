@@ -718,3 +718,12 @@ and `twine`. Proving offline reconstruction therefore needs an explicitly
 populated, declared Image wheel cache (a network fetch treated as separate
 authorization). This is a bootstrap/kit gate, not an app defect. Disposable temp
 home and any stage directory removed.
+
+## 2026-09-21 — R09 selected-device no-fanout proof (DeepSeek)
+
+[MEASURED] Added Hub-side selection tests to `tests/test_memory_policy_contract.py`:
+`set_mode('memory_saver', ['voice'])` reaches only the selected Voice Studio and
+leaves the Subtitle sibling's mode and request log untouched; `release(['voice'])`
+frees only the selected Studio and leaves the sibling's loaded models intact. Suite
+now **16 passed** (was 14). This closes the "no unselected fanout" half of ST-10.4;
+durable acknowledgement and two-machine deduplication remain unproven.
