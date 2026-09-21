@@ -1,0 +1,3 @@
+# Weights are never vendored: they are imported as the pinned Studio Hub model
+# package `stable-audio-3-medium`. Keep this directory so the runtime layout exists.
+*.npz
