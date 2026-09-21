@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 13:58 +07
+Last updated: 2026-09-22 01:24 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,7 +12,7 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `6211fbf` (R06 native Music workflow)
+- Current HEAD: `60d17ea` (docs); installed app build `ff4fd9b`
 - Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
   `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
   `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
@@ -147,40 +147,54 @@ second planning system.
   `.build/deepseek-r06-native-build.log`, `.build/deepseek-r06-root.log`.
 - Renders: `.build/deepseek-music-render/` (2 PNGs, inspected).
 - No owned servers/processes left; disposable temp homes/stages removed.
-- The `/Applications/Studio Hub.app` processes (pids 405/809/814/815) are the user's
-  installed app and were not started or stopped by this session.
+- `/Applications/Studio Hub.app` is now **this project's 0.6.38 build**
+  (`ff4fd9b`), installed by this session with the owner's authorization. The old
+  0.5.4 app and its data are backed up under `~/StudioHubAppBackups/`.
 
 ---
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-21 13:58 +07
+Timestamp: 2026-09-22 01:24 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `5c0e5f0` (plus this status-file commit)
-Uncommitted changes and owners: this status file only (DeepSeek).
-Current packet and objective: all locally executable work complete; R07-R10 gates documented.
-Completed changes: R04 node-owned admission; host-identity PATH fix; R05 records +
-Image offline probe; R09 Hub-side selection/no-fanout; R06 native Music workflow +
-packaged model-free smoke; R10 local candidate inventory.
-Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04-report,r05-report,r06-report}.md`
-and `progress.md`; logs and JSON under `.build/deepseek-*`; commits `e1d167a`..`5c0e5f0`.
-Self-review findings: fixed a `CancelledError` from the R04 lease sweep; R06's
-out-of-native `test_generation_time.py` change is a legitimate row-count update.
-Independent review status: not performed for R04/R05/R06/host fix.
-Remaining confirmed defects: none newly open.
+Current HEAD: `60d17ea` (docs); installed app build `ff4fd9b`
+Uncommitted changes and owners: none (clean tree).
+Current packet and objective: R07 model qualification is complete; R08 layout is
+verified and the remaining R08 step is physical GUI interaction.
+Completed changes (this session): R04 node-owned admission; host-identity PATH fix;
+R05 records + Image offline probe; R06 native Music workflow; R09 Hub-side
+selection; R10 local candidate inventory; app version + What's New footer;
+stale-listen-address recovery fix; **VoxCPM2 clone fix (4-bit/8-bit/bf16 all
+working)**; **ACE-Step Music generation (30s + 60s, ACK, cancel, restart)**;
+Whisper Base/Small/Turbo; delivery ACK for Image/Voice/Subtitle/Music; installed
+app replaced with 0.6.38.
+Model library: `~/StudioHubModels` (11 verified packages, ~30 GiB). SSD archive is
+a transport vehicle, read-only; its kit app is expired and must be rebuilt.
+Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04,r05,r06}-report.md`
+and `progress.md`; `qualification/evidence/r07-2026-09-21/` (real-model receipts +
+outputs) and `qualification/evidence/r08-2026-09-21/` (layout renders).
+Self-review findings: R04 lease-sweep CancelledError fixed; the install replace
+needs `chmod -R u+w` (or a rename-aside) because the staged app's runtime dirs are
+read-only - the kit installer has the same bug and must be fixed in R10.
+Independent review status: not performed for any packet.
+Remaining confirmed defects: none newly open. Kitty/UX gates: physical GUI
+Save-panel/ACK/keyboard/accessibility (R08).
 Unverified concerns: shared-voice flake (3x re-probe passed, cause unproven);
-deprecation/ResourceWarnings; GatewayKH counterpart gaps; R04 two-gate two-Hub limit.
-External gates and authorization needed: see above list.
-Owned processes / temporary data / cleanup: none outstanding. Proof app and logs
-remain under `.build/` (ignored) for future reference; do not delete as "cleanup".
-Next smallest action: on resumption, verify the tree is clean at `5c0e5f0` (or the
-latest local commit), then act on whichever external gate opened first.
+deprecation/ResourceWarnings; GatewayKH counterpart ACK/cancel/Music gaps;
+R04 model-pause + physical-reservation proven only at the peer HTTP route.
+External gates and authorization needed: GatewayKH scope; Image wheel-cache
+network fetch; clean Mac/original-M1/reboot hardware; distribution authority.
+Owned processes / temporary data / cleanup: none outstanding. `.build/` holds
+ignored proof artifacts and the installed-build source; keep.
+Next smallest action: R08 - the owner opens the running app, generates in each
+studio, clicks Save, and confirms the file and ACK; or start R10 (rebuild the SSD
+kit + simplify setup). R05 Image cache and R09 need authorization.
 First command to run:
 `git status --short && git log --oneline -3`
-Acceptance criteria: any resumed work is measured against the current HEAD with
-exact commands, labeled honestly, and no gated packet is claimed as qualified.
+Acceptance criteria: measure against the current HEAD with exact commands, label
+honestly, and do not claim a gated packet as qualified.
 Important do-not-touch paths: `~/Downloads/model-library`,
-`/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
+`~/StudioHubAppBackups/`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.
