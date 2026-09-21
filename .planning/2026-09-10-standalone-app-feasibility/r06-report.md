@@ -43,6 +43,16 @@ had **no** Music support at all and the native page fell through to the
 | Music render 1920×1053 + 1040×680 | exit 0; both inspected: real form, model picker, Generate, preview, history — no placeholder |
 | `test_generation_time.py` + `test_audio_layout.py` + `test_native_build_scripts.py` + `test_peer_path_contract.py` | 42 passed |
 | Full root suite (no staged app selected) | **655 tests OK, 11 skipped**, 440.729s |
+| Staged package + model-free four-worker smoke | **ok=true**; `/studio/music/api/health` 200, `/studio/music/api/catalog` 200, unauthenticated music 401, all four modalities (image/music/transcription/voice) started, owned processes stopped, bundle unchanged; `model_inference:false` |
+
+[MEASURED] Staged app: `.build/deepseek-proof-r06/Studio Hub.app`, version 0.6.38,
+`implementation_commit a600ca6`, `development_build:false`,
+`qualification:unqualified-local-proof`, tree sha256
+`712bb61d6e74a2160f2dea4db4ada19888116908e4af206d8d454f5d280c3b3d`. The bundled
+native shell hash equals the freshly built `.build/StudioHub`
+(`81151261c084f1906c3428b924b57ebd6a5e9f57f1b250334978765939cff2f7`), so the
+packaged app contains the R06 native workflow. Probe:
+`qualification/evidence/music-runtime-2026-09-21/probe.py`, exit 0.
 
 The native Music tests assert, among others: defaults and limits come from the
 runtime; the submit envelope binds `modality: "music"`, model, prompt and the

@@ -790,3 +790,24 @@ explicit non-committing brief; the coordinator reviewed the entire diff (includi
 the corrupt-artifact/no-ACK and uncertain-request cases), ran the gate, and owns
 this record. Independent review of R06 is **pending**. No real Music model ran;
 GUI save-panel/keyboard interaction was not driven. Real generation remains R07.
+
+## 2026-09-21 — R06 packaged model-free smoke (DeepSeek)
+
+[MEASURED] Staged the app at HEAD `a600ca6` (no staged app existed for the new
+native shell) with the Voice runtime, Image runtime, Music overlay and Music
+engine source:
+`.build/deepseek-proof-r06/Studio Hub.app`, version 0.6.38,
+`implementation_commit a600ca6`, `development_build:false`,
+`qualification:unqualified-local-proof`, tree sha256
+`712bb61d6e74a2160f2dea4db4ada19888116908e4af206d8d454f5d280c3b3d`. The bundled
+native shell hash matches the freshly built `.build/StudioHub`
+(`81151261c084f1906c3428b924b57ebd6a5e9f57f1b250334978765939cff2f7`).
+
+[MEASURED] Ran `qualification/evidence/music-runtime-2026-09-21/probe.py` against
+it: exit 0, `ok:true`, modalities `[image, music, transcription, voice]`,
+`/api/health` and `/api/hub/workers` 200, `/studio/music/api/health` and
+`/studio/music/api/catalog` 200, unauthenticated Music 401,
+`owned_processes_stopped:true`, `bundle_unchanged:true`, `ready_seconds:10.23`,
+`service_exit:-15`, `model_inference:false`. This proves the R06 native shell and
+Music worker routing in the packaged configuration; it is model-free and not
+release qualification. Raw: `.build/deepseek-proof-r06/packaged-smoke.json`.
