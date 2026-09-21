@@ -36,7 +36,9 @@ def resolve_manifest_path(explicit: Optional[os.PathLike | str] = None,
                           name: str = MANIFEST_NAME) -> Path:
     if explicit:
         candidates = [Path(explicit).expanduser()]
-    elif os.environ.get(MANIFEST_ENV):
+    elif name == MANIFEST_NAME and os.environ.get(MANIFEST_ENV):
+        # The env override names the default engine's manifest; a secondary engine
+        # resolves its own file by name so it cannot inherit the wrong package.
         candidates = [Path(os.environ[MANIFEST_ENV]).expanduser()]
     else:
         candidates = _candidate_manifests(name)
