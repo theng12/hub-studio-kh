@@ -865,3 +865,18 @@ on the water." The item's own metadata names revision
 the imported package. Receipt:
 `qualification/evidence/r07-2026-09-21/whisper-turbo.json`. This proves the
 current build + new library path for Subtitle; other models remain to be run.
+
+## 2026-09-21 — R07 real requalification: FLUX.2 Klein 4-bit (DeepSeek)
+
+[MEASURED] Real image generation through the current build and the new library
+(`qualification/evidence/r07-2026-09-21/flux_probe.py`): submit 200, item `done`
+in 70.82s, artifact 200, **valid 1280×720 PNG, 1,701,382 bytes**, matching the
+prompt ("riverside garden at sunrise, mist, green trees"). Image inspected.
+Receipt `flux-2-klein-4bit.json`; output
+`flux2-klein-1280x720-seed42-r07.png`.
+
+[MEASURED] It did **not** byte-match the historical deterministic receipt
+(1,696,066 bytes / `290d2fb8…`). Recorded honestly: the historical run used an
+older implementation and Image runtime, so byte-exact reproduction across
+versions is not the qualification bar. The job's own report names model revision
+`7fd24828501390b67a92c8b66d2fc5a707d0ba1a`, matching the imported package.

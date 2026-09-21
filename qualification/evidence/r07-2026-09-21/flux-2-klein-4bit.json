@@ -1,0 +1,40 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+  "prompt": "A quiet riverside garden at sunrise, soft mist over the water, green trees, natural light, photographic detail.",
+  "params": {
+    "width": 1280,
+    "height": 720,
+    "steps": 4,
+    "guidance": 1.0,
+    "seed": 42
+  },
+  "ready_seconds": 2.44,
+  "submit_status": 200,
+  "batch_id": "8d29685bae",
+  "generate_seconds": 70.82,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 1701382,
+    "sha256": "20905b3cb11860dfc89dad51ce18f53545a62af4b35b2dafe9f95dfaa625415c",
+    "media_type": "image/png",
+    "error": null,
+    "worker_id": "image",
+    "machine_id": null,
+    "studio": "image"
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 1701382,
+    "sha256": "20905b3cb11860dfc89dad51ce18f53545a62af4b35b2dafe9f95dfaa625415c",
+    "png_magic": true
+  },
+  "matches_historical": false,
+  "expected": {
+    "bytes": 1696066,
+    "sha256": "290d2fb8cf0cd927d7d0633412bb157a9ee8675684ed2da7e2e1267c6ce919bd"
+  },
+  "ok": true
+}
