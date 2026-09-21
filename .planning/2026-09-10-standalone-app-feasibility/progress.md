@@ -1155,3 +1155,22 @@ Instrumental is unticked.
 six minutes (the Mac's tier cap is 600s). Receipt `ace-step-turbo-6min.json`.
 Timing so far: 30s -> 97s, 60s -> 105s, 360s -> 256s wall clock (cold engine each
 probe; the app keeps the engine resident, so repeat jobs are faster).
+
+[MEASURED] ACE-Step warm timing (one resident engine, three identical 30s jobs):
+cold **106.25s**, warm **32.93s**, warm **42.76s** (service ready 2.64s). So the
+cold model load is ~65-70s and a resident engine generates a 30s clip in roughly
+33-43s. The app keeps the engine resident, so operators see the warm numbers after
+the first job. Receipt `ace-step-warm-timing.json`; probe `warm_timing.py`.
+
+[MEASURED/REPORTED] Music backend split: the 0.6B LM planner already runs on
+**MLX** (`STUDIOHUB_MUSIC_BACKEND` defaults to `mlx`); the 2B DiT/VAE run on
+PyTorch **MPS**. Upstream ACE-Step 1.5 ships an **MLX DiT/VAE**
+(`acestep/models/mlx/`), so a switch is possible but is a re-packaging and
+re-qualification project. Given warm ~33-43s for 30s audio, it is an optimisation,
+not a blocker.
+
+[MEASURED] Stable Audio 3.0 MLX scoping: `stabilityai/stable-audio-3-optimized` is
+**ungated** and carries MLX weights - medium DiT 2.9 GB + SAME-L autoencoder 3.4 GB
++ T5Gemma 0.57 GB (~6.9 GB for medium, 6 min 20 s); small music ~1.9 GB (2 min).
+Runs on Apple Silicon via MLX. Licence remains `stable-audio-community` (commercial
+per stability.ai/license), and the standard Medium repo is gated.

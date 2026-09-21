@@ -1,0 +1,23 @@
+{
+  "probe": "warm-timing",
+  "duration": 30.0,
+  "repeat": 3,
+  "runs": [
+    {
+      "index": 0,
+      "state": "done",
+      "seconds": 106.25
+    },
+    {
+      "index": 1,
+      "state": "done",
+      "seconds": 32.93
+    },
+    {
+      "index": 2,
+      "state": "done",
+      "seconds": 42.76
+    }
+  ],
+  "ready_seconds": 2.64
+}
