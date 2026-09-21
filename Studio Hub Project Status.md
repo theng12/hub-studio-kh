@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 12:52 +07
+Last updated: 2026-09-21 12:42 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -80,7 +80,11 @@ second planning system.
   ST-03/04/05/06/08/10/11 reconciled in `r05-report.md`; ST-04/05/06 status
   lines corrected; test-dependency setup recorded. Open: Image offline-build
   declared inputs (not attempted; may need network) and optional Graphify restore.
-- R06 native Music workflow: missing native UI (falls through to "Engine not installed").
+- **R06 native Music workflow — IN PROGRESS (delegated).** The Music backend/
+  runtime is integrated (PR #11) but the native UI still falls through to
+  "Engine not installed"; `StudioAPI.swift` has no Music support. A bounded
+  background implementation is adding the store, submit/poll/cancel/reconcile,
+  artifact Open/Save + verified ACK, and the workspace view.
 - R07 exact-artifact model qualification: qualification gaps; needs models/hardware.
 - R08 native usability + real export acceptance: needs real GUI/export exercise.
 - R09 GatewayKH/fleet contract qualification: needs disposable fixtures; no ACK in
@@ -138,7 +142,9 @@ second planning system.
 - Logs: `.build/deepseek-r04/r04-probe-baseline.log`,
   `.build/deepseek-r04/r04-probe-after.log`,
   `.build/deepseek-r04/handoff-probes.log`.
-- `tests/test_studio_proxy.py`: 14 passed, 2 warnings, 6 subtests (1.68s).
+- Full root suite (no staged app selected): **651 tests OK, 11 skipped**,
+  443.295s; the four extra skips are app-dependent release/bundled checks.
+- `tests/test_studio_proxy.py`: 15 passed, 2 warnings, 6 subtests (2.04s).
 - `tests/hub_regression/cases`: 108 passed.
 - `tests/test_hub_jobs.py` + `test_hub_dispatch_proof_gate.py` +
   `test_hub_standalone.py`: 18 passed.
@@ -157,7 +163,8 @@ Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Current HEAD: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Uncommitted changes and owners: R04 product/tests/records and this status file
 (DeepSeek). See `git status`.
-Current packet and objective: R06 native Music workflow.
+Current packet and objective: R06 native Music workflow (delegated to a bounded
+background implementation; native files are reserved for it until it lands).
 Completed changes: R04 node-owned admission repair; host-identity PATH fix; R05
 records reconciliation; R04/R05 reports; plan/board/progress records.
 Evidence: `.planning/2026-09-10-standalone-app-feasibility/r04-report.md`;

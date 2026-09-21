@@ -104,13 +104,22 @@ class StudioProxyTests(unittest.TestCase):
                      "STUDIOHUB_MODELS_DIR"):
             os.environ.pop(name, None)
         cls.worker = FakeWorker()
+        cls.subtitle = FakeWorker()
         workers = root / "workers.json"
-        workers.write_text(json.dumps([{
-            "id": "image", "title": "Image Studio", "modality": "image",
-            "host": "127.0.0.1", "port": cls.worker.port, "machine": "local", "local": True,
-            "runtime_identity": {"id": "r", "compatible": True},
-            "hub_token": "worker-token", "managed_output_roots": [str(root / "out")],
-        }]))
+        workers.write_text(json.dumps([
+            {
+                "id": "image", "title": "Image Studio", "modality": "image",
+                "host": "127.0.0.1", "port": cls.worker.port, "machine": "local", "local": True,
+                "runtime_identity": {"id": "r", "compatible": True},
+                "hub_token": "worker-token", "managed_output_roots": [str(root / "out")],
+            },
+            {
+                "id": "subtitle", "title": "Subtitle Studio", "modality": "transcription",
+                "host": "127.0.0.1", "port": cls.subtitle.port, "machine": "local", "local": True,
+                "runtime_identity": {"id": "r", "compatible": True},
+                "hub_token": "worker-token", "managed_output_roots": [str(root / "out")],
+            },
+        ]))
         os.chmod(workers, 0o600)
         data = root / "Node State"
         data.mkdir()
@@ -147,6 +156,7 @@ class StudioProxyTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.worker.stop()
+        cls.subtitle.stop()
         cls.stack.close()
         os.environ.clear()
         os.environ.update(cls.old)
@@ -282,6 +292,28 @@ class StudioProxyTests(unittest.TestCase):
         self.assertEqual(response.json().get("code"), "MODEL_PAUSED")
         self.assertEqual(len(self.worker.requests), before,
                          "a paused model must not reach the worker")
+
+    def test_a_multipart_transcription_names_its_model_for_admission(self) -> None:
+        """Subtitle carries the model as a multipart field, not in a JSON body."""
+        from components.hub.backend import broker
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        pause = {("subtitle", "fixture/whisper"): {
+            "studio": "subtitle", "model": "fixture/whisper", "blocked": True,
+            "reason": "fixture subtitle pause", "failures": 2,
+        }}
+        with patch.object(broker, "_model_protection", pause):
+            before = len(self.subtitle.requests)
+            response = client.post(
+                "/studio/transcription/api/transcribe",
+                data={"model": "fixture/whisper"},
+                files={"file": ("clip.wav", b"RIFF", "application/octet-stream")},
+                headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("code"), "MODEL_PAUSED")
+        self.assertEqual(len(self.subtitle.requests), before,
+                         "a paused Subtitle model must not reach the worker")
 
     def test_a_disabled_studio_is_refused_before_the_worker(self) -> None:
         client = self.client()

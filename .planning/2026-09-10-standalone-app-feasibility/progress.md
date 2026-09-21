@@ -685,3 +685,16 @@ exact versions) and confirmed the Image offline-build inputs remain undeclared
 and were not attempted (may need network). Graphify CLI remains unavailable; the
 saved graph predates current Hub/native/Music work and callers were inspected
 directly.
+
+## 2026-09-21 — R04 multipart coverage and full root baseline (DeepSeek)
+
+[MEASURED] Added a Subtitle multipart admission test (the `model` form field
+path) and a subtitle worker to the proxy fixture; `tests/test_studio_proxy.py`
+now 15 passed / 6 subtests.
+
+[MEASURED] Full root suite on the current tree, without a staged app selected:
+`.build/voice-runtime/bin/python3 -B -m unittest discover -s tests -p 'test_*.py'`
+→ **651 tests, OK, 11 skipped, 443.295s**. The four extra skips versus the
+recorded 7 are the app-dependent release/bundled checks, because this run did
+not set `STUDIOHUB_TEST_APP`; the historical 641/7 run selected the preserved
+`936b3e5` app. ResourceWarnings from fixture sockets remain visible.

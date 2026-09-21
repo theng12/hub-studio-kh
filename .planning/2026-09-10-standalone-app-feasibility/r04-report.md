@@ -61,7 +61,7 @@ lease on the asynchronous POST's return was deliberately not done.
 | Check | Result |
 | --- | --- |
 | R04 probe after repair | `409 / 409 / 507 / 409`, **0** worker requests each |
-| `tests/test_studio_proxy.py` | **14 passed**, 2 warnings, 6 subtests (1.68s) |
+| `tests/test_studio_proxy.py` | **15 passed**, 2 warnings, 6 subtests (2.04s) |
 | New two-Hub stale-capability test in isolation | **1 passed** (18.52s) |
 | `tests/test_standalone_connections.py` full | **32 passed, 1 failed** (326.91s) |
 | `tests/hub_regression/cases` | **108 passed**, 2 upstream warnings (1.64s) |
@@ -90,6 +90,8 @@ then passed 18/18.
 - An accepted asynchronous job holds the machine lease until a terminal poll
   releases it.
 - An abandoned lease expires (safety TTL).
+- A Subtitle multipart transcription names its model for admission (the
+  multipart `model` field path), refused while that model is paused.
 - A two-real-Hub stale-capability test: the controller has cached the node as
   reachable with its Image studio, the node's owner then disables the studio, and
   the node — not the controller's stale snapshot — refuses the dispatch with no
