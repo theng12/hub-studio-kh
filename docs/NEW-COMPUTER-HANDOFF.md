@@ -5,6 +5,17 @@ This is the continuation guide for the existing canonical plan, not a second pla
 
 ## Current continuation — 2026-09-21
 
+**Latest:** R03 Voice integrity, R05's native SDK/lifecycle-build slice and GatewayKH
+connection copy are verified at clean candidate `936b3e5`; integration is tracked by
+[PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13) (merge state authoritative).
+641 root tests OK/7 skips; nested Voice722/19, Hub108, native and model-free packaged
+checks passed. See [exact local evidence](../qualification/local-readiness-2026-09-21.md).
+R01/R02 are already merged at `b550617` through PR #12. **Next: R04**, four reproduced
+node-owned admission bypasses; then remaining portable/native/model work.
+**GatewayKH** replaces GenStudio as the current client. Its source audit found
+ACK/cancel/Music gaps; no live connection or full compatibility is implied.
+The older continuation below is provenance, not an instruction to redo completed work.
+
 [MEASURED] The audit repairs H-01 through H-05 are integrated, followed by the
 reviewed Music package/engine contract through
 [PR #10](https://github.com/theng12/Studio-Hub-KH/pull/10) at `9f25c03`.
@@ -198,8 +209,8 @@ availability and a fresh runtime build were not tested in this audit.
 
 ## First development checks
 
-[MEASURED] `native/build.sh` and `native/render-page.sh` select `macosx26.5` explicitly
-as a workaround for the old host's SDK. Before compiling, inspect the new toolchain:
+`native/build.sh` and `native/render-page.sh` share explicit SDK selection, defaulting
+to the tested `macosx26.5`. Before compiling, inspect the new toolchain:
 
 ```sh
 uname -m
@@ -208,8 +219,11 @@ xcode-select -p
 xcrun --sdk macosx26.5 --show-sdk-path
 ```
 
-If that SDK is unavailable, resolve the SDK-selection portability finding before
-building. Keep the macOS 14 deployment target unless owner requirements change;
+If that SDK is unavailable, select an installed compatible SDK explicitly with
+`STUDIOHUB_MACOS_SDK=<xcrun-sdk-selector>` on either script, then run the complete
+native gate. Empty/unavailable selectors fail before compilation; no newest-SDK
+fallback is attempted. `build.sh` now includes the R01 lifecycle harness alongside
+boundary/API checks. Keep the macOS 14 deployment target unless owner requirements change;
 that target is not evidence of physical Sonoma compatibility.
 `xcodebuild -showsdks` is an additional inventory command when full Xcode is installed;
 the old host selects Command Line Tools, and `xcodebuild` refuses that active selection.

@@ -6,6 +6,10 @@
 **Architecture:** Native client → bundled Hub → private studio workers. Qualified immutable runtimes, external model packages and one device output policy.
 **Tech stack:** Existing SwiftUI/AppKit, Python, MLX, SQLite and macOS ServiceManagement.
 **Spec:** [Focused design](standalone-plan.md).
+**Current external client (owner correction, 2026-09-21):** GatewayKH replaces
+GenStudio. R09 in the canonical completion plan owns exact counterpart contract
+qualification. Keep legacy wire identifiers until an evidenced migration is needed;
+historical GenStudio fixture passes do not establish GatewayKH compatibility.
 **Status:** ST-01 foundation and ST-02 local Hub now have implementation evidence;
 see the board for review/integration state and [Hub phase receipt](../qualification/st02.md).
 FLUX, scoped Voice/Subtitle inference, shared cleanup, complete native workflows and

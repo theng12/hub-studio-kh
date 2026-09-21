@@ -87,10 +87,17 @@ def test_broker_streams_staged_voice_to_worker_multipart(tmp_path: Path, monkeyp
     class Client:
         async def post(self, url, **kwargs):
             captured.update(url=url, **kwargs)
-            return Response({"job": {"id": "worker-job"}})
+            return Response({"job": {"id": "worker-job", "state": "queued"}})
 
         async def get(self, _url, **_kwargs):
-            return Response({"job": {"id": "worker-job", "state": "done"}})
+            return Response({"job": {
+                "id": "worker-job", "state": "done",
+                "params": {
+                    "client_request_id": "studiohub:batch-1:0",
+                },
+                "output_url": "/api/generate/jobs/worker-job/audio",
+                "output_path": "/tmp/worker-job.wav",
+            }})
 
     async def record_success(_client, _batch, item, _studio, _job, _body, _started):
         item["state"] = "done"

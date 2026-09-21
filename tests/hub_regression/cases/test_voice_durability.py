@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import io
+import json
 import time
+import wave
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -24,22 +28,63 @@ class StopDispatch(BaseException):
 
 
 class WorkerClient:
-    def __init__(self, accepted: dict | None = None, polled: dict | None = None,
-                 cancel_status: int = 200):
+    def __init__(self, accepted: object = None, polled: object = None,
+                 cancel_status: int = 200, artifact: bytes | None = None,
+                 accepted_responses: list[object] | None = None,
+                 polled_responses: list[object] | None = None):
         self.accepted = accepted
         self.polled = polled
         self.cancel_status = cancel_status
+        self.artifact = artifact
+        self.accepted_responses = list(accepted_responses or [])
+        self.polled_responses = list(polled_responses or [])
         self.posts = 0
         self.gets = 0
+        self.artifact_gets = 0
         self.deletes = 0
+        self.created_jobs: dict[str, dict] = {}
 
     async def post(self, *args, **kwargs):
         self.posts += 1
-        return response(200, {"job": self.accepted})
+        body = kwargs.get("json")
+        if body is None and isinstance(kwargs.get("data"), dict):
+            try:
+                body = json.loads(kwargs["data"].get("request_json") or "{}")
+            except (TypeError, ValueError):
+                body = {}
+        body = dict(body or {})
+        request_id = str(body.get("client_request_id") or f"post-{self.posts}")
+        original = self.created_jobs.get(request_id)
+        if original is not None and original != body:
+            return response(409, {
+                "detail": "client_request_id was already used for a different request"
+            })
+        self.created_jobs.setdefault(request_id, body)
+        accepted = (
+            self.accepted_responses.pop(0)
+            if self.accepted_responses else self.accepted
+        )
+        return response(200, {"job": accepted})
 
-    async def get(self, *args, **kwargs):
+    async def get(self, url, *args, **kwargs):
+        if str(url).endswith("/audio"):
+            self.artifact_gets += 1
+            return httpx.Response(
+                200,
+                content=self.artifact if self.artifact is not None else b"not-wave",
+                headers={"Content-Type": "audio/wav"},
+                request=httpx.Request("GET", str(url)),
+            )
         self.gets += 1
-        return response(200, {"job": self.polled})
+        polled = (
+            self.polled_responses.pop(0)
+            if self.polled_responses else self.polled
+        )
+        if isinstance(polled, BaseException):
+            raise polled
+        if isinstance(polled, httpx.Response):
+            return polled
+        return response(200, {"job": polled})
 
     async def delete(self, *args, **kwargs):
         self.deletes += 1
@@ -50,6 +95,25 @@ def response(status: int, payload: dict) -> httpx.Response:
     return httpx.Response(
         status, json=payload, request=httpx.Request("GET", "http://127.0.0.1/")
     )
+
+
+def invalid_json_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        content=b"{not-json",
+        headers={"Content-Type": "application/json"},
+        request=httpx.Request("GET", "http://127.0.0.1/"),
+    )
+
+
+def wav_bytes() -> bytes:
+    target = io.BytesIO()
+    with wave.open(target, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\0" * 1600)
+    return target.getvalue()
 
 
 def voice_attempt(fixture_monitor, *, accepted_state: str = "queued"):
@@ -91,6 +155,27 @@ def voice_attempt(fixture_monitor, *, accepted_state: str = "queued"):
     if accepted_state == "running":
         accepted["started_at"] = time.time()
     return batch, item, studio, accepted
+
+
+def completed_voice_job(batch: dict, item: dict, accepted: dict) -> dict:
+    audio = wav_bytes()
+    return {
+        **accepted,
+        "state": "done",
+        "params": {
+            "repo": batch["model"],
+            "text": item["prompt"],
+            "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
+        },
+        "output_url": f"/api/generate/jobs/{accepted['id']}/audio",
+        "output_path": f"/tmp/{accepted['id']}.wav",
+        "media_type": "audio/wav",
+        "bytes": len(audio),
+        "sha256": hashlib.sha256(audio).hexdigest(),
+        "generated_at": time.time(),
+        "finished_at": time.time(),
+        "runtime_s": 0.1,
+    }
 
 
 @pytest.mark.parametrize("accepted_state", ("queued", "running"))
@@ -194,6 +279,11 @@ def test_confirmed_voice_cancel_preserves_worker_terminal_error(
         "state": "error",
         "error": "fixture generation failed",
         "error_code": "FIXTURE_FAILURE",
+        "params": {
+            "repo": batch["model"],
+            "text": item["prompt"],
+            "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
+        },
     }
     client = WorkerClient(accepted, polled=worker_error)
     original_post = client.post
@@ -322,8 +412,8 @@ def test_worker_done_receipt_wins_lease_expiry_race(
     batch["genstudio_execution"] = {
         "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     }
-    done = {**accepted, "state": "done", "runtime_s": 0.1}
-    client = WorkerClient(accepted, polled=done)
+    done = completed_voice_job(batch, item, accepted)
+    client = WorkerClient(accepted, polled=done, artifact=wav_bytes())
 
     async def continue_to_poll(*args):
         return None
@@ -504,11 +594,7 @@ def test_restart_reconciles_exact_voice_job_without_another_post(
     async def noop(*args):
         return None
 
-    finished = {**accepted, "state": "done", "params": {
-        "repo": batch["model"],
-        "text": item["prompt"],
-        "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
-    }}
+    finished = completed_voice_job(batch, item, accepted)
     client = WorkerClient(polled=finished)
     monkeypatch.setattr(broker, "_record_worker_success", adopt)
     monkeypatch.setattr(broker, "_post_item_webhook", noop)
@@ -616,3 +702,355 @@ def test_authenticated_reconcile_route_dispatches_voice_without_post(
     reconcile.assert_awaited_once_with(
         batch["id"], item["index"], client=app.state.monitor._client
     )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda job: job.update(state="unknown"),
+        lambda job: job.update(state=[]),
+        lambda job: job.pop("output_url"),
+        lambda job: job.update(id="different-worker-job"),
+        lambda job: job["params"].update(client_request_id="different-request"),
+        lambda job: job.update(model_revision="different-model-revision"),
+    ),
+    ids=(
+        "unknown-state",
+        "non-scalar-state",
+        "missing-output-url",
+        "changed-job-id",
+        "changed-request-id",
+        "changed-model-revision",
+    ),
+)
+def test_live_voice_poll_rejects_malformed_receipt_and_persists_uncertainty(
+    fixture_monitor, monkeypatch, mutate
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    finished = completed_voice_job(batch, item, accepted)
+    mutate(finished)
+    client = WorkerClient(accepted, polled=finished, artifact=wav_bytes())
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item.get("asset_id") is None
+    assert broker.terminal_result(batch, item) is None
+    assert item["retry_at"] is None
+
+
+def test_remote_non_scalar_voice_state_is_fenced_without_regeneration(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    finished = completed_voice_job(batch, item, accepted)
+    finished["state"] = []
+    client = WorkerClient(accepted, polled=finished, artifact=wav_bytes())
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        broker, "studio_request",
+        lambda _studio, path: (f"http://remote.invalid{path}", {}),
+    )
+    monkeypatch.setattr(broker.peers, "is_local_studio", lambda _studio: False)
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item["studio"] == studio["id"]
+    assert item["retry_at"] is None
+
+
+@pytest.mark.parametrize("remote", (False, True), ids=("local", "remote"))
+def test_invalid_json_voice_poll_is_fenced_without_repost(
+    fixture_monitor, monkeypatch, remote
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    client = WorkerClient(
+        accepted,
+        polled_responses=[invalid_json_response()],
+    )
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    if remote:
+        monkeypatch.setattr(
+            broker, "studio_request",
+            lambda _studio, path: (f"http://remote.invalid{path}", {}),
+        )
+        monkeypatch.setattr(broker.peers, "is_local_studio", lambda _studio: False)
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["error_code"] == "VOICE_RECEIPT_INVALID"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item["retry_at"] is None
+
+
+def test_remote_transport_then_malformed_recovery_receipt_is_not_regenerated(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    client = WorkerClient(
+        accepted,
+        polled_responses=[
+            httpx.ConnectError(
+                "fixture disconnect",
+                request=httpx.Request("GET", "http://remote.invalid/status"),
+            ),
+            response(200, {"job": {"state": "running"}}),
+        ],
+    )
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        broker, "studio_request",
+        lambda _studio, path: (f"http://remote.invalid{path}", {}),
+    )
+    monkeypatch.setattr(broker.peers, "is_local_studio", lambda _studio: False)
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 1)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert client.gets == 2
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["error_code"] == "VOICE_RECEIPT_INVALID"
+    assert item["studio_job_id"] == accepted["id"]
+    assert item["studio"] == studio["id"]
+    assert item["retry_at"] is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda job: job.pop("output_url"),
+        lambda job: job.update(runtime_revision="different-runtime-revision"),
+    ),
+    ids=("missing-output-url", "changed-runtime-revision"),
+)
+def test_voice_reconcile_rejects_malformed_terminal_receipt_without_new_job(
+    fixture_monitor, mutate
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    item.update(
+        state="uncertain",
+        studio_job_id=accepted["id"],
+        machine=studio["machine"],
+        worker_id=studio["id"],
+        model_revision=accepted["model_revision"],
+        runtime_revision=accepted["runtime_revision"],
+    )
+    finished = completed_voice_job(batch, item, accepted)
+    mutate(finished)
+    client = WorkerClient(polled=finished, artifact=wav_bytes())
+
+    result = asyncio.run(
+        broker.reconcile_voice_item(batch["id"], item["index"], client=client)
+    )
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert result["reconciled"] is False
+    assert client.posts == 0
+    assert len(client.created_jobs) == 0
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["recovery"]["phase"] == "manual_action_required"
+    assert item.get("asset_id") is None
+    assert broker.terminal_result(batch, item) is None
+
+
+@pytest.mark.parametrize(
+    "accepted_receipt",
+    (None, [], {}, {"id": 123, "state": "queued"}),
+    ids=("missing", "non-object", "missing-id", "non-string-id"),
+)
+def test_malformed_voice_acceptance_is_fenced_before_another_worker_dispatch(
+    fixture_monitor, monkeypatch, accepted_receipt
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    second_studio = {**studio, "id": "voice@second", "machine": "second"}
+    terminal = {
+        **accepted,
+        "state": "error",
+        "error": "fixture terminal failure",
+        "params": {
+            "repo": batch["model"],
+            "text": item["prompt"],
+            "client_request_id": f"studiohub:{batch['id']}:{item['index']}",
+        },
+    }
+    first_client = WorkerClient(accepted=accepted_receipt)
+    second_client = WorkerClient(accepted=accepted, polled=terminal)
+    ledger.save_batch(batch)  # dispatcher persists Voice attempt ownership before POST
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(first_client, batch, item, studio))
+    if item["state"] == "queued":
+        item.update(state="running", studio=second_studio["id"], tries=2)
+        asyncio.run(broker._run_item(second_client, batch, item, second_studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert first_client.posts == 1
+    assert len(first_client.created_jobs) == 1
+    assert second_client.posts == 0
+    assert len(second_client.created_jobs) == 0
+    assert item["state"] == persisted["state"] == "uncertain"
+    assert item["error_code"] == "VOICE_RECEIPT_INVALID"
+    assert item["studio"] == studio["id"]
+    assert item["studio_job_id"] is None
+    assert item["retry_at"] is None
+
+
+def test_cancel_racing_malformed_voice_acceptance_stays_uncertain(
+    fixture_monitor, monkeypatch
+):
+    batch, item, studio, _ = voice_attempt(fixture_monitor)
+
+    class CancelOnAcceptanceClient(WorkerClient):
+        async def post(self, *args, **kwargs):
+            accepted = await super().post(*args, **kwargs)
+            batch["cancelled"] = True
+            return accepted
+
+    client = CancelOnAcceptanceClient(accepted={})
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker, "_maybe_finish", noop)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert item["state"] == "uncertain"
+    assert item["error_code"] == "VOICE_RECEIPT_INVALID"
+    assert item["studio"] == studio["id"]
+    assert item["studio_job_id"] is None
+    assert item["retry_at"] is None
+
+
+@pytest.mark.parametrize(
+    "receipt_change, artifact",
+    (
+        (lambda job: job.update(bytes={"invalid": True}), wav_bytes()),
+        (lambda job: job.update(bytes=1644.5), wav_bytes()),
+        (lambda job: job.update(bytes=1), wav_bytes()),
+        (lambda job: job.update(sha256="0" * 64), wav_bytes()),
+        (lambda job: None, b"not a wav artifact"),
+    ),
+    ids=(
+        "invalid-byte-count", "fractional-byte-count", "mismatched-byte-count", "mismatched-hash",
+        "invalid-media",
+    ),
+)
+def test_voice_artifact_verification_failure_remains_terminal_and_unverified(
+    fixture_monitor, monkeypatch, receipt_change, artifact
+):
+    batch, item, studio, accepted = voice_attempt(fixture_monitor)
+    finished = completed_voice_job(batch, item, accepted)
+    receipt_change(finished)
+    client = WorkerClient(accepted, polled=finished, artifact=artifact)
+
+    async def continue_to_poll(*args):
+        return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(broker.asyncio, "sleep", continue_to_poll)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0)
+    monkeypatch.setattr(broker, "_post_item_webhook", noop)
+    monkeypatch.setattr(broker.ledger, "record_activity_ownership", lambda **kwargs: None)
+
+    asyncio.run(broker._run_item(client, batch, item, studio))
+
+    persisted = ledger.load_batch(batch["id"])["items"][0]
+    assert client.posts == 1
+    assert len(client.created_jobs) == 1
+    assert client.artifact_gets == 1
+    assert item["state"] == persisted["state"] == "done"
+    assert item.get("asset_id")
+    assert item.get("artifact_metadata_error")
+    assert item.get("audio_duration_s") is None
+
+
+def test_infinite_voice_artifact_byte_count_is_an_unverified_metadata_error(
+    fixture_monitor
+):
+    studio = next(row for row in fixture_monitor.registry if row["id"] == "voice")
+    item: dict = {}
+    client = WorkerClient(artifact=wav_bytes())
+
+    asyncio.run(broker._cache_voice_artifact_metadata(
+        client,
+        item,
+        studio,
+        "/api/generate/jobs/voice-worker-1/audio",
+        float("inf"),
+        None,
+    ))
+
+    assert client.artifact_gets == 1
+    assert item.get("artifact_metadata_error")
+    assert item.get("audio_duration_s") is None

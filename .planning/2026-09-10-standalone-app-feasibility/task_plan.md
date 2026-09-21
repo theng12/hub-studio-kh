@@ -2,6 +2,14 @@
 
 ## Ordered completion plan — owner authorized 2026-09-21
 
+**Current owner correction:** GatewayKH replaces GenStudio as the external client.
+R09 must pin and test GatewayKH's actual contract. Legacy protocol identifiers and
+historical receipts retain their original names until an evidenced migration is
+needed. Continue all safe work runnable/testable on this Mac; physical hardware,
+live enrollment, installed-app replacement and distribution gates remain separate.
+GatewayKH remote work uses the existing Fleet token; optional Hub/admin credentials
+are reserved for shared-voice administration, as its current provider definition specifies.
+
 **Goal:** Finish the remaining handoff in priority order, retaining a usable,
 truthful standalone Hub/Image/Voice/Subtitle app and the accepted Music extension.
 **Architecture:** Keep native client → Hub → private workers. Reuse existing
@@ -98,29 +106,33 @@ independent review by `music_recovery_read`. **Owned files:**
   -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
   tests/test_hub_standalone.py`, then independent fault-injection review.
 
-### R03 — Voice acceptance/completion fault matrix [NEXT after PR #12 integration]
+### R03 — Voice acceptance/completion fault matrix [VERIFIED LOCAL — PR #13]
+
+Clean candidate `936b3e5`; [PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13)
+is the integration record. Full gate and limitations:
+`qualification/local-readiness-2026-09-21.md`. This does not qualify real models or GatewayKH.
 
 **Owned scope:** `components/hub/backend/broker.py`,
 `components/hub/backend/artifact_metadata.py`, its existing tests, and
 `tests/hub_regression/cases/test_voice_durability.py`, reference existing
 `test_image_uncertainty.py`/`test_music_durability.py`; Sol/high implementation.
 
-- [ ] Return missing ID, non-object receipt, unknown state, missing output URL,
+- [x] Return missing ID, non-object receipt, unknown state, missing output URL,
   invalid bytes/hash/media and changed identity from a fake Voice worker.
-- [ ] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
+- [x] Count generation POSTs **and worker-created jobs**; stable-ID identical-body
   reposts are permitted by the existing Voice worker idempotency contract. One
   worker attempt/result must remain; changed body with same ID remains a conflict.
-- [ ] Reproduce unknown live-poll state and done-without-output-URL in both live
+- [x] Reproduce unknown live-poll state and done-without-output-URL in both live
   and reconcile paths. Keep these uncertain rather than publishing false completion.
-- [ ] Preserve valid terminal receipt plus failed artifact fetch/verification as
+- [x] Preserve valid terminal receipt plus failed artifact fetch/verification as
   the existing `done + artifact_metadata_error` compatibility path; do not rewrite
   billing semantics. No missing-URL bypass and no falsely verified metadata.
-- [ ] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
+- [x] Add a truncated-WAV payload fixture. Preflight reproduced a 1,644-byte WAV
   truncated to 64 bytes still claiming 0.1s; require full declared PCM frame bytes
   before reporting verified audio metadata, using the existing standard-library parser.
-- [ ] Fix only reproduced gaps using existing identity/receipt validation and
+- [x] Fix only reproduced gaps using existing identity/receipt validation and
   Voice's stable client-request recovery; preserve Image/Music behavior.
-- [ ] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
+- [x] Run all `tests/hub_regression/cases`, Voice delivery and fleet fixtures,
   independent review and a model-free packaged Hub gate. If no failure reproduces,
   retain the negative tests and close the candidate with evidence, not a rewrite.
 
@@ -131,7 +143,21 @@ artifact references and falsely verified payloads. Cost if wrong: callers still
 need to check metadata availability before treating a generated result as verified;
 this task does not certify or change the external billing counterpart.
 
-### R04 — Peer admission negative qualification [QUEUED]
+Independent-review ruling: stable-ID deduplication is **worker-local**. The Hub's
+work-stealing queue can select a different worker after a malformed successful
+acceptance, so a same-worker replay test does not prove one fleet-wide attempt.
+Fence malformed successful acceptance with missing identity as uncertain/manual;
+do not add a pinned-retry subsystem. Preserve the real worker's idempotent replay
+contract separately. Cost: receipt-less accepted work needs operator reconciliation
+instead of unsafe automatic failover. Malformed live/recovery JSON must retain the
+same classification even when preceded by a genuine transport error.
+
+### R04 — Peer admission negative qualification [READY AFTER PR #13 MERGE]
+
+Four current-source bypasses reproduced on `936b3e5`; see `r04-preflight.md` and
+`qualification/evidence/local-readiness-2026-09-21/r04_admission_probe.py`.
+No repair or full two-Hub qualification yet. Claim the latest integration commit
+before dispatching its worker; do not reuse the older R03 base.
 
 **Owned scope:** `tests/test_standalone_connections.py`, `tests/test_studio_proxy.py`;
 any fix in `components/hub/standalone.py`, `backend/broker.py`, worker admission
@@ -146,13 +172,13 @@ requires root's traced-boundary decision before expansion; Sol/high.
 - [ ] Prove happy dispatch, negative admission, cancellation, artifact ACK and
   offline-node handling; independently review before closing C-04.
 
-### R05 — Portable bootstrap and accurate handoff [QUEUED]
+### R05 — Portable bootstrap and accurate handoff [PARTIAL — native build slice verified]
 
 **Owned scope:** `native/build.sh`, `native/render-page.sh`,
 `packaging/image-runtime/build.sh`, related runtime tests and `docs/NEW-COMPUTER-HANDOFF.md`;
 Terra for build scripts, Luna for root-approved mechanical documentation edits.
 
-- [ ] Preserve macOS14 deployment target while documenting/validating SDK selection;
+- [x] Preserve macOS14 deployment target while documenting/validating SDK selection;
   exercise valid explicit selection and unavailable SDK failures, not blind newest-SDK fallback.
 - [ ] Establish declared CPython/wheel/cache inputs for Image; test offline rebuilding
   with an empty user cache and project inputs. Never silently use the network.
@@ -211,7 +237,7 @@ root/Impeccable owns review, Terra only bounded fixes after reproduction.
 - [ ] Resolve retained task-card review gaps with exact current evidence, not stale
   'missing export' claims where save/ACK code already exists.
 
-### R09 — Fleet and GenStudio completion [QUEUED; physical enrollment gated]
+### R09 — Fleet and GatewayKH completion [QUEUED; physical enrollment gated]
 
 **Owned scope:** ST-10, existing Hub connection/settings/stats and native Connections;
 root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
@@ -220,7 +246,7 @@ root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
   fetch/ACK, retries/timeouts, token rotation and reconnect with accepted jobs.
 - [ ] Prove selected-device settings with durable acknowledgement and no unselected
   fanout; node identity, freshness, attempts-versus-items and location deduplication.
-- [ ] Pin and verify the GenStudio counterpart contract without changing billing,
+- [ ] Pin and verify the GatewayKH counterpart contract without changing billing,
   accounts or assets. Real counterpart changes/enrollment require separate authority.
 - [ ] Run second-physical-node checks only when hardware and enrollment authority are
   available; fixture success alone cannot close physical ST-10/ST-11 evidence.

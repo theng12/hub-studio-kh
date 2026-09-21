@@ -800,6 +800,7 @@ class StubVoiceWorker:
         self.seen: list[str] = []
         self.has_catalog = catalog
         self.machine = machine
+        self.job_params: dict = {}
         # A real, stateful voice library: the voice routes are the point of this stub, and an
         # app that adds a voice must be able to see it afterwards.
         self.voices: dict[str, dict] = {}
@@ -882,6 +883,7 @@ class StubVoiceWorker:
                 elif "/api/generate/jobs/" in self.path:
                     self._send(200, {"job": {
                         "id": "job-v1", "state": "done", "progress": 1.0,
+                        "params": outer.job_params,
                         "worker_id": "voice-fixture", "machine_id": outer.machine,
                         "bytes": len(VOICE_WAV), "sha256": VOICE_SHA,
                         "media_type": "audio/wav",
@@ -900,8 +902,16 @@ class StubVoiceWorker:
                 if "/api/generate/txt2speech" in self.path:
                     # A clone posts the request as JSON inside a form field, so the text is
                     # somewhere in the body rather than being the body.
+                    body = raw.decode("utf-8", "replace")
+                    marker = 'name="request_json"'
+                    if marker in body:
+                        after = body.split(marker, 1)[1]
+                        request_json = after.split("\r\n\r\n", 1)[-1].split(
+                            "\r\n--", 1
+                        )[0].strip()
+                        outer.job_params = json.loads(request_json)
                     outer.submissions.append({
-                        "path": self.path, "body": raw.decode("utf-8", "replace"),
+                        "path": self.path, "body": body,
                         "token": self.headers.get("X-Hub-Token"),
                     })
                     self._send(200, {"job": {"id": "job-v1", "state": "queued",

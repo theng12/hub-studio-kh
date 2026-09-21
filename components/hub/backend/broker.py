@@ -1744,11 +1744,14 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
         response = await client.get(url, headers=headers, timeout=600.0)
         response.raise_for_status()
         metadata = artifact_metadata.wav_metadata(response.content)
-        if expected_bytes is not None and int(expected_bytes) != metadata["bytes"]:
-            raise ValueError("worker byte count does not match downloaded artifact")
+        if expected_bytes is not None:
+            if type(expected_bytes) is not int or expected_bytes <= 0:
+                raise ValueError("worker byte count is not a positive integer")
+            if expected_bytes != metadata["bytes"]:
+                raise ValueError("worker byte count does not match downloaded artifact")
         if expected_sha256 and str(expected_sha256).lower() != metadata["sha256"]:
             raise ValueError("worker checksum does not match downloaded artifact")
-    except (ValueError, httpx.HTTPError) as exc:
+    except (OverflowError, TypeError, ValueError, httpx.HTTPError) as exc:
         item["artifact_metadata_error"] = str(exc)
         return
     item.update(metadata)
@@ -1765,9 +1768,12 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     artifact instead of submitting a duplicate generation.
     """
     if b.get("modality") == "voice":
-        expected_job_id = str(item.get("studio_job_id") or "")
-        if not expected_job_id or str(job.get("id") or "") != expected_job_id:
-            raise ValueError("worker result did not match the accepted Voice job identity")
+        request_id = body.get("client_request_id")
+        _validate_voice_worker_job(
+            item, job,
+            expected_request_id=(request_id if isinstance(request_id, str)
+                                 and request_id else None),
+        )
         if _voice_recovery_owns(item) and not recovery:
             return
     _persist_worker_execution_started_at(b, item, job)
@@ -1872,6 +1878,68 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     item["progress"] = 1.0
 
 
+class _VoiceReceiptError(ValueError):
+    pass
+
+
+def _voice_job_from_response(response: httpx.Response) -> object:
+    try:
+        payload = response.json()
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise _VoiceReceiptError("Voice worker returned an invalid JSON receipt") from exc
+    if not isinstance(payload, dict):
+        raise _VoiceReceiptError("Voice worker receipt was not an object")
+    return payload.get("job")
+
+
+def _mark_voice_receipt_invalid(item: dict) -> None:
+    reason = (
+        "The Voice worker returned a malformed status or artifact receipt; "
+        "reconcile the original attempt before any retry."
+    )
+    _mark_voice_uncertain(item, reason)
+    item["error_code"] = "VOICE_RECEIPT_INVALID"
+    item["error"] = reason
+
+
+def _validate_voice_worker_job(item: dict, job: object, *,
+                               expected_request_id: str | None = None) -> None:
+    """Reject changed Voice identity or a completion without an artifact reference."""
+    if (not isinstance(job, dict) or not isinstance(job.get("id"), str)
+            or not job["id"]):
+        raise _VoiceReceiptError("Voice worker status did not contain a valid job ID")
+    accepted_job_id = item.get("studio_job_id")
+    if accepted_job_id is not None and job["id"] != accepted_job_id:
+        raise _VoiceReceiptError("Voice worker status changed its accepted job ID")
+    state = job.get("state")
+    if not isinstance(state, str) or state not in {
+        "queued", "running", "cancel_requested", "done", "error", "cancelled"
+    }:
+        raise _VoiceReceiptError("Voice worker status has an unknown state")
+    for field, accepted in (
+        ("model_revision", item.get("model_revision")),
+        ("runtime_revision", item.get("runtime_revision")),
+    ):
+        reported = job.get(field)
+        if accepted is not None and reported is not None and reported != accepted:
+            raise _VoiceReceiptError(f"Voice worker status changed its {field}")
+    if expected_request_id is not None:
+        params = job.get("params")
+        if (not isinstance(params, dict)
+                or params.get("client_request_id") != expected_request_id):
+            raise _VoiceReceiptError(
+                "Voice worker request identity did not match the accepted attempt"
+            )
+    if state == "done" and not job.get("error"):
+        expected_url = f"/api/generate/jobs/{job['id']}/audio"
+        if (job.get("output_url") != expected_url
+                or not isinstance(job.get("output_path"), str)
+                or not job["output_path"]):
+            raise _VoiceReceiptError(
+                "Voice worker completion lacks a final artifact reference"
+            )
+
+
 def _validate_image_worker_job(item: dict, job: object) -> None:
     """Reject a changed Image identity or a completion without a PNG receipt."""
     if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
@@ -1957,11 +2025,18 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 url, headers=headers, timeout=10.0)
             if jr.status_code >= 400:
                 return False  # 404/4xx means the worker no longer has the job
-            job = jr.json().get("job") or {}
-            if not isinstance(job, dict) or job.get("id") != job_id:
-                return False
-            if b.get("modality") in DURABLE_ASYNC_MODALITIES:
-                _validate_durable_worker_job(b["modality"], item, job)
+            if b.get("modality") == "voice":
+                job = _voice_job_from_response(jr)
+                _validate_voice_worker_job(
+                    item, job,
+                    expected_request_id=str(body.get("client_request_id") or ""),
+                )
+            else:
+                job = jr.json().get("job") or {}
+                if not isinstance(job, dict) or job.get("id") != job_id:
+                    return False
+                if b.get("modality") in DURABLE_ASYNC_MODALITIES:
+                    _validate_durable_worker_job(b["modality"], item, job)
             if _voice_recovery_owns(item):
                 return False
             _persist_worker_execution_started_at(b, item, job)
@@ -1978,6 +2053,9 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 _mark_machine_success(studio)
                 return True
             return job if state in ("error", "cancelled") else False
+        except _VoiceReceiptError:
+            _mark_voice_receipt_invalid(item)
+            return False
         except Exception:
             # Tailscale/Wi-Fi and a busy worker can briefly drop the HTTP
             # connection. Back off while retaining the same worker lease.
@@ -2187,25 +2265,25 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                 return pending(
                     "The original Voice job could not be read; its outcome remains uncertain."
                 )
-            job = response.json().get("job")
-        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            job = _voice_job_from_response(response)
+        except httpx.HTTPError:
             return pending(
-                "The original Voice worker response was unavailable or malformed."
+                "The original Voice worker response was unavailable."
             )
-        if not isinstance(job, dict) or job.get("id") != job_id:
+        except _VoiceReceiptError:
             return pending(
-                "The original Voice worker status did not match the accepted job identity."
+                "The original Voice worker response was malformed."
             )
-        state = job.get("state")
-        if state not in {"queued", "running", "cancel_requested", "done", "error", "cancelled"}:
-            return pending("The original Voice worker returned an unknown job state.")
-        params = job.get("params")
         expected_request_id = f"studiohub:{batch['id']}:{item['index']}"
-        if (not isinstance(params, dict)
-                or params.get("client_request_id") != expected_request_id):
-            return pending(
-                "The original Voice worker request identity did not match the accepted attempt."
+        try:
+            _validate_voice_worker_job(
+                item, job, expected_request_id=expected_request_id,
             )
+        except _VoiceReceiptError:
+            return pending(
+                "The original Voice worker status or artifact receipt was malformed."
+            )
+        state = job["state"]
         if state in {"queued", "running", "cancel_requested"}:
             set_voice_recovery(
                 item, "health_wait", "The original Voice job is still active."
@@ -3109,14 +3187,19 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 _mark_model_failure(studio, b["model"], None,
                                     "MODEL_FILES_UNAVAILABLE", str(rejection))
             raise rejection
-        job = r.json()["job"]
-        if b["modality"] in DURABLE_ASYNC_MODALITIES and (
-                not isinstance(job, dict) or not isinstance(job.get("id"), str)
-                or not job["id"] or job.get("state") not in {
-                    "queued", "running", "cancel_requested", "done", "error", "cancelled"}):
-            raise ValueError(
-                f"{b['modality'].title()} worker acceptance did not contain a valid job receipt"
-            )
+        if b["modality"] == "voice":
+            job = _voice_job_from_response(r)
+            _validate_voice_worker_job(item, job)
+        else:
+            payload = r.json()
+            job = payload.get("job") if isinstance(payload, dict) else None
+            if b["modality"] in DURABLE_ASYNC_MODALITIES and (
+                    not isinstance(job, dict) or not isinstance(job.get("id"), str)
+                    or not job["id"] or job.get("state") not in {
+                        "queued", "running", "cancel_requested", "done", "error", "cancelled"}):
+                raise ValueError(
+                    f"{b['modality'].title()} worker acceptance did not contain a valid job receipt"
+                )
         if b["modality"] in RECEIPT_DURABLE_MODALITIES:
             # The acceptance receipt below is the durability boundary. Record
             # a supplied start time in the same write so a failure cannot occur
@@ -3240,11 +3323,19 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     peers.invalidate(studio["machine"], rejected=True,
                                      modality=studio["modality"])
                 raise _worker_http_error(jr)
-            j = jr.json()["job"]
             if _voice_recovery_owns(item):
                 return
-            if b["modality"] in DURABLE_ASYNC_MODALITIES:
-                _validate_durable_worker_job(b["modality"], item, j)
+            if b["modality"] == "voice":
+                j = _voice_job_from_response(jr)
+                _validate_voice_worker_job(
+                    item, j,
+                    expected_request_id=str(body.get("client_request_id") or ""),
+                )
+            else:
+                payload = jr.json()
+                j = payload.get("job") if isinstance(payload, dict) else None
+                if b["modality"] in DURABLE_ASYNC_MODALITIES:
+                    _validate_durable_worker_job(b["modality"], item, j)
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)
@@ -3277,6 +3368,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             return
     except Exception as e:
         if _voice_recovery_owns(item):
+            return
+        if b.get("modality") == "voice" and isinstance(e, _VoiceReceiptError):
+            _mark_voice_receipt_invalid(item)
             return
         # The worker may have completed even though this status request lost
         # its connection. Reconcile the original job before considering a

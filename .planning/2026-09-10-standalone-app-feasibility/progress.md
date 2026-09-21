@@ -1,5 +1,73 @@
 # Progress
 
+## 2026-09-21 — local verification / GatewayKH continuation
+
+[MEASURED] FINAL LOCAL GATE: clean candidate `936b3e5` passed 641 root tests
+(7 skips, 428.429s), nested Voice722/19 and fresh Hub108. Native build, 21 final-app
+release/phonemizer checks and four-worker model-free startup/auth/owned shutdown
+passed. Exact app tree `06e881146e69e88097df71291569ffa873acf541381dc3fb8010df1ec34024e7`.
+Integration: https://github.com/theng12/Studio-Hub-KH/pull/13 (merge state/hash
+authoritative). Evidence-only child preserves the exact tested source identity.
+See `qualification/local-readiness-2026-09-21.md`, including the failed first gate,
+fixture corrections, unproven intermittent peer observation and remaining warnings.
+Next after merge: R04. Its four bypasses reproduced again on this final candidate;
+they are not repaired by this batch. No installed-app/model/fleet/deployment changes.
+
+Owner requested runnable local work and changed the external integration target
+from GenStudio to GatewayKH. R03 claimed at PR #12 merge `b550617`, using preserved
+handoff-completion worktree on new branch `codex/local-readiness-gatewaykh`.
+Baseline Hub suite: 85 passed, two upstream deprecation warnings, 1.65 seconds.
+Root owns canonical records/review/integration; worker scope is in r03-brief.md.
+Ruling: GatewayKH is the current target; retain legacy identifiers until its actual
+contract is inspected, rather than breaking compatibility through a global rename.
+Cost if wrong: a later explicit migration may be necessary; compatibility is not
+claimed by this naming update. Graphify CLI remains unavailable; direct inspection.
+No protected model library, installed app, production connection or enrollment changes.
+
+R05 independent native-build slice dispatched concurrently (native/build.sh,
+render-page.sh, shared SDK helper and shell behavior tests only); no R03 overlap.
+Root R04 boundary probe confirmed paused-model, disabled-studio, exhausted-storage
+and reserved-machine requests still forward through the fleet proxy (HTTP200, one
+worker request each). Full two-Hub qualification and repair remain; see r04-preflight.md. Integration
+remote still b550617; GitHub workflows count zero. Active docs now name GatewayKH.
+
+[MEASURED] R03 follow-up source is frozen for re-review after four reproduced
+independent findings: invalid JSON retry, recovery losing malformed-receipt
+classification, fractional byte-count coercion, and worker-local idempotency not
+protecting cross-worker retry after malformed acceptance. The smallest repair
+fences unreadable successful receipts, including cancellation races, using existing
+uncertainty helpers. Root fresh Hub suite: 108 passed, two upstream warnings.
+Full packaged gate and integration remain pending at this checkpoint.
+
+[REPORTED / independently checked] Sol/high reviewer `review_r03_integrity` found
+no remaining actionable spec/quality issues on the frozen eight-file diff
+`a2f4022027a57251fb30164901db6b8a8931d04445fd0e5ed53bc424b13cf915`.
+Reviewer reruns: focused integrity10, Hub108, standalone10, real Voice replay/conflict1
+passed. Root separately reran Hub108. R05 Terra review was also clean; root reviewed
+the literal GatewayKH copy diff against its pinned counterpart's token contract.
+Proceed to a clean source commit and separate staged artifact; no qualification
+claim extends to the installed app, real models, physical fleet or GatewayKH E2E.
+
+[MEASURED] R05 native-build slice has clean independent review; root SDK26.5 build
+passed boundary/API/lifecycle gates and optimized arm64 compilation. Eight isolated
+build-script tests passed. GatewayKH copy-only Connections renders were inspected
+at 1040×680 and 1920×1053 in disconnected/offline state; token/identity states and
+live control remain unqualified. Impeccable informed clear token-scope wording,
+not a redesign. GatewayKH's three offline checkpoint tests passed; contract gaps
+remain ACK, upstream cancellation, Music and reference/recovery qualification.
+
+[MEASURED] First clean candidate `fb36c89` passed packaged four-worker model-free
+startup/auth/owned shutdown and 21 release/phonemizer checks, but its full gate
+failed: 641 tests, three failures, seven skips (449.455s). Two duplicate legacy
+Voice proof fixtures returned incomplete receipts; Luna aligned only those two
+fixtures with the real serializer. Root independently reviewed their diffs and
+reran both proof modules: eight tests passed (15.401s); assertions were preserved.
+The third failure was a 45-second shared-voice peer reachability miss. It did not
+reproduce alone (one passed, 13.68s) or in its complete class (six passed, 61.42s).
+No timeout/admission changes were made; its cause is unproven, not declared fixed.
+One fixture-process ResourceWarning was emitted; its named PID had exited when
+checked. A clean second candidate/full rerun is required before integration.
+
 ## 2026-09-21 — ordered remaining-work execution
 
 [MEASURED] Final wave-1 gate is green at clean product `7ec9f89`: 632 tests OK,

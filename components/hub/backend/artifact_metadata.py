@@ -53,10 +53,14 @@ def wav_metadata(data: bytes) -> dict:
             frames = audio.getnframes()
             sample_rate_hz = audio.getframerate()
             channels = audio.getnchannels()
+            sample_width = audio.getsampwidth()
+            frame_bytes = audio.readframes(frames)
     except (EOFError, wave.Error) as exc:
         raise ValueError(f"invalid WAV artifact: {exc}") from exc
     if frames <= 0 or sample_rate_hz <= 0 or channels not in (1, 2):
         raise ValueError("WAV has invalid duration, sample rate, or channel count")
+    if len(frame_bytes) != frames * channels * sample_width:
+        raise ValueError("WAV artifact is truncated before its declared frames end")
     duration_s = frames / sample_rate_hz
     return {
         "media_type": "audio/wav",

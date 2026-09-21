@@ -137,22 +137,37 @@ class FixtureWorker:
             body = await request.json()
             with self.lock:
                 job_id = f"voice-{len(self.jobs) + 1}"
-                self.jobs[job_id] = {"state": "running" if body.get("text") == "hold" else "done"}
-            return {"job": {"id": job_id}}
+                self.jobs[job_id] = {
+                    "state": "running" if body.get("text") == "hold" else "done",
+                    "params": body,
+                }
+            # Match GenerationJob.serialize() at acceptance: the worker has
+            # accepted the params, but a terminal artifact is not available yet.
+            return {"job": {"id": job_id, "mode": "txt2speech", "state": "queued",
+                             "params": body, "output_path": None, "output_url": None}}
 
         @self.app.get("/api/generate/jobs/{job_id}")
         async def job(job_id: str, request: Request):
             self._check(request)
             with self.lock:
-                state = self.jobs.get(job_id, {}).get("state")
+                record = self.jobs.get(job_id, {})
+                state = record.get("state")
             if state is None:
                 raise HTTPException(404)
             if state == "running":
-                return {"job": {"id": job_id, "state": "running"}}
+                return {"job": {"id": job_id, "mode": "txt2speech", "state": "running",
+                                 "params": record["params"], "output_path": None,
+                                 "output_url": None}}
             if state == "cancelled":
-                return {"job": {"id": job_id, "state": "cancelled", "error": "cancelled"}}
-            return {"job": {"id": job_id, "state": "done", "output_url": f"/api/generate/jobs/{job_id}/audio",
-                             "bytes": len(_AUDIO), "sha256": _AUDIO_SHA, "media_type": "audio/wav"}}
+                return {"job": {"id": job_id, "mode": "txt2speech", "state": "cancelled",
+                                 "params": record["params"], "output_path": None,
+                                 "output_url": None, "error": "cancelled"}}
+            return {"job": {"id": job_id, "mode": "txt2speech", "state": "done",
+                             "params": record["params"],
+                             "output_path": str(_ROOT / f"{job_id}.wav"),
+                             "output_url": f"/api/generate/jobs/{job_id}/audio",
+                             "bytes": len(_AUDIO), "sha256": _AUDIO_SHA,
+                             "media_type": "audio/wav"}}
 
         @self.app.delete("/api/generate/jobs/{job_id}")
         async def cancel(job_id: str, request: Request):
