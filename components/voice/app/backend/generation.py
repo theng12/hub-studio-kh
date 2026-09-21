@@ -3841,10 +3841,14 @@ class GenerationManager:
                 fallback_transcript="",
             )
             ref_path = gen_kwargs["ref_audio"]
-            transcript = (gen_kwargs.pop("ref_text", "") or "").strip()
+            transcript = (gen_kwargs.get("ref_text") or "").strip()
             if transcript:
-                # VoxCPM2's highest-fidelity path needs the same clip in both
-                # reference and continuation slots, paired with its transcript.
+                # VoxCPM2 clones from `ref_audio` + `ref_text`. Keep the transcript:
+                # when `ref_text` is missing, mlx-audio loads its own STT model
+                # (mlx-community/whisper-large-v3-turbo-asr-fp16) to transcribe the
+                # reference. That model is not a packaged dependency, so an offline
+                # Mac has no copy and generation fails with "produced no audio" -
+                # which reads as a memory problem and is not one.
                 gen_kwargs["prompt_audio"] = str(ref_path)
                 gen_kwargs["prompt_text"] = transcript
 

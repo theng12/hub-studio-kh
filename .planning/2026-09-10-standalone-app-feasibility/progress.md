@@ -943,3 +943,23 @@ its Hub reported `{"ok":true,"workers":4}` on `127.0.0.1:47873`, version 0.6.38;
 `/api/hub/model-packages` shows the imported library under `~/StudioHubModels`.
 The stale-address fix took effect: services started on loopback despite the saved
 LAN/Tailscale addresses. The version + What's New footer is in this build.
+
+## 2026-09-22 — VoxCPM2 fixed and requalified (DeepSeek)
+
+[MEASURED] Root cause of the VoxCPM2 "produced no audio" failure: our Voice worker
+`_mlx_kwargs_voxcpm_flex` did `gen_kwargs.pop("ref_text")` and passed only
+`prompt_audio`/`prompt_text`. The VoxCPM2 model clones from `ref_audio` + `ref_text`
+and ignores the `prompt_*` fields, so mlx-audio saw a reference with no transcript
+and loaded its own STT model, `mlx-community/whisper-large-v3-turbo-asr-fp16`,
+which is not a packaged dependency and fails offline. The error text blamed memory
+and suggested shortening the section; a 22-character section failed the same way.
+
+[MEASURED] Fix in `components/voice/app/backend/generation.py`: keep `ref_text` so
+the transcript the operator already supplied is used and the undeclared STT model
+is never loaded. Re-tested against the staged app:
+- **VoxCPM2 4-bit**: done in 22.29s, 5.76s / 48kHz WAV (553,020 bytes).
+- **VoxCPM2 bf16**: done in 23.21s, 5.60s / 48kHz WAV (537,660 bytes).
+- **VoxCPM2 8-bit**: not in the current Voice catalogue (the worker offers 4-bit and
+  bf16 only; 8-bit is a retired older alternative), so a direct API job stays queued
+  rather than failing. Not a model/runtime defect.
+Receipts and outputs under `qualification/evidence/r07-2026-09-21/`.
