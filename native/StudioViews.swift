@@ -1218,25 +1218,32 @@ struct StudioContent: View {
                 }
                 Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
             }
-            Toggle("Instrumental", isOn: Binding(
-                get: { workspace.musicSettings?.instrumental ?? values.instrumental },
-                set: { workspace.musicSettings?.instrumental = $0 }))
-                .toggleStyle(.checkbox)
-            if workspace.musicSettings?.instrumental != true {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Lyrics").font(.callout)
-                    TextField("One line per lyric", text: Binding(
-                        get: { workspace.musicSettings?.lyrics ?? values.lyrics },
-                        set: { workspace.musicSettings?.lyrics = $0 }), axis: .vertical)
-                        .lineLimit(3...6).textFieldStyle(.roundedBorder)
+            // Stable Audio 3 is instrumental only; its catalogue entry omits "lyrics".
+            let supportsVocals = selectedMusicModel?.capabilities.contains("lyrics") ?? true
+            if supportsVocals {
+                Toggle("Instrumental", isOn: Binding(
+                    get: { workspace.musicSettings?.instrumental ?? values.instrumental },
+                    set: { workspace.musicSettings?.instrumental = $0 }))
+                    .toggleStyle(.checkbox)
+                if workspace.musicSettings?.instrumental != true {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Lyrics").font(.callout)
+                        TextField("One line per lyric", text: Binding(
+                            get: { workspace.musicSettings?.lyrics ?? values.lyrics },
+                            set: { workspace.musicSettings?.lyrics = $0 }), axis: .vertical)
+                            .lineLimit(3...6).textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Vocal language").font(.callout)
+                        TextField("Language code, e.g. en", text: Binding(
+                            get: { workspace.musicSettings?.vocalLanguage ?? values.vocalLanguage },
+                            set: { workspace.musicSettings?.vocalLanguage = $0 }))
+                            .textFieldStyle(.roundedBorder)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Vocal language").font(.callout)
-                    TextField("Language code, e.g. en", text: Binding(
-                        get: { workspace.musicSettings?.vocalLanguage ?? values.vocalLanguage },
-                        set: { workspace.musicSettings?.vocalLanguage = $0 }))
-                        .textFieldStyle(.roundedBorder)
-                }
+            } else {
+                Text("This model is instrumental only — it has no vocal controls.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let rate = selectedMusicModel?.sampleRateHz, let channels = selectedMusicModel?.channels {
                 Text("Output: WAV · \(channels) channel\(channels == 1 ? "" : "s") · \(rate) Hz")

@@ -14,6 +14,8 @@ REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 EXPECTED = {
     "ace-step-1-5-turbo": ("ACE-Step/Ace-Step1.5", "19671f406d603126926c1b7e2adc169acbcade22", "music-mlx"),
+    # The second Music engine: Stability's MLX Stable Audio 3, instrumental only.
+    "stable-audio-3-medium": ("stabilityai/stable-audio-3-optimized", "da6edc54ddba10bfd79a077102ded687f80e882b", "music-mlx"),
     "flux2-klein-4b-mlx-4bit": ("AITRADER/FLUX2-klein-4B-mlx-4bit", "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "image-mflux"),
     "qwen3-tts-12hz-0-6b-base-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "50f45ef0047cde7e84c2ef04326acb8ada2436a7", "voice-mlx"),
     "qwen3-tts-12hz-0-6b-base-4bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "0d6bb6fe33f92d47a507e23b9148940e8366ab5b", "voice-mlx"),
@@ -121,6 +123,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "umt5-base": "8036296138d919d330b63f5c1d7803c4f4da7baab9ce10ec41dd699bb692cf1e",
             "vibevoice-realtime-0-5b-4bit": "b0b65edbe472c76ea9c39251cf26505589d75308b21616340faf845152c6d3d9",
             "voxtral-4b-tts-2603-mlx-4bit": "2216037cd62d29e5723f7b104419c3cccbbb3e771d7056fd9b6cc129f04f3a53",
+            # Stable Audio 3's MLX bundle, captured from the ungated optimized repo.
+            "stable-audio-3-medium": "82b64fa98763e4e4fcf1b8bbbe24c40dcd8ef1a03900b82423c1dbad0039516f",
         }
         self.assertEqual(set(expected_digests), set(EXPECTED))
         for package_id, manifest in self.manifests.items():

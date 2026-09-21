@@ -99,51 +99,73 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
 
     @app.get("/api/catalog")
     def catalog_route() -> dict:
-        state = readiness()
-        files = state["files"]
+        host = _host_eligibility()
         models = []
         for model in catalog.CATALOG:
+            stable = catalog.is_stable_audio(model.repo)
+            try:
+                files = manager.preflight(model.repo)
+            except (OSError, ValueError, KeyError) as exc:
+                files = {"state": "manifest_unavailable", "reason": str(exc)}
+            cached = files["state"] == "cached"
+            ready = cached and host["eligible"]
+            revision = (catalog.STABLE_AUDIO_REVISION if stable else MODEL_REVISION)
+            if stable:
+                defaults = {"duration_seconds": 30, "steps": 8,
+                            "guidance_scale": 1.0, "seed": -1, "dit_model": "dit_medium"}
+                limits = {"min_duration_seconds": 1,
+                          "max_duration_seconds": catalog.SA3_MAX_DURATION_SECONDS,
+                          "single_pass_max_seconds": catalog.SA3_MAX_DURATION_SECONDS,
+                          "min_steps": 1, "max_steps": 50,
+                          "min_guidance": 0.0, "max_guidance": 30.0,
+                          "min_seed": -1, "max_seed": 2 ** 32 - 1}
+                qualification = {
+                    "historical_source_workload":
+                        "1.4B medium DiT + SAME-L codec, pure MLX backend",
+                    "packaged_inference": "measured locally, not yet qualified in-app"}
+            else:
+                defaults = dict(DEFAULTS)
+                limits = {"min_duration_seconds": MIN_DURATION_SECONDS,
+                          "max_duration_seconds": MAX_DURATION_SECONDS,
+                          "single_pass_max_seconds": model.long_form.single_pass_max_seconds,
+                          "min_steps": 1, "max_steps": 50,
+                          "min_guidance": 0.0, "max_guidance": 30.0,
+                          "min_seed": -1, "max_seed": 2 ** 32 - 1}
+                qualification = {
+                    "historical_source_workload":
+                        "30 s instrumental, 8 steps, turbo DiT + 0.6B LM, MLX backend, tier4",
+                    "packaged_inference": "unqualified; source contract only"}
             entry = catalog.serialize_model(model)
-            cached = (files["state"] == "cached" and model.checkpoint == "acestep-v15-turbo")
             entry.update({
                 "name": model.label,
                 "model_id": model.repo,
                 "modality": "music",
                 "hub_operation": "music.text_to_music",
-                "model_revision": MODEL_REVISION,
-                "qualified_revision": MODEL_REVISION,
+                "model_revision": revision,
+                "qualified_revision": revision,
                 "qualified_revision_match": True,
                 "runtime_revision": manager.runtime_sha256,
-                "runtime_compatible": state["runtime_identity"]["compatible"],
-                "runtime_ready": state["runtime_identity"]["compatible"],
-                "memory_eligible": state["host"]["eligible"],
+                "runtime_compatible": cached,
+                "runtime_ready": cached,
+                "memory_eligible": host["eligible"],
                 "min_total_memory_gb": model.min_unified_memory_gb,
                 "qualified_minimum_memory_gb": QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
-                "memory_warning": state["host"].get("memory_warning"),
+                "memory_warning": host.get("memory_warning"),
                 "cache": {"state": "cached" if cached else "missing",
-                          "package_id": PACKAGE_ID,
-                          "model_revision": MODEL_REVISION,
+                          "package_id": catalog.package_id_for(model.repo),
+                          "model_revision": revision,
                           "manifest_revision": files.get("manifest_revision"),
                           "checkpoints_root": files.get("checkpoints_root")},
-                "readiness": {"ready": cached and state["host"]["eligible"],
-                              "files": files, "host": state["host"],
-                              "reason": None if cached else files.get("reason") or files["state"]},
-                "execution_ready": cached and state["host"]["eligible"],
-                "available": cached and state["host"]["eligible"],
-                "generation_defaults": dict(DEFAULTS),
-                "generation_limits": {
-                    "min_duration_seconds": MIN_DURATION_SECONDS,
-                    "max_duration_seconds": MAX_DURATION_SECONDS,
-                    "single_pass_max_seconds": model.long_form.single_pass_max_seconds,
-                    "min_steps": 1, "max_steps": 50,
-                    "min_guidance": 0.0, "max_guidance": 30.0,
-                    "min_seed": -1, "max_seed": 2 ** 32 - 1},
+                "readiness": {"ready": ready, "files": files, "host": host,
+                              "reason": None if cached
+                              else files.get("reason") or files["state"]},
+                "execution_ready": ready,
+                "available": ready,
+                "generation_defaults": defaults,
+                "generation_limits": limits,
                 "sample_rate_hz": model.sample_rate_hz,
                 "channels": model.channels,
-                "qualification": {
-                    "historical_source_workload":
-                        "30 s instrumental, 8 steps, turbo DiT + 0.6B LM, MLX backend, tier4",
-                    "packaged_inference": "unqualified; source contract only"},
+                "qualification": qualification,
             })
             models.append(entry)
         return {"models": models,

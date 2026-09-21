@@ -108,9 +108,15 @@ class MusicPackageContractTests(unittest.TestCase):
     def test_catalog_and_requests_offer_only_the_packaged_model_set(self):
         from components.music.app.backend import catalog, generation
 
-        self.assertEqual([model.repo for model in catalog.CATALOG], [catalog.MAIN_REPO])
+        # Two packaged engines now: ACE-Step (instrumental + vocals, long form)
+        # and Stable Audio 3 (instrumental only, faster).
+        self.assertEqual([model.repo for model in catalog.CATALOG],
+                         [catalog.MAIN_REPO, catalog.STABLE_AUDIO_REPO])
         self.assertEqual(catalog.CATALOG[0].dit_tiers, (catalog.TURBO_DIT,))
         self.assertEqual(catalog.CATALOG[0].lm_tiers, (catalog.LM_06B,))
+        stable = catalog.get_model(catalog.STABLE_AUDIO_REPO)
+        self.assertEqual(stable.capabilities, ("music", "instrumental", "text-to-music"))
+        self.assertEqual(stable.sample_rate_hz, 44100)
         with self.assertRaisesRegex(ValueError, "Only the acestep-5Hz-lm-0.6B"):
             generation.validate_request({"prompt": "piano", "lm_model": "acestep-5Hz-lm-1.7B"})
 

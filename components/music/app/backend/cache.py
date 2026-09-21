@@ -26,24 +26,25 @@ DEFAULT_LIBRARY = (Path.home() / "Library" / "Application Support"
                    / "StudioHub Standalone" / "models")
 
 
-def _candidate_manifests() -> list[Path]:
+def _candidate_manifests(name: str = MANIFEST_NAME) -> list[Path]:
     here = Path(__file__).resolve()
     root = here.parents[4]
-    return [root / "model-manifests" / MANIFEST_NAME]
+    return [root / "model-manifests" / name]
 
 
-def resolve_manifest_path(explicit: Optional[os.PathLike | str] = None) -> Path:
+def resolve_manifest_path(explicit: Optional[os.PathLike | str] = None,
+                          name: str = MANIFEST_NAME) -> Path:
     if explicit:
         candidates = [Path(explicit).expanduser()]
     elif os.environ.get(MANIFEST_ENV):
         candidates = [Path(os.environ[MANIFEST_ENV]).expanduser()]
     else:
-        candidates = _candidate_manifests()
+        candidates = _candidate_manifests(name)
     for path in candidates:
         if path.is_file():
             return path
     raise FileNotFoundError(
-        f"Music manifest {MANIFEST_NAME} was not found next to the worker; "
+        f"Music manifest {name} was not found next to the worker; "
         f"set {MANIFEST_ENV}")
 
 
@@ -57,19 +58,24 @@ class MusicCache:
 
     def __init__(self, checkpoints: os.PathLike | str | None = None, *,
                  library: os.PathLike | str | None = None,
-                 manifest_path: os.PathLike | str | None = None) -> None:
+                 manifest_path: os.PathLike | str | None = None,
+                 repo: str | None = None) -> None:
         if checkpoints is not None:
             raise ValueError(
                 "External Music checkpoint roots are unsupported; install the "
                 "package in the selected model library")
+        self.repo = repo or catalog.MAIN_REPO
         self.library = resolve_library_root(library)
-        self.manifest_path = resolve_manifest_path(manifest_path)
+        self.manifest_path = resolve_manifest_path(
+            manifest_path, catalog.manifest_name_for(self.repo))
         self.manifest = json.loads(self.manifest_path.read_text())
         model_packages.validate_manifest(self.manifest)
-        if self.manifest["package_id"] != catalog.PACKAGE_ID:
+        if self.manifest["package_id"] != catalog.package_id_for(self.repo):
             raise ValueError("Music manifest package identity does not match the worker")
         if self.manifest["engine"] != catalog.ENGINE:
             raise ValueError("Music manifest engine does not match the worker")
+        # Where this engine's files live inside the imported package folder.
+        self.root_relative = catalog.package_root_for(self.repo)
 
     @property
     def package_id(self) -> str:
@@ -104,7 +110,7 @@ class MusicCache:
             return {**base, "state": ("missing" if report["state"] == "not_installed"
                                       else report["state"])}
         installed = Path(report["folder"])
-        checkpoints = installed / "model"
+        checkpoints = installed.joinpath(*self.root_relative.split("/"))
         try:
             if installed.is_symlink() or checkpoints.is_symlink() or not checkpoints.is_dir():
                 raise OSError()

@@ -148,6 +148,39 @@ STABLE_AUDIO_REPO = "stabilityai/stable-audio-3-optimized"
 STABLE_AUDIO_REVISION = "da6edc54ddba10bfd79a077102ded687f80e882b"
 STABLE_AUDIO_PACKAGE_ID = "stable-audio-3-medium"
 SA3_MAX_DURATION_SECONDS = 380
+
+# One Music worker serves more than one engine now, so a request names its repo and
+# these maps decide which installed package and engine files it needs.
+PACKAGE_MANIFESTS: dict[str, str] = {
+    MAIN_REPO: "ace-step-1-5-turbo.json",
+    STABLE_AUDIO_REPO: "stable-audio-3-medium.json",
+}
+PACKAGE_IDS: dict[str, str] = {
+    MAIN_REPO: PACKAGE_ID,
+    STABLE_AUDIO_REPO: STABLE_AUDIO_PACKAGE_ID,
+}
+# Where the engine's own files sit inside an imported package folder.
+PACKAGE_ROOTS: dict[str, str] = {
+    MAIN_REPO: "model",
+    STABLE_AUDIO_REPO: "model/mlx",
+}
+
+
+def manifest_name_for(repo: str) -> str:
+    return PACKAGE_MANIFESTS.get(repo, PACKAGE_MANIFESTS[MAIN_REPO])
+
+
+def package_id_for(repo: str) -> str:
+    return PACKAGE_IDS.get(repo, PACKAGE_ID)
+
+
+def package_root_for(repo: str) -> str:
+    return PACKAGE_ROOTS.get(repo, PACKAGE_ROOTS[MAIN_REPO])
+
+
+def is_stable_audio(repo: str) -> bool:
+    return repo == STABLE_AUDIO_REPO
+
 SA3_DIT_MEDIUM = Checkpoint(
     name="dit_medium", kind="dit", repo=STABLE_AUDIO_REPO,
     revision=STABLE_AUDIO_REVISION, size_gb=2907300946 / 1e9,

@@ -37,7 +37,7 @@ try:
 except ImportError:  # pragma: no cover - psutil ships with the engine venv
     psutil = None
 
-from . import catalog, cache as cache_module, engine_child
+from . import catalog, cache as cache_module, engine_child, stable_audio
 
 
 MODEL_ID = catalog.MAIN_REPO
@@ -96,12 +96,48 @@ def _finite_number(value, *, name: str, low: float, high: float) -> float:
     return number
 
 
+def _validate_stable_audio(raw: dict) -> dict:
+    """Stable Audio 3 parameters: instrumental only, up to 380 s."""
+    prompt = raw.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
+        raise ValueError("Prompt must contain 1-4000 characters")
+    duration = raw.get("duration_seconds", raw.get("duration", 30))
+    duration = _finite_number(duration, name="duration", low=1.0,
+                              high=float(catalog.SA3_MAX_DURATION_SECONDS))
+    steps = raw.get("steps", raw.get("inference_steps", 8))
+    if type(steps) is not int or not 1 <= steps <= 50:
+        raise ValueError("Steps must be an integer between 1 and 50")
+    guidance = _finite_number(
+        raw.get("guidance_scale", raw.get("cfg", 1.0)),
+        name="guidance_scale", low=0.0, high=30.0)
+    seed = raw.get("seed", -1)
+    if seed is None:
+        seed = -1
+    if type(seed) is not int or not -1 <= seed <= 2 ** 32 - 1:
+        raise ValueError("Seed must be -1 or a 32-bit unsigned integer")
+    return {
+        "repo": catalog.STABLE_AUDIO_REPO,
+        "model_revision": catalog.STABLE_AUDIO_REVISION,
+        "prompt": prompt.strip(), "duration_seconds": duration, "steps": steps,
+        "guidance_scale": guidance, "seed": seed,
+        # The engine has no vocals; keep the shared job shape honest about that.
+        "instrumental": True, "lyrics": "[Instrumental]", "vocal_language": "unknown",
+        "dit_model": "dit_medium", "lm_model": "",
+        "tier_cap_seconds": catalog.SA3_MAX_DURATION_SECONDS,
+        "exceeds_single_pass": False,
+    }
+
+
 def validate_request(raw: dict, tier_cap_seconds: int = 480) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("Music request must be an object")
     repo = str(raw.get("repo") or MODEL_ID)
+    if catalog.is_stable_audio(repo):
+        return _validate_stable_audio(raw)
     if repo not in (catalog.MAIN_REPO, catalog.PACKAGE_ID):
-        raise ValueError(f"Only {catalog.MAIN_REPO} is available on this worker; got {repo!r}")
+        raise ValueError(
+            f"Only {catalog.MAIN_REPO} or {catalog.STABLE_AUDIO_REPO} is available "
+            f"on this worker; got {repo!r}")
     revision = raw.get("model_revision")
     if revision is not None and revision != MODEL_REVISION:
         raise ValueError("Only the pinned ACE-Step 1.5 revision is available")
@@ -585,6 +621,8 @@ class GenerationManager:
         self.engine_root = str(engine_root or env_root or "").strip()
         self.cache = cache_module.MusicCache(library=library_dir,
                                              manifest_path=manifest_path)
+        self.sa3_cache = cache_module.MusicCache(
+            library=library_dir, repo=catalog.STABLE_AUDIO_REPO)
         package = self.cache.status()
         self.runtime_sha256 = runtime_sha256 or runtime_identity()
         self.executor = EngineExecutor({
@@ -636,11 +674,17 @@ class GenerationManager:
     def _engine_contract_reason(self) -> str | None:
         return engine_contract_reason(self.engine_root)
 
-    def preflight(self) -> dict:
+    def preflight(self, repo: str | None = None) -> dict:
+        stable = catalog.is_stable_audio(repo or "")
+        cache = self.sa3_cache if stable else self.cache
         try:
-            status = self.cache.status()
+            status = cache.status()
         except (OSError, ValueError, KeyError) as exc:
             return {"state": "manifest_unavailable", "reason": str(exc)}
+        if stable:
+            # Stable Audio 3 ships its own vendored MLX runtime; it has no ACE
+            # engine root to verify.
+            return status
         if not self.engine_root:
             return {**status, "state": "engine_root_missing",
                     "reason": "STUDIOHUB_MUSIC_ENGINE_ROOT is not set"}
@@ -666,10 +710,12 @@ class GenerationManager:
     def submit(self, raw: dict) -> dict:
         tier_cap = _tier_cap_for_this_host()
         params = validate_request(raw, tier_cap_seconds=tier_cap)
-        files = self.preflight()
+        stable = catalog.is_stable_audio(params["repo"])
+        files = self.preflight(params["repo"])
         if files["state"] != "cached":
             raise RuntimeError(f"MODEL_FILES_UNAVAILABLE: {files.get('reason') or files['state']}")
-        self.executor.engine["checkpoints_dir"] = files["checkpoints_root"]
+        if not stable:
+            self.executor.engine["checkpoints_dir"] = files["checkpoints_root"]
         job_id = uuid4().hex
         job = {
             "id": job_id, "mode": "txt2music", "params": params, "state": "queued",
@@ -679,7 +725,8 @@ class GenerationManager:
             "sidecar_path": None, "sha256": None, "bytes": None, "media_type": None,
             "sample_rate_hz": None, "channels": None, "audio_duration_s": None,
             "frames": None, "resolved_seed": None, "dit_model": params["dit_model"],
-            "lm_model": params["lm_model"], "model_revision": MODEL_REVISION,
+            "lm_model": params["lm_model"],
+            "model_revision": params.get("model_revision") or MODEL_REVISION,
             "runtime_revision": self.runtime_sha256, "worker_id": "music",
             "machine_id": self.machine, "acknowledged": False,
             "error": None, "error_code": None,
@@ -693,7 +740,8 @@ class GenerationManager:
                 self.jobs.pop(job_id, None)
                 self.cancel_events.pop(job_id, None)
                 raise
-        threading.Thread(target=self._run, args=(job_id,), daemon=True,
+        threading.Thread(target=(self._run_sa3 if stable else self._run),
+                         args=(job_id,), daemon=True,
                          name=f"music-{job_id[:8]}").start()
         return dict(job)
 
@@ -884,6 +932,84 @@ class GenerationManager:
                 self._finish_failure(job, outcome)
             finally:
                 self._cleanup_staging(staging)
+                self.cancel_events.pop(job_id, None)
+
+    def _run_sa3(self, job_id: str) -> None:
+        """Render one Stable Audio 3 clip; a short-lived MLX subprocess per job."""
+        final = self.outputs / f"{job_id}.wav"
+        sidecar = self.outputs / f"{job_id}.json"
+        with self.inference_lock:
+            job = None
+            try:
+                with self.lock:
+                    event = self.cancel_events.get(job_id)
+                    job = self.jobs.get(job_id)
+                    if job is None:
+                        return
+                    if event is not None and event.is_set():
+                        job.update(state="cancelled", finished_at=time.time())
+                        self._persist()
+                        return
+                    job.update(state="running", progress=0.05, started_at=time.time())
+                    self._persist()
+                params = job["params"]
+                seed = params["seed"]
+                if seed == -1:
+                    seed = random.randint(0, 2 ** 32 - 1)
+                with self.lock:
+                    job["resolved_seed"] = seed
+                    self._persist()
+                files = self.preflight(catalog.STABLE_AUDIO_REPO)
+                if files["state"] != "cached":
+                    raise _JobFailed({
+                        "state": "error",
+                        "error": ("MODEL_FILES_UNAVAILABLE: "
+                                  + str(files.get("reason") or files["state"])),
+                        "error_code": "MODEL_FILES_UNAVAILABLE"})
+                facts = stable_audio.generate(
+                    prompt=params["prompt"], seconds=params["duration_seconds"],
+                    steps=params["steps"], seed=seed,
+                    cfg=params["guidance_scale"],
+                    weights=Path(files["checkpoints_root"]), output=final,
+                    cancel_event=self.cancel_events.get(job_id))
+                with self.lock:
+                    now = time.time()
+                    _atomic_json(sidecar, {
+                        "schema": "studiohub.music-artifact", "schema_version": 1,
+                        "job_id": job_id, "created_at": job["created_at"],
+                        "generated_at": now,
+                        "request": {
+                            "repo": params["repo"], "prompt": params["prompt"],
+                            "duration_seconds": params["duration_seconds"],
+                            "steps": params["steps"], "seed": seed,
+                            "guidance_scale": params["guidance_scale"]},
+                        "artifact": {key: facts[key] for key in (
+                            "bytes", "sha256", "audio_duration_s", "sample_rate_hz",
+                            "channels", "frames")},
+                    })
+                    job.update(
+                        state="done", progress=1.0, finished_at=now, generated_at=now,
+                        duration_seconds=now - job["started_at"],
+                        engine_seconds=facts["engine_seconds"],
+                        output_path=str(final),
+                        output_url=f"/api/generate/jobs/{job_id}/audio",
+                        sidecar_path=str(sidecar), sha256=facts["sha256"],
+                        bytes=facts["bytes"], media_type=MEDIA_TYPE,
+                        sample_rate_hz=facts["sample_rate_hz"],
+                        channels=facts["channels"],
+                        audio_duration_s=facts["audio_duration_s"],
+                        frames=facts["frames"],
+                        peak_process_rss_bytes=resource.getrusage(
+                            resource.RUSAGE_SELF).ru_maxrss)
+                    self._persist()
+            except _JobFailed as failure:
+                self._finish_failure(job, failure.outcome)
+            except Exception as exc:  # noqa: BLE001 - report the engine's own text
+                final.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                self._finish_failure(job, {
+                    "state": "error", "error": f"{type(exc).__name__}: {exc}"})
+            finally:
                 self.cancel_events.pop(job_id, None)
 
     def _progress(self, job_id: str, ratio, desc) -> None:
