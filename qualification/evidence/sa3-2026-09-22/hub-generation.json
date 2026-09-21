@@ -1,0 +1,21 @@
+{
+  "probe": "stable-audio-3-hub",
+  "model": "stabilityai/stable-audio-3-optimized",
+  "prompt": "Bright cinematic piano and strings, uplifting, wide reverb, instrumental",
+  "duration_seconds": 20.0,
+  "hub": "http://127.0.0.1:47873",
+  "batch_id": "42649c50d1",
+  "state": "done",
+  "error": null,
+  "error_code": null,
+  "artifact": {
+    "bytes": 3528044,
+    "sha256": "4af21404d53aeb2182bd4eb6733819cbe0d3e21f1ecdafdc7dd9c537c2cfbbc7",
+    "reported_sha256": "4af21404d53aeb2182bd4eb6733819cbe0d3e21f1ecdafdc7dd9c537c2cfbbc7",
+    "matches_reported": true,
+    "duration_s": 20.0,
+    "sample_rate_hz": 44100,
+    "channels": 2
+  },
+  "wall_seconds": 10.21
+}

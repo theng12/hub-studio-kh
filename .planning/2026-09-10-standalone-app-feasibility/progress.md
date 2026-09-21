@@ -1250,3 +1250,23 @@ suites 174 passed + 6 subtests.
 
 [MEASURED] Imported the medium package into the owner's real library
 `~/StudioHubModels/stable-audio-3-medium/da6edc54…/` (6.4 GiB, `files_verified`).
+
+[MEASURED] Stable Audio 3 is now a second Music engine in the installed app
+(build `6eba1a5`, `development_build:false`). The app's `/studio/music/api/catalog`
+lists both models, each `cached` and ready (ACE 48 kHz, SA3 44.1 kHz).
+
+[MEASURED] Real end-to-end generation through the installed app's Hub: submitted
+`stabilityai/stable-audio-3-optimized` (20 s, seed 11), state `done` in 10.21 s
+wall, artifact 3,528,044 bytes, 44.1 kHz stereo, 20.0 s, and the fetched SHA-256
+matches the reported one. Receipt `qualification/evidence/sa3-2026-09-22/hub-generation.json`;
+probe `sa3_hub_probe.py`. The clip is in the owner's listening folder as
+`13 music - Stable Audio 3 via the app 20s.wav`.
+
+[MEASURED] Startup defects found and fixed on the way: the manifest env override
+(`STUDIOHUB_MUSIC_MANIFEST`) leaked into the SA3 cache and crashed the worker; and
+the runner's symlinked temp tree let the CLI write weight links back into the app
+bundle, which broke staging. Both fixed (`47955cc`, `78f29b7`).
+
+[MEASURED] ACE-Step regression: its engine is untouched, its worker path and
+executor are unchanged, the music/hub/manifest suites pass (152-174), and the app
+reports it `cached`/ready beside SA3.
