@@ -29,31 +29,54 @@ CADDY_FD_WARN = 1000
 
 @lru_cache(maxsize=1)
 def apple_chip_name() -> str | None:
-    """Return the Mac's marketing chip name without polling sysctl every tick."""
-    try:
-        result = subprocess.run(
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
-            capture_output=True, text=True, timeout=2,
-        )
+    """Return the Mac's marketing chip name without polling sysctl every tick.
+
+    `sysctl` lives in `/usr/sbin`, which is not on the PATH of an app started by
+    launchd or of a minimal test harness. Invoking it by bare name alone made the
+    chip unknown in exactly the environment the packaged app runs in, so the
+    absolute path is tried first. Apple Silicon macOS builds that report an empty
+    `machdep.cpu.brand_string` fall back to `system_profiler`'s `chip_type`.
+    """
+    for command in (["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+                    ["sysctl", "-n", "machdep.cpu.brand_string"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=2)
+        except (subprocess.TimeoutExpired, OSError):
+            continue
         value = result.stdout.strip()
-        return value or None
-    except (subprocess.TimeoutExpired, OSError):
-        return None
+        if value:
+            return value
+    for command in (["/usr/sbin/system_profiler", "SPHardwareDataType", "-json"],
+                    ["system_profiler", "SPHardwareDataType", "-json"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+            rows = json.loads(result.stdout or "{}").get("SPHardwareDataType", [])
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
+            continue
+        value = str((rows[0].get("chip_type") if rows else "") or "").strip()
+        if value:
+            return value
+    return None
 
 
 @lru_cache(maxsize=1)
 def apple_machine_type() -> str | None:
-    """Return the Mac product family used by the hardware-profile catalog."""
-    try:
-        result = subprocess.run(
-            ["system_profiler", "SPHardwareDataType", "-json"],
-            capture_output=True, text=True, timeout=5,
-        )
-        rows = json.loads(result.stdout or "{}").get("SPHardwareDataType", [])
-        value = rows[0].get("machine_name") if rows else None
-        return str(value).strip() or None
-    except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
-        return None
+    """Return the Mac product family used by the hardware-profile catalog.
+
+    Same PATH reasoning as `apple_chip_name`: the absolute `/usr/sbin` path is
+    tried first because a packaged app does not inherit a login shell's PATH.
+    """
+    for command in (["/usr/sbin/system_profiler", "SPHardwareDataType", "-json"],
+                    ["system_profiler", "SPHardwareDataType", "-json"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+            rows = json.loads(result.stdout or "{}").get("SPHardwareDataType", [])
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
+            continue
+        value = str((rows[0].get("machine_name") if rows else "") or "").strip()
+        if value:
+            return value
+    return None
 
 
 def hardware_identity() -> dict:

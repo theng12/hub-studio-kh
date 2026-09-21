@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 12:19 +07
+Last updated: 2026-09-21 12:40 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -72,10 +72,10 @@ second planning system.
 
 - **R04 node-owned admission — LOCALLY VERIFIED / self-reviewed.** Independent
   review pending. Four bypasses closed; lease lifetime + TTL added.
-- **Bounded follow-up: host-identity robustness — IN PROGRESS NEXT.**
-  `resources.apple_chip_name()` runs `sysctl` from PATH; with a PATH lacking
-  `/usr/sbin` it returns no chip and `test_the_overview_shows_every_machine_in_one_row`
-  fails. Passes with `/usr/sbin` on PATH; failed before any R04 edit.
+- **Host-identity robustness — LOCALLY VERIFIED / self-reviewed.**
+  `apple_chip_name()` / `apple_machine_type()` now prefer absolute `/usr/sbin`
+  paths and fall back to `system_profiler`; the previous PATH-caused overview
+  failure is closed (`test_standalone_connections.py` 33 passed).
 - R05 portable bootstrap + accurate records: partial; remaining Image inputs/
   offline rebuild, harness paths, ST-status reconciliation, Graphify limitation.
 - R06 native Music workflow: missing native UI (falls through to "Engine not installed").
@@ -93,11 +93,10 @@ second planning system.
   physical-machine reservation. Baseline probe on `9a4570d`: each case HTTP 200 +
   1 worker request (`.build/deepseek-r04/r04-probe-baseline.log`); after repair
   409/409/507/409 + 0 worker requests (`.build/deepseek-r04/r04-probe-after.log`).
-- **Host identity (confirmed, not yet repaired):** `apple_chip_name()` in
-  `components/hub/backend/resources.py` calls `sysctl` by name; a launch PATH
-  without `/usr/sbin` yields no chip. `sysctl` absolute path works on this host
-  (`Apple M2 Max`, `Mac14,13`). One existing connections test fails only for this
-  reason. Small, bounded fix planned next.
+- **Host identity (repaired locally):** `apple_chip_name()` called `sysctl` by
+  name; a launch PATH without `/usr/sbin` yielded no chip. Now uses absolute
+  `/usr/sbin` paths plus a `system_profiler` fallback. `Apple M2 Max` / `Mac14,13`
+  reported on this host; the overview test passes under the restricted harness PATH.
 
 ## Unverified concerns (do not treat as fixed/default)
 
@@ -124,14 +123,13 @@ second planning system.
 
 ## Current packet
 
-- Objective: make `apple_chip_name()` independent of a minimal PATH (fall back to
-  an absolute `/usr/sbin/sysctl`, then `platform`), so fleet overview/hardware
-  identity is truthful for a packaged app launched without a login PATH.
-- Owned files (proposed): `components/hub/backend/resources.py`, a focused test
-  (existing `tests/test_standalone_connections.py` overview test is the end-to-end
-  proof; add a direct unit-level fallback test if practical).
+- Objective: R05 remaining locally executable work — reconcile stale ST-03/04/05/
+  06/08/10/11 checkboxes against current source and receipts; confirm test
+  dependency setup and harness path safety; check Image offline-build declared
+  inputs; confirm Graphify limitation. R06 native Music workflow follows.
 - State: queued (immediately next).
-- Next smallest action: reproduce with a PATH that omits `/usr/sbin`, then fix and test.
+- Next smallest action: read the ST cards and current receipts, and write the
+  reconciliation into `r05-report.md`.
 
 ## Test processes / temp paths / cleanup
 
@@ -157,26 +155,26 @@ Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Current HEAD: `9a4570da57cb9109cd7da1d06d2197f923a71139`
 Uncommitted changes and owners: R04 product/tests/records and this status file
 (DeepSeek). See `git status`.
-Current packet and objective: bounded host-identity robustness fix for
-`apple_chip_name()` (PATH-independent chip detection).
-Completed changes: R04 node-owned admission repair, six proxy tests + one
-two-Hub test, R04 report, plan/board/progress records.
+Current packet and objective: R05 remaining locally executable work (records
+reconciliation, harness/test-dependency safety, Image offline inputs, Graphify).
+Completed changes: R04 node-owned admission repair; host-identity PATH fix;
+R04 report; plan/board/progress records.
 Evidence: `.planning/2026-09-10-standalone-app-feasibility/r04-report.md`;
 probe logs under `.build/deepseek-r04/`.
 Self-review findings: first post-repair run exposed a `CancelledError` from the
 new lease-sweep task during lifespan shutdown; fixed by swallowing cancellation
 like `job_storage.budget_loop`. Re-verified 18/18.
 Independent review status: not performed (self-review only).
-Remaining confirmed defects: host-identity PATH fragility (next packet).
+Remaining confirmed defects: none newly confirmed open; see unverified concerns.
 Unverified concerns: see above list.
 External gates and authorization needed: see above list.
 Owned processes / temporary data / cleanup: none outstanding.
-Next smallest action: reproduce the chip failure with `PATH` lacking `/usr/sbin`,
-then fix `apple_chip_name()` and run `test_standalone_connections.py` overview test.
+Next smallest action: read `docs/tasks/ST-03/04/05/06/08/10/11.md` with their
+receipts and write an evidence-based reconciliation in `r05-report.md`.
 First command to run:
-`PATH=/usr/bin:/bin PYTHONPATH=.build/test-deps .build/voice-runtime/bin/python3 -B -m pytest -q "tests/test_standalone_connections.py::ControllerRegistryTests::test_the_overview_shows_every_machine_in_one_row"`
-Acceptance criteria: chip is reported even when `/usr/sbin` is absent; the
-overview test passes; no change to other hardware-identity consumers.
+`sed -n '1,80p' docs/tasks/ST-03.md`
+Acceptance criteria: each stale checkbox is labeled verified-implemented,
+implemented-unproven or gated, with an exact evidence pointer; no history erased.
 Important do-not-touch paths: `~/Downloads/model-library`,
 `/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.

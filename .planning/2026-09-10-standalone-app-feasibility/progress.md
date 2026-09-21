@@ -650,3 +650,23 @@ handoff probes OK. A first post-repair `test_hub_jobs` run exposed a
 cancellation; fixed by mirroring `job_storage.budget_loop`.
 
 Self-review only; independent review of R04 remains pending.
+
+## 2026-09-21 — host identity independent of PATH (DeepSeek)
+
+[MEASURED] `test_the_overview_shows_every_machine_in_one_row` failed on this
+harness because `resources.apple_chip_name()` ran `sysctl` by name and the
+harness PATH omits `/usr/sbin`; the fleet overview reported no chip. The same
+test passed with `/usr/sbin` on PATH. The defect is real for a launchd-started
+packaged app, which does not inherit a login shell's PATH.
+
+[MEASURED] `apple_chip_name()` now tries `/usr/sbin/sysctl` first, then the bare
+name, then `system_profiler`'s `chip_type` (some Apple Silicon builds report an
+empty `machdep.cpu.brand_string`). `apple_machine_type()` uses the same absolute
+path preference. New `tests/test_hardware_identity.py` proves both with
+`PATH=/nonexistent`.
+
+[MEASURED] `tests/test_hardware_identity.py` 2 passed;
+`tests/test_standalone_connections.py` full **33 passed** (previously 32 passed,
+1 failed). `test_hub_statistics.py` + `test_hub_standalone.py` +
+`test_hub_process.py` + `test_fleet_credentials.py` + `test_hardware_identity.py`
++ `test_studio_proxy.py` 40 passed with 122 subtests.
