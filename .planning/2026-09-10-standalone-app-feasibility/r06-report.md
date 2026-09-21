@@ -67,6 +67,10 @@ Restore Defaults uses runtime values.
 ## Limits
 
 - No real ACE-Step inference; the model-free render and fixtures only.
+- The native mapper keys on the catalog capability `music`; the real Music worker
+  publishes `capabilities` containing `music` (`components/music/app/backend/catalog.py`
+  `:234`, `:365`), and the packaged smoke reached `/studio/music/api/catalog` 200, so
+  the selection condition is aligned — but a real generation was not run.
 - Actual GUI save-panel/keyboard/accessibility interaction was not driven; only
   offscreen renders at minimum and normal sizes were inspected.
 - Independent review has not been performed.
