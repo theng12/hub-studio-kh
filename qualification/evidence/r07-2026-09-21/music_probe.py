@@ -34,6 +34,9 @@ def main() -> int:
     parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
     parser.add_argument("--prompt", default=PROMPT)
     parser.add_argument("--duration", type=float, default=30.0)
+    parser.add_argument("--instrumental", default="true", choices=("true", "false"))
+    parser.add_argument("--lyrics", default="[Instrumental]")
+    parser.add_argument("--vocal-language", default="unknown")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-wav", type=Path)
     parser.add_argument("--log-out", type=Path)
@@ -45,8 +48,8 @@ def main() -> int:
     service = app / "Contents/MacOS/StudioHubService"
     assert service.is_file(), service
     params = {"duration_seconds": args.duration, "steps": 8, "guidance_scale": 1.0,
-              "shift": 3.0, "seed": -1, "instrumental": True,
-              "lyrics": "[Instrumental]", "vocal_language": "unknown"}
+              "shift": 3.0, "seed": -1, "instrumental": args.instrumental == "true",
+              "lyrics": args.lyrics, "vocal_language": args.vocal_language}
     receipt: dict = {"app": str(app), "models_dir": str(models), "model": MODEL,
                      "prompt": args.prompt, "params": params}
 
