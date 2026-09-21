@@ -850,3 +850,18 @@ references; the SSD was read-only and remains untouched. Internal disk 234 GB fr
 Future R10 work: rebuild the SSD kit from current source and **simplify the
 per-computer setup** (the kit's current script is out of date). The SSD is a
 transport vehicle, not the live library; not needed for local testing.
+
+## 2026-09-21 — R07 first real requalification: Whisper Turbo (DeepSeek)
+
+[MEASURED] Launched the staged app's private service with the new library
+(`qualification/evidence/r07-2026-09-21/whisper_probe.py`, disposable state,
+loopback, offline) and submitted a real transcription of
+`qualification/evidence/st04-reference-clip.wav` through
+`POST /api/hub/transcription/jobs` with `mlx-community/whisper-large-v3-turbo`.
+Result: `done` in 9.66s, SRT artifact 200, transcript **exactly**
+"The river runs quietly past the old stone bridge, and the morning light settles
+on the water." The item's own metadata names revision
+`a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb` and package `whisper-turbo`, matching
+the imported package. Receipt:
+`qualification/evidence/r07-2026-09-21/whisper-turbo.json`. This proves the
+current build + new library path for Subtitle; other models remain to be run.

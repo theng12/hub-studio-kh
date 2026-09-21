@@ -1,0 +1,59 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "input": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480"
+  },
+  "ready_seconds": 2.44,
+  "workers": [
+    "image",
+    "music",
+    "transcription",
+    "voice"
+  ],
+  "submit_status": 200,
+  "batch_id": "38cdd9593700",
+  "final_status": "done",
+  "item": {
+    "index": 0,
+    "item_id": "clip-1",
+    "filename": "st04-reference-clip.wav",
+    "state": "done",
+    "studio": "subtitle",
+    "studio_task_id": "b7aae783e644487195cc02050fa01982",
+    "duration_seconds": 9.66,
+    "media_duration_seconds": 5.166,
+    "artifact_url": "/api/hub/transcription/jobs/38cdd9593700/items/0/artifact",
+    "error": null,
+    "tries": 1,
+    "manual_action_required": false,
+    "metadata": {
+      "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+      "language": "en",
+      "duration": 5.166,
+      "model": "mlx-community/whisper-large-v3-turbo",
+      "segments": [
+        {
+          "start": 0.0,
+          "end": 5.0,
+          "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+        }
+      ],
+      "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nThe river runs quietly past the old stone bridge, and the morning light settles on the water.\n",
+      "elapsed_seconds": 9.659,
+      "studio_task_id": "b7aae783e644487195cc02050fa01982",
+      "task_id": "b7aae783e644487195cc02050fa01982",
+      "job_id": "b7aae783e644487195cc02050fa01982",
+      "model_revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+      "package_id": "whisper-turbo"
+    }
+  },
+  "artifact_status": 200,
+  "srt": "1\n00:00:00,000 --> 00:00:05,000\nThe river runs quietly past the old stone bridge, and the morning light settles on the water.\n",
+  "transcript_text": "1 The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "expected": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "matches": true
+}
