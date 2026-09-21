@@ -1174,3 +1174,21 @@ not a blocker.
 + T5Gemma 0.57 GB (~6.9 GB for medium, 6 min 20 s); small music ~1.9 GB (2 min).
 Runs on Apple Silicon via MLX. Licence remains `stable-audio-community` (commercial
 per stability.ai/license), and the standard Medium repo is gated.
+
+## 2026-09-22 — Stable Audio 3 Medium MLX proof (DeepSeek)
+
+[MEASURED] Stability ships a **pure-MLX** Stable Audio 3 at
+`optimized/mlx` (deps: mlx, numpy, sentencepiece, huggingface_hub, soundfile - no
+PyTorch at inference; torch appears only in an optional weight-converter helper).
+Installed the medium bundle from the ungated `stable-audio-3-optimized` repo and ran
+real generations on this **M2 Max / 32 GB**:
+
+| Audio | Wall | Realtime | Peak RAM |
+|---|---|---|---|
+| 30 s | 9.26 s | 3.24x | 3.89 GB |
+| 380 s (6:20) | 61.58 s | 6.17x | 5.05 GB |
+
+Output is 44.1 kHz 16-bit stereo, exactly `--seconds`. Receipt
+`qualification/evidence/sa3-2026-09-22/proof.json`. So Stable Audio 3 Medium is
+comfortably feasible on this Mac and ~3-4x faster than the ACE-Step MPS path for a
+6-minute clip. Plan: `.planning/2026-09-10-standalone-app-feasibility/r-music-mlx.md`.

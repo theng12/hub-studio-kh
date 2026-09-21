@@ -1,0 +1,41 @@
+{
+  "probe": "stable-audio-3-medium-mlx",
+  "host": "Apple M2 Max / 32 GB",
+  "engine": "stabilityai/stable-audio-3 optimized/mlx (pure MLX)",
+  "dit": "medium (1.4B)",
+  "decoder": "same-l",
+  "steps": 8,
+  "seed": 42,
+  "runs": [
+    {
+      "seconds": 30,
+      "wall_s": 9.26,
+      "realtime_x": 3.24,
+      "peak_ram_gb": 3.89,
+      "artifact": {
+        "file": "sa3-medium-30s.wav",
+        "bytes": 5292044,
+        "sha256": "c9894be3fe851a6a4de042a179ca12a791a98242460364a78214257f10af62de",
+        "duration_s": 30.0,
+        "sample_rate_hz": 44100,
+        "channels": 2
+      }
+    },
+    {
+      "seconds": 380,
+      "wall_s": 61.58,
+      "realtime_x": 6.17,
+      "peak_ram_gb": 5.05,
+      "artifact": {
+        "file": "sa3-medium-380s.wav",
+        "bytes": 67032044,
+        "sha256": "d253e140471e57ffbde6f631c1d04f14c971fd431499e00ddbd5c7aef680bd1e",
+        "duration_s": 380.0,
+        "sample_rate_hz": 44100,
+        "channels": 2
+      }
+    }
+  ],
+  "torch_free_inference": true,
+  "note": "torch appears only in an optional checkpoint-conversion helper; the runtime requirements are mlx, numpy, sentencepiece, huggingface_hub, soundfile."
+}
