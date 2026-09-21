@@ -748,3 +748,18 @@ pause and physical-machine reservation remain proven at the peer HTTP route only
 [MEASURED] Full `tests/test_standalone_connections.py` with both new two-Hub
 tests: **34 passed**, 347.11s. Earlier count was 32 passed / 1 failed (the
 PATH-caused chip failure, since fixed).
+
+## 2026-09-21 — R06 native Music UI render (independent pre-integration check)
+
+[MEASURED] Rendered the in-progress Music workspace offscreen at minimum and
+normal sizes:
+`STUDIOHUB_MACOS_SDK=macosx26.5 STUDIOHUB_RENDER_LIVE=0 bash native/render-page.sh music .build/deepseek-music-render 1040x680 1920x1053`
+→ exit 0, two PNGs. Both show a real workflow (prompt editor, character count,
+Generate Music, Generation/Model picker, Manage Music Models, Preview pane,
+Recent music/All Jobs) and the "Start your local services" block — **not** the
+former "Engine not installed" placeholder. Renders inspected directly.
+Also ran the native test binaries built from the same sources:
+`native-boundary-tests` / `native-api-tests` / `native-lifecycle-tests` all passed,
+and `tests/test_generation_time.py` + `test_audio_layout.py` +
+`test_native_build_scripts.py` + `test_peer_path_contract.py` → 42 passed.
+Not yet integrated; the subagent is still finalizing.
