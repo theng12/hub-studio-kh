@@ -63,7 +63,7 @@ lease on the asynchronous POST's return was deliberately not done.
 | R04 probe after repair | `409 / 409 / 507 / 409`, **0** worker requests each |
 | `tests/test_studio_proxy.py` | **15 passed**, 2 warnings, 6 subtests (2.04s) |
 | New two-Hub stale-capability test in isolation | **1 passed** (18.52s) |
-| `tests/test_standalone_connections.py` full | **32 passed, 1 failed** (326.91s) |
+| `tests/test_standalone_connections.py` full | **34 passed** (347.11s; the earlier `32 passed, 1 failed` was the PATH-caused chip failure, since fixed) |
 | `tests/hub_regression/cases` | **108 passed**, 2 upstream warnings (1.64s) |
 | `tests/test_hub_jobs.py` + `test_hub_dispatch_proof_gate.py` + `test_hub_standalone.py` | **18 passed** (15.57s) |
 | `tests/test_hub_statistics.py` + `test_paused_model_recovery.py` + `test_studio_proxy.py` | **28 passed** (3.49s) |

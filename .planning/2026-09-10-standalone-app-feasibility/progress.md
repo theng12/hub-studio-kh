@@ -744,3 +744,7 @@ sets `minimum_free_bytes` out of range, and a fleet POST to the node's peer rout
 is refused `507 OUTPUT_STORAGE_BLOCKED` with no worker submission. Passed (3.13s).
 R04 now has two-real-Hub proofs for Studio-disable and output-storage; model
 pause and physical-machine reservation remain proven at the peer HTTP route only.
+
+[MEASURED] Full `tests/test_standalone_connections.py` with both new two-Hub
+tests: **34 passed**, 347.11s. Earlier count was 32 passed / 1 failed (the
+PATH-caused chip failure, since fixed).
