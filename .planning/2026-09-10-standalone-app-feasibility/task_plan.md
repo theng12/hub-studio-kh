@@ -254,17 +254,32 @@ root/Impeccable owns review, Terra only bounded fixes after reproduction.
 - [ ] Resolve retained task-card review gaps with exact current evidence, not stale
   'missing export' claims where save/ACK code already exists.
 
-### R09 — Fleet and GatewayKH completion [QUEUED; physical enrollment gated]
+### R09 — Fleet and GatewayKH completion [PARTIAL — Hub-side covered; counterpart edits and physical enrollment gated]
 
 **Owned scope:** ST-10, existing Hub connection/settings/stats and native Connections;
 root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
 
+Hub-side coverage already present (no counterpart change needed):
+`tests/test_standalone_connections.py` (33 passed) drives discovery, join/adopt,
+dispatch, artifact, cancel, authentication and token rotation across two real Hub
+processes; `tests/test_hub_delivery.py` proves the Image/Subtitle ACK contract
+(worker ack, idempotency, failure preservation); `tests/test_hub_statistics.py`
+and the native statistics path cover attribution. R04 added node-owned admission
+and stale-capability refusal.
+
 - [ ] Complete disposable counterpart fixtures: discovery, submit/poll/cancel,
   fetch/ACK, retries/timeouts, token rotation and reconnect with accepted jobs.
+  Hub side mostly covered; the *GatewayKH* timeout/retry matrix is not.
 - [ ] Prove selected-device settings with durable acknowledgement and no unselected
   fanout; node identity, freshness, attempts-versus-items and location deduplication.
+  Per-studio memory policy is proven; general per-device fanout and two-machine
+  deduplication are not.
 - [ ] Pin and verify the GatewayKH counterpart contract without changing billing,
   accounts or assets. Real counterpart changes/enrollment require separate authority.
+  Read-only inventory at `gatewaykh-contract-inventory.md` @ `736d7b0`: counterpart
+  gaps are **no delivery ACK**, **no Hub DELETE cancel**, omitted Music lane and
+  partial voice-reference metadata. Fixing these needs explicit GatewayKH scope
+  authorization, which this session does not have.
 - [ ] Run second-physical-node checks only when hardware and enrollment authority are
   available; fixture success alone cannot close physical ST-10/ST-11 evidence.
 
