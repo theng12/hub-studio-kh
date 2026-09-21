@@ -628,8 +628,8 @@ CATALOG: tuple[ModelEntry, ...] = (
     # that does zero-shot + voice design + cloning. Inference via `mlx-audio`
     # — same library as Qwen3-TTS, so the worker shares load_model + generate.
     # Apache-2.0. 4-bit is the recommended pick (faster + smaller, minimal
-    # quality loss per the MLX conversion benchmarks). Keep bf16 as the
-    # final-render tier; the 8-bit middle row has no distinct workflow.
+    # quality loss per the MLX conversion benchmarks). 8-bit sits between 4-bit
+    # and bf16; bf16 remains the final-render tier.
     ModelEntry(
         repo="mlx-community/VoxCPM2-4bit",
         label="VoxCPM2 4-bit (MLX) — recommended",
@@ -660,6 +660,30 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("good",  "Voice design from natural-language prompt ('elderly male, gravelly')"),
             ("weak",  "4-bit quantization can occasionally fumble on rare-word pronunciation"),
             ("avoid", "Final renders where you can't afford a quantization artifact — use bf16"),
+        ),
+    ),
+    ModelEntry(
+        repo="mlx-community/VoxCPM2-8bit",
+        label="VoxCPM2 8-bit (MLX) — balanced",
+        family="voxcpm-mlx",
+        size_gb=3.2,
+        gated=False,
+        min_unified_memory_gb=16,
+        recommended_hardware="16 GB unified memory or more.",
+        capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        best_for="Middle tier: richer than 4-bit with less quantization loss, lighter and faster than bf16. 48 kHz studio-quality output, 30 languages, voice cloning + voice design in one model.",
+        sample_rate_hz=48000,
+        languages=VOXCPM2_LANGUAGE_CODES,
+        language_support=LanguageSupport(
+            input_selection="none",
+            enumeration_status="exact",
+            codes=VOXCPM2_LANGUAGE_CODES,
+        ),
+        use_cases=(
+            ("good",  "Balanced quality and speed when 4-bit artifacts are audible but bf16 is too slow"),
+            ("good",  "48 kHz studio output; same cloning and voice-design contract as the other tiers"),
+            ("weak",  "No distinct workflow versus 4-bit and bf16 - it sits between them"),
+            ("avoid", "8 GB Macs — use the 4-bit tier there"),
         ),
     ),
     ModelEntry(

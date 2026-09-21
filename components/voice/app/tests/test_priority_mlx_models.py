@@ -586,9 +586,12 @@ def test_mlx_worker_joins_all_generated_segments() -> None:
     assert 'temp_dir / "audio.wav"' in source
 
 
-def test_voxcpm_catalog_keeps_latest_mlx_workflows_only() -> None:
+def test_voxcpm_catalog_exposes_the_three_mlx_tiers() -> None:
+    # The owner asked for the 8-bit middle tier to be selectable (2026-09-22),
+    # so all three quantizations are offered in ascending precision order.
     assert _repos("voxcpm-mlx") == [
         "mlx-community/VoxCPM2-4bit",
+        "mlx-community/VoxCPM2-8bit",
         "mlx-community/VoxCPM2-bf16",
     ]
     assert "voxcpm" not in catalog.FAMILIES
@@ -610,9 +613,12 @@ def test_voxcpm_saved_transcript_enables_ultimate_clone(tmp_path: Path) -> None:
     )
 
     assert label == "ultimate clone + style"
+    # `ref_text` is kept as well as the prompt pair: without it mlx-audio loads its
+    # own undeclared STT model to transcribe the reference, which fails offline.
     assert kwargs == {
         "instruct": "calm and warm",
         "ref_audio": str(reference),
+        "ref_text": "Saved reference transcript",
         "prompt_audio": str(reference),
         "prompt_text": "Saved reference transcript",
     }

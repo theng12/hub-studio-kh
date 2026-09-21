@@ -3851,6 +3851,9 @@ class GenerationManager:
                 # which reads as a memory problem and is not one.
                 gen_kwargs["prompt_audio"] = str(ref_path)
                 gen_kwargs["prompt_text"] = transcript
+            else:
+                # No transcript: leave mlx-audio's reference-only path untouched.
+                gen_kwargs.pop("ref_text", None)
 
         if "prompt_audio" in gen_kwargs and "instruct" in gen_kwargs:
             return "ultimate clone + style"
