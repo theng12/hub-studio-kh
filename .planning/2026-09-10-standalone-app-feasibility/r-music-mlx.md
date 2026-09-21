@@ -81,6 +81,9 @@ history after restart for both engines; keep receipts under
 
 ## Gates
 - Network download of the SA3 weights (owner authorized by requesting the model).
-- The Stability Community Licence governs SA3 use (commercial per
-  <https://stability.ai/license>); ACE-Step remains MIT.
+- Licensing split: the upstream `stable-audio-3` **code** repo is **MIT**
+  (`LICENSE`, Copyright (c) 2026 Stability AI), so vendoring `optimized/mlx` code
+  is permissive; the **model weights** are governed by the **Stability AI
+  Community License** (commercial per <https://stability.ai/license>). Keep both
+  notices with the vendored engine and the model package. ACE-Step remains MIT.
 - Signing/deployment/enrollment unchanged and still requires separate authority.
