@@ -1,0 +1,42 @@
+{
+  "app": "/Applications/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "ACE-Step/Ace-Step1.5",
+  "prompt": "Warm acoustic folk song, fingerpicked guitar, upright bass, close harmony",
+  "params": {
+    "duration_seconds": 20.0,
+    "steps": 8,
+    "guidance_scale": 1.0,
+    "shift": 3.0,
+    "seed": -1,
+    "instrumental": false,
+    "lyrics": "[Verse]\nMorning breaks across the river\nLight is dancing on the stone\nEvery quiet hour we gather\nFinding roads that lead us home",
+    "vocal_language": "en"
+  },
+  "ready_seconds": 2.45,
+  "submit_status": 200,
+  "batch_id": "4217320b03",
+  "generate_seconds": 106.65,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 3840044,
+    "sha256": "d4e2938dccc2bda68ce1f11f0b8086f3735007de003b715d6d3af4210e94ac83",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "music",
+    "machine_id": null,
+    "studio": "music",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 3840044,
+    "sha256": "d4e2938dccc2bda68ce1f11f0b8086f3735007de003b715d6d3af4210e94ac83",
+    "riff_wave": true
+  },
+  "ack_status": 200,
+  "ack_body": "{\"ok\":true}",
+  "ok": true
+}

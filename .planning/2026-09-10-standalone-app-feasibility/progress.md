@@ -1130,3 +1130,22 @@ reviewed pages render at 1040x680 and 1920x1053 with no clipping. Renders kept i
 [GATE] The transient active states (aura, live progress, transport, thumbnails)
 cannot appear in an offline render; they are compile- and fixture-verified but not
 screenshot-verified. The owner should try them live.
+
+## 2026-09-22 — ACE-Step vocals proven; model research (DeepSeek)
+
+[MEASURED] Real **vocal** ACE-Step generation through the installed app: the
+`instrumental: false` + lyrics + `en` request completed and acknowledged. Receipt
+`ace-step-turbo-vocal.json`; output `ace-step-turbo-vocal.wav`. So vocals need no
+new model - the app already exposes the Lyrics and vocal-language fields when
+Instrumental is unticked.
+
+[REPORTED] Model research (web):
+- ACE-Step 1.5: technical report Feb 2026; XL 4B DiT added 2026-04-02; the
+  original ACE-Step was 2025. MIT licence. Upstream ships an **MLX** macOS launch
+  path, but our packaged engine runs it on PyTorch **MPS**.
+- Stable Audio 3.0: announced 2026-05 (arXiv 2605.17991); medium/large generate up
+  to 6 min 20 s; instrumental/SFX (no vocals); `stable-audio-community` licence
+  (gated, includes Gemma terms). Stability published an optimised repo with
+  **official MLX weights**, plus LiteRT/ONNX CPU paths.
+- MiniMax Music 3: 2026-08, open weights, song/vocal-first up to 5 min; the
+  community MLX port needs **32 GB minimum / 48 GB recommended**. Parked.
