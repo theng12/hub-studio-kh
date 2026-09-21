@@ -1192,3 +1192,14 @@ Output is 44.1 kHz 16-bit stereo, exactly `--seconds`. Receipt
 `qualification/evidence/sa3-2026-09-22/proof.json`. So Stable Audio 3 Medium is
 comfortably feasible on this Mac and ~3-4x faster than the ACE-Step MPS path for a
 6-minute clip. Plan: `.planning/2026-09-10-standalone-app-feasibility/r-music-mlx.md`.
+
+[MEASURED] Correction to the earlier "DiT is MPS" claim: a real generation's engine
+log shows `[MLX-DiT] Native MLX DiT decoder initialized successfully` and
+`[MLX-VAE] Native MLX VAE initialized (dtype=mlx.core.float32, compiled=True)`, with
+the LM loading via MLX in 2.17s. The engine's `initialize_service` defaults
+`use_mlx_dit=True`, so on macOS the DiT/VAE **compute already runs on native MLX**;
+only the checkpoint load uses PyTorch (the ~57s cold load and the meta-tensor issue
+live there). The "switch ACE-Step to MLX" is therefore already in place - there is
+no port to do. The only remaining saving is skipping the redundant PyTorch load on
+Apple Silicon, which needs an upstream engine change behind the digest-locked
+overlay and only helps cold start. Recorded in `r-music-mlx.md`.

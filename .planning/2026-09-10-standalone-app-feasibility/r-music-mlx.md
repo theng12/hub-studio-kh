@@ -58,12 +58,21 @@ Gate: the proof produces valid audio within RAM and a time the app can queue.
    appears automatically; hide the Lyrics/vocal fields when the selected model is
    instrumental-only.
 
-### Phase 3 — ACE-Step DiT/VAE on MLX
-1. Adopt the upstream MLX DiT/VAE (`acestep/models/mlx/`) behind the existing
-   worker interface; keep the resident-child model and cancel semantics.
-2. Re-measure cold/warm timings and memory; confirm audio parity against the MPS
-   path on the same seed/prompt.
-3. Re-pin the runtime digest and re-qualify the tier caps.
+### Phase 3 — ACE-Step DiT/VAE on MLX: already true (corrected)
+Verified 2026-09-22 from the engine's own log during a real generation:
+`[MLX-DiT] Native MLX DiT decoder initialized successfully`,
+`[MLX-VAE] Native MLX VAE initialized (dtype=mlx.core.float32, compiled=True)`,
+and the LM `MLX model loaded successfully in 2.17s`. The engine's
+`initialize_service` defaults `use_mlx_dit=True`, so on macOS (`device="mps"`) the
+DiT and VAE *compute* already run on native MLX; only the **checkpoint load** goes
+through PyTorch (the orchestrator always loads a PyTorch copy first, which is where
+the meta-tensor error and the ~57 s cold load come from).
+
+So there is no port to do. The only remaining optimisation is to skip that
+redundant PyTorch load on Apple Silicon, which is an upstream engine change behind
+the digest-locked overlay and only saves cold-start time (the app keeps the engine
+resident, so warm jobs already run at ~33-43 s per 30 s clip). Reclassified as a
+small, optional follow-up rather than a phase.
 
 ### Phase 4 — qualification
 Real generations (short, 6-min instrumental, vocal), cancel/restart, ACK, and
