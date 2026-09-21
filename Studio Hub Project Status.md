@@ -148,7 +148,8 @@ second planning system.
 - `tests/hub_regression/cases`: 108 passed.
 - `tests/test_hub_jobs.py` + `test_hub_dispatch_proof_gate.py` +
   `test_hub_standalone.py`: 18 passed.
-- `tests/test_standalone_connections.py`: 32 passed, 1 failed (chip/PATH, env).
+- `tests/test_standalone_connections.py`: **33 passed** (the pre-existing chip/PATH
+  failure is closed by the host-identity fix).
 - Original five handoff probes: 5 OK, exit 0.
 - No owned servers left running; probes used disposable temp state.
 
@@ -156,34 +157,54 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-21 12:19 +07
+Timestamp: 2026-09-21 12:47 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Uncommitted changes and owners: R04 product/tests/records and this status file
-(DeepSeek). See `git status`.
-Current packet and objective: R06 native Music workflow (delegated to a bounded
-background implementation; native files are reserved for it until it lands).
-Completed changes: R04 node-owned admission repair; host-identity PATH fix; R05
-records reconciliation; R04/R05 reports; plan/board/progress records.
-Evidence: `.planning/2026-09-10-standalone-app-feasibility/r04-report.md`;
-probe logs under `.build/deepseek-r04/`.
-Self-review findings: first post-repair run exposed a `CancelledError` from the
-new lease-sweep task during lifespan shutdown; fixed by swallowing cancellation
-like `job_storage.budget_loop`. Re-verified 18/18.
-Independent review status: not performed (self-review only).
-Remaining confirmed defects: none newly confirmed open; see unverified concerns.
-Unverified concerns: see above list.
-External gates and authorization needed: see above list.
-Owned processes / temporary data / cleanup: none outstanding.
-Next smallest action: find the native Music "Engine not installed" path and the
-Image/Audio form-result patterns to reuse.
+Current HEAD: `5cad55a` (chain: `e1d167a` R04, `b68e7b2` host identity,
+`295daf8` R05 records, `678630e` R04 multipart, `5cad55a` R09 note)
+Uncommitted changes and owners: `native/StudioAPI.swift` — reserved by the running
+R06 subagent (native Music workflow). Do not edit native files until it lands and
+is reviewed. No other dirty files.
+Current packet and objective: R06 native Music workflow, delegated to a bounded
+background implementation. It must reuse the Image/Audio patterns, add
+submit/poll/cancel/reconcile, artifact Open/Save with verified ACK, and the
+workspace view; no new job subsystem. Review and integrate its result here.
+Completed changes: R04 node-owned peer admission + all four gate negatives +
+lease lifetime/TTL + multipart Subtitle coverage + two-real-Hub stale-capability
+test; PATH-independent host identity; R05 records reconciliation; R09 Hub-side
+coverage note.
+Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04-report,r05-report}.md`;
+`.build/deepseek-r04/r04-probe-baseline.log`, `.build/deepseek-r04/r04-probe-after.log`.
+Full root suite without `STUDIOHUB_TEST_APP`: 651 OK, 11 skipped, 443.295s.
+`tests/test_studio_proxy.py` 15 passed; `test_standalone_connections.py` 33 passed;
+`test_hub_jobs.py`+`test_hub_dispatch_proof_gate.py`+`test_hub_standalone.py` 18 passed;
+`hub_regression/cases` 108 passed; handoff probes 5 OK.
+Self-review findings: the R04 lease-sweep task first propagated `CancelledError`
+at lifespan shutdown; fixed by swallowing it like `job_storage.budget_loop`
+(18/18 re-verified). Voice reference POST returns the generation job itself, so
+no lease stranding between reference prep and generation.
+Independent review status: not performed (self-review only) for R04/R05 and the
+host-identity fix.
+Remaining confirmed defects: none newly confirmed open.
+Unverified concerns: shared-voice peer flake (not reproduced, not fixed);
+dependency deprecations and fixture socket/process ResourceWarnings; GatewayKH
+counterpart ACK/cancel/Music gaps (need separate scope authority); R04's four
+gates proven at the peer HTTP boundary (only Studio-disable also at two Hubs).
+External gates and authorization needed: remote push/PR/merge, tags/releases,
+signing/notarization, deployment, installed-app replacement, real enrollment,
+live generation, GatewayKH edits, paid/hosted compute, reboot/logout.
+Owned processes / temporary data / cleanup: none outstanding. The
+`/Applications/Studio Hub.app` processes (pids 405/809/814/815) are the user's
+installed app and were NOT started or stopped by this session.
+Next smallest action: when the R06 subagent settles, review its native diff,
+run `STUDIOHUB_MACOS_SDK=macosx26.5 bash native/build.sh`, the native parser
+tests, and a Music offscreen render, then commit or send it back.
 First command to run:
-`grep -rn "Engine not installed\|Music\|music" native/StudioViews.swift | head -40`
+`git status --short && git diff --stat -- native/`
 Acceptance criteria: Music exposes readiness, supported controls, submit/cancel,
 uncertain recovery and Open/Save with verified ACK, reusing existing patterns;
-native build passes; no new job subsystem.
+native build passes; no new job subsystem; no existing assertion weakened.
 Important do-not-touch paths: `~/Downloads/model-library`,
 `/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.
