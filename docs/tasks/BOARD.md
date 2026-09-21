@@ -20,14 +20,18 @@ native build and four-worker model-free package checks passed.
 **R04 locally verified and self-reviewed on `9a4570d`** (DeepSeek autonomous
 takeover): the four node-owned admission bypasses (model protection, studio
 disable, storage block and physical-machine reservation) are repaired, with
-permanent proxy negatives, lease-lifetime coverage and a two-real-Hub
-stale-capability test. Independent review remains pending. See
-[R04 report](../../.planning/2026-09-10-standalone-app-feasibility/r04-report.md)
-and [status](../Studio%20Hub%20Project%20Status.md).
-**Next: a bounded host-identity robustness fix** (`apple_chip_name()` invokes
-`sysctl` from PATH and reports no chip when `/usr/sbin` is absent; one existing
-test fails in this harness for that reason), then remaining portable/native/model
-work. GatewayKH still needs ACK/cancel/Music and end-to-end qualification; no live
+permanent proxy negatives, lease-lifetime coverage and two-real-Hub tests for
+Studio-disable and storage. **R05 records reconciled** (`r05-report.md`; Image
+offline rebuild probed and gated on a declared wheel cache). **Host-identity PATH
+robustness fixed** (`b68e7b2`). **R09 Hub-side selection/no-fanout proven.** **R06
+native Music workflow locally verified (`r06-report.md`): `native/build.sh` exit 0,
+three native suites pass, Music renders at 1040×680 and 1920×1053, root suite 655
+OK/11 skips.** Independent review remains pending for each. See
+[status](../Studio%20Hub%20Project%20Status.md).
+**Next locally executable:** R07/R08/R10 need real models/hardware/GUI; R09
+counterpart ACK/cancel/Music edits need separate GatewayKH scope authority. Then
+remaining portable/native/model work. GatewayKH still needs ACK/cancel/Music and
+end-to-end qualification; no live
 connection or enrollment.
 All earlier "next" statements below are historical where they differ.
 

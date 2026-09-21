@@ -36,6 +36,52 @@ struct NativeImageConfiguration: Equatable {
     }
 }
 
+/// The controls ACE-Step 1.5 actually accepts, as the Music worker publishes them.
+///
+/// The Hub catalogue carries `generation_defaults` and `generation_limits` per model, and the
+/// worker's own `validate_request` (components/music/app/backend/generation.py) is the contract
+/// behind them: duration 1-600 s, 1-50 steps, guidance 0-30, shift 0-20, seed -1 or a 32-bit
+/// unsigned value, and a fixed WAV output shape. Only fields the Hub publishes are modelled, so
+/// the form cannot invent a knob the engine does not have.
+struct NativeMusicSettings: Codable, Equatable {
+    var durationSeconds: Double
+    var steps: Int
+    var guidanceScale: Double
+    var shift: Double
+    var seed: Int64
+    var instrumental: Bool
+    var lyrics: String
+    var vocalLanguage: String
+}
+struct NativeMusicLimits: Equatable {
+    let minDurationSeconds: Double
+    let maxDurationSeconds: Double
+    let minSteps: Int
+    let maxSteps: Int
+    let minGuidance: Double
+    let maxGuidance: Double
+    /// The Hub does not publish shift bounds today. The worker's own validation is 0-20, so a
+    /// missing bound falls back to that contract rather than to a guess.
+    let minShift: Double
+    let maxShift: Double
+    let minSeed: Int64
+    let maxSeed: Int64
+}
+struct NativeMusicConfiguration: Equatable {
+    let defaults: NativeMusicSettings
+    let limits: NativeMusicLimits
+    func accepts(_ value: NativeMusicSettings) -> Bool {
+        value.durationSeconds.isFinite
+            && value.durationSeconds >= limits.minDurationSeconds && value.durationSeconds <= limits.maxDurationSeconds
+            && value.steps >= limits.minSteps && value.steps <= limits.maxSteps
+            && value.guidanceScale.isFinite
+            && value.guidanceScale >= limits.minGuidance && value.guidanceScale <= limits.maxGuidance
+            && value.shift.isFinite && value.shift >= limits.minShift && value.shift <= limits.maxShift
+            && value.seed >= limits.minSeed && value.seed <= limits.maxSeed
+            && value.lyrics.count <= 8000 && value.vocalLanguage.count <= 32
+    }
+}
+
 struct NativeModel: Identifiable, Equatable {
     let id: String
     let repo: String
@@ -76,6 +122,10 @@ struct NativeModel: Identifiable, Equatable {
     var longForm: NativeLongFormDelivery? = nil
     /// Which Studio paused it, so the recheck names the exact pause to release.
     var pausedStudio: String? = nil
+    /// The output shape a Music model publishes. Read-only facts, shown so the operator knows what
+    /// the WAV will be without opening it; absent for every other function.
+    var sampleRateHz: Int? = nil
+    var channels: Int? = nil
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
 }
@@ -417,6 +467,7 @@ struct NativeJob: Identifiable, Equatable {
     var bytes: Int64? = nil
     var sha256: String? = nil
     var imageSettings: NativeImageSettings? = nil
+    var musicSettings: NativeMusicSettings? = nil
     /// Runtime facts the Hub recorded for this result, shown beside it so an operator can see
     /// what they actually got without opening the file.
     var durationSeconds: Double? = nil
@@ -672,6 +723,18 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
     @Published var imageModel = "" { didSet { if imageModel != oldValue { imageSettings = nil }; scheduleSave() } }
     @Published var imageSettings: NativeImageSettings? { didSet { scheduleSave() } }
+    /// Per-studio Music history and the last Music draft, mirroring Image. It is the same Hub job
+    /// queue, filtered to `modality == "music"`, so no second job subsystem is introduced.
+    @Published private(set) var musicJobs: [NativeJob] = []
+    @Published private(set) var musicConfigurations: [String: NativeMusicConfiguration] = [:]
+    @Published var musicPrompt = "" { didSet { scheduleSave() } }
+    @Published var musicModel = "" { didSet { if musicModel != oldValue { musicSettings = nil }; scheduleSave() } }
+    @Published var musicSettings: NativeMusicSettings? { didSet { scheduleSave() } }
+    /// A Music-only note, shown beside the Music form. A failure still goes to `error`, which is
+    /// the banner every workspace shares.
+    @Published var musicNote: String?
+    @Published private(set) var submittingMusic = false
+    var musicConfiguration: NativeMusicConfiguration? { musicConfigurations[musicModel] }
     /// Which Mac new work should run on, as the Hub's `routing` value: nil means the Hub picks,
     /// and `machine:<id>` pins one machine. Kept as the owner's standing choice so a pin set on
     /// the fleet screen applies to every workspace until it is cleared.
@@ -802,6 +865,7 @@ final class NativeWorkspaceStore: ObservableObject {
     private var loadingState = false
     private var pendingAudio: HubAudioRequest?
     private var pendingImage: HubImageRequest?
+    private var pendingMusic: HubMusicRequest?
     private var pendingTranscription: PendingTranscription?
     private var modelPackages: [String: HubModelPackage] = [:]
     private var hubDownloadRuns: [String: String] = [:]
@@ -839,6 +903,7 @@ final class NativeWorkspaceStore: ObservableObject {
             loadBestEffort(dataDirectory.appendingPathComponent("native-workspaces.json"), "your saved workspaces") { try loadState() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-audio.json"), "a pending audio request") { try loadPendingAudio() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-image.json"), "a pending image request") { try loadPendingImage() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-pending-music.json"), "a pending music request") { try loadPendingMusic() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-transcription.json"), "a pending transcription") { try loadPendingTranscription() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-model-downloads.json"), "the model-download list") { try loadHubDownloadRuns() }
             await refresh()
@@ -876,6 +941,7 @@ final class NativeWorkspaceStore: ObservableObject {
         isReachable = false
         submittingAudio = false
         submittingImage = false
+        submittingMusic = false
         transcribing = false
         memoryInventory = nil
         memoryNote = nil
@@ -936,17 +1002,26 @@ final class NativeWorkspaceStore: ObservableObject {
             imageConfigurations = catalogValue.models.reduce(into: [:]) { result, model in
                 if let configuration = model.imageConfiguration { result[model.repo] = configuration }
             }
+            musicConfigurations = catalogValue.models.reduce(into: [:]) { result, model in
+                if let configuration = model.musicConfiguration { result[model.repo] = configuration }
+            }
             if imageConfigurations[imageModel] == nil,
                let first = models.first(where: { $0.function == .image && $0.supported }) { imageModel = first.repo }
+            if musicConfigurations[musicModel] == nil,
+               let first = models.first(where: { $0.function == .music && $0.supported }) { musicModel = first.repo }
             if imageSettings == nil { imageSettings = imageConfiguration?.defaults }
+            if musicSettings == nil { musicSettings = musicConfiguration?.defaults }
             var history: [NativeJob] = []
             var images: [NativeJob] = []
+            var musics: [NativeJob] = []
             var unreadable = 0
             var finished: [String: NativeJob] = [:]
-            for batch in (jobsValue?.batches ?? []) where ["voice", "image"].contains(batch.modality) {
+            for batch in (jobsValue?.batches ?? []) where ["voice", "image", "music"].contains(batch.modality) {
                 if let known = finishedJobCache[batch.id] {
                     finished[batch.id] = known
-                    if batch.modality == "image" { images.append(known) } else { history.append(known) }
+                    if batch.modality == "image" { images.append(known) }
+                    else if batch.modality == "music" { musics.append(known) }
+                    else { history.append(known) }
                     continue
                 }
                 do {
@@ -955,6 +1030,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     let job = Self.mapHubJob(detail)
                     if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
                     if batch.modality == "image" { images.append(job) }
+                    else if batch.modality == "music" { musics.append(job) }
                     else { history.append(job) }
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
@@ -970,6 +1046,7 @@ final class NativeWorkspaceStore: ObservableObject {
             finishedJobCache = finished
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            musicJobs = musics.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var subtitles: [NativeJob] = []
             for batch in (subtitleValue?.batches ?? []) {
                 let batchState = batch.status ?? "unknown"
@@ -1237,7 +1314,7 @@ final class NativeWorkspaceStore: ObservableObject {
             guard imageJobs.contains(where: { $0.id == job.id && $0.state == "uncertain" }) else {
                 throw NativeAPIError.message("Refresh the original uncertain Image job before checking its result.")
             }
-            let result: HubImageReconciliation = try await sendEmpty(["api", "hub", "jobs", job.id, "items", "0", "reconcile"], method: "POST")
+            let result: HubReconciliation = try await sendEmpty(["api", "hub", "jobs", job.id, "items", "0", "reconcile"], method: "POST")
             guard connectionID == requestConnection else { return }
             if result.reconciled && result.clientRequestId == pendingImage?.clientRequestId {
                 pendingImage = nil
@@ -1290,6 +1367,143 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             throw NativeAPIError.message("The image was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
         }
+    }
+
+    func restoreMusicDefaults() {
+        musicSettings = musicConfiguration?.defaults
+    }
+
+    /// Submit one Music job through the same durable Hub route Image and Voice use.
+    ///
+    /// The Hub's `broker.MODALITY` maps `music` to the worker's `/api/generate/txt2music`, so the
+    /// envelope is a Music-shaped `HubMusicRequest` on `POST /api/hub/jobs`. The original attempt is
+    /// written to disk before the request leaves, exactly as the Image path does: the Music worker
+    /// acknowledges a job before the WAV exists, so a lost response must be reconciled rather than
+    /// silently resubmitted even though no durable per-item recovery contract exists.
+    func generateMusic() async {
+        guard !submittingMusic, let requestConnection = connectionID else { return }
+        do {
+            let body: HubMusicRequest
+            if let pendingMusic { body = pendingMusic }
+            else {
+                let model = try usableModel(repo: musicModel, function: .music)
+                let prompt = musicPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !prompt.isEmpty else { throw NativeAPIError.message("Describe the music you want.") }
+                guard prompt.count <= 4_000 else { throw NativeAPIError.message("The prompt exceeds the 4,000-character limit.") }
+                guard let settings = musicSettings, musicConfiguration?.accepts(settings) == true else {
+                    throw NativeAPIError.message("Choose settings within the model's supported ranges, or restore its defaults.")
+                }
+                if let original = musicJobs.first(where: {
+                    $0.state == "uncertain" && $0.model == model.repo && $0.text == prompt
+                        && ($0.musicSettings == nil || $0.musicSettings == settings)
+                }) {
+                    throw NativeAPIError.message("Music job \(original.id) has an uncertain result. Reconcile that original job before repeating this request.")
+                }
+                body = HubMusicRequest(modality: "music", model: model.repo,
+                    clientRequestId: "native:\(UUID().uuidString)", items: [HubMusicItem(prompt: prompt, params: settings)],
+                    routing: routingPin)
+            }
+            submittingMusic = true
+            defer { if connectionID == requestConnection { submittingMusic = false } }
+            if pendingMusic == nil { pendingMusic = body; try savePendingMusic() }
+            let response: HubJobSubmit = try await sendHubJSON(["api", "hub", "jobs"], body: body)
+            guard connectionID == requestConnection else { return }
+            let detail: HubJobDetail = try await get(["api", "hub", "jobs", response.batchId])
+            guard connectionID == requestConnection else { return }
+            let job = Self.mapHubJob(detail)
+            musicJobs.removeAll { $0.id == job.id }; musicJobs.insert(job, at: 0)
+            if job.state != "uncertain" { pendingMusic = nil }
+            try savePendingMusic()
+            musicNote = job.state == "uncertain" ? "The Music result is uncertain. Its original request is preserved for reconciliation." : nil
+            error = nil
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Generate music") }
+        }
+    }
+
+    func cancelMusic(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard musicJobs.contains(where: { $0.id == job.id }) else { throw NativeAPIError.message("That music job is no longer in the current history.") }
+            let _: HubCancelResponse = try await sendEmpty(["api", "hub", "jobs", job.id], method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the music job") } }
+    }
+
+    /// Check only the original uncertain Music job; never submit a replacement.
+    func reconcileMusic(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard musicJobs.contains(where: { $0.id == job.id && $0.state == "uncertain" }) else {
+                throw NativeAPIError.message("Refresh the original uncertain Music job before checking its result.")
+            }
+            let result: HubReconciliation = try await sendEmpty(["api", "hub", "jobs", job.id, "items", "0", "reconcile"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            if result.reconciled && result.clientRequestId == pendingMusic?.clientRequestId {
+                pendingMusic = nil
+                try savePendingMusic()
+            }
+            await refresh()
+            guard connectionID == requestConnection else { return }
+            musicNote = result.reconciled
+                ? nil
+                : "The original Music result is still uncertain. Its request remains protected; no new generation was submitted."
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Check the original Music result") }
+        }
+    }
+
+    /// Fetch one Music artifact and verify it against the Hub's own receipt.
+    ///
+    /// The count, the SHA-256 and the RIFF/WAVE magic are required, exactly as the Voice path
+    /// requires them: bytes that are not the generated WAV must never be played or saved under an
+    /// audio name.
+    func musicData(for job: NativeJob) async throws -> Data {
+        guard let requestConnection = connectionID else { throw NativeAPIError.message("Start the local services before retrieving music.") }
+        guard job.state == "done", musicJobs.contains(where: { $0.id == job.id }),
+              let bytes = job.bytes, bytes > 0, let sha = job.sha256,
+              sha.count == 64, sha.allSatisfy({ $0.isHexDigit }) else {
+            throw NativeAPIError.message("This music clip has no verified completed result. Refresh its job before playing or saving it.")
+        }
+        let data = try await performData(makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"]))
+        guard connectionID == requestConnection else { throw NativeAPIError.message("The Hub connection changed before music retrieval completed.") }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard Int64(data.count) == bytes, digest == sha.lowercased(),
+              data.count >= 12, data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46]),
+              data[8..<12] == Data([0x57, 0x41, 0x56, 0x45]) else {
+            throw NativeAPIError.message("Music verification failed. Refresh the job and retrieve its original result again.")
+        }
+        return data
+    }
+
+    /// Save one music clip and confirm delivery only after the write is re-read and verified.
+    func saveMusic(_ job: NativeJob, to destination: URL) async throws {
+        let requestConnection = connectionID
+        let data = try await musicData(for: job)
+        try data.write(to: destination, options: .atomic)
+        guard try Data(contentsOf: destination) == data else {
+            throw NativeAPIError.message("Saved music verification failed. Choose another destination and save again.")
+        }
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The music was saved and verified, but the local service connection changed before delivery was acknowledged. Save again to confirm delivery.")
+        }
+        do {
+            let receipt: HubAckReceipt = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", "0", "ack"], method: "POST")
+            if !receipt.ok { throw NativeAPIError.message("rejected") }
+        } catch {
+            throw NativeAPIError.message("The music was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery; the protected copy is not deleted until acknowledgement succeeds.")
+        }
+    }
+
+    /// Hand a finished music clip to the shared preview player.
+    func playMusic(_ job: NativeJob, with player: PreviewPlayer) async throws {
+        let data = try await musicData(for: job)
+        guard let directory = dataDirectory else {
+            throw NativeAPIError.message("The app data directory is unavailable.")
+        }
+        try player.play(data, extension: Self.audioExtension(of: data), in: directory)
     }
 
     /// Read the saved voices from this Mac's Voice worker.
@@ -2805,6 +3019,11 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         if let selected = models.first(where: { $0.repo == transcriptionModel && $0.function == .transcription }),
            !selected.supportsWordTimestamps { wordTimestamps = false }
+        // A Music model that leaves the catalogue (or is not runnable here) must not stay selected,
+        // or the page shows controls for a model the Hub will refuse.
+        if !models.contains(where: { $0.repo == musicModel && $0.function == .music && $0.supported }) {
+            musicModel = models.first { $0.function == .music && $0.supported }?.repo ?? ""
+        }
     }
 
     /// Which way a model is told what to sound like.
@@ -2950,6 +3169,40 @@ final class NativeWorkspaceStore: ObservableObject {
                 pausedStudio: package?.pausedStudio)
         }
         return audioModels + transcriptionModels + imageModels
+            + Self.musicModels(audio, packages: packages)
+    }
+
+    /// The Music models the Hub catalogue exposes.
+    ///
+    /// The standalone Music worker publishes ACE-Step 1.5 with `capabilities` led by `music` and the
+    /// `generation_defaults`/`generation_limits` the form needs. A model with no decodable Music
+    /// configuration is not offered, because the app has nothing truthful to put on the form.
+    private static func musicModels(_ catalog: [CatalogModel],
+                                    packages: [String: HubModelPackage]) -> [NativeModel] {
+        catalog.filter { $0.capabilities?.contains("music") == true }.map { item in
+            let package = packages[item.repo]
+            let supported = item.musicConfiguration != nil && package != nil
+            let block = Self.blockReason(memoryWarning: item.memoryWarning,
+                                         memoryEligible: item.memoryEligible, package: package)
+            let cached = item.cache?.state == "cached"
+            let ready = item.runtimeReady == true && block == nil && package?.dispatchState == "eligible"
+            let note = supported
+                ? (cached && ready
+                    ? "Ready for local music generation."
+                    : "Native Music compatible; install the model and ensure its runtime is ready.")
+                : (package == nil
+                    ? "This model is outside the packaged model catalog."
+                    : "This native Music form has no compatible generation controls for this runtime entry.")
+            return NativeModel(
+                id: "music:\(item.repo)", repo: item.repo, label: item.label,
+                family: item.family ?? "Music", function: .music, cached: cached, supported: supported,
+                supportNote: note, sizeGB: item.sizeGb, capabilities: item.capabilities ?? [],
+                languages: [], runtimeReady: ready, supportsWordTimestamps: false, speakers: [],
+                memoryWarning: item.memoryWarning, blockReason: block,
+                paused: package?.paused == true, pausedReason: package?.pausedReason,
+                pausedStudio: package?.pausedStudio,
+                sampleRateHz: item.sampleRateHz, channels: item.channels)
+        }
     }
 
     private static func mapJob(_ wire: JobWire) -> NativeJob {
@@ -3005,6 +3258,7 @@ final class NativeWorkspaceStore: ObservableObject {
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
             imageSettings: item?.params?.imageSettings,
+            musicSettings: item?.params?.musicSettings,
             durationSeconds: item?.audioDurationS,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS)
@@ -3194,6 +3448,11 @@ final class NativeWorkspaceStore: ObservableObject {
         let imagePrompt: String?
         let imageModel: String?
         let imageSettings: NativeImageSettings?
+        /// Music draft. Absent in state written before the Music workflow existed, so an older file
+        /// still loads with an empty Music form.
+        let musicPrompt: String?
+        let musicModel: String?
+        let musicSettings: NativeMusicSettings?
         /// Absent in state written before pinning existed, and absent means automatic.
         let routingPin: String?
     }
@@ -3221,6 +3480,19 @@ final class NativeWorkspaceStore: ObservableObject {
         pendingImage = nil
         guard let pendingImageURL, FileManager.default.fileExists(atPath: pendingImageURL.path) else { return }
         pendingImage = try JSONDecoder().decode(HubImageRequest.self, from: Data(contentsOf: pendingImageURL))
+    }
+    private var pendingMusicURL: URL? { dataDirectory?.appendingPathComponent("native-pending-music.json") }
+    private func savePendingMusic() throws {
+        guard let pendingMusicURL else { return }
+        if let pendingMusic {
+            try JSONEncoder().encode(pendingMusic).write(to: pendingMusicURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingMusicURL.path)
+        } else { try? FileManager.default.removeItem(at: pendingMusicURL) }
+    }
+    private func loadPendingMusic() throws {
+        pendingMusic = nil
+        guard let pendingMusicURL, FileManager.default.fileExists(atPath: pendingMusicURL.path) else { return }
+        pendingMusic = try JSONDecoder().decode(HubMusicRequest.self, from: Data(contentsOf: pendingMusicURL))
     }
     private var pendingTranscriptionURL: URL? { dataDirectory?.appendingPathComponent("native-pending-transcription.json") }
     private func savePendingTranscription() throws {
@@ -3267,6 +3539,7 @@ final class NativeWorkspaceStore: ObservableObject {
             transcriptionModel: transcriptionModel, transcriptionFile: transcriptionFile?.path,
             transcriptionLanguage: transcriptionLanguage, wordTimestamps: wordTimestamps,
             transcriptionResult: transcriptionResult, imagePrompt: imagePrompt, imageModel: imageModel, imageSettings: imageSettings,
+            musicPrompt: musicPrompt, musicModel: musicModel, musicSettings: musicSettings,
             routingPin: routingPin
         )
         let encoder = JSONEncoder()
@@ -3300,6 +3573,9 @@ final class NativeWorkspaceStore: ObservableObject {
         imagePrompt = state.imagePrompt ?? ""
         imageModel = state.imageModel ?? ""
         imageSettings = state.imageSettings
+        musicPrompt = state.musicPrompt ?? ""
+        musicModel = state.musicModel ?? ""
+        musicSettings = state.musicSettings
         routingPin = state.routingPin
     }
 }
@@ -3413,9 +3689,16 @@ private struct CatalogModel: Decodable {
     /// Why this Mac is below the model's qualified tier, when it is.
     let memoryWarning: String?
     let cache: CacheWire?
-    let generationDefaults: NativeImageSettings?
-    let generationLimits: NativeImageLimits?
+    /// The generation controls the model publishes. Decoded as a loose bag rather than as one
+    /// concrete shape: Image and Music publish different control sets under the same key, and a
+    /// mismatch in one modality must not fail the whole catalogue request. The two per-function
+    /// views below are the only readers.
+    let generationDefaults: HubGenerationDefaults?
+    let generationLimits: HubGenerationLimits?
     let imageSizes: [NativeImageSize]?
+    /// The fixed WAV shape a Music model publishes. Absent for every other function.
+    let sampleRateHz: Int?
+    let channels: Int?
     /// Family capability claim from the runtime, so clone vs preset is decided by the catalog
     /// rather than by guessing from the model name.
     let referenceAudio: CatalogReferenceAudio?
@@ -3425,7 +3708,8 @@ private struct CatalogModel: Decodable {
     /// app at all.
     let longFormDelivery: HubLongFormDelivery?
     var imageConfiguration: NativeImageConfiguration? {
-        guard let defaults = generationDefaults, let limits = generationLimits,
+        guard let defaults = generationDefaults?.imageSettings,
+              let limits = generationLimits?.imageLimits,
               let sizes = imageSizes, !sizes.isEmpty,
               limits.minSteps > 0, limits.maxSteps >= limits.minSteps,
               limits.minGuidance.isFinite, limits.maxGuidance.isFinite, limits.minGuidance <= limits.maxGuidance,
@@ -3433,6 +3717,77 @@ private struct CatalogModel: Decodable {
               sizes.allSatisfy({ $0.width > 0 && $0.height > 0 }), Set(sizes.map(\.id)).count == sizes.count else { return nil }
         let value = NativeImageConfiguration(defaults: defaults, sizes: sizes, limits: limits)
         return value.accepts(defaults) ? value : nil
+    }
+    var musicConfiguration: NativeMusicConfiguration? {
+        guard let defaults = generationDefaults?.musicSettings,
+              let limits = generationLimits?.musicLimits,
+              limits.minDurationSeconds > 0, limits.maxDurationSeconds >= limits.minDurationSeconds,
+              limits.maxSteps >= limits.minSteps,
+              limits.minGuidance.isFinite, limits.maxGuidance.isFinite, limits.minGuidance <= limits.maxGuidance,
+              limits.minShift.isFinite, limits.maxShift.isFinite, limits.minShift <= limits.maxShift,
+              limits.minSeed <= limits.maxSeed else { return nil }
+        let value = NativeMusicConfiguration(defaults: defaults, limits: limits)
+        return value.accepts(defaults) ? value : nil
+    }
+}
+
+/// The catalogue's `generation_defaults` object, decoded field by field.
+///
+/// Image publishes `width`/`height`/`steps`/`guidance`/`seed`; Music publishes
+/// `duration_seconds`/`steps`/`guidance_scale`/`shift`/`seed`/`instrumental`/`lyrics`/
+/// `vocal_language`. Both arrive under the same `generation_defaults` key, so a concrete type for
+/// one modality would make the other's entry fail the entire catalogue decode.
+private struct HubGenerationDefaults: Decodable {
+    let width: Int?
+    let height: Int?
+    let steps: Int?
+    let guidance: Double?
+    let guidanceScale: Double?
+    let seed: Int64?
+    let durationSeconds: Double?
+    let shift: Double?
+    let instrumental: Bool?
+    let lyrics: String?
+    let vocalLanguage: String?
+    var imageSettings: NativeImageSettings? {
+        guard let width, let height, let steps, let guidance, let seed else { return nil }
+        return NativeImageSettings(width: width, height: height, steps: steps, guidance: guidance, seed: seed)
+    }
+    var musicSettings: NativeMusicSettings? {
+        guard let durationSeconds, let steps, let guidanceScale, let seed else { return nil }
+        return NativeMusicSettings(
+            durationSeconds: durationSeconds, steps: steps, guidanceScale: guidanceScale,
+            shift: shift ?? 3, seed: seed, instrumental: instrumental ?? true,
+            lyrics: lyrics ?? "[Instrumental]", vocalLanguage: vocalLanguage ?? "unknown")
+    }
+}
+
+/// The catalogue's `generation_limits` object, decoded field by field for the same reason.
+private struct HubGenerationLimits: Decodable {
+    let minSteps: Int?
+    let maxSteps: Int?
+    let minGuidance: Double?
+    let maxGuidance: Double?
+    let minSeed: Int64?
+    let maxSeed: Int64?
+    let minDurationSeconds: Double?
+    let maxDurationSeconds: Double?
+    let minShift: Double?
+    let maxShift: Double?
+    var imageLimits: NativeImageLimits? {
+        guard let minSteps, let maxSteps, let minGuidance, let maxGuidance, let minSeed, let maxSeed else { return nil }
+        return NativeImageLimits(minSteps: minSteps, maxSteps: maxSteps,
+                                 minGuidance: minGuidance, maxGuidance: maxGuidance,
+                                 minSeed: minSeed, maxSeed: maxSeed)
+    }
+    var musicLimits: NativeMusicLimits? {
+        guard let minDurationSeconds, let maxDurationSeconds, let minSteps, let maxSteps,
+              let minGuidance, let maxGuidance, let minSeed, let maxSeed else { return nil }
+        return NativeMusicLimits(minDurationSeconds: minDurationSeconds, maxDurationSeconds: maxDurationSeconds,
+                                 minSteps: minSteps, maxSteps: maxSteps,
+                                 minGuidance: minGuidance, maxGuidance: maxGuidance,
+                                 minShift: minShift ?? 0, maxShift: maxShift ?? 20,
+                                 minSeed: minSeed, maxSeed: maxSeed)
     }
 }
 /// How one model is sectioned and how its speed control is delivered.
@@ -3553,14 +3908,32 @@ private struct HubJobParams: Decodable {
     let steps: Int?
     let guidance: Double?
     let seed: Int64?
+    /// Music's own controls. The Hub echoes the accepted item params on the public job, so a
+    /// finished Music job can show what it was asked for and an uncertain one can be matched to the
+    /// request that produced it.
+    let durationSeconds: Double?
+    let guidanceScale: Double?
+    let shift: Double?
+    let instrumental: Bool?
+    let lyrics: String?
+    let vocalLanguage: String?
     var imageSettings: NativeImageSettings? {
         guard let width, let height, let steps, let guidance, let seed else { return nil }
         return NativeImageSettings(width: width, height: height, steps: steps, guidance: guidance, seed: seed)
     }
+    var musicSettings: NativeMusicSettings? {
+        guard let durationSeconds, let steps, let guidanceScale, let shift, let seed,
+              let instrumental, let lyrics, let vocalLanguage else { return nil }
+        return NativeMusicSettings(durationSeconds: durationSeconds, steps: steps,
+                                   guidanceScale: guidanceScale, shift: shift, seed: seed,
+                                   instrumental: instrumental, lyrics: lyrics,
+                                   vocalLanguage: vocalLanguage)
+    }
 }
 private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
 private struct HubCancelResponse: Decodable { let ok: Bool }
-private struct HubImageReconciliation: Decodable { let reconciled: Bool; let clientRequestId: String? }
+/// Both Image and Music reconciliation return this shape; the route and the modality differ.
+private struct HubReconciliation: Decodable { let reconciled: Bool; let clientRequestId: String? }
 private struct HubImageRequest: Codable {
     let modality: String
     let model: String
@@ -3581,6 +3954,29 @@ private struct HubImageRequest: Codable {
     }
 }
 private struct HubImageItem: Codable { let prompt: String; let params: NativeImageSettings }
+/// One Music generation on the same durable Hub route Image uses.
+///
+/// The Hub's `broker.MODALITY["music"]` maps this envelope to the worker's
+/// `/api/generate/txt2music` and lifts each item's `params` onto the worker body, so the encoded
+/// keys (`duration_seconds`, `guidance_scale`, `shift`, `vocal_language`, ...) are exactly what the
+/// Music worker's `validate_request` reads.
+private struct HubMusicRequest: Codable {
+    let modality: String
+    let model: String
+    let clientRequestId: String
+    let items: [HubMusicItem]
+    /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
+    let routing: String?
+    init(modality: String, model: String, clientRequestId: String, items: [HubMusicItem],
+         routing: String?) {
+        self.modality = modality
+        self.model = model
+        self.clientRequestId = clientRequestId
+        self.items = items
+        self.routing = routing
+    }
+}
+private struct HubMusicItem: Codable { let prompt: String; let params: NativeMusicSettings }
 private struct HubAckReceipt: Decodable { let ok: Bool }
 private struct HubAudioRequest: Codable {
     let modality: String

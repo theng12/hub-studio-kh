@@ -15,6 +15,7 @@ enum HistoryTab: String, CaseIterable, Identifiable {
     case all = "All"
     case image = "Image"
     case audio = "Audio"
+    case music = "Music"
     case subtitle = "Subtitle"
     var id: String { rawValue }
 }
@@ -69,6 +70,7 @@ struct StudioContent: View {
     @State private var savingToken = false
     @State private var imagePreview: NSImage?
     @State private var selectedImageID: String?
+    @State private var selectedMusicID: String?
     @State private var historyTab = HistoryTab.all
     @State private var loadingImage = false
     @State private var revealedToken = false
@@ -98,8 +100,11 @@ struct StudioContent: View {
     private var selectedAudioModel: NativeModel? { workspace.models.first { $0.repo == workspace.audioModel && $0.function == .audio } }
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
     private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
+    private var selectedMusicModel: NativeModel? { workspace.models.first { $0.repo == workspace.musicModel && $0.function == .music } }
     private var previewImageJob: NativeJob? { workspace.imageJobs.first { $0.state == "done" && (selectedImageID == nil || $0.id == selectedImageID) } }
+    private var previewMusicJob: NativeJob? { workspace.musicJobs.first { $0.state == "done" && (selectedMusicID == nil || $0.id == selectedMusicID) } }
     private var activeImages: [NativeJob] { workspace.imageJobs.filter { active($0.state) } }
+    private var activeMusic: [NativeJob] { workspace.musicJobs.filter { active($0.state) } }
     private var activeAudio: [NativeJob] { workspace.audioJobs.filter { active($0.state) } }
     private var activeDownloads: [NativeDownload] { workspace.downloads.filter { active($0.state) } }
     private var filteredModels: [NativeModel] {
@@ -153,6 +158,7 @@ struct StudioContent: View {
                 case .overview: overview
                 case .audio: audioWorkspace
                 case .image: imageWorkspace
+                case .music: musicWorkspace
                 case .transcription: transcriptionWorkspace
                 case .models: modelsWorkspace
                 case .voices: voicesWorkspace
@@ -239,7 +245,7 @@ struct StudioContent: View {
                     sectionTitle("In progress")
                     Button("View All Jobs") { studio.select(.jobs) }
                 }
-                if activeAudio.isEmpty && activeImages.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
+                if activeAudio.isEmpty && activeImages.isEmpty && activeMusic.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
@@ -252,6 +258,7 @@ struct StudioContent: View {
                 } else {
                     ForEach(activeAudio) { job in jobRow(job, compact: true) }
                     ForEach(activeImages) { imageJobRow($0) }
+                    ForEach(activeMusic) { musicJobRow($0) }
                     if workspace.transcribing { transcriptionActivity }
                     ForEach(activeDownloads) { download in downloadRow(download) }
                 }
@@ -362,6 +369,7 @@ struct StudioContent: View {
         switch modality {
         case "image": return "photo"
         case "transcription": return "waveform"
+        case "music": return "music.note"
         case "speech", "voice": return "mic"
         default: return "clock"
         }
@@ -372,7 +380,7 @@ struct StudioContent: View {
         return value >= 60 ? String(format: "%.1f min", value / 60) : String(format: "%.1f s", value)
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
-        guard page == .audio || page == .transcription || page == .image else { return "Engine not installed" }
+        guard page == .audio || page == .transcription || page == .image || page == .music else { return "Engine not installed" }
         guard connected else { return "Services stopped" }
         if workspace.refreshing && workspace.models.isEmpty { return "Checking models…" }
         return workspace.models.contains { $0.function == page.function && $0.supported && $0.cached && $0.runtimeReady } ? "Ready to create" : "Needs a model"
@@ -515,6 +523,229 @@ struct StudioContent: View {
                     Button("Check Original Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected)
                 } else if active(job.state) {
                     Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected)
+                }
+            }
+            if let message = job.error, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+        }
+    }
+
+    /// Music generation, laid out exactly like Image: prompt and settings on the left, the result
+    /// and the studio's own history on the right.
+    private var musicWorkspace: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            heading("Music Studio", "Describe the music, choose its settings and generate it locally.")
+            if !connected { setup }
+            HSplitView {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text("Prompt").font(.headline)
+                        TextEditor(text: $workspace.musicPrompt)
+                            .font(.body).padding(8).frame(height: 155)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            .accessibilityLabel("Music prompt")
+                        HStack {
+                            Text("\(workspace.musicPrompt.count) characters").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if workspace.submittingMusic { ProgressView().controlSize(.small) }
+                            Button("Generate Music") { selectedMusicID = nil; Task { await workspace.generateMusic() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(musicBlockedReason != nil)
+                        }
+                        // A disabled prominent button with no explanation is the worst state a form
+                        // can be in: whatever holds it up is named right below it, first thing first.
+                        if let reason = musicBlockedReason {
+                            Label(reason, systemImage: "exclamationmark.circle")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider().padding(.top, 8)
+                        Text("Generation").font(.headline)
+                        modelPicker(.music)
+                        if let warning = selectedMusicModel?.memoryWarning {
+                            // Advice, not a refusal: the operator decides whether to run it here.
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if let configuration = workspace.musicConfiguration, let values = workspace.musicSettings {
+                            musicControls(configuration, values)
+                            Button("Restore Music Defaults") { workspace.restoreMusicDefaults() }
+                        } else if selectedMusicModel?.supported == true {
+                            Label("This model does not publish generation controls this app can show.",
+                                  systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let note = workspace.musicNote {
+                            Label(note, systemImage: "exclamationmark.circle")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider().padding(.top, 8)
+                        Text("Model installation and storage are managed centrally.").font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Manage Music Models") { modelFilter = "Music"; studio.select(.models) }
+                    }.padding(.trailing, 20).padding(.bottom, 20)
+                }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Preview").font(.headline)
+                        Spacer()
+                        if player.playing { Button("Stop Playback") { player.stop() } }
+                        if let job = previewMusicJob { Button("Save Audio…") { saveMusic(job) }.disabled(!connected) }
+                    }
+                    Group {
+                        if let job = previewMusicJob {
+                            VStack(spacing: 12) {
+                                Image(systemName: "music.note").font(.system(size: 32, weight: .light)).foregroundStyle(.secondary)
+                                Text(job.text.isEmpty ? modelName(job.model) : job.text)
+                                    .font(.headline).multilineTextAlignment(.center).lineLimit(3)
+                                if !job.assetFacts.isEmpty {
+                                    Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityLabel("Result details: \(job.assetFacts)")
+                                }
+                                Button("Play") {
+                                    Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
+                                }
+                                .disabled(!connected)
+                                .accessibilityLabel("Play \(job.text.isEmpty ? "generated music" : job.text)")
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            empty("Your music will appear here", "Describe the music and generate it. Completed music stays in Jobs.", symbol: "music.note")
+                        }
+                    }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    Divider()
+                    HStack { Text("Recent music").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
+                    if workspace.musicJobs.isEmpty {
+                        Text("Completed music will appear here.").foregroundStyle(.secondary).font(.callout)
+                        Spacer(minLength: 0)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(workspace.musicJobs.prefix(5)) { musicJobRow($0) }
+                            }
+                        }
+                        .frame(minHeight: 80, maxHeight: 170)
+                    }
+                }
+                .padding(.leading, 20)
+                // The same house frame as Audio, Subtitle and Image, so the four cannot drift apart.
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }.padding(28)
+    }
+
+    /// The Music controls the Hub publishes for this model, and nothing else.
+    private func musicControls(_ configuration: NativeMusicConfiguration, _ values: NativeMusicSettings) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Stepper(value: Binding(
+                get: { Int((workspace.musicSettings?.durationSeconds ?? values.durationSeconds).rounded()) },
+                set: { workspace.musicSettings?.durationSeconds = Double($0) }),
+                in: Int(configuration.limits.minDurationSeconds.rounded())...Int(configuration.limits.maxDurationSeconds.rounded()),
+                step: 5) {
+                Text("Duration: \(Int((workspace.musicSettings?.durationSeconds ?? values.durationSeconds).rounded())) s")
+            }
+            Stepper(value: Binding(get: { workspace.musicSettings?.steps ?? values.steps }, set: { workspace.musicSettings?.steps = $0 }),
+                    in: configuration.limits.minSteps...configuration.limits.maxSteps) {
+                Text("Steps: \(workspace.musicSettings?.steps ?? values.steps)")
+            }
+            HStack {
+                Text("Guidance")
+                Spacer()
+                TextField("Guidance", value: Binding(get: { workspace.musicSettings?.guidanceScale ?? values.guidanceScale }, set: { workspace.musicSettings?.guidanceScale = $0 }), format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 95)
+            }
+            HStack {
+                Text("Shift")
+                Spacer()
+                TextField("Shift", value: Binding(get: { workspace.musicSettings?.shift ?? values.shift }, set: { workspace.musicSettings?.shift = $0 }), format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 95)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Seed")
+                    Spacer()
+                    TextField("Seed", value: Binding(get: { workspace.musicSettings?.seed ?? values.seed }, set: { workspace.musicSettings?.seed = $0 }), format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder).frame(width: 145)
+                }
+                Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle("Instrumental", isOn: Binding(
+                get: { workspace.musicSettings?.instrumental ?? values.instrumental },
+                set: { workspace.musicSettings?.instrumental = $0 }))
+                .toggleStyle(.checkbox)
+            if workspace.musicSettings?.instrumental != true {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Lyrics").font(.callout)
+                    TextField("One line per lyric", text: Binding(
+                        get: { workspace.musicSettings?.lyrics ?? values.lyrics },
+                        set: { workspace.musicSettings?.lyrics = $0 }), axis: .vertical)
+                        .lineLimit(3...6).textFieldStyle(.roundedBorder)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Vocal language").font(.callout)
+                    TextField("Language code, e.g. en", text: Binding(
+                        get: { workspace.musicSettings?.vocalLanguage ?? values.vocalLanguage },
+                        set: { workspace.musicSettings?.vocalLanguage = $0 }))
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            if let rate = selectedMusicModel?.sampleRateHz, let channels = selectedMusicModel?.channels {
+                Text("Output: WAV · \(channels) channel\(channels == 1 ? "" : "s") · \(rate) Hz")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Why Generate Music cannot run yet, or nil when it can. One rule, read by both the button and
+    /// the message under it, so the control and the explanation can never disagree.
+    private var musicBlockedReason: String? {
+        if !connected { return "Start the local services first." }
+        if workspace.submittingMusic { return "Generating. One job at a time." }
+        if workspace.musicPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Describe the music you want."
+        }
+        if workspace.musicPrompt.count > 4_000 { return "The prompt exceeds the 4,000-character limit." }
+        guard let model = selectedMusicModel else { return "Choose a model." }
+        if let reason = model.blockReason { return reason }
+        if model.supported != true { return model.supportNote }
+        if model.cached != true { return "Download \(model.label) on the Models page first." }
+        if model.runtimeReady != true {
+            return "\(model.label) is installed, but its local runtime is unavailable."
+        }
+        guard let settings = workspace.musicSettings, workspace.musicConfiguration?.accepts(settings) == true else {
+            return "Choose settings within the model's supported ranges, or restore its defaults."
+        }
+        return nil
+    }
+
+    private func musicJobRow(_ job: NativeJob) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: active(job.state) ? "music.note" : job.state == "done"
+                      ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
+                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if job.state == "done", !job.assetFacts.isEmpty {
+                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Result details: \(job.assetFacts)")
+                    }
+                }
+                Spacer()
+                if job.state == "done" {
+                    Button("Preview") { selectedMusicID = job.id; studio.select(.music) }
+                    Button("Play") {
+                        Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
+                    }.disabled(!connected)
+                    Button("Save…") { saveMusic(job) }.disabled(!connected)
+                } else if job.state == "uncertain" {
+                    Button("Check Original Result") { Task { await workspace.reconcileMusic(job) } }.disabled(!connected)
+                } else if active(job.state) {
+                    Button("Cancel") { Task { await workspace.cancelMusic(job) } }.disabled(!connected)
                 }
             }
             if let message = job.error, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -843,7 +1074,10 @@ struct StudioContent: View {
     }
 
     private func modelPicker(_ function: StudioFunction) -> some View {
-        let selection = function == .audio ? $workspace.audioModel : function == .image ? $workspace.imageModel : $workspace.transcriptionModel
+        let selection = function == .audio ? $workspace.audioModel
+            : function == .image ? $workspace.imageModel
+            : function == .music ? $workspace.musicModel
+            : $workspace.transcriptionModel
         // On the Audio page the list is the one that belongs to the chosen voice tab, so the model
         // and the controls under it always describe the same job.
         let models = function == .audio
@@ -1179,6 +1413,11 @@ struct StudioContent: View {
                     sectionTitle("Audio")
                     if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
                     ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
+                }
+                if historyTab == .all || historyTab == .music {
+                    sectionTitle("Music")
+                    if workspace.musicJobs.isEmpty { Text("No music jobs yet.").foregroundStyle(.secondary) }
+                    ForEach(workspace.musicJobs) { job in musicJobRow(job); Divider() }
                 }
                 if historyTab == .all || historyTab == .subtitle {
                     sectionTitle("Subtitle")
@@ -2316,6 +2555,16 @@ struct StudioContent: View {
         // Subtitle saves use. Acknowledgement is what releases the protected copy.
         Task {
             do { try await workspace.saveAudio(job, to: url) }
+            catch { fileActionError = error.localizedDescription }
+        }
+    }
+    private func saveMusic(_ job: NativeJob) {
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "music-\(job.id).wav"; panel.allowedContentTypes = [.wav]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Same order as every other workspace: fetch, verify the bytes against the Hub's receipt,
+        // write, re-read, and only then acknowledge delivery.
+        Task {
+            do { try await workspace.saveMusic(job, to: url) }
             catch { fileActionError = error.localizedDescription }
         }
     }

@@ -210,21 +210,29 @@ Terra for build scripts, Luna for root-approved mechanical documentation edits.
 Also repaired here: `apple_chip_name()`/`apple_machine_type()` no longer depend on
 `sysctl`/`system_profiler` being on PATH (commit `b68e7b2`).
 
-### R06 — Native Music workflow [QUEUED]
+### R06 — Native Music workflow [LOCALLY VERIFIED / self-reviewed; independent review pending]
 
 **Owned scope:** `native/StudioAPI.swift`, `native/StudioViews.swift`,
 `native/ShellCore.swift`, `tests/native/api_main.swift`, focused Music UI tests;
 Terra implementation after root/Impeccable design review. Serialize native edits.
 
-- [ ] Reuse the Image/Audio form-result layout and existing durable Music Hub routes.
+- [x] Reuse the Image/Audio form-result layout and existing durable Music Hub routes.
   Show supported exact model/controls, install/readiness block, submit/progress/cancel,
   recovery uncertainty, per-studio and unified history. No new job subsystem.
-- [ ] Wire authenticated artifact open/save with byte/hash verification and ACK only
+  Music models decode from the worker's `generation_defaults`/`generation_limits`;
+  submit uses `POST /api/hub/jobs` with `modality: "music"`.
+- [x] Wire authenticated artifact open/save with byte/hash verification and ACK only
   after verified save. Preserve output protection when export or acknowledgement fails.
-- [ ] Test request validation and stale connection/job responses with native API fixtures;
+  Corrupt artifacts are rejected with no ACK; a failed save never ACKs; a verified
+  save ACKs exactly once; a rejected ACK leaves the file on disk.
+- [x] Test request validation and stale connection/job responses with native API fixtures;
   render minimum/normal sizes, keyboard/focus/accessibility and long/error/empty states.
-- [ ] Stage model-free app; prove actual UI routing/readiness, then independent review.
-  Real generation is R07; do not advertise it as qualified after only startup.
+  Native fixtures cover the cases above; offscreen renders at 1040×680 and 1920×1053
+  were inspected. Actual GUI save-panel/keyboard interaction is not exercised.
+- [x] Stage model-free app; prove actual UI routing/readiness. Native build and the
+  three native suites pass; the workspace renders a real workflow.
+- [ ] Independent review. Real generation is R07 and is **not** claimed by R06.
+  Evidence: [r06-report.md](r06-report.md).
 
 ### R07 — Current-artifact model matrix [QUEUED]
 

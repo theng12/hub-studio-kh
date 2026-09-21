@@ -39,10 +39,11 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertIn("runningSeconds: item?.elapsedS", mapping)
 
     def test_every_job_row_shows_it(self) -> None:
-        """One suffix, three row styles, both pages: the generator and Jobs cannot disagree."""
-        self.assertEqual(VIEWS.count("job.generationSuffix"), 3,
-                         "imageJobRow, jobRow and subtitleJobRow must each show it")
-        for row in ("private func imageJobRow", "private func jobRow", "private func subtitleJobRow"):
+        """One suffix, four row styles, both pages: the generator and Jobs cannot disagree."""
+        self.assertEqual(VIEWS.count("job.generationSuffix"), 4,
+                         "imageJobRow, jobRow, musicJobRow and subtitleJobRow must each show it")
+        for row in ("private func imageJobRow", "private func jobRow",
+                    "private func musicJobRow", "private func subtitleJobRow"):
             body = VIEWS[VIEWS.index(row):]
             body = body[:body.index("\n    private func", 10)]
             self.assertIn("generationSuffix", body, f"{row} must show the generation time")

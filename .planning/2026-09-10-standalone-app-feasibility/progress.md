@@ -763,3 +763,30 @@ Also ran the native test binaries built from the same sources:
 and `tests/test_generation_time.py` + `test_audio_layout.py` +
 `test_native_build_scripts.py` + `test_peer_path_contract.py` → 42 passed.
 Not yet integrated; the subagent is still finalizing.
+
+## 2026-09-21 — R06 native Music workflow (DeepSeek + bounded subagent)
+
+[MEASURED] Implemented the native Music workflow that was missing behind the
+"Engine not installed" placeholder. `StudioAPI.swift` decodes the worker's
+`generation_defaults`/`generation_limits`, keeps per-studio Music history and a
+persisted pending request, and submits through the existing durable
+`POST /api/hub/jobs` queue with `modality: "music"`. Artifact retrieval verifies
+byte count, SHA-256 and RIFF/WAVE before play/save; delivery is acknowledged only
+after a verified save, a rejected ACK leaves the file on disk, and an uncertain
+request is never resubmitted as new work. `StudioViews.swift` wires a Music
+workspace (prompt, Generate, model/controls, Preview, Save Audio, history,
+Cancel/Check Original Result). `tests/native/api_main.swift` adds Music fixtures
+and cases; `tests/test_generation_time.py` now expects four job-row styles.
+
+[MEASURED] Integration gate: `STUDIOHUB_MACOS_SDK=macosx26.5 bash native/build.sh`
+**exit 0** (boundary, API, lifecycle checks passed; optimized app built). Offscreen
+render of the Music page at 1040×680 and 1920×1053 exit 0 and inspected. The three
+native test binaries and `test_generation_time.py` + `test_audio_layout.py` +
+`test_native_build_scripts.py` + `test_peer_path_contract.py` (42) passed. Full
+root suite: **655 tests OK, 11 skipped, 440.729s** (no staged app selected).
+
+[MEASURED] The implementation came from a bounded background subagent under an
+explicit non-committing brief; the coordinator reviewed the entire diff (including
+the corrupt-artifact/no-ACK and uncertain-request cases), ran the gate, and owns
+this record. Independent review of R06 is **pending**. No real Music model ran;
+GUI save-panel/keyboard interaction was not driven. Real generation remains R07.

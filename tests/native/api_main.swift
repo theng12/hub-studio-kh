@@ -43,6 +43,10 @@ final class FixtureProtocol: URLProtocol {
     static var uncertainImage = false
     static var imageAckPaths: [String] = []
     static var imageAckRejects = false
+    static var uncertainMusic = false
+    static var corruptMusic = false
+    static var musicAckPaths: [String] = []
+    static var musicAckRejects = false
     static var transcriptionAckPaths: [String] = []
     static var transcriptionAckRejects = false
     static var modelRoutes: [String] = []
@@ -90,6 +94,13 @@ final class FixtureProtocol: URLProtocol {
         return body
     }()
     static func audioDigest() -> String { SHA256.hash(data: wav).map { String(format: "%02x", $0) }.joined() }
+    /// The exact key set the Music worker's `validate_request` reads, echoed back on a job item the
+    /// way the Hub's `public_item` does. All eight fields are present so the app can reconstruct
+    /// the accepted settings and match an uncertain job to its original request.
+    static let musicParams: [String: Any] = [
+        "duration_seconds": 30.0, "steps": 8, "guidance_scale": 1.0, "shift": 3.0,
+        "seed": -1, "instrumental": true, "lyrics": "[Instrumental]", "vocal_language": "unknown",
+    ]
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
     static let releaseGeneration = DispatchSemaphore(value: 0)
@@ -122,6 +133,10 @@ final class FixtureProtocol: URLProtocol {
     static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
     static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
+    static func setUncertainMusic(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainMusic = value }
+    static func setCorruptMusic(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptMusic = value }
+    static func setMusicAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; musicAckRejects = value }
+    static func musicAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return musicAckPaths }
     static func transcriptionAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return transcriptionAckPaths }
     static func setTranscriptionAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; transcriptionAckRejects = value }
     static func modelCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return modelRoutes }
@@ -238,7 +253,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
         case ("POST", "/api/hub/model-health/recheck"):
             let body = requestBody()
             Self.lock.lock()
@@ -452,15 +467,22 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/studio/voice/api/model-storage"):
             result = (200, "application/json", Data(#"{"cache_root":"/tmp/hub","groups":[{"id":"voxcpm2","label":"VoxCPM2 (MLX)","bytes_total":5000000000,"memory":{"required_gb":8,"this_mac_gb":16,"runs_here":true}},{"id":"fish-s2-pro","label":"Fish Audio S2 Pro (MLX)","bytes_total":17000000000,"memory":{"required_gb":32,"this_mac_gb":16,"runs_here":false}}]}"#.utf8))
         case ("GET", "/api/hub/jobs"):
-            Self.lock.lock(); let pendingUncertain = Self.uncertainImage; Self.lock.unlock()
+            Self.lock.lock()
+            let pendingImage = Self.uncertainImage
+            let pendingMusic = Self.uncertainMusic
+            Self.lock.unlock()
             // The unresolved request is a *different* batch (older, so it does not become the most
             // recent job). It used to be the same id flipping from done to uncertain, which cannot
             // happen now that a finished job's detail is fetched once - and cannot happen in
-            // production either, where nothing can re-open a finished job.
-            let listed = pendingUncertain
-                ? #"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"},{"id":"image-uncertain","modality":"image"}]}"#
-                : #"{"batches":[{"id":"old-job","modality":"voice"},{"id":"image-job","modality":"image"}]}"#
-            result = (200, "application/json", Data(listed.utf8))
+            // production either, where nothing can re-open a finished job. Music mirrors Image.
+            var batches: [[String: String]] = [
+                ["id": "old-job", "modality": "voice"],
+                ["id": "image-job", "modality": "image"],
+                ["id": "music-job", "modality": "music"],
+            ]
+            if pendingImage { batches.append(["id": "image-uncertain", "modality": "image"]) }
+            if pendingMusic { batches.append(["id": "music-uncertain", "modality": "music"]) }
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["batches": batches]))
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
             if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
@@ -511,6 +533,35 @@ final class FixtureProtocol: URLProtocol {
             let originalRequestID = Self.generateBodies.last?["client_request_id"] as? String ?? ""
             Self.lock.unlock()
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
+        case ("GET", "/api/hub/jobs/music-uncertain"):
+            let uncertainSHA = SHA256.hash(data: Self.wav).map { String(format: "%02x", $0) }.joined()
+            let pending: [String: Any] = ["id": "music-uncertain", "modality": "music", "model": "ACE-Step/Ace-Step1.5", "created_at": 20,
+                "items": [["index": 0, "state": "uncertain", "prompt": "Warm lo-fi beat", "artifact_url": "/api/hub/jobs/music-uncertain/items/0/artifact", "bytes": Self.wav.count, "sha256": uncertainSHA,
+                           "params": Self.musicParams]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: pending))
+        case ("GET", "/api/hub/jobs/music-job"):
+            let sha = SHA256.hash(data: Self.wav).map { String(format: "%02x", $0) }.joined()
+            Self.lock.lock(); let uncertain = Self.uncertainMusic; Self.lock.unlock()
+            let body: [String: Any] = ["id": "music-job", "modality": "music", "model": "ACE-Step/Ace-Step1.5", "created_at": 35,
+                "items": [["index": 0, "state": uncertain ? "uncertain" : "done", "progress": 1.0, "prompt": "Warm lo-fi beat",
+                           "artifact_url": "/api/hub/jobs/music-job/items/0/artifact", "bytes": Self.wav.count, "sha256": sha,
+                           "media_type": "audio/wav", "audio_duration_s": 30.0, "runtime_s": 89.0,
+                           "params": Self.musicParams]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case ("GET", "/api/hub/jobs/music-job/items/0/artifact"):
+            Self.lock.lock(); let corrupt = Self.corruptMusic; Self.lock.unlock()
+            result = (200, "audio/wav", corrupt ? Data([0x52, 0x49, 0x46, 0x46]) : Self.wav)
+        case ("POST", "/api/hub/jobs/music-job/items/0/ack"):
+            Self.lock.lock(); Self.musicAckPaths.append(path); let rejects = Self.musicAckRejects; Self.lock.unlock()
+            result = rejects
+                ? (502, "application/json", Data(#"{"detail":"music worker did not acknowledge receipt"}"#.utf8))
+                : (200, "application/json", Data(#"{"ok":true}"#.utf8))
+        case ("POST", "/api/hub/jobs/music-job/items/0/reconcile"):
+            Self.lock.lock()
+            Self.uncertainMusic = false
+            let originalRequestID = Self.generateBodies.last?["client_request_id"] as? String ?? ""
+            Self.lock.unlock()
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
         case ("GET", "/studio/voice/api/downloads"):
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
         case ("POST", "/api/hub/jobs"):
@@ -533,6 +584,10 @@ final class FixtureProtocol: URLProtocol {
                 }
                 if object["modality"] as? String == "image" {
                     result = (200, "application/json", Data(#"{"batch_id":"image-job","items":1,"replayed":false}"#.utf8))
+                    break
+                }
+                if object["modality"] as? String == "music" {
+                    result = (200, "application/json", Data(#"{"batch_id":"music-job","items":1,"replayed":false}"#.utf8))
                     break
                 }
             }
@@ -580,7 +635,7 @@ final class FixtureProtocol: URLProtocol {
 
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
     private static let catalogFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}}]}"#.utf8)
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2}]}"#.utf8)
 
     private func finish(_ result: (Int, String, Data)) {
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
@@ -610,7 +665,7 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
-        require(store.models.count == 7, "combined model catalog")
+        require(store.models.count == 8, "combined model catalog")
 
         // Fleet: one app can be told what it is. The role is the Hub's own setting, saved
         // through its controller route, and the screen shows the Hub's answer rather than the
@@ -1238,12 +1293,13 @@ struct NativeAPITests {
         await store.verifyInstalledModels()
         let verifyAll = Array(FixtureProtocol.modelCalls().dropFirst(beforeVerifyAll))
         require(Set(verifyAll) == ["verify:synthetic-custom-voice", "verify:fixture-flux",
-                                   "verify:whisper-turbo", "verify:voxcpm2-4bit"],
+                                   "verify:whisper-turbo", "verify:voxcpm2-4bit",
+                                   "verify:ace-step-1-5-turbo"],
                 "Verify All must check every installed model with a Hub package: \(verifyAll)")
-        require(verifyAll.count == 4, "Verify All must not verify a model twice")
-        // Six catalog entries report as cached, but only four have an approved Hub package.
+        require(verifyAll.count == 5, "Verify All must not verify a model twice")
+        // Seven catalog entries report as cached, but only five have an approved Hub package.
         // The summary must say so rather than claim everything was checked.
-        require(store.modelNote == "Verified 4 of 6. Could not verify: Other TTS, Moonshine.",
+        require(store.modelNote == "Verified 5 of 7. Could not verify: Other TTS, Moonshine.",
                 "Verify All must report what it could not verify, got: \(store.modelNote ?? "nil")")
         require(store.modelNoteRepo == nil, "a library-wide summary must not be scoped to a model")
 
@@ -1519,6 +1575,115 @@ struct NativeAPITests {
                 "a machine pin must reach the Hub: \(String(describing: FixtureProtocol.generatedBodies().last?["routing"]))")
         store.routingPin = nil
 
+        // Music: the same durable Hub route as Image, with the Music worker's own controls. The
+        // catalogue publishes a Music-shaped `generation_defaults` under the same key Image uses,
+        // so reaching here also pins that one modality cannot break the whole catalogue decode.
+        require(store.musicJobs.first?.id == "music-job", "Music history must restore through Hub")
+        require(store.musicModel == "ACE-Step/Ace-Step1.5", "the Music model must come from the catalogue")
+        require(store.musicSettings?.durationSeconds == 30 && store.musicSettings?.steps == 8
+                && store.musicSettings?.guidanceScale == 1 && store.musicSettings?.shift == 3
+                && store.musicSettings?.seed == -1 && store.musicSettings?.instrumental == true,
+                "Music defaults must come from the runtime")
+        require(store.musicConfiguration?.limits.maxDurationSeconds == 600
+                && store.musicConfiguration?.limits.maxGuidance == 30,
+                "Music limits must come from the runtime")
+        let musicModelInfo = store.models.first { $0.function == .music && $0.repo == "ACE-Step/Ace-Step1.5" }
+        require(musicModelInfo?.sampleRateHz == 48000 && musicModelInfo?.channels == 2,
+                "the published WAV shape must reach the app")
+        store.musicPrompt = "Warm lo-fi beat"
+        await store.generateMusic()
+        let musicBody = FixtureProtocol.generatedBodies().last!
+        require(musicBody["modality"] as? String == "music", "Music must submit through the Hub job queue")
+        require(musicBody["model"] as? String == "ACE-Step/Ace-Step1.5", "Music must name its model")
+        let musicItem = (musicBody["items"] as? [[String: Any]])?.first
+        require(musicItem?["prompt"] as? String == "Warm lo-fi beat", "Music prompt must reach the Hub")
+        let musicWireParams = musicItem?["params"] as? [String: Any]
+        require((musicWireParams?["duration_seconds"] as? NSNumber)?.doubleValue == 30,
+                "Music must send duration_seconds the worker reads")
+        require((musicWireParams?["guidance_scale"] as? NSNumber)?.doubleValue == 1,
+                "Music must send guidance_scale the worker reads")
+        require((musicWireParams?["shift"] as? NSNumber)?.doubleValue == 3,
+                "Music must send shift the worker reads")
+        require((musicWireParams?["vocal_language"] as? String) == "unknown",
+                "Music must send vocal_language the worker reads")
+        require(musicWireParams?["instrumental"] as? Bool == true, "Music must send the instrumental flag")
+        let music = store.musicJobs.first!
+        require(music.musicSettings?.steps == 8, "an accepted Music job must carry its settings back")
+        let verifiedMusic = try await store.musicData(for: music)
+        require(verifiedMusic == FixtureProtocol.wav, "verified Music artifact")
+        FixtureProtocol.setCorruptMusic(true)
+        do { _ = try await store.musicData(for: music); fatalError("corrupt Music artifact was accepted") }
+        catch { require(error.localizedDescription.contains("verification"), "Music hash mismatch needs an actionable message") }
+        FixtureProtocol.setCorruptMusic(false)
+        require(FixtureProtocol.musicAckRequests().isEmpty, "unverified Music reads must not acknowledge delivery")
+        // A save that cannot even be written must never reach the Hub receipt, even though
+        // the artifact itself was fetched and hash-verified successfully first.
+        let unwritableMusic = temporary.appendingPathComponent("missing-directory/never.wav")
+        do {
+            try await store.saveMusic(music, to: unwritableMusic)
+            fatalError("a Music save into a missing directory must fail")
+        } catch {
+            require(FixtureProtocol.musicAckRequests().isEmpty, "a failed Music save must never acknowledge delivery")
+        }
+        let musicDestination = temporary.appendingPathComponent("saved-music.wav")
+        try await store.saveMusic(music, to: musicDestination)
+        let savedMusic = try Data(contentsOf: musicDestination)
+        require(savedMusic == FixtureProtocol.wav, "Music export bytes")
+        require(FixtureProtocol.musicAckRequests() == ["/api/hub/jobs/music-job/items/0/ack"],
+                "a verified Music save must acknowledge delivery exactly once")
+        FixtureProtocol.setMusicAckRejects(true)
+        let rejectedMusic = temporary.appendingPathComponent("rejected-music.wav")
+        do {
+            try await store.saveMusic(music, to: rejectedMusic)
+            fatalError("a rejected Music acknowledgement must be reported")
+        } catch {
+            require(error.localizedDescription.contains("was not acknowledged"),
+                    "rejected Music acknowledgement needs an actionable message")
+        }
+        require(FileManager.default.fileExists(atPath: rejectedMusic.path),
+                "the verified Music file must remain on disk when acknowledgement fails")
+        FixtureProtocol.setMusicAckRejects(false)
+        store.restoreMusicDefaults()
+        require(store.musicSettings?.steps == 8 && store.musicSettings?.seed == -1,
+                "Restore Music Defaults must use runtime values")
+
+        FixtureProtocol.setUncertainMusic(true)
+        await store.refresh()
+        store.musicPrompt = "Warm lo-fi beat"
+        let beforeUncertainMusic = FixtureProtocol.generatedBodies().count
+        await store.generateMusic()
+        require(FixtureProtocol.generatedBodies().count == beforeUncertainMusic,
+                "the same unresolved Music request must not be submitted as new work")
+        require(store.error?.contains("uncertain") == true,
+                "an unresolved Music repeat needs a reconciliation explanation")
+        store.musicPrompt = "A different new track"
+        await store.generateMusic()
+        require(FixtureProtocol.generatedBodies().count == beforeUncertainMusic + 1,
+                "uncertainty must not block a different new Music request")
+        let musicPending = state.appendingPathComponent("native-pending-music.json")
+        require(FileManager.default.fileExists(atPath: musicPending.path),
+                "an accepted uncertain Music response must retain its original request")
+        require(store.musicNote?.contains("uncertain") == true,
+                "an uncertain Music response must say so beside the form")
+        let uncertainMusicRequest = FixtureProtocol.generatedBodies().last!
+        FixtureProtocol.setUncertainMusic(false)
+        await store.generateMusic()
+        require(FixtureProtocol.generatedBodies().last!["client_request_id"] as? String
+                    == uncertainMusicRequest["client_request_id"] as? String,
+                "an uncertain Music response must replay its original identity, not mint a new one")
+        require(!FileManager.default.fileExists(atPath: musicPending.path),
+                "a reconciled Music response must clear its pending identity")
+        FixtureProtocol.setUncertainMusic(true)
+        store.musicPrompt = "A second different track"
+        await store.generateMusic()
+        let beforeMusicCheck = FixtureProtocol.generatedBodies().count
+        await store.reconcileMusic(store.musicJobs.first!)
+        require(FixtureProtocol.generatedBodies().count == beforeMusicCheck,
+                "Check Original Result must not submit another Music generation")
+        require(store.musicJobs.first?.state == "done", "Music reconciliation must refresh history")
+        require(!FileManager.default.fileExists(atPath: musicPending.path),
+                "a verified original Music result must clear its matching pending identity")
+
         let input = temporary.appendingPathComponent("clip.wav")
         try Data([0x52, 0x49, 0x46, 0x46]).write(to: input)
         store.transcriptionFile = input
@@ -1645,9 +1810,13 @@ struct NativeAPITests {
 
         store.audioText = "Persist this draft"
         store.transcriptionModel = supportedSTT[0].repo
+        store.musicPrompt = "Persist this music draft"
         store.disconnect()
         let preferences = state.appendingPathComponent("native-workspaces.json")
         require(FileManager.default.fileExists(atPath: preferences.path), "workspace choices not persisted")
+        let persistedPreferences = String(decoding: try Data(contentsOf: preferences), as: UTF8.self)
+        require(persistedPreferences.contains("Persist this music draft"),
+                "the Music draft must persist like the other workspaces")
         let mode = try FileManager.default.attributesOfItem(atPath: preferences.path)[.posixPermissions] as? NSNumber
         require(mode?.intValue == 0o600, "workspace choices must be private")
 
