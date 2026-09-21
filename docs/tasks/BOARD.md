@@ -28,10 +28,15 @@ native Music workflow locally verified (`r06-report.md`): `native/build.sh` exit
 three native suites pass, Music renders at 1040×680 and 1920×1053, root suite 655
 OK/11 skips.** Independent review remains pending for each. See
 [status](../Studio%20Hub%20Project%20Status.md).
-**Next locally executable:** R07/R08/R10 need real models/hardware/GUI; R09
-counterpart ACK/cancel/Music edits need separate GatewayKH scope authority. Then
-remaining portable/native/model work. GatewayKH still needs ACK/cancel/Music and
-end-to-end qualification; no live
+**All currently authorized locally executable work is complete:** R06's staged app
+passed the model-free four-worker smoke (Music health/catalog 200, unauth 401,
+owned shutdown, bundle unchanged) and R10's local candidate/identity/licence
+inventory is recorded (`release_kit.py` exits 1 with 34 "advertised but not
+installed" because no model library exists here). Remaining is gated: R07 needs
+real models, R08 real jobs/GUI interaction, R09 counterpart ACK/cancel/Music edits
+need separate GatewayKH scope authority, R10 a model library and clean/original-M1
+hardware, R05's Image cache a network fetch, and independent review a separate
+reviewer. GatewayKH still needs ACK/cancel/Music and end-to-end qualification; no live
 connection or enrollment.
 All earlier "next" statements below are historical where they differ.
 

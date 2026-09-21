@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-21 13:57 +07
+Last updated: 2026-09-21 13:58 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -76,6 +76,15 @@ second planning system.
   exit 0; renders at 1040×680/1920×1053; root suite 655 OK/11 skipped.
 - **Flake re-probe** (`0fdfbe3`). Shared-voice peer test passed 3/3 in isolation;
   still not fixed, cause unproven.
+- **R06 packaged model-free smoke** (`eb3f0b1`). Staged `.build/deepseek-proof-r06/Studio Hub.app`
+  (`implementation_commit a600ca6`, tree sha256 `712bb61d…`) with the bundled native
+  shell hash matching the fresh build; probe `ok:true`, all four workers up, Music
+  health/catalog 200, unauthenticated Music 401, owned processes stopped, bundle
+  unchanged, no model inference.
+- **R10 local candidate inventory** (`5c0e5f0`). `release_kit.py` records app/runtime
+  identity, components and operator steps and exits 1 with 34 "advertised but not
+  installed" problems because no model library exists here; model completeness and
+  clean-Mac runs stay gated.
 
 ## Packet checklist (R04–R10)
 
@@ -119,12 +128,18 @@ second planning system.
 
 ## Current packet
 
-- Objective: none newly started. Next candidates are R07/R08/R09/R10, all gated on
-  unavailable models, hardware, GUI, counterpart authority, or distribution authority.
-- Next smallest locally executable action: reconcile the R06 evidence into the
-  release/status records and run a final clean full-gate on a clean working tree; if
-  a model package is present locally, begin the R07 requalification that needs no new
-  download; otherwise confirm the gates and leave the record truthful.
+- Objective: **all currently authorized locally executable work is complete.** R04,
+  R05 (records + Image offline probe), R06 (native Music + packaged smoke) and R09
+  Hub-side selection are locally verified and recorded; R10's local candidate and
+  identity/licenses are inventoried.
+- Remaining is gated, not blocked by effort: R07 needs real models (no
+  `~/StudioHubModels` here), R08 needs real jobs/GUI interaction, R09's counterpart
+  ACK/cancel/Music edits need GatewayKH scope authority, R10 needs a model library
+  and clean/original-M1 hardware, R05's Image cache needs a network fetch, and
+  independent review requires a separate reviewer.
+- Next action on resumption: pick up whichever gate is opened first (install a
+  qualified model package, obtain GatewayKH scope, or obtain clean hardware), then
+  requalify against the then-current HEAD with exact commands.
 
 ## Test processes / temp paths / cleanup
 
@@ -139,33 +154,33 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-21 13:57 +07
+Timestamp: 2026-09-21 13:58 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `6211fbf` (plus this status-file commit)
+Current HEAD: `5c0e5f0` (plus this status-file commit)
 Uncommitted changes and owners: this status file only (DeepSeek).
-Current packet and objective: R04–R06 locally verified and recorded; R07–R10 are
-gated on models, hardware, GUI, counterpart authority or distribution authority.
+Current packet and objective: all locally executable work complete; R07-R10 gates documented.
 Completed changes: R04 node-owned admission; host-identity PATH fix; R05 records +
-Image offline probe; R09 Hub-side selection/no-fanout; R06 native Music workflow.
+Image offline probe; R09 Hub-side selection/no-fanout; R06 native Music workflow +
+packaged model-free smoke; R10 local candidate inventory.
 Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04-report,r05-report,r06-report}.md`
-and `progress.md`; logs under `.build/deepseek-*`; commits `e1d167a`…`6211fbf`.
+and `progress.md`; logs and JSON under `.build/deepseek-*`; commits `e1d167a`..`5c0e5f0`.
 Self-review findings: fixed a `CancelledError` from the R04 lease sweep; R06's
 out-of-native `test_generation_time.py` change is a legitimate row-count update.
 Independent review status: not performed for R04/R05/R06/host fix.
 Remaining confirmed defects: none newly open.
-Unverified concerns: shared-voice flake (3× re-probe passed, cause unproven);
+Unverified concerns: shared-voice flake (3x re-probe passed, cause unproven);
 deprecation/ResourceWarnings; GatewayKH counterpart gaps; R04 two-gate two-Hub limit.
 External gates and authorization needed: see above list.
-Owned processes / temporary data / cleanup: none outstanding.
-Next smallest action: if a qualified model package exists locally, start R07
-requalification without new downloads; otherwise verify the gates still hold and
-keep the record truthful.
+Owned processes / temporary data / cleanup: none outstanding. Proof app and logs
+remain under `.build/` (ignored) for future reference; do not delete as "cleanup".
+Next smallest action: on resumption, verify the tree is clean at `5c0e5f0` (or the
+latest local commit), then act on whichever external gate opened first.
 First command to run:
-`ls "$HOME/StudioHubModels" 2>/dev/null && .build/voice-runtime/bin/python3 -I -B packaging/voice-runtime/runtime_packaging.py verify .build/st03-image-runtime-worker`
-Acceptance criteria: any new work is measured against the current HEAD with exact
-commands and labeled honestly; no gated packet is claimed as qualified.
+`git status --short && git log --oneline -3`
+Acceptance criteria: any resumed work is measured against the current HEAD with
+exact commands, labeled honestly, and no gated packet is claimed as qualified.
 Important do-not-touch paths: `~/Downloads/model-library`,
 `/Applications/Studio Hub.app`, other worktrees, `codex/recovered-music-draft`,
 GatewayKH checkout.
