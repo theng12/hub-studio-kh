@@ -57,12 +57,20 @@ def weights_dir(package_root: Path) -> Path:
 
 
 def _build_work_tree(root: Path, weights: Path) -> Path:
-    """Lay out a temp tree so the CLI finds its code and the package weights."""
+    """Lay out a temp tree so the CLI finds its code and the package weights.
+
+    The code is **copied**, not symlinked: the CLI resolves its own root with
+    ``Path(__file__).resolve()``, so a symlinked script would point back at the
+    installed app and its weight lookup (and any auto-download) would land in the
+    app bundle instead of this private tree.
+    """
     models = root / "models"
     models.mkdir(parents=True, exist_ok=True)
-    (root / "scripts").symlink_to(ENGINE_DIR / "scripts", target_is_directory=True)
-    (models / "__init__.py").symlink_to(ENGINE_DIR / "models" / "__init__.py")
-    (models / "defs").symlink_to(ENGINE_DIR / "models" / "defs", target_is_directory=True)
+    shutil.copytree(ENGINE_DIR / "scripts", root / "scripts",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(ENGINE_DIR / "models" / "defs", models / "defs",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copy2(ENGINE_DIR / "models" / "__init__.py", models / "__init__.py")
     # The CLI looks for weights at <root>/models/mlx; point that at the package.
     (models / "mlx").symlink_to(weights, target_is_directory=True)
     return root / "scripts" / "sa3_mlx.py"
