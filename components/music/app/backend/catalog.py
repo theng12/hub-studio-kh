@@ -140,6 +140,54 @@ LM_06B = Checkpoint(
     parameters_b=0.6, repo_path="acestep-5Hz-lm-0.6B",
     note="5 Hz semantic-token LM (Qwen3-0.6B base). The only LM tier usable at "
          "tier4; responsible for the ~8 s audio-code phase in the probe.")
+# ── Stable Audio 3 (MLX) ────────────────────────────────────────────────────
+# A second music engine: Stability's latent-diffusion model, run through the
+# vendored pure-MLX runtime under ``components/music/engines/stable_audio_3``.
+# Instrumental only (no vocals); 44.1 kHz stereo; 380 s absolute maximum.
+STABLE_AUDIO_REPO = "stabilityai/stable-audio-3-optimized"
+STABLE_AUDIO_REVISION = "da6edc54ddba10bfd79a077102ded687f80e882b"
+STABLE_AUDIO_PACKAGE_ID = "stable-audio-3-medium"
+SA3_MAX_DURATION_SECONDS = 380
+SA3_DIT_MEDIUM = Checkpoint(
+    name="dit_medium", kind="dit", repo=STABLE_AUDIO_REPO,
+    revision=STABLE_AUDIO_REVISION, size_gb=2907300946 / 1e9,
+    size_bytes=2907300946, parameters_b=1.4, repo_path="MLX/dit_medium_f16.npz",
+    note="1.4B medium DiT (sa3-medium-ARC), fp16 MLX. Higher quality than the "
+         "small DiTs; paired with the SAME-L codec.")
+SA3_SAME_L_ENCODER = Checkpoint(
+    name="same_l_encoder", kind="codec", repo=STABLE_AUDIO_REPO,
+    revision=STABLE_AUDIO_REVISION, size_gb=1704313504 / 1e9,
+    size_bytes=1704313504, parameters_b=None,
+    repo_path="MLX/same_l_encoder_f32.npz",
+    note="SAME-Large encoder (fp32): 44.1 kHz stereo into 256-dim latents.")
+SA3_SAME_L_DECODER = Checkpoint(
+    name="same_l_decoder", kind="codec", repo=STABLE_AUDIO_REPO,
+    revision=STABLE_AUDIO_REVISION, size_gb=1704311976 / 1e9,
+    size_bytes=1704311976, parameters_b=None,
+    repo_path="MLX/same_l_decoder_f32.npz",
+    note="SAME-Large decoder (fp32); always FP32 because its differential "
+         "attention cancels in fp16.")
+SA3_T5GEMMA = Checkpoint(
+    name="t5gemma", kind="text-encoder", repo=STABLE_AUDIO_REPO,
+    revision=STABLE_AUDIO_REVISION, size_gb=567443068 / 1e9,
+    size_bytes=567443068, parameters_b=0.3, repo_path="MLX/t5gemma_f16.npz",
+    note="T5Gemma text encoder + tokenizer (fp16), redistributed under the "
+         "Gemma Terms of Use.")
+SA3_TIERS: tuple[TierLimit, ...] = (
+    TierLimit("sa3", "any Apple Silicon (>=8 GB)", 8, SA3_MAX_DURATION_SECONDS,
+              SA3_MAX_DURATION_SECONDS, 1, 1, (), "", False, False,
+              "380 s is the model's absolute maximum."),
+)
+SA3_LONG_FORM = LongFormStrategy(
+    single_pass_max_seconds=SA3_MAX_DURATION_SECONDS,
+    single_pass_cap_source="stable-audio-3 model table: medium max length 380 s",
+    beyond_cap="Not supported in one request: render in sections and join them "
+               "outside the app.",
+    repaint_task_type="", repaint_mode="", repaint_strength=0.0,
+    repaint_latent_crossfade_frames=0, repaint_wav_crossfade_sec=0.0,
+    note="Stable Audio 3 does not extend past 380 s in one request.",
+)
+
 TIERS: tuple[TierLimit, ...] = (
     TierLimit("tier1", "tier1 (<=4 GB)", 0, 240, 360, 1, 1, (),
               "", True, True,
@@ -218,6 +266,23 @@ FAMILIES: dict[str, Family] = {
             "cold worker pays a one-time ~3 minute model load."
         ),
     ),
+    "stable-audio-3": Family(
+        id="stable-audio-3",
+        label="Stable Audio 3",
+        summary=(
+            "Stability AI's latent-diffusion text-to-audio family, run here "
+            "through its pure-MLX Apple-Silicon implementation. Instrumental "
+            "music and sound at 44.1 kHz stereo, up to 380 s (6 min 20 s). "
+            "Weights are under the Stability AI Community License."
+        ),
+        how_to_use=(
+            "Describe the music in a caption (genre, instruments, mood, tempo). "
+            "This engine is instrumental only - there is nothing to sing. Pick a "
+            "duration up to 380 s; longer pieces need to be rendered in sections. "
+            "It is much faster than ACE-Step: 30 s renders in about 9 s and 380 s "
+            "in about 62 s on an M2 Max."
+        ),
+    ),
 }
 
 
@@ -284,6 +349,39 @@ CATALOG: tuple[ModelEntry, ...] = (
         # are package members instead. Studio Hub's adapter verifies equality
         # and refuses a mismatch; it never writes into the installed package.
         ignore_patterns=(),
+    ),
+    ModelEntry(
+        repo=STABLE_AUDIO_REPO,
+        label="Stable Audio 3 Medium (1.4B)",
+        family="stable-audio-3",
+        checkpoint="dit_medium",
+        size_gb=6883369494 / 1e9,
+        gated=False,
+        min_unified_memory_gb=8,
+        recommended_hardware=(
+            "Any Apple Silicon Mac. Measured 3.89 GB peak for a 30 s clip and "
+            "5.05 GB for 380 s on a 32 GB M2 Max."),
+        capabilities=("music", "instrumental", "text-to-music"),
+        best_for=(
+            "Fast instrumental music at 44.1 kHz stereo, up to 380 s (6 min 20 s). "
+            "Measured 30 s in 9.3 s and 380 s in 61.6 s on an M2 Max - several "
+            "times faster than ACE-Step - but it cannot sing. Pick ACE-Step when "
+            "you need vocals or more than 380 s."),
+        sample_rate_hz=44100,
+        channels=2,
+        license_name="Stability AI Community License",
+        license_source=(
+            "stabilityai/stable-audio-3-optimized model card; commercial terms at "
+            "https://stability.ai/license"),
+        checkpoints=(SA3_DIT_MEDIUM, SA3_SAME_L_ENCODER, SA3_SAME_L_DECODER,
+                     SA3_T5GEMMA),
+        dit_tiers=(SA3_DIT_MEDIUM,),
+        lm_tiers=(),
+        tiers=SA3_TIERS,
+        long_form=SA3_LONG_FORM,
+        default_lm_model="",
+        inference_steps=8,
+        guidance_scale=1.0,
     ),
 )
 

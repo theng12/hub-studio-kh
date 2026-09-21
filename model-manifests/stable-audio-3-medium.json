@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "package_id": "stable-audio-3-medium",
+  "model_id": "stabilityai/stable-audio-3-optimized",
+  "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+  "engine": "music-mlx",
+  "minimum_macos": "14.0",
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-22",
+    "sources": [
+      {
+        "repo": "stabilityai/stable-audio-3-optimized",
+        "revision": "da6edc54ddba10bfd79a077102ded687f80e882b"
+      }
+    ]
+  },
+  "defaults": {
+    "dit_model": "dit_medium",
+    "decoder": "same-l",
+    "inference_steps": 8,
+    "guidance_scale": 1.0,
+    "audio_format": "wav",
+    "sample_rate_hz": 44100,
+    "channels": 2,
+    "max_duration_seconds": 380
+  },
+  "qualification": {
+    "minimum_unified_memory_gb": 8,
+    "recommended_unified_memory_gb": 16,
+    "status": "measured-local",
+    "reason": "Measured on the target Apple Silicon Mac through the vendored MLX runtime; not yet qualified through the packaged app.",
+    "memory_evidence": "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s."
+  },
+  "files": [
+    {
+      "path": "models/mlx/dit_medium_f16.npz",
+      "source_path": "MLX/dit_medium_f16.npz",
+      "repo": "stabilityai/stable-audio-3-optimized",
+      "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+      "size": 2907300946,
+      "sha256": "f9e5647ea3225818657d47d47ae4b34afa29c0568206ca89566c1a758944a38e"
+    },
+    {
+      "path": "models/mlx/same_l_encoder_f32.npz",
+      "source_path": "MLX/same_l_encoder_f32.npz",
+      "repo": "stabilityai/stable-audio-3-optimized",
+      "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+      "size": 1704313504,
+      "sha256": "c5caafc6bd29fc3d4cb7a08b0d3725041fa2100711f86a4f05d2638c532871d2"
+    },
+    {
+      "path": "models/mlx/same_l_decoder_f32.npz",
+      "source_path": "MLX/same_l_decoder_f32.npz",
+      "repo": "stabilityai/stable-audio-3-optimized",
+      "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+      "size": 1704311976,
+      "sha256": "84924be2122d3a20fce443f40b782d9cd88e8e73707476326003ac47659a2287"
+    },
+    {
+      "path": "models/mlx/t5gemma_f16.npz",
+      "source_path": "MLX/t5gemma_f16.npz",
+      "repo": "stabilityai/stable-audio-3-optimized",
+      "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+      "size": 567443068,
+      "sha256": "8deb20489f36d9aec539f26c9c67321f99bc5fe300d470435ed6e76be4f16bbd"
+    }
+  ],
+  "dependencies": [],
+  "requires_packages": []
+}

@@ -1210,3 +1210,20 @@ overlay and only helps cold start. Recorded in `r-music-mlx.md`.
 MLX DiT and VAE initialisation, the LM loading via MLX in 2.17s, DCW on the
 MLX-native Haar path, and a VAE decode of 300 latent frames in 4.08s on MLX. This
 is the re-qualification evidence for the ACE-Step half of the objective.
+
+[MEASURED] Stable Audio 3 Phase 2 (integration) started. Landed by the coordinator:
+- Vendored MLX runtime at `components/music/engines/stable_audio_3/` (scripts +
+  models/defs + LICENSE + NOTICE.md), pinned to upstream commit
+  `779434a908193105335fd8d833418603625b2859`; 532 KB, 30 Python files, no weights.
+- `model-manifests/stable-audio-3-medium.json`: validates against
+  `components/model_packages.py` (digest f028a68d9ef6019a), revision
+  `da6edc54ddba10bfd79a077102ded687f80e882b`, four MLX files with verified sizes and
+  SHA-256, layout `models/mlx/<file>`, 6.88 GB total.
+- Music catalogue now offers both engines: `stable-audio-3` Family + a SA3
+  `ModelEntry` (44.1 kHz, instrumental-only, 380 s cap, max/1 tier, no repaint).
+  `catalog.get_model` and `serialize_model` verified.
+
+[GATE] The exact-menu tests (`test_model_manifest_catalog.py`,
+`test_music_package_contract.py::test_catalog_and_requests_offer_only_the_packaged_model_set`)
+fail until updated for the new model - expected, and being updated with the worker
+integration. Worker dispatch/packaging/UI still in progress.
