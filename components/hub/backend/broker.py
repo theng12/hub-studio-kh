@@ -1228,6 +1228,13 @@ def busy_machines() -> set[str]:
         if sid in by_id
     }
     for batch in batches.values():
+        # An uncertain item normally reserves its Mac because the attempt may still
+        # be running. Once the operator cancels the batch, that reservation must not
+        # outlive the decision: the uncertainty cannot resolve by itself, so the Mac
+        # would be pinned forever and no later job would ever dispatch. Cancelled
+        # uncertainty is still recorded for reconciliation; it just no longer blocks.
+        if batch.get("cancelled"):
+            continue
         if batch.get("modality") in RECEIPT_DURABLE_MODALITIES:
             for item in batch.get("items") or []:
                 if item.get("state") == "uncertain":
@@ -1238,6 +1245,8 @@ def busy_machines() -> set[str]:
     from . import transcription_jobs
     if transcription_jobs._packaged():
         for batch in transcription_jobs.batches.values():
+            if batch.get("cancelled"):
+                continue
             for item in batch.get("items") or []:
                 if item.get("state") == "uncertain":
                     # Dispatch persists the physical identity. Use the
