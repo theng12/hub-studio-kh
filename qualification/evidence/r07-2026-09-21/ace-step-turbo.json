@@ -1,0 +1,43 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-clean/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "ACE-Step/Ace-Step1.5",
+  "prompt": "Warm lo-fi hip hop beat, mellow piano, vinyl crackle, late night study mood",
+  "params": {
+    "duration_seconds": 30.0,
+    "steps": 8,
+    "guidance_scale": 1.0,
+    "shift": 3.0,
+    "seed": -1,
+    "instrumental": true,
+    "lyrics": "[Instrumental]",
+    "vocal_language": "unknown"
+  },
+  "ready_seconds": 2.24,
+  "submit_status": 200,
+  "batch_id": "7ca969cffe",
+  "generate_seconds": 97.35,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 5760044,
+    "sha256": "135cc7035515d8accb5e659b195b027ebe33e67c02972f706d647eabaad6b362",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "music",
+    "machine_id": null,
+    "studio": "music",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 5760044,
+    "sha256": "135cc7035515d8accb5e659b195b027ebe33e67c02972f706d647eabaad6b362",
+    "riff_wave": true,
+    "duration_seconds": 30.0,
+    "sample_rate_hz": 48000,
+    "channels": 2
+  },
+  "ok": true
+}

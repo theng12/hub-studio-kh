@@ -93,9 +93,39 @@ def _verify_model_code(config_path: str, checkpoint_path) -> None:
             + ", ".join(mismatched))
 
 
+def _allow_real_device_init() -> None:
+    """Let the ACE-Step DiT build on a real device under transformers 5.
+
+    transformers 5 constructs a checkpoint model inside a ``torch.device("meta")``
+    context. ACE-Step's DiT instantiates a ``vector_quantize_pytorch`` FSQ whose
+    ``__init__`` asserts on a real tensor, so the meta context aborts the model load
+    with "Tensor.item() cannot be called on meta tensors" - which the worker then
+    reports as ``MUSIC_GENERATION_FAILED``. Keep the dtype and weight-tying contexts
+    and drop only the meta device, so the model is built normally and the engine
+    moves it afterwards. This patches transformers in-process; it edits no stamped
+    runtime file, so the music runtime digest is unchanged.
+    """
+    try:
+        import torch
+        from transformers import PreTrainedModel
+
+        original = PreTrainedModel.get_init_context.__func__
+
+        def without_meta(cls, dtype, is_quantized, _is_ds_init_called, allow_all_kernels):
+            contexts = original(cls, dtype, is_quantized, _is_ds_init_called, allow_all_kernels)
+            return [context for context in contexts
+                    if not (isinstance(context, torch.device) and context.type == "meta")]
+
+        PreTrainedModel.get_init_context = classmethod(without_meta)
+    except Exception:
+        # A different transformers layout must not stop the engine from trying.
+        pass
+
+
 def _load_handlers(config: dict, events) -> tuple[object, object]:
     from acestep.handler import AceStepHandler
     from acestep.llm_inference import LLMHandler
+    _allow_real_device_init()
 
     class StudioHubAceStepHandler(AceStepHandler):
         """ACE-Step with Studio Hub's verified, offline package boundary."""

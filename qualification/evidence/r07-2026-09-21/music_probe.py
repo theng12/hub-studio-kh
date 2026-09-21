@@ -36,6 +36,7 @@ def main() -> int:
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-wav", type=Path)
+    parser.add_argument("--log-out", type=Path)
     args = parser.parse_args()
 
     app, models = args.app.resolve(), args.models.resolve()
@@ -120,6 +121,11 @@ def main() -> int:
                     process.wait(timeout=20)
                 except subprocess.TimeoutExpired:
                     process.kill()
+            if args.log_out:
+                try:
+                    args.log_out.write_text(log_path.read_text(errors="replace"))
+                except OSError:
+                    pass
 
     artifact = receipt.get("artifact") or {}
     receipt["ok"] = ((receipt.get("final_status") == "done"

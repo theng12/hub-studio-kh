@@ -963,3 +963,24 @@ is never loaded. Re-tested against the staged app:
   bf16 only; 8-bit is a retired older alternative), so a direct API job stays queued
   rather than failing. Not a model/runtime defect.
 Receipts and outputs under `qualification/evidence/r07-2026-09-21/`.
+
+## 2026-09-22 — ACE-Step Music generation fixed and requalified (DeepSeek)
+
+[MEASURED] Real Music generation through the staged app first failed with
+`MUSIC_GENERATION_FAILED: DiT initialization failed ... Tensor.item() cannot be
+called on meta tensors`. transformers 5 constructs checkpoint models inside a
+`torch.device("meta")` context, and ACE-Step's DiT instantiates a
+`vector_quantize_pytorch` FSQ whose `__init__` asserts on a real tensor
+(`residual_fsq.py:84`), aborting the load.
+
+[MEASURED] The music runtime overlay is digest-locked: patching its
+`residual_fsq.py` made `music_worker.py` refuse to start ("Music runtime overlay
+digest does not match its release identity"), and the overlay was restored. The fix
+lives in our own adapter, `components/music/app/backend/engine_child.py`:
+`_allow_real_device_init()` drops only the meta-device context from
+`PreTrainedModel.get_init_context`, so the DiT builds on a real device. No stamped
+runtime file changes.
+
+[MEASURED] After the shim: **ACE-Step 1.5 Turbo generated a real 30s track** -
+done in 97.35s, valid RIFF/WAVE, ~5.76 MB, engine ready in 2.24s. Receipt
+`ace-step-turbo.json`; output `ace-step-turbo-r07.wav`.
