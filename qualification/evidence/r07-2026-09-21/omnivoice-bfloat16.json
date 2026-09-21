@@ -1,0 +1,50 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/OmniVoice-bfloat16",
+  "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "reference": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+  },
+  "ready_seconds": 2.25,
+  "stage_status": 201,
+  "asset": {
+    "asset_id": "25990298cb625cf415992458",
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "bytes": 252084,
+    "media_type": "audio/wav",
+    "created_at": 1790010004.743983,
+    "expires_at": 1790096404.743702,
+    "transcript_supplied": true,
+    "origin": "local"
+  },
+  "submit_status": 200,
+  "batch_id": "b5b56175ee",
+  "generate_seconds": 18.13,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 309164,
+    "sha256": "2a3fc3b4a2b836869e33fc52b09b3fb61ee288f165340366ffe9994686aa4fe0",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "voice",
+    "machine_id": null,
+    "studio": "voice",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 309164,
+    "sha256": "2a3fc3b4a2b836869e33fc52b09b3fb61ee288f165340366ffe9994686aa4fe0",
+    "riff_wave": true,
+    "duration_seconds": 6.44,
+    "sample_rate_hz": 24000,
+    "channels": 1
+  },
+  "ok": true
+}

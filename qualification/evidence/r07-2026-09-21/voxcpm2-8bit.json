@@ -1,0 +1,41 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/VoxCPM2-8bit",
+  "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "reference": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+  },
+  "ready_seconds": 2.45,
+  "stage_status": 201,
+  "asset": {
+    "asset_id": "25990298cb625cf415992458",
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "bytes": 252084,
+    "media_type": "audio/wav",
+    "created_at": 1790008764.368885,
+    "expires_at": 1790095164.3685749,
+    "transcript_supplied": true,
+    "origin": "local"
+  },
+  "submit_status": 200,
+  "batch_id": "1069617928",
+  "generate_seconds": 1200.02,
+  "final_status": null,
+  "item": {
+    "state": "queued",
+    "bytes": null,
+    "sha256": null,
+    "media_type": null,
+    "error": null,
+    "error_code": null,
+    "worker_id": null,
+    "machine_id": null,
+    "studio": null,
+    "metadata": null
+  },
+  "ok": false
+}

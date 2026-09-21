@@ -1,0 +1,41 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/VoxCPM2-4bit",
+  "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "reference": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+  },
+  "ready_seconds": 2.44,
+  "stage_status": 201,
+  "asset": {
+    "asset_id": "25990298cb625cf415992458",
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "bytes": 252084,
+    "media_type": "audio/wav",
+    "created_at": 1790008728.9316201,
+    "expires_at": 1790095128.9313521,
+    "transcript_supplied": true,
+    "origin": "local"
+  },
+  "submit_status": 200,
+  "batch_id": "8ea5f2cd60",
+  "generate_seconds": 31.25,
+  "final_status": null,
+  "item": {
+    "state": "error",
+    "bytes": null,
+    "sha256": null,
+    "media_type": null,
+    "error": "RuntimeError: RuntimeError: voxcpm-mlx produced no audio. 93-character section. host has 34.4 GB unified memory, 20.9 GB free. this is usually the request being too large for the available memory \u2014 shorten the section, or free memory and retry. Temp dir: [local path]",
+    "error_code": "WORKER_TERMINAL_ERROR",
+    "worker_id": "voice",
+    "machine_id": null,
+    "studio": "voice",
+    "metadata": null
+  },
+  "ok": false
+}

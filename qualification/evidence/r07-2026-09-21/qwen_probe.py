@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--text", default=TRANSCRIPT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-wav", type=Path)
+    parser.add_argument("--log-out", type=Path)
     args = parser.parse_args()
 
     app, models, clip = args.app.resolve(), args.models.resolve(), args.clip.resolve()
@@ -57,6 +58,7 @@ def main() -> int:
         data.mkdir(mode=0o700)
         ready = data / "hub-ready.json"
         log_path = root / "service.log"
+        service_log = ""
         with log_path.open("w") as log:
             process = subprocess.Popen(
                 [str(service), "--data-dir", str(data), "--models-dir", str(models),
@@ -138,12 +140,23 @@ def main() -> int:
                     process.wait(timeout=20)
                 except subprocess.TimeoutExpired:
                     process.kill()
+            try:
+                service_log = log_path.read_text(errors="replace")[-6000:]
+            except OSError:
+                service_log = ""
+            if args.log_out:
+                try:
+                    args.log_out.write_text(log_path.read_text(errors="replace"))
+                except OSError:
+                    pass
 
     artifact = receipt.get("artifact") or {}
     receipt["ok"] = ((receipt.get("final_status") == "done"
                       or (receipt.get("item") or {}).get("state") == "done")
                      and bool(artifact.get("riff_wave"))
                      and (artifact.get("bytes") or 0) > 0)
+    if not receipt["ok"] and service_log:
+        receipt["service_log_tail"] = service_log
     print(json.dumps(receipt, indent=2))
     if args.output:
         args.output.write_text(json.dumps(receipt, indent=2) + "\n")
