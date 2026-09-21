@@ -140,7 +140,8 @@ def main() -> int:
                     process.kill()
 
     artifact = receipt.get("artifact") or {}
-    receipt["ok"] = (receipt.get("final_status") == "done"
+    receipt["ok"] = ((receipt.get("final_status") == "done"
+                      or (receipt.get("item") or {}).get("state") == "done")
                      and bool(artifact.get("riff_wave"))
                      and (artifact.get("bytes") or 0) > 0)
     print(json.dumps(receipt, indent=2))

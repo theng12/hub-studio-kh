@@ -880,3 +880,14 @@ Receipt `flux-2-klein-4bit.json`; output
 older implementation and Image runtime, so byte-exact reproduction across
 versions is not the qualification bar. The job's own report names model revision
 `7fd24828501390b67a92c8b66d2fc5a707d0ba1a`, matching the imported package.
+
+## 2026-09-21 — R07 real requalification: Qwen3-TTS 0.6B Base 8-bit clone (DeepSeek)
+
+[MEASURED] Real clone through the current build and the new library
+(`qualification/evidence/r07-2026-09-21/qwen_probe.py`): reference staged through
+the shared `POST /api/hub/voice-references` contract (201), voice job submitted
+(200), item `done` in 26.18s, artifact 200. Output WAV 234,284 bytes, 4.88s,
+24000 Hz mono, valid RIFF/WAVE; spoken text was the reference transcript.
+TTS sampling is not deterministic, so no fixed output hash is asserted. Model
+revision `50f45ef0047cde7e84c2ef04326acb8ada2436a7`, matching the imported
+package. Receipt `qwen06-base-8bit.json`; output `qwen06-base-8bit-r07.wav`.
