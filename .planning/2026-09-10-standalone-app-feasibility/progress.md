@@ -1020,3 +1020,21 @@ both `matches` (word-normalised) and `matches_verbatim`.
 - **Qwen3-TTS 0.6B Base clone**: done, artifact 253,484 bytes, ACK 200 `{"ok":true}`.
 The image/voice/music probes gained an `--ack` option and now default to the
 installed app.
+
+## 2026-09-22 — R07 long Music, cancellation and restart/history (DeepSeek)
+
+[MEASURED] **ACE-Step Turbo 60s**: done in 104.71s, valid 60.0s / 48kHz stereo WAV
+(11,520,044 bytes), ACK 200 `{"ok":true}`. Receipt `ace-step-turbo-60s.json`.
+
+[MEASURED] **Cancellation** (Music, 120s requested, cancelled after it was active):
+submit 200, active observed, DELETE 200, and the item settled **`uncertain`**
+(`MUSIC_OUTCOME_UNCERTAIN`, "Music cancellation was requested after submission;
+the original worker outcome must be reconciled") with the artifact route 404. That
+is the preserved contract - a post-submission cancel on a durable async worker
+cannot be confirmed, so the Hub must not claim a false `cancelled` or `done`.
+Receipt `cancel-music.json`.
+
+[MEASURED] **Restart/history**: Whisper Turbo transcribed one clip (`done`), the
+service was stopped and started again on the same data directory, and the batch
+(`46234417f620`) was still listed in transcription history. Receipt
+`history-subtitle.json`. Adds `resilience_probe.py`.

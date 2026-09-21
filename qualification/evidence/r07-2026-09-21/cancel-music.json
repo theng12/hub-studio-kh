@@ -1,0 +1,29 @@
+{
+  "probe": "cancel-music",
+  "params": {
+    "duration_seconds": 120.0,
+    "steps": 8,
+    "guidance_scale": 1.0,
+    "shift": 3.0,
+    "seed": -1,
+    "instrumental": true,
+    "lyrics": "[Instrumental]",
+    "vocal_language": "unknown"
+  },
+  "submit_status": 200,
+  "submit_body": "{\"batch_id\":\"fcbe91dccb\",\"items\":1,\"replayed\":false}",
+  "batch_id": "fcbe91dccb",
+  "saw_active": true,
+  "cancel_status": 200,
+  "final_item": {
+    "state": "uncertain",
+    "error_code": "MUSIC_OUTCOME_UNCERTAIN",
+    "error": "Music cancellation was requested after submission; the original worker outcome must be reconciled.",
+    "bytes": null,
+    "sha256": null
+  },
+  "artifact_status_after_cancel": 404,
+  "cancelled_without_artifact": false,
+  "terminal_without_artifact": true,
+  "no_false_completion": true
+}

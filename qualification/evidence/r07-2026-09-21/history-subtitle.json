@@ -1,0 +1,10 @@
+{
+  "probe": "history-subtitle",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "batch_id": "46234417f620",
+  "first_run_state": "done",
+  "restart_batch_listed": true,
+  "restart_history_ids": [
+    "46234417f620"
+  ]
+}
