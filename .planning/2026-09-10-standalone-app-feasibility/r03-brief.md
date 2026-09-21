@@ -22,6 +22,9 @@ validation; fixture-contract fidelity only in
 Review follow-up also permits adding a changed-body conflict assertion to the
 existing queued-job idempotency test in
 `components/voice/app/tests/test_native_executor.py`; no Voice worker source edits.
+The full-gate follow-up at `fb36c89` also permits receipt-shape-only alignment in
+`tests/_hub_dispatch_proof.py` and the duplicate embedded fixture in
+`tests/test_hub_jobs.py`; no assertion or production-validation weakening.
 
 ## Requirements and steps
 

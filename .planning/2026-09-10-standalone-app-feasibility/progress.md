@@ -45,6 +45,18 @@ live control remain unqualified. Impeccable informed clear token-scope wording,
 not a redesign. GatewayKH's three offline checkpoint tests passed; contract gaps
 remain ACK, upstream cancellation, Music and reference/recovery qualification.
 
+[MEASURED] First clean candidate `fb36c89` passed packaged four-worker model-free
+startup/auth/owned shutdown and 21 release/phonemizer checks, but its full gate
+failed: 641 tests, three failures, seven skips (449.455s). Two duplicate legacy
+Voice proof fixtures returned incomplete receipts; Luna aligned only those two
+fixtures with the real serializer. Root independently reviewed their diffs and
+reran both proof modules: eight tests passed (15.401s); assertions were preserved.
+The third failure was a 45-second shared-voice peer reachability miss. It did not
+reproduce alone (one passed, 13.68s) or in its complete class (six passed, 61.42s).
+No timeout/admission changes were made; its cause is unproven, not declared fixed.
+One fixture-process ResourceWarning was emitted; its named PID had exited when
+checked. A clean second candidate/full rerun is required before integration.
+
 ## 2026-09-21 — ordered remaining-work execution
 
 [MEASURED] Final wave-1 gate is green at clean product `7ec9f89`: 632 tests OK,
