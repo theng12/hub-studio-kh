@@ -811,3 +811,17 @@ it: exit 0, `ok:true`, modalities `[image, music, transcription, voice]`,
 `service_exit:-15`, `model_inference:false`. This proves the R06 native shell and
 Music worker routing in the packaged configuration; it is model-free and not
 release qualification. Raw: `.build/deepseek-proof-r06/packaged-smoke.json`.
+
+## 2026-09-21 — R10 local candidate inventory (DeepSeek)
+
+[MEASURED] Ran `packaging/release_kit.py` against the staged R06 app. It exits
+non-zero by design when the library is incomplete: **34 problems**, every one
+"advertised but not installed in the library" (no `~/StudioHubModels` exists on
+this computer). The manifest still records version 0.6.38,
+`implementation_commit a600ca6`, `qualification:unqualified-local-proof`,
+components `[hub, image, music, subtitle, voice]`, the app payload and per-component
+runtime identity, and operator steps. So the local candidate and its identity /
+licenses are verifiable now, while model-package completeness and any clean-Mac
+run remain gated on the model library and hardware. Raw manifest:
+`.build/deepseek-proof-r06/release-manifest.json`; kit log
+`.build/deepseek-r06-release-kit.log`.
