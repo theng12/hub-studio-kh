@@ -109,7 +109,8 @@ second planning system.
 
 ## Unverified concerns (do not treat as fixed/default)
 
-- One earlier shared-voice peer reachability failure did not recur; cause unproven.
+- One earlier shared-voice peer reachability failure did not recur; re-probed
+  3x in isolation this session (3 passed) and still cause-unproven, not fixed.
 - Dependency deprecations + fixture socket/process ResourceWarnings remain.
 - R09 GatewayKH reference-upload metadata/ttl and uncertain→PROVIDER_FAILED
   recovery semantics are only partly inspected.

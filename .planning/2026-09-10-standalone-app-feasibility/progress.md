@@ -727,3 +727,11 @@ leaves the Subtitle sibling's mode and request log untouched; `release(['voice']
 frees only the selected Studio and leaves the sibling's loaded models intact. Suite
 now **16 passed** (was 14). This closes the "no unselected fanout" half of ST-10.4;
 durable acknowledgement and two-machine deduplication remain unproven.
+
+## 2026-09-21 — shared-voice flake re-probe (DeepSeek)
+
+[MEASURED] Ran the shared-voice peer test
+`test_a_voice_clone_submitted_to_the_controller_runs_on_the_node` three times in
+isolation: **3 passed** (23.76s, 23.77s, 11.70s). The documented earlier
+shared-voice peer reachability failure still does not reproduce.
+**Not declared fixed**; the cause remains unproven.
