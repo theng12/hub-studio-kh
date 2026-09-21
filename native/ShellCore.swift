@@ -232,6 +232,28 @@ struct ShellConfiguration {
             .filter { !$0.isEmpty }
     }
 
+    /// Addresses the operator chose that are not on this Mac right now.
+    ///
+    /// Binding one fails with `EADDRNOTAVAIL` ("Can't assign requested address"): the
+    /// Hub exits, the app retries three times, and the operator only saw "Automatic
+    /// recovery stopped after repeated service failures". A saved LAN or Tailscale
+    /// address after a network change is the usual cause, so it is named here and
+    /// skipped for this start instead of poisoning the whole service set.
+    func unavailableListenAddresses(assigned: [String] = LocalAddresses.current().map(\.address)) -> [String] {
+        let present = Set(assigned)
+        return listenHosts.filter { host in
+            host != "127.0.0.1" && host != "0.0.0.0" && !present.contains(host)
+        }
+    }
+
+    /// The listen list with only addresses this Mac can actually bind. Loopback is
+    /// always available and the Hub adds it itself.
+    func bindableListenHost(assigned: [String] = LocalAddresses.current().map(\.address)) -> String {
+        let unavailable = Set(unavailableListenAddresses(assigned: assigned))
+        let kept = listenHosts.filter { !unavailable.contains($0) }
+        return kept.isEmpty ? "127.0.0.1" : kept.joined(separator: ",")
+    }
+
     /// Every entry must be an IPv4 address or the wildcard. Refusing anything else keeps a
     /// typo from silently widening what can reach this Mac.
     static func requireBindableHost(_ host: String) throws {

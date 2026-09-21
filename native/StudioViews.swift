@@ -120,6 +120,15 @@ struct StudioContent: View {
     }
     private func modelName(_ repo: String) -> String { workspace.models.first { $0.repo == repo }?.label ?? repo.components(separatedBy: "/").last ?? repo }
 
+    /// The version this build actually is, shown in the corner so it is never a
+    /// guess. A raw development executable has no bundle version; "Development" is
+    /// more honest there than inventing a number.
+    private var appVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? "Development"
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
@@ -171,6 +180,25 @@ struct StudioContent: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
+            // The version and What's New live in the lower-right corner of the page,
+            // where an operator can always see which build they are on without opening
+            // Settings - the first question when an old app is still running.
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    Text("Studio Hub \(appVersion)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Studio Hub version \(appVersion)")
+                    Button("What's New") { studio.select(.whatsNew) }
+                        .buttonStyle(.link)
+                        .accessibilityLabel("What's New in this version")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
             // The page itself may still be wider than a very narrow window; scrolling beats
             // clipping, because everything stays reachable.
             .clipped()

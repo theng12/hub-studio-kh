@@ -157,10 +157,21 @@ final class StudioController: ObservableObject {
             logHandle = log
             let process = Process()
             process.executableURL = executable
+            // A saved LAN or Tailscale address can disappear when the network changes.
+            // Binding it fails with EADDRNOTAVAIL, and the old app reported that only as
+            // "repeated service failures" after three retries. Start on the addresses this
+            // Mac actually has and name the ones it does not.
+            let unavailable = configuration.unavailableListenAddresses()
+            let listenHost = configuration.bindableListenHost()
+            if !unavailable.isEmpty {
+                fleetNote = "This Mac no longer has \(unavailable.joined(separator: ", ")). "
+                    + "Services are starting on the remaining addresses. Update them under "
+                    + "Connections if this Mac should serve other machines."
+            }
             process.arguments = ShellConfiguration.serviceArguments(
                 dataDirectory: configuration.dataDirectory, modelsDirectory: models,
                 readyFile: configuration.readyFile, parentPID: ProcessInfo.processInfo.processIdentifier,
-                listenHost: configuration.listenHost, offline: configuration.offline,
+                listenHost: listenHost, offline: configuration.offline,
                 port: configuration.port)
             process.currentDirectoryURL = configuration.dataDirectory
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]

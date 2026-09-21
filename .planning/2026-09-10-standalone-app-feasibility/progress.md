@@ -895,3 +895,34 @@ package. Receipt `qwen06-base-8bit.json`; output `qwen06-base-8bit-r07.wav`.
 [MEASURED] R07 Qwen3-TTS **1.7B Base 8-bit** clone: done, WAV 253,484 bytes,
 valid RIFF/WAVE; receipt `qwen17-base-8bit.json`, output
 `qwen17-base-8bit-r07.wav`. Model revision `e7dd0585652209fa0d7783659aad4e8a324de11c`.
+
+## 2026-09-22 — service-recovery error, version footer, VoxCPM2 root cause (DeepSeek)
+
+[MEASURED] The owner's installed app is **0.5.4** (commit `3589f8d`), far behind
+source 0.6.38. Its `hub-worker.log` (253 MB) ends in repeated
+`OSError: [Errno 49] Can't assign requested address` at `sock.bind((entry, port))`:
+the app was started with `--host 127.0.0.1,192.168.18.248,100.126.154.54`, and one
+of those addresses is no longer on this Mac. The Hub exits, the app retries three
+times, and the operator sees only "Automatic recovery stopped after repeated
+service failures".
+
+[MEASURED] Source fix: `ShellConfiguration.unavailableListenAddresses()` /
+`bindableListenHost()` name and skip addresses this Mac no longer has, so services
+still start on the addresses that exist; `StudioController.start` sets a
+`fleetNote` explaining what was skipped. Boundary tests added to
+`tests/native/main.swift`. Native build (boundary/API/lifecycle + optimized app)
+exit 0; the 42 view/parser tests pass.
+
+[MEASURED] Source UI: the main pane now has a lower-right footer showing
+`Studio Hub <version>` (`CFBundleShortVersionString`, "Development" for a raw
+executable) next to a **What's New** button. Rendered at 1440x900 and inspected.
+
+[MEASURED] R07 VoxCPM2 root cause (from the captured worker log): the failure is
+**not** the memory wording the worker prints. VoxCPM2 4-bit fails even for a
+22-character section, and the traceback is
+`huggingface_hub.errors.OfflineModeIsEnabled` / `LocalEntryNotFoundError` for
+`mlx-community/whisper-large-v3-turbo-asr-fp16` - an **undeclared companion** the
+VoxCPM2 path loads, absent from the local cache while offline. Qwen 0.6B/1.7B and
+OmniVoice clones succeed on the same machine and library. The SSD archive has
+`transcription-models/whisper-large-v3-turbo-asr-fp16`. VoxCPM2 8-bit additionally
+sat `queued` for 20 minutes without dispatching.

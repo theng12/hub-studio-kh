@@ -86,6 +86,29 @@ require(offlineArgs.contains("--parent-pid") && offlineArgs.contains("--data-dir
 // later, somewhere the app cannot explain.
 require(!offlineArgs.contains(""), "no service argument may be empty")
 
+// A saved LAN or Tailscale address can vanish when the network changes. Binding it
+// fails with EADDRNOTAVAIL, which the app used to report only as "repeated service
+// failures" after three retries. It must be named and skipped instead of stalling
+// every service on this Mac.
+var staleConfig = try ShellConfiguration(
+    arguments: ["app", "--data-dir", state.path], bundle: bundle)
+staleConfig.listenHost = "192.168.99.99,100.64.0.1,127.0.0.1"
+require(staleConfig.unavailableListenAddresses(assigned: ["127.0.0.1", "100.64.0.1"])
+        == ["192.168.99.99"], "a missing listen address must be named")
+require(staleConfig.bindableListenHost(assigned: ["127.0.0.1", "100.64.0.1"]) == "100.64.0.1,127.0.0.1",
+        "only addresses this Mac actually has may reach the worker")
+require(staleConfig.unavailableListenAddresses(assigned: ["127.0.0.1"])
+        == ["192.168.99.99", "100.64.0.1"], "every missing address must be reported")
+require(staleConfig.bindableListenHost(assigned: []) == "127.0.0.1",
+        "with no other address available the Hub must still start on loopback")
+var wildcardConfig = try ShellConfiguration(
+    arguments: ["app", "--data-dir", state.path], bundle: bundle)
+wildcardConfig.listenHost = "0.0.0.0"
+require(wildcardConfig.unavailableListenAddresses(assigned: []).isEmpty,
+        "the wildcard is always bindable and is not a stale address")
+require(wildcardConfig.bindableListenHost(assigned: []) == "0.0.0.0",
+        "the wildcard must survive the bindable filter")
+
 var noAutomaticRecovery = restoredConfig
 try noAutomaticRecovery.setRecoveryPolicy(maxAttempts: 0, backoffSeconds: [1])
 require(noAutomaticRecovery.recoveryMaxAttempts == 0, "zero recovery attempts must persist as disabled")
