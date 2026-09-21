@@ -825,3 +825,28 @@ licenses are verifiable now, while model-package completeness and any clean-Mac
 run remain gated on the model library and hardware. Raw manifest:
 `.build/deepseek-proof-r06/release-manifest.json`; kit log
 `.build/deepseek-r06-release-kit.log`.
+
+## 2026-09-21 — model library provisioned from the SSD archive (DeepSeek)
+
+[MEASURED] The owner connected a 954 GB SSD (`/Volumes/KH-STUDIO-NOVA`) holding a
+plain, sorted model archive: 53 models, 153.4 GB, one folder per model with real
+filenames (`MODEL-LIBRARY-HANDOFF.md`, `model-library/README.md`). It is **not** an
+application library (no `.studiohub/`, no `blobs/`, no revision folders).
+
+[MEASURED] Only the 11 packages in the bounded qualification list are needed
+(~30 GiB). Ten matched the tracked manifests exactly (paths and pinned revisions).
+ACE-Step is a composite (model repo + `ACE-Step/acestep-5Hz-lm-0.6B` planner +
+`ace-step/ACE-Step-1.5` engine code); its flattened folder did not match the
+manifest layout, so a staging tree was assembled and its one absent file
+(`model/config.json`) was byte-identical to `acestep-v15-turbo/config.json`.
+
+[MEASURED] All 11 imported into the app's own library `~/StudioHubModels` via
+`components/model_packages.py import`, which hashes every byte. A final `scan`
+reports all 11 as `files_verified` and the other 23 manifests as `not_installed`
+(extra stock, deliberately not copied). Library = 30 GB, no symlinks, no SSD
+references; the SSD was read-only and remains untouched. Internal disk 234 GB free.
+
+[REPORTED/OWNER DIRECTION] The SSD kit's bundled `Studio Hub.app` is old/expired.
+Future R10 work: rebuild the SSD kit from current source and **simplify the
+per-computer setup** (the kit's current script is out of date). The SSD is a
+transport vehicle, not the live library; not needed for local testing.
