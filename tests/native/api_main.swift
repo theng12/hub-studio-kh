@@ -43,6 +43,7 @@ final class FixtureProtocol: URLProtocol {
     static var uncertainImage = false
     static var imageAckPaths: [String] = []
     static var imageAckRejects = false
+    static var discardPaths: [String] = []
     static var uncertainMusic = false
     static var corruptMusic = false
     static var musicAckPaths: [String] = []
@@ -132,6 +133,7 @@ final class FixtureProtocol: URLProtocol {
     static func audioAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return audioAckPaths }
     static func setUncertainImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainImage = value }
     static func imageAckRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return imageAckPaths }
+    static func discardRequests() -> [String] { lock.lock(); defer { lock.unlock() }; return discardPaths }
     static func setImageAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; imageAckRejects = value }
     static func setUncertainMusic(_ value: Bool) { lock.lock(); defer { lock.unlock() }; uncertainMusic = value }
     static func setCorruptMusic(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptMusic = value }
@@ -533,6 +535,10 @@ final class FixtureProtocol: URLProtocol {
             let originalRequestID = Self.generateBodies.last?["client_request_id"] as? String ?? ""
             Self.lock.unlock()
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
+        case ("POST", "/api/hub/jobs/image-job/items/0/discard"),
+             ("POST", "/api/hub/jobs/image-uncertain/items/0/discard"):
+            Self.lock.lock(); Self.discardPaths.append(path); Self.uncertainImage = false; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"batch_id":"image-job","item_index":0}"#.utf8))
         case ("GET", "/api/hub/jobs/music-uncertain"):
             let uncertainSHA = SHA256.hash(data: Self.wav).map { String(format: "%02x", $0) }.joined()
             let pending: [String: Any] = ["id": "music-uncertain", "modality": "music", "model": "ACE-Step/Ace-Step1.5", "created_at": 20,
@@ -562,6 +568,10 @@ final class FixtureProtocol: URLProtocol {
             let originalRequestID = Self.generateBodies.last?["client_request_id"] as? String ?? ""
             Self.lock.unlock()
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["reconciled": true, "client_request_id": originalRequestID]))
+        case ("POST", "/api/hub/jobs/music-job/items/0/discard"),
+             ("POST", "/api/hub/jobs/music-uncertain/items/0/discard"):
+            Self.lock.lock(); Self.discardPaths.append(path); Self.uncertainMusic = false; Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"batch_id":"music-job","item_index":0}"#.utf8))
         case ("GET", "/studio/voice/api/downloads"):
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
         case ("POST", "/api/hub/jobs"):
@@ -697,6 +707,13 @@ struct NativeAPITests {
                 "an unsupported macOS must name both versions, got: \(gated?.blockReason ?? "nil")")
         require(gated?.pickerSuffix.contains("not available") == true,
                 "an unusable model must be marked in the picker")
+        // The picker shows a cleaned short name; the full catalogue label stays everywhere else.
+        require(NativeModel.pickerName(for: "VoxCPM2 4-bit (MLX) — recommended") == "VoxCPM2 4-bit",
+                "a recommendation suffix and runtime marker must be dropped in the picker")
+        require(NativeModel.pickerName(for: "VoxCPM2 bf16 (MLX) — full precision") == "VoxCPM2 bf16",
+                "the full-precision suffix must be dropped in the picker")
+        require(NativeModel.pickerName(for: "Qwen3-TTS 0.6B Base") == "Qwen3-TTS 0.6B Base",
+                "a label with nothing to strip must pass through unchanged")
         let healthy = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
         require(healthy?.blockReason == nil, "a model that can run must carry no reason")
 
@@ -1548,6 +1565,19 @@ struct NativeAPITests {
         require(FixtureProtocol.generatedBodies().count == beforeImageCheck, "Check Original Result submitted another generation")
         require(store.imageJobs.first?.state == "done", "Image result reconciliation did not refresh history")
         require(!FileManager.default.fileExists(atPath: imagePending.path), "verified original Image result did not clear its matching pending identity")
+
+        // Discarding an uncertain attempt must reach the Hub's discard route with the item's own
+        // index. It is the only action that releases a job nobody can reconcile.
+        FixtureProtocol.setUncertainImage(true)
+        await store.refresh()
+        let uncertainImageJob = store.imageJobs.first { $0.id == "image-uncertain" }
+        require(uncertainImageJob?.state == "uncertain", "the fixture must present an uncertain Image")
+        await store.discardImage(uncertainImageJob!)
+        require(FixtureProtocol.discardRequests().last == "/api/hub/jobs/image-uncertain/items/0/discard",
+                "discard must address the item by its index, got: \(FixtureProtocol.discardRequests())")
+        require(store.error == nil, "a successful discard must not leave an error, got: \(store.error ?? "nil")")
+        FixtureProtocol.setUncertainImage(false)
+        await store.refresh()
 
         let imageConnectionStore = NativeWorkspaceStore(sessionConfiguration: configuration)
         let oldImageState = temporary.appendingPathComponent("old-image-state")

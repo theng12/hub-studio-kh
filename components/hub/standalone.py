@@ -1158,6 +1158,14 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post("/api/hub/jobs/{batch_id}/items/{item_index}/discard")
+    async def discard_item(batch_id: str, item_index: int) -> dict[str, Any]:
+        """Abandon one uncertain item, releasing the machine it has been pinning."""
+        try:
+            return broker.discard_uncertain_item(batch_id, item_index)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     async def open_worker_artifact(worker: dict[str, Any], artifact_path: str):
         from .backend.peers import studio_request
         url, headers = studio_request(worker, artifact_path)

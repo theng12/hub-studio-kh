@@ -20,6 +20,186 @@ enum HistoryTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// A slowly turning rainbow ring, drawn only while `active`.
+///
+/// The owner's feedback was that a long generation "shows almost nothing", so a running job is now
+/// unmistakable: the ring travels around the Generate button and the preview while work is in
+/// flight. Because it is a `TimelineView`, it costs nothing when idle - the view is not in the
+/// hierarchy at all once the last job finishes.
+private struct ActiveAura<Content: View>: View {
+    let active: Bool
+    @ViewBuilder var content: () -> Content
+
+    private static var rainbow: [Color] {
+        [.pink, .purple, .indigo, .blue, .cyan, .green, .yellow, .orange, .pink]
+    }
+
+    var body: some View {
+        if active {
+            TimelineView(.animation) { context in
+                let phase = context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 8) / 8
+                content()
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(AngularGradient(colors: Self.rainbow, center: .center,
+                                                    angle: .degrees(phase * 360)),
+                                    lineWidth: 3)
+                            .shadow(color: .purple.opacity(0.35), radius: 4)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+            }
+        } else {
+            content()
+        }
+    }
+}
+
+/// Small in-memory cache of Image thumbnails.
+///
+/// The history list must neither block on the network nor hold a full-size PNG per row, so a
+/// thumbnail is fetched once through the verified artifact route, downscaled and kept. A failure
+/// is not cached, so a row that could not be fetched is simply retried the next time it appears.
+@MainActor
+final class ImageThumbnailStore: ObservableObject {
+    @Published private(set) var thumbnails: [String: NSImage] = [:]
+    private var loading: Set<String> = []
+    /// A soft ceiling. Image history is pruned by the Hub anyway; this only stops an unusually
+    /// long session from pinning decoded thumbnails forever.
+    private let limit = 240
+
+    func thumbnail(for job: NativeJob, using workspace: NativeWorkspaceStore) async -> NSImage? {
+        if let ready = thumbnails[job.id] { return ready }
+        guard job.state == "done", !loading.contains(job.id) else { return nil }
+        loading.insert(job.id)
+        defer { loading.remove(job.id) }
+        do {
+            let data = try await workspace.imageData(for: job)
+            guard let full = NSImage(data: data),
+                  let small = Self.downscaled(full, to: 72) else { return nil }
+            if thumbnails.count >= limit { thumbnails.removeAll() }
+            thumbnails[job.id] = small
+            return small
+        } catch {
+            return nil
+        }
+    }
+
+    private static func downscaled(_ image: NSImage, to maxDimension: CGFloat) -> NSImage? {
+        let source = image.size
+        guard source.width > 0, source.height > 0 else { return nil }
+        let scale = min(1, maxDimension / max(source.width, source.height))
+        let target = NSSize(width: max(1, (source.width * scale).rounded()),
+                            height: max(1, (source.height * scale).rounded()))
+        let small = NSImage(size: target)
+        small.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image.draw(in: NSRect(origin: .zero, size: target),
+                   from: NSRect(origin: .zero, size: source),
+                   operation: .sourceOver, fraction: 1)
+        small.unlockFocus()
+        return small
+    }
+}
+
+/// One low-cost preview of a completed Image.
+///
+/// It is deliberately not the preview pane: the full image still loads only on Preview/Save. This
+/// asks the store for a cached thumbnail and shows a placeholder until one arrives, so a slow fetch
+/// never holds up the row.
+private struct JobThumbnail: View {
+    let job: NativeJob
+    let connected: Bool
+    @ObservedObject var store: ImageThumbnailStore
+    @ObservedObject var workspace: NativeWorkspaceStore
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+            if let image = store.thumbnails[job.id] {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").font(.title3).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+        .accessibilityLabel(job.text.isEmpty ? "Generated image thumbnail" : "Thumbnail of \(job.text)")
+        .task(id: "\(job.id)-\(connected)") {
+            guard connected else { return }
+            _ = await store.thumbnail(for: job, using: workspace)
+        }
+    }
+}
+
+/// A whole-number field that can be typed into as well as stepped.
+///
+/// A value outside `range` is refused on commit and the field falls back to what it was, so a
+/// typo can never leave the form in a state the Hub would reject. The stepper still clamps, so
+/// the two controls cannot disagree about the allowed range.
+private struct NumberField: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var step: Int = 1
+    var width: CGFloat = 90
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Spacer(minLength: 8)
+            TextField(title, value: Binding(
+                get: { value },
+                set: { if range.contains($0) { value = $0 } }
+            ), format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: width)
+                .accessibilityLabel(title)
+            Stepper(title, value: $value, in: range, step: step).labelsHidden()
+        }
+    }
+}
+
+/// The same as `NumberField`, for a measured value that may be fractional.
+private struct DoubleField: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 1
+    var width: CGFloat = 90
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Spacer(minLength: 8)
+            TextField(title, value: Binding(
+                get: { value },
+                set: { if $0.isFinite && range.contains($0) { value = $0 } }
+            ), format: .number.precision(.fractionLength(0)))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: width)
+                .accessibilityLabel(title)
+            Stepper(title, value: $value, in: range, step: step).labelsHidden()
+        }
+    }
+}
+
+/// Which history an uncertain job belongs to, so one confirmation can act on all three rows.
+private enum DiscardKind { case image, audio, music }
+
+/// An uncertain job the operator asked to abandon, held until they confirm.
+private struct PendingDiscard: Identifiable {
+    let id: String
+    let job: NativeJob
+    let kind: DiscardKind
+}
+
 /// The fields one voice editor collects, for a voice that exists or one being added.
 struct VoiceDraft: Identifiable {
     let id = UUID()
@@ -94,6 +274,19 @@ struct StudioContent: View {
     /// Set while a clip is being transcribed here and now, for either the voice editor or the
     /// audio reference field, so the button shows it is working and cannot be pressed twice.
     @State private var transcribingClip = false
+    /// Decoded Image thumbnails, shared by every history row so one artifact is fetched once.
+    @StateObject private var thumbnails = ImageThumbnailStore()
+    /// The uncertain job the operator asked to discard, held until they confirm.
+    @State private var pendingDiscard: PendingDiscard?
+    /// A sample is seeded into an empty prompt the first time a studio is opened, so a brand-new
+    /// user has something to press Generate on. The flag keeps it from refilling a field the
+    /// operator deliberately cleared.
+    @State private var seededImageSample = false
+    @State private var seededAudioSample = false
+    @State private var seededMusicSample = false
+    /// Which Music job the shared player is currently holding, so the preview transport only
+    /// claims a clip it actually started.
+    @State private var loadedMusicJobID: String?
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -120,6 +313,224 @@ struct StudioContent: View {
     }
     private func modelName(_ repo: String) -> String { workspace.models.first { $0.repo == repo }?.label ?? repo.components(separatedBy: "/").last ?? repo }
 
+    // MARK: - Working state at a glance
+
+    /// The colour a state is read as. Queued, running, done and failed must be distinguishable
+    /// from across the room, which is the feedback: small grey text was not enough.
+    private func stateColor(_ state: String) -> Color {
+        switch state {
+        case "done": return .green
+        case "error": return .red
+        case "uncertain": return .orange
+        case "cancelled": return .gray
+        case "running": return .blue
+        case "queued": return .purple
+        default: return .secondary
+        }
+    }
+    private func stateSymbol(_ state: String) -> String {
+        switch state {
+        case "done": return "checkmark.circle.fill"
+        case "error": return "xmark.octagon.fill"
+        case "uncertain": return "questionmark.circle.fill"
+        case "cancelled": return "slash.circle.fill"
+        case "running": return "bolt.fill"
+        case "queued": return "clock.fill"
+        default: return "stop.circle.fill"
+        }
+    }
+
+    /// The state as a coloured pill, so "Queued" and "Running" cannot be mistaken for each other.
+    private func stateBadge(_ state: String) -> some View {
+        Label(stateLabel(state), systemImage: stateSymbol(state))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(stateColor(state))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(stateColor(state).opacity(0.14),
+                        in: Capsule())
+            .overlay(Capsule().stroke(stateColor(state).opacity(0.45), lineWidth: 1))
+            .fixedSize()
+    }
+
+    /// The honest progress line for one job.
+    ///
+    /// A percentage is drawn only when the Hub actually reported one. A queued or unmeasured job
+    /// gets an indeterminate linear bar instead, because a bar pinned at zero reads as "stuck" and
+    /// a made-up number is worse than no number.
+    @ViewBuilder private func jobProgress(_ job: NativeJob) -> some View {
+        switch job.state {
+        case "queued":
+            HStack(spacing: 8) {
+                ProgressView().progressViewStyle(.linear).frame(width: 140)
+                Text("Waiting for a free worker").font(.caption).foregroundStyle(.secondary)
+            }
+        case "running":
+            if job.progress > 0.001 {
+                VStack(alignment: .leading, spacing: 3) {
+                    ProgressView(value: min(1, max(0, job.progress)), total: 1)
+                        .tint(stateColor(job.state))
+                    Text("Running — \(Int((min(1, max(0, job.progress)) * 100).rounded()))%")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().progressViewStyle(.linear).frame(width: 140)
+                    Text("Running — progress is not reported by this model")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        case "uncertain":
+            Label("Needs attention — an earlier attempt may still be running",
+                  systemImage: "questionmark.circle")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        case "cancel_requested", "cancelling":
+            HStack(spacing: 8) {
+                ProgressView().progressViewStyle(.linear).frame(width: 140)
+                Text("Stopping…").font(.caption).foregroundStyle(.secondary)
+            }
+        case "error":
+            Label("Failed", systemImage: "xmark.octagon")
+                .font(.caption).foregroundStyle(.red)
+        case "cancelled":
+            Text("Cancelled").font(.caption).foregroundStyle(.secondary)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// A spinner and a sentence beside a Generate button while its studio is working.
+    @ViewBuilder private func activeWorkIndicator(_ jobs: [NativeJob]) -> some View {
+        if !jobs.isEmpty {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(jobs.count == 1 ? "Working…" : "Working on \(jobs.count) jobs…")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Sample prompts
+
+    /// Twelve to fifteen varied visual prompts. Offered through "Surprise me" and the examples
+    /// menu rather than hidden in documentation, so a blank page is never a dead end.
+    static let imageSamples = [
+        "A lone lighthouse on a black cliff at dawn, long exposure sea mist, cinematic",
+        "A red panda barista pulling an espresso in a tiny wooden café, warm morning light",
+        "Aerial view of terraced rice fields after rain, low clouds between the hills",
+        "Macro photograph of frost crystals on a spiderweb, deep blue background",
+        "A 1970s sci-fi control room with round CRT screens and orange indicator lights",
+        "An empty night train carriage lit by overhead fluorescents, muted teal palette",
+        "A whale swimming through a city street flooded with sunlight, surreal and calm",
+        "A still life of ripe figs, cracked walnuts and dark bread on linen, Dutch masters light",
+        "A Japanese garden in late autumn, stone lantern half hidden by red maple leaves",
+        "Portrait of an old fisherman with weathered hands, soft overcast light, 85mm",
+        "A desert highway at dusk with distant mesas and a single telephone pole",
+        "Close-up of a hummingbird hovering beside a red flower, motion frozen, bright bokeh",
+        "A cozy attic library with a round window, stacks of books and drifting dust motes",
+        "Neon-lit ramen stand in the rain, steam and reflections on wet asphalt, night",
+        "A hot air balloon rising over a patchwork of farmland at sunrise, soft haze",
+    ]
+
+    /// Lines to speak: short, natural, and some of them not in English, because the models handle
+    /// more than one language and the samples should say so.
+    static let audioSamples = [
+        "Good morning. Here is your studio update for today.",
+        "The train to the coast leaves in ten minutes. Please have your ticket ready.",
+        "Let's keep this simple: one idea, one sentence, one clear next step.",
+        "Guten Morgen. Die Proben beginnen um zehn Uhr im großen Saal.",
+        "Bonjour, ceci est un message de bienvenue pour votre nouvel appareil.",
+        "Hola, gracias por llamar. En un momento le atenderemos.",
+        "こんにちは。今日はいい天気ですね。",
+        "Welcome back. Your previous session is exactly where you left it.",
+        "In a quiet room, a single idea can change the shape of an entire afternoon.",
+        "This is a short test of the selected voice. How does it sound to you?",
+        "Please leave a message after the tone, and we will get back to you soon.",
+        "The kitchen is closing in fifteen minutes. Last orders, please.",
+        "Numbers, dates and names: forty-two, the third of March, and Mr. Okonkwo.",
+        "Let's begin with a slow breath in, and then a long, easy breath out.",
+    ]
+
+    /// Music descriptions, from sparse to busy, so the examples do not all sound the same.
+    static let musicSamples = [
+        "Warm lo-fi hip hop with dusty drums, vinyl crackle and a mellow Rhodes piano",
+        "Slow orchestral strings building under a solo cello, cinematic and hopeful",
+        "Driving 80s synthwave with arpeggios, gated drums and a wide analog bass",
+        "Gentle solo piano, unhurried and reflective, recorded in a small hall",
+        "Afrobeat groove with bright horns, talking drum and a rolling bassline",
+        "Ambient drone with soft chimes and distant rain, calm and weightless",
+        "Upright jazz trio, brushed drums and a walking bass, late-night club feel",
+        "Punchy electronic dance track with a four-on-the-floor kick and rising pads",
+        "Acoustic folk fingerpicking with harmonica and a close, intimate vocal",
+        "Dusty boom-bap beat with chopped soul samples and a deep sub bass",
+        "Minimal techno, hypnotic and repetitive, with a slow filter sweep",
+        "Sweeping film score with taiko drums and brass, epic and determined",
+        "Bossa nova guitar with light shakers and a relaxed whistled melody",
+        "Chiptune adventure theme with a driving square-wave lead and playful bass",
+        "Gospel organ and hand claps under a soaring choir, joyful and full",
+    ]
+
+    /// The "Surprise me" button plus the examples menu, shown beside a prompt field.
+    private func sampleControl(_ samples: [String], binding: Binding<String>) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                if let pick = samples.randomElement() { binding.wrappedValue = pick }
+            } label: {
+                Label("Surprise Me", systemImage: "dice")
+            }
+            .help("Insert a random example into the field. Nothing is submitted.")
+            Menu("Examples") {
+                ForEach(samples, id: \.self) { sample in
+                    Button(sample) { binding.wrappedValue = sample }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Choose an example to insert. Nothing is submitted.")
+        }
+        .font(.caption)
+    }
+
+    /// Fill an empty field once, so a new user can press Generate immediately. Never overwrites
+    /// something the operator typed, and never resubmits anything.
+    private func seedSample(_ samples: [String], binding: Binding<String>, seeded: Binding<Bool>) {
+        guard !seeded.wrappedValue else { return }
+        seeded.wrappedValue = true
+        guard binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let pick = samples.randomElement() else { return }
+        binding.wrappedValue = pick
+    }
+
+    /// The clip length the Hub reported for this item, or the length that was requested when the
+    /// measured value is absent (some Music receipts carry no `audio_duration_s`). A requested
+    /// value is labelled as such; a number is never invented.
+    private func clipLength(_ job: NativeJob) -> String? {
+        if let measured = job.durationSeconds, measured > 0 {
+            return NativeJob.clock(measured)
+        }
+        if let requested = job.musicSettings?.durationSeconds, requested > 0 {
+            return "\(NativeJob.clock(requested)) requested"
+        }
+        return nil
+    }
+
+    // MARK: - Discarding an uncertain job
+
+    private func requestDiscard(_ job: NativeJob, kind: DiscardKind) {
+        pendingDiscard = PendingDiscard(id: "\(kind)-\(job.id)", job: job, kind: kind)
+    }
+
+    private func confirmDiscard(_ pending: PendingDiscard) {
+        pendingDiscard = nil
+        Task {
+            switch pending.kind {
+            case .image: await workspace.discardImage(pending.job)
+            case .audio: await workspace.discardAudio(pending.job)
+            case .music: await workspace.discardMusic(pending.job)
+            }
+        }
+    }
+
     /// The version this build actually is, shown in the corner so it is never a
     /// guess. A raw development executable has no bundle version; "Development" is
     /// more honest there than inventing a number.
@@ -133,11 +544,16 @@ struct StudioContent: View {
         HStack(spacing: 0) {
             List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
                 Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
-                Section("Create") {
-                    ForEach(StudioPage.workspaces) { page in Label(page.title, systemImage: page.symbol).tag(page) }
-                }
-                Section("Library & app") {
-                    ForEach(StudioPage.management) { page in Label(page.title, systemImage: page.symbol).tag(page) }
+                ForEach(StudioPage.sidebarSections, id: \.title) { section in
+                    Section(section.title) {
+                        ForEach(section.pages) { page in
+                            // "Coming later" pages are reachable but deliberately quieter: they
+                            // work, there is just no engine behind them yet.
+                            Label(page.title, systemImage: page.symbol)
+                                .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
+                                .tag(page)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -180,9 +596,10 @@ struct StudioContent: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
-            // The version and What's New live in the lower-right corner of the page,
-            // where an operator can always see which build they are on without opening
-            // Settings - the first question when an old app is still running.
+            // The version lives in the lower-right corner of the page, where an operator can always
+            // see which build they are on without opening Settings - the first question when an old
+            // app is still running. What's New is reachable from the sidebar, so it is not repeated
+            // here.
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 12) {
                     Spacer(minLength: 0)
@@ -191,9 +608,6 @@ struct StudioContent: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .accessibilityLabel("Studio Hub version \(appVersion)")
-                    Button("What's New") { studio.select(.whatsNew) }
-                        .buttonStyle(.link)
-                        .accessibilityLabel("What's New in this version")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -206,6 +620,17 @@ struct StudioContent: View {
         // A floor that matches the window's own minimum, not the sum of every column: the
         // columns are allowed to compress below their ideal so nothing has to be cropped.
         .frame(minWidth: 720, minHeight: 520)
+        .confirmationDialog(
+            "Discard this uncertain job?",
+            isPresented: Binding(get: { pendingDiscard != nil },
+                                 set: { if !$0 { pendingDiscard = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingDiscard) { pending in
+                Button("Discard Attempt", role: .destructive) { confirmDiscard(pending) }
+                Button("Keep", role: .cancel) { pendingDiscard = nil }
+            } message: { _ in
+                Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
+            }
     }
 
     private func heading(_ title: String, _ description: String) -> some View {
@@ -293,7 +718,7 @@ struct StudioContent: View {
                 Divider()
                 sectionTitle("Workspaces")
                 VStack(spacing: 0) {
-                    ForEach(StudioPage.workspaces) { page in
+                    ForEach(StudioPage.create) { page in
                         HStack(spacing: 14) {
                             Image(systemName: page.symbol).font(.title3).frame(width: 24)
                             VStack(alignment: .leading, spacing: 4) {
@@ -305,7 +730,7 @@ struct StudioContent: View {
                                 .font(.callout).foregroundStyle(.secondary)
                             Button("Open") { studio.select(page) }.accessibilityLabel("Open \(page.rawValue)")
                         }.padding(.vertical, 13)
-                        if page != .chat { Divider() }
+                        if page != StudioPage.create.last { Divider() }
                     }
                 }
                 Divider()
@@ -432,17 +857,23 @@ struct StudioContent: View {
             HSplitView {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text("Prompt").font(.headline)
+                        HStack {
+                            Text("Prompt").font(.headline)
+                            Spacer()
+                            sampleControl(Self.imageSamples, binding: $workspace.imagePrompt)
+                        }
                         TextEditor(text: $workspace.imagePrompt)
                             .font(.body).padding(8).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
                             .accessibilityLabel("Image prompt")
                         HStack {
-                            if workspace.submittingImage { ProgressView().controlSize(.small) }
+                            activeWorkIndicator(activeImages)
                             Spacer()
-                            Button("Generate Image") { selectedImageID = nil; Task { await workspace.generateImage() } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(!connected || workspace.submittingImage || workspace.imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageModel?.supported != true || selectedImageModel?.runtimeReady != true || selectedImageModel?.cached != true)
+                            ActiveAura(active: !activeImages.isEmpty || workspace.submittingImage) {
+                                Button("Generate Image") { selectedImageID = nil; Task { await workspace.generateImage() } }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(!connected || workspace.submittingImage || workspace.imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageModel?.supported != true || selectedImageModel?.runtimeReady != true || selectedImageModel?.cached != true)
+                            }
                         }
                         Divider()
                         modelPicker(.image)
@@ -467,14 +898,16 @@ struct StudioContent: View {
                         Spacer()
                         if let job = previewImageJob { Button("Save Image…") { saveImage(job) }.disabled(!connected || loadingImage) }
                     }
-                    Group {
-                        if loadingImage { ProgressView("Loading image…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-                        else if let imagePreview {
-                            Image(nsImage: imagePreview).resizable().scaledToFit()
-                                .accessibilityLabel(previewImageJob?.text ?? "Generated image")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else { empty("Your image will appear here", "Enter a prompt and generate an image. Completed images stay in Jobs.", symbol: "photo") }
-                    }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    ActiveAura(active: !activeImages.isEmpty) {
+                        Group {
+                            if loadingImage { ProgressView("Loading image…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                            else if let imagePreview {
+                                Image(nsImage: imagePreview).resizable().scaledToFit()
+                                    .accessibilityLabel(previewImageJob?.text ?? "Generated image")
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else { empty("Your image will appear here", "Enter a prompt and generate an image. Completed images stay in Jobs.", symbol: "photo") }
+                        }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    }
                     if let job = previewImageJob { Text(job.text).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     Divider()
                     HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
@@ -487,6 +920,7 @@ struct StudioContent: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
+        .onAppear { seedSample(Self.imageSamples, binding: $workspace.imagePrompt, seeded: $seededImageSample) }
         .task(id: previewImageJob?.id) {
             imagePreview = nil
             guard let job = previewImageJob else { return }
@@ -511,8 +945,10 @@ struct StudioContent: View {
                 })) {
                     ForEach(configuration.sizes) { size in Text("\(size.label) · \(size.width) × \(size.height)").tag(size.id) }
                 }
-            Stepper(value: Binding(get: { workspace.imageSettings?.steps ?? values.steps }, set: { workspace.imageSettings?.steps = $0 }),
-                    in: configuration.limits.minSteps...configuration.limits.maxSteps) { Text("Steps: \(workspace.imageSettings?.steps ?? values.steps)") }
+            NumberField(title: "Steps",
+                        value: Binding(get: { workspace.imageSettings?.steps ?? values.steps },
+                                       set: { workspace.imageSettings?.steps = $0 }),
+                        range: configuration.limits.minSteps...configuration.limits.maxSteps)
             HStack {
                 Text("Guidance")
                 Spacer()
@@ -533,11 +969,18 @@ struct StudioContent: View {
 
     private func imageJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 10) {
+                if job.state == "done" {
+                    JobThumbnail(job: job, connected: connected, store: thumbnails, workspace: workspace)
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -549,6 +992,7 @@ struct StudioContent: View {
                     Button("Save…") { saveImage(job) }.disabled(!connected)
                 } else if job.state == "uncertain" {
                     Button("Check Original Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected)
+                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .image) }.disabled(!connected)
                 } else if active(job.state) {
                     Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected)
                 }
@@ -566,7 +1010,11 @@ struct StudioContent: View {
             HSplitView {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text("Prompt").font(.headline)
+                        HStack {
+                            Text("Prompt").font(.headline)
+                            Spacer()
+                            sampleControl(Self.musicSamples, binding: $workspace.musicPrompt)
+                        }
                         TextEditor(text: $workspace.musicPrompt)
                             .font(.body).padding(8).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
@@ -574,10 +1022,12 @@ struct StudioContent: View {
                         HStack {
                             Text("\(workspace.musicPrompt.count) characters").font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            if workspace.submittingMusic { ProgressView().controlSize(.small) }
-                            Button("Generate Music") { selectedMusicID = nil; Task { await workspace.generateMusic() } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(musicBlockedReason != nil)
+                            activeWorkIndicator(activeMusic)
+                            ActiveAura(active: !activeMusic.isEmpty || workspace.submittingMusic) {
+                                Button("Generate Music") { selectedMusicID = nil; Task { await workspace.generateMusic() } }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(musicBlockedReason != nil)
+                            }
                         }
                         // A disabled prominent button with no explanation is the worst state a form
                         // can be in: whatever holds it up is named right below it, first thing first.
@@ -623,26 +1073,27 @@ struct StudioContent: View {
                         if player.playing { Button("Stop Playback") { player.stop() } }
                         if let job = previewMusicJob { Button("Save Audio…") { saveMusic(job) }.disabled(!connected) }
                     }
-                    Group {
-                        if let job = previewMusicJob {
-                            VStack(spacing: 12) {
-                                Image(systemName: "music.note").font(.system(size: 32, weight: .light)).foregroundStyle(.secondary)
-                                Text(job.text.isEmpty ? modelName(job.model) : job.text)
-                                    .font(.headline).multilineTextAlignment(.center).lineLimit(3)
-                                if !job.assetFacts.isEmpty {
-                                    Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
-                                        .accessibilityLabel("Result details: \(job.assetFacts)")
-                                }
-                                Button("Play") {
-                                    Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
-                                }
-                                .disabled(!connected)
-                                .accessibilityLabel("Play \(job.text.isEmpty ? "generated music" : job.text)")
-                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            empty("Your music will appear here", "Describe the music and generate it. Completed music stays in Jobs.", symbol: "music.note")
-                        }
-                    }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    ActiveAura(active: !activeMusic.isEmpty) {
+                        Group {
+                            if let job = previewMusicJob {
+                                VStack(spacing: 12) {
+                                    Image(systemName: "music.note").font(.system(size: 32, weight: .light)).foregroundStyle(.secondary)
+                                    Text(job.text.isEmpty ? modelName(job.model) : job.text)
+                                        .font(.headline).multilineTextAlignment(.center).lineLimit(3)
+                                    if let length = clipLength(job) {
+                                        Text("Clip length \(length)").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    if !job.assetFacts.isEmpty {
+                                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                                            .accessibilityLabel("Result details: \(job.assetFacts)")
+                                    }
+                                    musicTransport(job)
+                                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else {
+                                empty("Your music will appear here", "Describe the music and generate it. Completed music stays in Jobs.", symbol: "music.note")
+                            }
+                        }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                    }
                     Divider()
                     HStack { Text("Recent music").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
                     if workspace.musicJobs.isEmpty {
@@ -662,22 +1113,90 @@ struct StudioContent: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
+        .onAppear { seedSample(Self.musicSamples, binding: $workspace.musicPrompt, seeded: $seededMusicSample) }
+        .onChange(of: previewMusicJob?.id) { _, _ in
+            // A different clip is showing, so the transport must not pretend to control the old one.
+            player.stop()
+            loadedMusicJobID = nil
+        }
+    }
+
+    /// A conventional transport for the previewed Music clip: play/pause, a stop, a scrub bar and
+    /// the elapsed time of the audio actually loaded. Nothing starts on its own.
+    @ViewBuilder private func musicTransport(_ job: NativeJob) -> some View {
+        let loaded = loadedMusicJobID == job.id && player.hasAudio
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                Button {
+                    if loaded && player.playing { player.pause() }
+                    else if loaded { player.resume() }
+                    else { startPreviewMusic(job) }
+                } label: {
+                    Label(loaded && player.playing ? "Pause" : "Play",
+                          systemImage: loaded && player.playing ? "pause.fill" : "play.fill")
+                }
+                .disabled(!connected)
+                .accessibilityLabel(loaded && player.playing
+                                    ? "Pause \(job.text.isEmpty ? "generated music" : job.text)"
+                                    : "Play \(job.text.isEmpty ? "generated music" : job.text)")
+                Button {
+                    player.stop()
+                    loadedMusicJobID = nil
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .disabled(!loaded)
+                Spacer()
+                Text(loaded ? player.timeLabel : "0:00 / 0:00")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Elapsed and total time")
+            }
+            Slider(value: Binding(get: { loaded ? player.position : 0 },
+                                  set: { player.seek(to: $0) }),
+                   in: 0...max(loaded ? player.duration : 1, 0.001))
+                .disabled(!loaded)
+                .accessibilityLabel("Playback position")
+        }
+    }
+
+    private func startPreviewMusic(_ job: NativeJob) {
+        Task {
+            do {
+                try await workspace.playMusic(job, with: player)
+                loadedMusicJobID = job.id
+            } catch { fileActionError = error.localizedDescription }
+        }
     }
 
     /// The Music controls the Hub publishes for this model, and nothing else.
     private func musicControls(_ configuration: NativeMusicConfiguration, _ values: NativeMusicSettings) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Stepper(value: Binding(
-                get: { Int((workspace.musicSettings?.durationSeconds ?? values.durationSeconds).rounded()) },
-                set: { workspace.musicSettings?.durationSeconds = Double($0) }),
-                in: Int(configuration.limits.minDurationSeconds.rounded())...Int(configuration.limits.maxDurationSeconds.rounded()),
-                step: 5) {
-                Text("Duration: \(Int((workspace.musicSettings?.durationSeconds ?? values.durationSeconds).rounded())) s")
+        let durationRange = configuration.limits.minDurationSeconds...configuration.limits.maxDurationSeconds
+        // One validated binding for both the field and the stepper: the field refuses a value
+        // outside the model's published range and falls back to the current value, so a typo can
+        // never leave the form in a state the Hub would reject.
+        let duration = Binding<Double>(
+            get: { workspace.musicSettings?.durationSeconds ?? values.durationSeconds },
+            set: { proposed in
+                guard proposed.isFinite, durationRange.contains(proposed) else { return }
+                workspace.musicSettings?.durationSeconds = proposed
+            })
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 6) {
+                Text("Duration")
+                Spacer(minLength: 8)
+                TextField("Duration", value: duration, format: .number.precision(.fractionLength(0)))
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .accessibilityLabel("Duration in seconds")
+                Text("s").foregroundStyle(.secondary)
+                Stepper("Duration", value: duration, in: durationRange, step: 5).labelsHidden()
             }
-            Stepper(value: Binding(get: { workspace.musicSettings?.steps ?? values.steps }, set: { workspace.musicSettings?.steps = $0 }),
-                    in: configuration.limits.minSteps...configuration.limits.maxSteps) {
-                Text("Steps: \(workspace.musicSettings?.steps ?? values.steps)")
-            }
+            NumberField(title: "Steps",
+                        value: Binding(get: { workspace.musicSettings?.steps ?? values.steps },
+                                       set: { workspace.musicSettings?.steps = $0 }),
+                        range: configuration.limits.minSteps...configuration.limits.maxSteps)
             HStack {
                 Text("Guidance")
                 Spacer()
@@ -753,14 +1272,25 @@ struct StudioContent: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: active(job.state) ? "music.note" : job.state == "done"
                       ? "checkmark.circle" : "exclamationmark.circle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
+                    }
+                    // Some Music receipts carry no measured `audio_duration_s`. Rather than show
+                    // nothing, name the requested length - and say that is what it is.
+                    if job.state == "done", job.durationSeconds == nil,
+                       let requested = job.musicSettings?.durationSeconds, requested > 0 {
+                        Text("Clip length \(NativeJob.clock(requested)) requested")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
@@ -772,6 +1302,7 @@ struct StudioContent: View {
                     Button("Save…") { saveMusic(job) }.disabled(!connected)
                 } else if job.state == "uncertain" {
                     Button("Check Original Result") { Task { await workspace.reconcileMusic(job) } }.disabled(!connected)
+                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .music) }.disabled(!connected)
                 } else if active(job.state) {
                     Button("Cancel") { Task { await workspace.cancelMusic(job) } }.disabled(!connected)
                 }
@@ -791,7 +1322,11 @@ struct StudioContent: View {
                 // control on this page was once clipped and why the page never matched the others.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text("Script").font(.headline)
+                        HStack {
+                            Text("Script").font(.headline)
+                            Spacer()
+                            sampleControl(Self.audioSamples, binding: $workspace.audioText)
+                        }
                         TextEditor(text: $workspace.audioText)
                             .font(.body).padding(8).frame(height: 155)
                             .background(Color(nsColor: .textBackgroundColor))
@@ -800,10 +1335,12 @@ struct StudioContent: View {
                         HStack {
                             Text("\(workspace.audioText.count) characters").font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            if workspace.submittingAudio { ProgressView().controlSize(.small) }
-                            Button("Generate Audio") { Task { await workspace.generateAudio() } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(audioBlockedReason != nil)
+                            activeWorkIndicator(activeAudio)
+                            ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
+                                Button("Generate Audio") { Task { await workspace.generateAudio() } }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(audioBlockedReason != nil)
+                            }
                         }
                         // A disabled prominent button with no explanation is the worst state a form
                         // can be in: the operator can see the control, cannot use it, and has
@@ -921,21 +1458,26 @@ struct StudioContent: View {
                         if player.playing { Button("Stop Playback") { player.stop() } }
                         Button("All Jobs") { studio.select(.jobs) }
                     }
-                    if workspace.audioJobs.isEmpty {
-                        empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
-                    } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.audioJobs.prefix(5)) { jobRow($0, compact: true) }
+                    ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
+                        Group {
+                            if workspace.audioJobs.isEmpty {
+                                empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
+                            } else {
+                                ScrollView {
+                                    LazyVStack(alignment: .leading, spacing: 12) {
+                                        ForEach(workspace.audioJobs.prefix(5)) { jobRow($0, compact: true) }
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                             }
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                 }
                 .padding(.leading, 20)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.padding(28)
+        .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
     }
 
     /// Where the voice for a clone comes from: one already saved, or a clip from disk.
@@ -1116,7 +1658,7 @@ struct StudioContent: View {
             Picker("Model", selection: selection) {
                 Text("Choose a model").tag("")
                 ForEach(models) { model in
-                    Text(model.label + (model.cached ? "" : " · Not installed") + model.pickerSuffix)
+                    Text(model.pickerName + (model.cached ? "" : " · Not installed") + model.pickerSuffix)
                         .tag(model.repo)
                 }
             }.labelsHidden().frame(maxWidth: .infinity)
@@ -1435,7 +1977,10 @@ struct StudioContent: View {
                 if historyTab == .all || historyTab == .image {
                     sectionTitle("Image")
                     if workspace.imageJobs.isEmpty { Text("No image jobs yet.").foregroundStyle(.secondary) }
-                    ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
+                    // Lazy so a thumbnail is only fetched for a row that is actually on screen.
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
+                    }
                 }
                 if historyTab == .all || historyTab == .audio {
                     sectionTitle("Audio")
@@ -1474,11 +2019,15 @@ struct StudioContent: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: active(job.state) ? "waveform" : job.state == "done"
                       ? "checkmark.circle" : "exclamationmark.circle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
                     if job.state == "done" {
                         Text("Transcript").font(.caption).foregroundStyle(.secondary)
                     }
@@ -1510,11 +2059,16 @@ struct StudioContent: View {
     private func jobRow(_ job: NativeJob, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: active(job.state) ? "waveform" : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(.secondary)
+                Image(systemName: active(job.state) ? "waveform" : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
-                    Text("\(modelName(job.model)) · \(stateLabel(job.state))\(job.generationSuffix)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
                     // What was actually produced: length, size and the size requested. An asset
                     // with no stated facts is hard to tell apart from one that came back wrong.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -1526,6 +2080,8 @@ struct StudioContent: View {
                 if job.state == "done" {
                     Button("Play") { Task { do { try await workspace.play(job, with: player) } catch { fileActionError = error.localizedDescription } } }.disabled(!connected)
                     Button("Save…") { saveAudio(job) }.disabled(!connected)
+                } else if job.state == "uncertain" {
+                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected)
                 } else if active(job.state) { Button("Cancel") { Task { await workspace.cancelAudio(job) } }.disabled(!connected) }
             }
             if let error = job.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -1890,12 +2446,8 @@ struct StudioContent: View {
             Text("These apply to this Mac only. Protected work is never deleted, so lowering the limit can leave this Mac above it.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
-                Stepper(value: $draftGigabytes, in: 1...2000, step: 1) {
-                    Text("Keep at most \(String(format: "%.0f", draftGigabytes)) GB")
-                }
-                Stepper(value: $draftRetentionDays, in: 1...365, step: 1) {
-                    Text("Keep finished work for \(draftRetentionDays) days")
-                }
+                DoubleField(title: "Keep at most (GB)", value: $draftGigabytes, range: 1...2000, step: 1)
+                NumberField(title: "Keep finished work (days)", value: $draftRetentionDays, range: 1...365)
                 Toggle("Clean up automatically", isOn: $draftCleanup)
             }.formStyle(.grouped).frame(height: 190)
             HStack {

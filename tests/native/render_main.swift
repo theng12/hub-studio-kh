@@ -123,6 +123,7 @@ struct PageRenderHarness {
     private static func pageNamed(_ name: String) -> StudioPage {
         let wanted = name.lowercased()
         if wanted == "subtitle" { return .transcription }
+        if wanted == "whatsnew" || wanted == "whats-new" { return .whatsNew }
         return StudioPage.allCases.first { $0.rawValue.lowercased() == wanted } ?? .overview
     }
 }

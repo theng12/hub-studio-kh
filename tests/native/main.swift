@@ -191,14 +191,20 @@ require(ShellConfiguration.preparedLibrary(
 
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
-// Voices sits beside Models: both are libraries the operator maintains, as opposed to the
-// per-workspace pages where work is created.
-require(StudioPage.management == [.models, .voices, .jobs, .connections, .whatsNew, .settings],
-        "central management navigation includes the voice library and the release notes")
-// The notes are reachable without knowing a version, and the page must not pretend to be a
-// workspace: it creates nothing.
+// The sidebar is grouped by what a page is for: work is created, libraries are maintained, the
+// fleet is connected, app pages are settings, and the two engine-less studios wait at the end.
+require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet", "App", "Coming later"],
+        "the sidebar sections are named and ordered as the owner asked")
+require(StudioPage.create == [.image, .audio, .transcription, .music],
+        "Create holds every workspace that can make something today")
+require(StudioPage.library == [.models, .voices, .jobs], "Library holds the things the operator maintains")
+require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
+require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")
+require(StudioPage.comingLater == [.video, .chat], "Video and Chat stay reachable but last")
+// The notes are reachable from the App section, and the page must not pretend to be a workspace:
+// it creates nothing.
 require(StudioPage.whatsNew.function == nil, "What's New is a page, not a studio function")
-require(!StudioPage.workspaces.contains(.whatsNew), "What's New must not appear as a workspace")
+require(!StudioPage.create.contains(.whatsNew), "What's New must not appear as a workspace")
 let firstLock = try InstanceLock(directory: state)
 do { _ = try InstanceLock(directory: state); fatalError("duplicate app owns same state") } catch {}
 withExtendedLifetime(firstLock) {}

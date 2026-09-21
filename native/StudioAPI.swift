@@ -128,6 +128,19 @@ struct NativeModel: Identifiable, Equatable {
     var channels: Int? = nil
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
+    /// A cleaned short name for a chooser. The catalogue label carries a recommendation suffix and
+    /// a runtime marker that are useful on the Models page but noise in a picker, so both are
+    /// dropped here only - `label` stays verbatim everywhere else.
+    var pickerName: String { Self.pickerName(for: label) }
+    static func pickerName(for label: String) -> String {
+        var name = label
+        if let suffix = name.range(of: " — ") {
+            name = String(name[name.startIndex..<suffix.lowerBound])
+        }
+        name = name.replacingOccurrences(of: " (MLX)", with: "")
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? label : trimmed
+    }
 }
 
 /// The three ways a local voice model can be told what to sound like.
@@ -477,6 +490,10 @@ struct NativeJob: Identifiable, Equatable {
     /// is the length of the media produced.
     var generationSeconds: Double? = nil
     var runningSeconds: Double? = nil
+    /// Which item in the batch this row is. Single-item app submissions are always 0, but the
+    /// Jobs page can show a batch another client submitted, so the discard route is addressed with
+    /// the index the Hub actually reported.
+    var itemIndex: Int = 0
 
     /// "· took 52 s", "· running 12 s", or nothing when the Hub has not timed it.
     ///
@@ -647,8 +664,24 @@ private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
 @MainActor
 final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playing = false
+    /// Where playback is now, in seconds, and how long the loaded clip is. Both come from the
+    /// player actually holding the audio, never from the job's requested length.
+    @Published var position: Double = 0
+    @Published var duration: Double = 0
     private var player: AVAudioPlayer?
     private var scratch: URL?
+    private var ticker: Timer?
+
+    var hasAudio: Bool { player != nil }
+    /// "0:07 / 0:30", for a transport that reads like every other player.
+    var timeLabel: String {
+        "\(Self.clock(position)) / \(Self.clock(duration))"
+    }
+    static func clock(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
 
     /// Play fetched audio from a file on disk, not from memory.
     ///
@@ -676,18 +709,68 @@ final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             ready.play()
             player = ready
             scratch = file
+            duration = ready.duration
+            position = ready.currentTime
             playing = true
+            startTicker()
         } catch {
             try? FileManager.default.removeItem(at: file)
             throw error
         }
     }
+
+    /// Stop making sound, but keep the clip loaded so Play can resume where it left off.
+    func pause() {
+        player?.pause()
+        playing = false
+        stopTicker()
+        if let player { position = player.currentTime }
+    }
+
+    func resume() {
+        guard let player else { return }
+        player.play()
+        playing = true
+        startTicker()
+    }
+
+    /// Move the loaded clip to a point in seconds. Used by the scrub bar.
+    func seek(to seconds: Double) {
+        guard let player else { return }
+        let clamped = min(max(seconds, 0), player.duration)
+        player.currentTime = clamped
+        position = clamped
+    }
+
     func stop() {
+        stopTicker()
         player?.stop()
         player = nil
         playing = false
+        position = 0
+        duration = 0
         if let scratch { try? FileManager.default.removeItem(at: scratch) }
         scratch = nil
+    }
+
+    private func startTicker() {
+        stopTicker()
+        ticker = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+    private func stopTicker() {
+        ticker?.invalidate()
+        ticker = nil
+    }
+    private func tick() {
+        guard let player else { return }
+        position = player.currentTime
+        if !player.isPlaying && playing {
+            // The delegate normally lands first; this is the belt to its braces so a finished
+            // clip can never leave the transport stuck on "Pause".
+            stop()
+        }
     }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in self?.stop() }
@@ -1453,6 +1536,29 @@ final class NativeWorkspaceStore: ObservableObject {
             if connectionID == requestConnection { self.error = Self.actionable(error, action: "Check the original Music result") }
         }
     }
+
+    /// Abandon one uncertain attempt for good.
+    ///
+    /// This is deliberately separate from cancel and reconcile. The Hub accepts it only for a job
+    /// that is already uncertain, marks it cancelled and releases the worker identity it has been
+    /// pinning, so later work is no longer blocked by an attempt nobody can resolve.
+    private func discard(_ job: NativeJob, action: String) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let response: HubDiscardResponse = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", String(job.itemIndex), "discard"],
+                method: "POST")
+            guard connectionID == requestConnection else { return }
+            guard response.ok else { throw NativeAPIError.message("The Hub did not discard that job.") }
+            error = nil
+            await refresh()
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: action) }
+        }
+    }
+    func discardImage(_ job: NativeJob) async { await discard(job, action: "Discard the image attempt") }
+    func discardAudio(_ job: NativeJob) async { await discard(job, action: "Discard the audio attempt") }
+    func discardMusic(_ job: NativeJob) async { await discard(job, action: "Discard the music attempt") }
 
     /// Fetch one Music artifact and verify it against the Hub's own receipt.
     ///
@@ -3261,7 +3367,8 @@ final class NativeWorkspaceStore: ObservableObject {
             musicSettings: item?.params?.musicSettings,
             durationSeconds: item?.audioDurationS,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
-            generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS)
+            generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
+            itemIndex: item?.index ?? 0)
     }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
@@ -3883,6 +3990,8 @@ private struct HubJobDetail: Decodable {
 }
 private struct HubJobItem: Decodable {
     let state: String
+    /// The item's position in the batch, which is what the discard route is addressed with.
+    let index: Int?
     let progress: Double?
     let prompt: String?
     let artifactUrl: String?
@@ -3932,6 +4041,8 @@ private struct HubJobParams: Decodable {
 }
 private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
 private struct HubCancelResponse: Decodable { let ok: Bool }
+/// `POST /api/hub/jobs/{id}/items/{index}/discard` answers with the abandoned item.
+private struct HubDiscardResponse: Decodable { let ok: Bool }
 /// Both Image and Music reconciliation return this shape; the route and the modality differ.
 private struct HubReconciliation: Decodable { let reconciled: Bool; let clientRequestId: String? }
 private struct HubImageRequest: Codable {

@@ -27,8 +27,21 @@ enum StudioPage: String, CaseIterable, Identifiable {
     /// Owner-facing name. The raw value stays stable because it is also the StudioFunction
     /// lookup key and is persisted in saved state.
     var title: String { self == .transcription ? "Subtitle" : rawValue }
-    static let workspaces: [Self] = [.audio, .transcription, .image, .music, .video, .chat]
-    static let management: [Self] = [.models, .voices, .jobs, .connections, .whatsNew, .settings]
+    /// Sidebar sections, in the order the owner asked for. "Create" is where work is made, and
+    /// Video and Chat sit last and quieter because neither has an engine yet. The raw values stay
+    /// stable, so moving a page between sections never invalidates saved state.
+    static let create: [Self] = [.image, .audio, .transcription, .music]
+    static let library: [Self] = [.models, .voices, .jobs]
+    static let fleet: [Self] = [.connections]
+    static let app: [Self] = [.whatsNew, .settings]
+    static let comingLater: [Self] = [.video, .chat]
+    static let sidebarSections: [(title: String, pages: [Self])] = [
+        ("Create", create),
+        ("Library", library),
+        ("Fleet", fleet),
+        ("App", app),
+        ("Coming later", comingLater),
+    ]
     var function: StudioFunction? { StudioFunction(rawValue: rawValue) }
     var symbol: String {
         if let function { return function.symbol }

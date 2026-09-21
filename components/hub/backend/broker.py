@@ -2351,6 +2351,49 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             await client.aclose()
 
 
+def discard_uncertain_item(batch_id: str, item_index: int) -> dict:
+    """Let an operator abandon an uncertain attempt for good.
+
+    An uncertain item keeps its physical Mac reserved for reconciliation, because the accepted
+    worker attempt may still be running - and that uncertainty can never resolve by itself when
+    the worker is gone. Left alone it pins the machine and every later job waits behind it with
+    no reason shown. Discarding is the operator's explicit decision to stop waiting: the attempt
+    is recorded as cancelled and its worker and recovery identity are cleared, so a restart,
+    monitor pass or reconcile cannot adopt it back.
+
+    This is deliberately separate from cancellation and reconciliation, which keep a live worker
+    fenced. Only an item that is already uncertain can be discarded.
+    """
+    batch = batches.get(batch_id) or ledger.load_batch(batch_id)
+    if batch is None:
+        raise ValueError("unknown batch")
+    item = next((row for row in batch.get("items", [])
+                 if row.get("index") == item_index), None)
+    if item is None:
+        raise ValueError("unknown job item")
+    if item.get("state") != "uncertain":
+        raise ValueError("Discard is available only for an uncertain job")
+    reason = (
+        "The operator discarded this uncertain attempt. It was abandoned rather than "
+        "reconciled, so any result the original worker may still produce is ignored."
+    )
+    item["state"] = "cancelled"
+    item["error_code"] = "DISCARDED_UNCERTAIN"
+    item["error"] = reason
+    item["retry_at"] = None
+    item["finished_at"] = time.time()
+    # The worker attempt and its recovery trail are removed on purpose: nothing may reconcile an
+    # attempt the operator has abandoned.
+    for field in ("studio", "studio_job_id", "worker_id", "worker_artifact_url", "machine",
+                  "recovery", "model_revision", "runtime_revision", "worker_accepted_params",
+                  "cancel_signal_sent_at", "cancel_error"):
+        item.pop(field, None)
+    batches[batch_id] = batch
+    ledger.save_batch(batch)
+    _wakeup.set()
+    return {"ok": True, "batch_id": batch_id, "item_index": item_index}
+
+
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
     """Persist state; when the batch just reached a terminal state, alert on any
     failures and fire the client's webhook (Story Studio et al) once."""
