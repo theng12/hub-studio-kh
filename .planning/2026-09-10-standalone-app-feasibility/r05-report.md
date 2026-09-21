@@ -58,14 +58,43 @@ No test tool was installed into the immutable runtime. Old qualification harness
 must be given explicit paths; do not replace a live library or hardlink into a
 verified package (ctime changes invalidate verification).
 
-## Image offline rebuild (not attempted; inputs undeclared)
+## Image offline rebuild (attempted; declared inputs were incomplete)
 
-[MEASURED] `packaging/image-runtime/build.sh` exists and uses `uv --offline`, and
-`native/build.sh` selects the SDK explicitly. What is missing is a declaration of
-the exact CPython archive and wheel set the Image runtime needs, and a proven
-offline build from an empty user cache. This was not attempted because it may
-require network acquisition, which is out of scope for this session; it remains an
-R05 gate. A clean clone alone is not an offline rebuild kit.
+[MEASURED] Declared inputs found and verified present:
+`packaging/voice-runtime/pins.env` (CPython `3.12.14+20260901`, sha256
+`3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76`), the pinned
+archive `.build/downloads/cpython-3.12.14+20260901-aarch64-apple-darwin-install_only.tar.gz`
+(checksum OK), and `packaging/image-runtime/requirements.lock.txt`
+(sha256 `5fd5e79db7f8bec7dfa5c3ebc0fd1495ba7460138b44caf06bb6c0346c186b4f`, checksum
+OK). The existing `.build/st03-image-runtime-worker` still verifies.
+
+[MEASURED] Offline reconstruction was then attempted with an **empty user cache**
+and only project inputs:
+
+```sh
+env -i HOME=<fresh temp> PATH="<system tools>:/opt/homebrew/bin" \
+  UV_CACHE_DIR="$PWD/.build/uv-cache" \
+  bash packaging/image-runtime/build.sh .build/deepseek-image-offline
+```
+
+Result: **failed loudly at `uv pip sync --offline`** with
+`Because contourpy was not found in the cache and you require contourpy==1.4.0`,
+network disabled. The builder never silently reached the network, which is the
+required safety property, and it left no partial runtime.
+
+[MEASURED] The project uv cache `.build/uv-cache` is not a complete declared input
+for Image. Comparing the 73 locked package names with the cache's registry
+metadata (`simple-v25/pypi`), **21 are absent**: `contourpy cycler docutils
+fonttools hf-transfer id jaraco-classes jaraco-context jaraco-functools keyring
+kiwisolver matplotlib mflux nh3 opencv-python piexif platformdirs
+readme-renderer requests-toolbelt toml twine`. `mflux` itself is among them.
+
+Gate: proving an offline Image rebuild from an empty user cache requires an
+explicitly populated, declared Image wheel cache. Populating it needs a network
+package fetch, which this session treats as a separate authorization, not a silent
+step. The existing transferred runtime remains valid; this is a bootstrap/kit gate,
+not an app defect. `.build/deepseek-offline-home.*` and any stage directory were
+removed after the attempt.
 
 ## Graphify
 

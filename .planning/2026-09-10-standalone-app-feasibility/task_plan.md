@@ -190,7 +190,11 @@ Terra for build scripts, Luna for root-approved mechanical documentation edits.
   exercise valid explicit selection and unavailable SDK failures, not blind newest-SDK fallback.
 - [ ] Establish declared CPython/wheel/cache inputs for Image; test offline rebuilding
   with an empty user cache and project inputs. Never silently use the network.
-  Not attempted; may require network acquisition. See `r05-report.md`.
+  Declared CPython archive + lock verified present; offline rebuild attempted with an
+  empty user cache and failed **loudly** (`contourpy` and 20 other locked packages are
+  absent from `.build/uv-cache`). No silent network use. Gate: an explicitly populated,
+  declared Image wheel cache (a network fetch needing separate authorization).
+  Evidence in `r05-report.md`.
 - [x] Record separate test-dependency setup and safe explicit paths for old qualification
   harnesses; replace no live library and avoid ctime-changing hardlinks into verified packages.
   `.build/test-deps` is separate from `.build/voice-runtime`; exact versions recorded in

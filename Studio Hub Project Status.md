@@ -78,8 +78,11 @@ second planning system.
   failure is closed (`test_standalone_connections.py` 33 passed).
 - **R05 portable bootstrap + accurate records — RECORDS RECONCILED / self-reviewed.**
   ST-03/04/05/06/08/10/11 reconciled in `r05-report.md`; ST-04/05/06 status
-  lines corrected; test-dependency setup recorded. Open: Image offline-build
-  declared inputs (not attempted; may need network) and optional Graphify restore.
+  lines corrected; test-dependency setup recorded. Image offline rebuild was then
+  **attempted** with an empty user cache: declared CPython archive + lock verified,
+  build failed loudly (`contourpy==1.4.0` plus 20 other locked packages absent from
+  `.build/uv-cache`); no silent network use. Gate: an explicitly populated Image
+  wheel cache needs separate network authorization. Optional Graphify restore stays open.
 - **R06 native Music workflow — IN PROGRESS (delegated).** The Music backend/
   runtime is integrated (PR #11) but the native UI still falls through to
   "Engine not installed"; `StudioAPI.swift` has no Music support. A bounded

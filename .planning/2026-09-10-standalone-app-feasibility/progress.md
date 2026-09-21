@@ -698,3 +698,23 @@ now 15 passed / 6 subtests.
 recorded 7 are the app-dependent release/bundled checks, because this run did
 not set `STUDIOHUB_TEST_APP`; the historical 641/7 run selected the preserved
 `936b3e5` app. ResourceWarnings from fixture sockets remain visible.
+
+## 2026-09-21 — R05 Image offline-rebuild check (DeepSeek)
+
+[MEASURED] Declared inputs verified present: CPython `3.12.14+20260901` archive
+(`.build/downloads`) with matching sha; `packaging/image-runtime/requirements.lock.txt`
+sha `5fd5e79…`; pins in `packaging/voice-runtime/pins.env`. The existing
+`.build/st03-image-runtime-worker` still verifies.
+
+[MEASURED] Offline rebuild attempted with an empty user cache (`env -i HOME=<temp>`)
+and only project inputs (`UV_CACHE_DIR=.build/uv-cache`). It failed **loudly** at
+`uv pip sync --offline`: `contourpy==1.4.0` was not in the cache and the network
+was disabled. No silent network use; no partial runtime left.
+
+[MEASURED] The project uv cache is an incomplete Image input: 21 of 73 locked
+packages have no registry metadata there, including `mflux`, `matplotlib`,
+`opencv-python`, `contourpy`, `kiwisolver`, `fonttools`, `hf-transfer`, `keyring`
+and `twine`. Proving offline reconstruction therefore needs an explicitly
+populated, declared Image wheel cache (a network fetch treated as separate
+authorization). This is a bootstrap/kit gate, not an app defect. Disposable temp
+home and any stage directory removed.
