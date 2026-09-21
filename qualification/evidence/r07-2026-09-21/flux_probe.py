@@ -19,7 +19,7 @@ import time
 import httpx
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_APP = ROOT / ".build/deepseek-proof-r06/Studio Hub.app"
+DEFAULT_APP = Path("/Applications/Studio Hub.app")
 MODEL = "AITRADER/FLUX2-klein-4B-mlx-4bit"
 PROMPT = ("A quiet riverside garden at sunrise, soft mist over the water, "
           "green trees, natural light, photographic detail.")
@@ -35,6 +35,8 @@ def main() -> int:
     parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-png", type=Path)
+    parser.add_argument("--ack", action="store_true",
+                        help="acknowledge delivery through the Hub after verifying the artifact")
     args = parser.parse_args()
 
     app, models = args.app.resolve(), args.models.resolve()
@@ -109,6 +111,12 @@ def main() -> int:
                         }
                         if args.save_png:
                             args.save_png.write_bytes(blob)
+                        if args.ack:
+                            ack = client.post(
+                                base + f"/api/hub/jobs/{batch}/items/0/ack",
+                                headers=headers)
+                            receipt["ack_status"] = ack.status_code
+                            receipt["ack_body"] = ack.text[:200]
             finally:
                 process.terminate()
                 try:

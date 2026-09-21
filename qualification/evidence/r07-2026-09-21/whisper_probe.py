@@ -19,9 +19,9 @@ import time
 import httpx
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_APP = ROOT / ".build/deepseek-proof-r06/Studio Hub.app"
+DEFAULT_APP = Path("/Applications/Studio Hub.app")
 DEFAULT_CLIP = ROOT / "qualification/evidence/st04-reference-clip.wav"
-MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 EXPECTED = ("The river runs quietly past the old stone bridge, "
             "and the morning light settles on the water.")
 
@@ -31,6 +31,9 @@ def main() -> int:
     parser.add_argument("--app", type=Path, default=DEFAULT_APP)
     parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
     parser.add_argument("--clip", type=Path, default=DEFAULT_CLIP)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--ack", action="store_true",
+                        help="verify the artifact and acknowledge delivery through the Hub")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -43,7 +46,7 @@ def main() -> int:
     receipt: dict = {
         "app": str(app),
         "models_dir": str(models),
-        "model": MODEL,
+        "model": args.model,
         "input": {"file": clip.name, "bytes": len(audio),
                   "sha256": hashlib.sha256(audio).hexdigest()},
     }
@@ -77,7 +80,7 @@ def main() -> int:
                     receipt["workers"] = sorted(row["modality"] for row in workers)
                     response = client.post(
                         base + "/api/hub/transcription/jobs", headers=headers,
-                        data={"item_ids": "clip-1", "model": MODEL, "word_timestamps": "false"},
+                        data={"item_ids": "clip-1", "model": args.model, "word_timestamps": "false"},
                         files={"files": (clip.name, audio, "audio/wav")})
                     receipt["submit_status"] = response.status_code
                     response.raise_for_status()
@@ -101,6 +104,17 @@ def main() -> int:
                         headers=headers)
                     receipt["artifact_status"] = artifact.status_code
                     receipt["srt"] = artifact.text if artifact.status_code == 200 else None
+                    if args.ack and artifact.status_code == 200:
+                        ack = client.post(
+                            base + f"/api/hub/transcription/jobs/{batch}/items/0/ack",
+                            headers=headers)
+                        receipt["ack_status"] = ack.status_code
+                        receipt["ack_body"] = ack.text[:200]
+                        after = client.get(
+                            base + f"/api/hub/transcription/jobs/{batch}",
+                            headers=headers).json()
+                        receipt["receipt_acked_at"] = (
+                            (after.get("items") or [{}])[0].get("receipt_acked_at"))
             finally:
                 process.terminate()
                 try:
@@ -115,7 +129,15 @@ def main() -> int:
             if line and "-->" not in line and line.strip() != "WEBVTT")
     receipt["transcript_text"] = transcript_text
     receipt["expected"] = EXPECTED
-    receipt["matches"] = EXPECTED.rstrip(".") in transcript_text
+    # Base is smaller and may differ in capitalisation/punctuation; a word-level
+    # comparison records that it transcribed correctly without pretending verbatim.
+    import re as _re
+
+    def _normalise(value: str) -> str:
+        return _re.sub(r"[^a-z0-9 ]", "", value.lower())
+
+    receipt["matches_verbatim"] = EXPECTED.rstrip(".") in transcript_text
+    receipt["matches"] = _normalise(EXPECTED) in _normalise(transcript_text)
 
     print(json.dumps(receipt, indent=2))
     if args.output:

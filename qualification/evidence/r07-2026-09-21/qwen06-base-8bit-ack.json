@@ -1,0 +1,49 @@
+{
+  "app": "/Applications/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+  "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+  "reference": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+  },
+  "ready_seconds": 2.25,
+  "stage_status": 201,
+  "asset": {
+    "asset_id": "25990298cb625cf415992458",
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "bytes": 252084,
+    "media_type": "audio/wav",
+    "created_at": 1790013788.228328,
+    "expires_at": 1790100188.227982,
+    "transcript_supplied": true,
+    "origin": "local"
+  },
+  "submit_status": 200,
+  "batch_id": "d11212d51e",
+  "generate_seconds": 28.18,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 253484,
+    "sha256": "f06d397eca1fa5cf5e4e88705a61a0b71d0fdd56bd3cbc0683a6484914a59002",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "voice",
+    "machine_id": null,
+    "studio": "voice",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 253484,
+    "sha256": "f06d397eca1fa5cf5e4e88705a61a0b71d0fdd56bd3cbc0683a6484914a59002",
+    "riff_wave": true
+  },
+  "ack_status": 200,
+  "ack_body": "{\"ok\":true}",
+  "ok": true
+}

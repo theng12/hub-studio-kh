@@ -20,7 +20,7 @@ import time
 import httpx
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_APP = ROOT / ".build/deepseek-proof-r06/Studio Hub.app"
+DEFAULT_APP = Path("/Applications/Studio Hub.app")
 DEFAULT_CLIP = ROOT / "qualification/evidence/st04-reference-clip.wav"
 TRANSCRIPT = ("The river runs quietly past the old stone bridge, "
               "and the morning light settles on the water.")
@@ -40,6 +40,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-wav", type=Path)
     parser.add_argument("--log-out", type=Path)
+    parser.add_argument("--ack", action="store_true",
+                        help="acknowledge delivery through the Hub after verifying the artifact")
     args = parser.parse_args()
 
     app, models, clip = args.app.resolve(), args.models.resolve(), args.clip.resolve()
@@ -134,6 +136,12 @@ def main() -> int:
                         }
                         if args.save_wav:
                             args.save_wav.write_bytes(blob)
+                        if args.ack:
+                            ack = client.post(
+                                base + f"/api/hub/jobs/{batch}/items/0/ack",
+                                headers=headers)
+                            receipt["ack_status"] = ack.status_code
+                            receipt["ack_body"] = ack.text[:200]
             finally:
                 process.terminate()
                 try:

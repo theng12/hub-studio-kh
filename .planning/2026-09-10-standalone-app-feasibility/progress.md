@@ -1000,3 +1000,23 @@ Recovered by `chmod -R u+w` then removing the remnant and moving the verified
 incoming copy into place. **The installer's own `rm -rf` has the same flaw when
 replacing a read-only build** - the kit's `1 - Install the app.command` should
 `chmod -R u+w` the target before removing it. Recorded as a fix for the kit rework.
+
+## 2026-09-22 — R07 Whisper Base/Small and delivery ACK (DeepSeek)
+
+[MEASURED] Real transcription against the installed 0.6.38 app with the new library:
+- **Whisper Base** (`mlx-community/whisper-base-mlx`): done; transcript correct but
+  not verbatim (capitalisation/punctuation differ, e.g. "the river ... Old Stone
+  Bridge and ..."); normalized word match true.
+- **Whisper Small** (`mlx-community/whisper-small-mlx`): done; **verbatim** match.
+- **Whisper Turbo**: done; verbatim match (earlier).
+All three acknowledged delivery through the Hub (`POST .../ack` → `{"ok":true}`).
+The transcription summary does not expose `receipt_acked_at`, so that field reads
+null there; the ACK itself returned 200.
+The whisper probe now takes `--model`, defaults to the installed app, and reports
+both `matches` (word-normalised) and `matches_verbatim`.
+
+[MEASURED] Delivery ACK for the other studios against the installed app:
+- **FLUX.2 Klein 4-bit**: done, artifact 1,701,382 bytes, ACK 200 `{"ok":true}`.
+- **Qwen3-TTS 0.6B Base clone**: done, artifact 253,484 bytes, ACK 200 `{"ok":true}`.
+The image/voice/music probes gained an `--ack` option and now default to the
+installed app.

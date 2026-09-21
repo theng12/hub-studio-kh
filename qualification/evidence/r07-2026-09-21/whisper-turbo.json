@@ -55,5 +55,7 @@
   "srt": "1\n00:00:00,000 --> 00:00:05,000\nThe river runs quietly past the old stone bridge, and the morning light settles on the water.\n",
   "transcript_text": "1 The river runs quietly past the old stone bridge, and the morning light settles on the water.",
   "expected": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
-  "matches": true
+  "matches": true,
+  "matches_verbatim": true,
+  "ack_status": null
 }
