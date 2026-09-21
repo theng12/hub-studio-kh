@@ -891,3 +891,7 @@ the shared `POST /api/hub/voice-references` contract (201), voice job submitted
 TTS sampling is not deterministic, so no fixed output hash is asserted. Model
 revision `50f45ef0047cde7e84c2ef04326acb8ada2436a7`, matching the imported
 package. Receipt `qwen06-base-8bit.json`; output `qwen06-base-8bit-r07.wav`.
+
+[MEASURED] R07 Qwen3-TTS **1.7B Base 8-bit** clone: done, WAV 253,484 bytes,
+valid RIFF/WAVE; receipt `qwen17-base-8bit.json`, output
+`qwen17-base-8bit-r07.wav`. Model revision `e7dd0585652209fa0d7783659aad4e8a324de11c`.
