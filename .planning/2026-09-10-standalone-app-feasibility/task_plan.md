@@ -2,6 +2,14 @@
 
 ## Ordered completion plan — owner authorized 2026-09-21
 
+**Current owner correction:** GatewayKH replaces GenStudio as the external client.
+R09 must pin and test GatewayKH's actual contract. Legacy protocol identifiers and
+historical receipts retain their original names until an evidenced migration is
+needed. Continue all safe work runnable/testable on this Mac; physical hardware,
+live enrollment, installed-app replacement and distribution gates remain separate.
+GatewayKH remote work uses the existing Fleet token; optional Hub/admin credentials
+are reserved for shared-voice administration, as its current provider definition specifies.
+
 **Goal:** Finish the remaining handoff in priority order, retaining a usable,
 truthful standalone Hub/Image/Voice/Subtitle app and the accepted Music extension.
 **Architecture:** Keep native client → Hub → private workers. Reuse existing
@@ -98,7 +106,7 @@ independent review by `music_recovery_read`. **Owned files:**
   -q tests/test_hub_voice_references.py tests/test_execution_asset_purge.py
   tests/test_hub_standalone.py`, then independent fault-injection review.
 
-### R03 — Voice acceptance/completion fault matrix [NEXT after PR #12 integration]
+### R03 — Voice acceptance/completion fault matrix [IN PROGRESS at b550617]
 
 **Owned scope:** `components/hub/backend/broker.py`,
 `components/hub/backend/artifact_metadata.py`, its existing tests, and
@@ -130,6 +138,15 @@ reposts and generated-but-unverified results; fix false terminal states, absent
 artifact references and falsely verified payloads. Cost if wrong: callers still
 need to check metadata availability before treating a generated result as verified;
 this task does not certify or change the external billing counterpart.
+
+Independent-review ruling: stable-ID deduplication is **worker-local**. The Hub's
+work-stealing queue can select a different worker after a malformed successful
+acceptance, so a same-worker replay test does not prove one fleet-wide attempt.
+Fence malformed successful acceptance with missing identity as uncertain/manual;
+do not add a pinned-retry subsystem. Preserve the real worker's idempotent replay
+contract separately. Cost: receipt-less accepted work needs operator reconciliation
+instead of unsafe automatic failover. Malformed live/recovery JSON must retain the
+same classification even when preceded by a genuine transport error.
 
 ### R04 — Peer admission negative qualification [QUEUED]
 
@@ -211,7 +228,7 @@ root/Impeccable owns review, Terra only bounded fixes after reproduction.
 - [ ] Resolve retained task-card review gaps with exact current evidence, not stale
   'missing export' claims where save/ACK code already exists.
 
-### R09 — Fleet and GenStudio completion [QUEUED; physical enrollment gated]
+### R09 — Fleet and GatewayKH completion [QUEUED; physical enrollment gated]
 
 **Owned scope:** ST-10, existing Hub connection/settings/stats and native Connections;
 root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
@@ -220,7 +237,7 @@ root owns topology/contract decisions, Sol/high bounded lifecycle/data changes.
   fetch/ACK, retries/timeouts, token rotation and reconnect with accepted jobs.
 - [ ] Prove selected-device settings with durable acknowledgement and no unselected
   fanout; node identity, freshness, attempts-versus-items and location deduplication.
-- [ ] Pin and verify the GenStudio counterpart contract without changing billing,
+- [ ] Pin and verify the GatewayKH counterpart contract without changing billing,
   accounts or assets. Real counterpart changes/enrollment require separate authority.
 - [ ] Run second-physical-node checks only when hardware and enrollment authority are
   available; fixture success alone cannot close physical ST-10/ST-11 evidence.

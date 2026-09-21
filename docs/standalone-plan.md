@@ -1,5 +1,16 @@
 # Studio Hub Standalone — focused first-release design
 
+Owner amendments, 2026-09-21: **GatewayKH**, not GenStudio, is now the external
+client. The existing address/token → location-controller → joined-node boundary
+remains the starting architecture; GatewayKH compatibility requires testing its
+actual adapter contract. Older GenStudio references below describe the inherited
+design/protocol, not a second current integration target. Music is the accepted
+extension tracked in the implementation plan; Chat and Video remain deferred.
+GatewayKH's current remote-location adapter uses the Fleet token for work/results
+and an optional Hub/admin token for shared-voice administration. This supersedes
+the older blanket external-client Hub-token guidance below, without changing
+the existing credential scopes.
+
 Updated: 2026-09-15. This is the canonical design. It supersedes the earlier six-function release plan.
 Implementation progress: ST-01 model/runtime contracts and ST-02 local Hub have
 current evidence; the 0.4.0 local proof bundles Hub and Voice. See the task board

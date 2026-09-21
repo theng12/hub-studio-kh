@@ -660,6 +660,10 @@ def test_queued_job_is_durable_before_worker_start_and_reloads_as_uncertain(tmp_
         assert recovered is not None
         assert recovered.state == "uncertain"
         assert restored.start_txt2speech(params) is recovered
+        with pytest.raises(ValueError, match="different request"):
+            restored.start_txt2speech({**params, "text": "changed request"})
+        assert len(restored._jobs) == 1
+        assert restored.get(job.job_id) is recovered
     finally:
         manager.cancel(job.job_id)
         generation._GEN_LOCK.release()

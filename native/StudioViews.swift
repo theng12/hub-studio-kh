@@ -1668,7 +1668,7 @@ struct StudioContent: View {
     private var connections: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                heading("Connections", "Optional API access and external Studio Hub or GenStudio control.")
+                heading("Connections", "Optional API access and external Studio Hub or GatewayKH control.")
                 Text("Local creation works independently. Connecting a controller is optional.").font(.headline)
                 Divider()
                 localAPI
@@ -1699,7 +1699,7 @@ struct StudioContent: View {
                     LabeledContent("Controller ID", value: identity.settings.controllerId)
                     LabeledContent("This machine", value: identity.settings.machineName)
                     LabeledContent("Accepts customer jobs", value: identity.readiness.ready ? "Yes" : "No")
-                    Text("Node-to-node routing is unchanged: GenStudio reaches a location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway.")
+                    Text("Node-to-node routing is unchanged: GatewayKH sends work to a location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
                     Text("Reading this Hub's identity…").font(.callout).foregroundStyle(.secondary)
@@ -1731,7 +1731,7 @@ struct StudioContent: View {
                 }.disabled(studio.connectionToken == nil)
                 if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
             }
-            Text("This Mac's own token. Use it here, or give it to the gateway so it can reach this Hub and manage what is shared from it.")
+            Text("This Mac's administrative token. GatewayKH needs it only for shared-voice administration; use the Fleet token for work and results.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Two values, and the difference is the safety property: this one is what a joining Mac
             // adopts and what this Mac then presents back to it. Handing a node the Hub token
@@ -1751,7 +1751,7 @@ struct StudioContent: View {
                         connectionNote = "Fleet token copied"
                     }
                 }.disabled(studio.fleetToken == nil)
-                Text("Give this one to each Mac that joins this controller.")
+                Text("Give this to GatewayKH for work and results, or to each Mac that joins this controller.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Text("It lets this controller send work to a Mac and read the results. It cannot change a Mac's settings, delete its output or manage its models — and a node that holds it cannot administer this Mac.")
@@ -1787,16 +1787,16 @@ struct StudioContent: View {
 
     private var controllerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Studio Hub & GenStudio")
+            sectionTitle("Studio Hub & GatewayKH")
             if let identity = workspace.controllerIdentity, let version = workspace.hubVersion {
                 LabeledContent("Hub version", value: version.version)
                 LabeledContent("Data store", value: identity.readiness.sqliteAuthoritative == true ? "Local, authoritative" : identity.settings.databaseMode)
-                LabeledContent("Global authority", value: (identity.settings.globalAuthority ?? "genstudio").capitalized)
+                LabeledContent("Reported protocol authority", value: identity.settings.globalAuthority ?? "Not reported")
                 LabeledContent("Migration stage", value: identity.settings.migrationStage ?? identity.readiness.migrationStage ?? "local")
                 if let warning = identity.readiness.telemetryWarning {
                     Text(warning).font(.callout).foregroundStyle(.orange)
                 }
-                Text("Jobs are recorded and claimed on this Mac. GenStudio remains the authority for accounts, billing and assets; this app reports the capabilities it actually has and offers no update channel it cannot honour.")
+                Text("Jobs are recorded and claimed on this Mac. GatewayKH sends work to location controllers; Studio Hub manages local execution and reports the capabilities it actually has. This app offers no update channel it cannot honour.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 Text("Remote control is optional and not required to create assets locally.")
@@ -2104,9 +2104,9 @@ struct StudioContent: View {
     private func roleExplanation(_ role: String?) -> String {
         switch role {
         case "controller":
-            return "Other Macs on your network can send work here, and this Mac reports what the whole group is doing. GenStudio still owns accounts, billing and assets."
+            return "Other Macs on your network can send work here, and this Mac reports what the whole group is doing. GatewayKH sends work to this location controller."
         case "agent":
-            return "This Mac creates locally and does not accept customer jobs directly; a controller sends it work. Nothing here contacts GenStudio."
+            return "This Mac creates locally and does not accept customer jobs directly; a controller sends it work. This Mac does not contact GatewayKH directly."
         default:
             return "This Mac creates on its own. Nothing else can send it work and it contacts nothing else."
         }

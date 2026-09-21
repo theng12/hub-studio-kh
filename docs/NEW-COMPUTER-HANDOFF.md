@@ -5,6 +5,14 @@ This is the continuation guide for the existing canonical plan, not a second pla
 
 ## Current continuation — 2026-09-21
 
+**Latest:** PR #12 merged at `b550617`; R01 native lifecycle/rejoin and R02 reference
+validation are verified. The exact wave-1 candidate passed 632 root tests (seven
+skips); see [wave-1 evidence](../qualification/handoff-completion-wave1-2026-09-21.md).
+The owner now names **GatewayKH** as the external client instead of GenStudio.
+R03 Voice receipt/payload repair is in progress; follow the top board block and
+canonical R01–R10 plan. The older continuation below is provenance, not a request
+to redo completed native/reference repairs. No GatewayKH live connection is implied.
+
 [MEASURED] The audit repairs H-01 through H-05 are integrated, followed by the
 reviewed Music package/engine contract through
 [PR #10](https://github.com/theng12/Studio-Hub-KH/pull/10) at `9f25c03`.
@@ -198,8 +206,8 @@ availability and a fresh runtime build were not tested in this audit.
 
 ## First development checks
 
-[MEASURED] `native/build.sh` and `native/render-page.sh` select `macosx26.5` explicitly
-as a workaround for the old host's SDK. Before compiling, inspect the new toolchain:
+`native/build.sh` and `native/render-page.sh` share explicit SDK selection, defaulting
+to the tested `macosx26.5`. Before compiling, inspect the new toolchain:
 
 ```sh
 uname -m
@@ -208,8 +216,11 @@ xcode-select -p
 xcrun --sdk macosx26.5 --show-sdk-path
 ```
 
-If that SDK is unavailable, resolve the SDK-selection portability finding before
-building. Keep the macOS 14 deployment target unless owner requirements change;
+If that SDK is unavailable, select an installed compatible SDK explicitly with
+`STUDIOHUB_MACOS_SDK=<xcrun-sdk-selector>` on either script, then run the complete
+native gate. Empty/unavailable selectors fail before compilation; no newest-SDK
+fallback is attempted. `build.sh` now includes the R01 lifecycle harness alongside
+boundary/API checks. Keep the macOS 14 deployment target unless owner requirements change;
 that target is not evidence of physical Sonoma compatibility.
 `xcodebuild -showsdks` is an additional inventory command when full Xcode is installed;
 the old host selects Command Line Tools, and `xcodebuild` refuses that active selection.

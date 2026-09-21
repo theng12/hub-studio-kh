@@ -19,17 +19,19 @@ workflow and no real Music model inference is claimed.
 The focused release is **Hub + Image Studio + Voice Studio + Subtitle Studio**.
 Its models are FLUX.2 Klein 4B MLX 4-bit; Qwen3 TTS Base 0.6B/1.7B;
 VoxCPM2 4-bit/8-bit/full; OmniVoice full; and three Whisper choices.
-Chat, Music and Video are deferred.
+Music is an accepted extension with its backend/runtime integrated; its native workflow
+and real-model qualification remain open. Chat and Video are deferred.
 
 All operating defaults are editable. Generated-output cleanup defaults to **50 GB
 total per device across the studios and 30 days after generation**, whichever
-condition is reached first. Automatic login startup and optional protected Hub-token
-connection to GenStudio are part of the target. The app bundles runtimes; complete
+condition is reached first. Automatic login startup and optional scoped-token
+connection to GatewayKH are part of the target. The app bundles runtimes; complete
 model packages can accompany it in an offline install kit.
 
 The model-package foundation supports configured GitHub/original-host downloads and copy/paste
 of complete model folders, with the same companion-file validation. Address/IP, port
-and token connections retain an API boundary suitable for a future standalone GenStudio.
+and token connections retain the existing external-client API boundary. GatewayKH
+is the current client; exact adapter compatibility is tracked under R09, not assumed.
 
 Compatibility targets original M1 and newer with macOS 14 Sonoma as the oldest current
 MLX baseline, rather than requiring the newest macOS. Exact point-release/model support
@@ -97,7 +99,14 @@ bash native/build.sh
 python3 -B packaging/stage_voice.py --runtime .build/voice-runtime --native-shell .build/StudioHub --output 'dist/Studio Hub 0.4.0 Local Proof.app'
 ```
 
-`native/build.sh` selects the installed macOS 26.5 SDK because the installed SDK 27 toolchain is missing the SwiftUI macros plugin needed by this source. The deployment target remains macOS 14. Local execution was tested on macOS 26; physical Sonoma compatibility remains unqualified. The target app needs no Swift build tools, Python, Pinokio or Homebrew on the user machine.
+Both native scripts default to `macosx26.5`: the installed SDK 27 toolchain lacks
+the SwiftUI macros plugin needed here. Select another installed SDK explicitly
+with `STUDIOHUB_MACOS_SDK=<xcrun-sdk-selector>`; an empty/unavailable selection
+fails before compilation and never falls back silently. Changing the selector
+does not qualify that toolchain. The build runs boundary, API and lifecycle gates
+before the optimized app. The deployment target remains macOS 14; physical Sonoma
+compatibility remains unqualified. Target devices need no Swift build tools,
+Python, Pinokio or Homebrew.
 
 Open the separately built app and choose a model library. A missing model volume stays
 unavailable with an actionable error; the app does not silently create a replacement
@@ -108,7 +117,7 @@ Transcription accepts an audio or video file and exports Text, SRT or VTT. The w
 
 ## Local state and optional connections
 
-Model libraries may live in Application Support or on an external SSD. The selected location is retained outside the app bundle. The Connections page is for optional API or external Studio Hub/GenStudio control; it is not required to create local assets.
+Model libraries may live in Application Support or on an external SSD. The selected location is retained outside the app bundle. The Connections page is for optional API or external Studio Hub/GatewayKH control; it is not required to create local assets.
 
 The app has no signing, notarization, login-registration or physical Sonoma test evidence yet. Login-item status is read from macOS service management, but login/reboot behavior remains unqualified.
 
@@ -134,17 +143,22 @@ What each studio needs, in the current build:
 | Voice | Qwen3-TTS **Base** (clone: reference clip **and** its exact transcript required), Qwen3-TTS **CustomVoice** (preset speakers), **OmniVoice** (clone: reference clip only). |
 | Voice (heavy) | **VoxCPM2** is exposed but needs more free unified memory than a 16 GB Mac has with the other engines resident; it fails with its own explicit memory message rather than misbehaving. Run it on a 24/32 GB machine with memory free. |
 
-### Connecting a controller or GenStudio
+### Connecting a controller or GatewayKH
 
-A location controller reaches this app with an address, a port and the Hub token — nothing else.
+A location controller or GatewayKH reaches this app with an address, a port and a scoped token.
 No browser login, no cloud domain and no shared database or filesystem are involved.
 
 1. In the app, open **Settings → Local services** and start the services. The status line reads
    `Local services ready`.
 2. Open **Connections → Local API**. It shows the address the Hub bound on this Mac, the role, the
    station name and IDs, and the Hub token masked.
-3. Use **Reveal Token** / **Copy Token** to obtain the credential, then present it on every request
-   as either `X-Hub-Token: <token>` or `Authorization: Bearer <token>`.
+3. For a remote location in GatewayKH, use this controller's **Fleet token** for
+   work, status and results. Its optional **Hub token (shared voices only)** field
+   takes the administrative Hub token only when that feature is needed. Do not
+   give joined nodes the administrative token. Headers remain `X-Hub-Token: <token>`
+   or `Authorization: Bearer <token>`; the header name does not determine its scope.
+
+The examples below use the administrative token for owner-level identity inspection:
 
 ```sh
 # Address and identity
@@ -153,7 +167,7 @@ curl -s -H "X-Hub-Token: $HUB_TOKEN" http://127.0.0.1:<port>/api/hub/controller
 curl -s -H "X-Hub-Token: $HUB_TOKEN" http://127.0.0.1:<port>/api/hub/capabilities
 ```
 
-Routing is unchanged: GenStudio talks to a location controller, and joined nodes keep their existing
+Routing is unchanged: GatewayKH talks to a location controller, and joined nodes keep their existing
 enrolment and fleet credential. The Hub token and the fleet token are separate scopes and rotate
 independently; rotating one does not disturb the job ledger, and station/controller IDs stay stable
 when a node's address changes. `/api/health` and `/api/version` are public by design and carry no

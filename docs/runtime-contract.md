@@ -132,7 +132,9 @@ Return truthful unsupported/unknown states instead of mapping absence to a healt
 
 - Device/site identity is independent of IP and editable display labels. Preserve
   Standalone/Controller/Agent roles and the existing prohibition on customer queue
-  submissions to agents. GenStudio contacts location controllers; their joined nodes do not contact GenStudio.
+  submissions to agents. GatewayKH contacts location controllers; their joined nodes do not contact GatewayKH.
+  This owner-confirmed client change does not rename inherited wire fields or
+  certify the counterpart: test the exact GatewayKH adapter revision under R09.
 - Preserve batch ID, item index and clientRequestId/fingerprint replay. Count execution
   attempts/retries separately from requested items; lost responses reconcile original work.
 - Preserve submit/status/cancel, Hub-relative artifact proxy, SHA-256/byte evidence and

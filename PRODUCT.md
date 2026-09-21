@@ -3,13 +3,16 @@
 ## Current product direction — 2026-09-15
 
 One native Apple Silicon app with Hub management, Image Studio, Voice Studio and
-Subtitle Studio. It works locally without GenStudio and can be configured as a
-location controller or joined worker. Optional authenticated GenStudio connectivity,
+Subtitle Studio. It works locally without GatewayKH and can be configured as a
+location controller or joined worker. Optional authenticated GatewayKH connectivity,
 including protected token reveal/copy, belongs in the focused release.
 
 The bounded catalog is FLUX.2 Klein 4B MLX 4-bit; Qwen3 TTS Base 0.6B/1.7B;
 VoxCPM2 4-bit/8-bit/full; OmniVoice full; and three Whisper choices.
-Chat, Music and Video are deferred from this release.
+Music is the accepted extension tracked in the current implementation plan;
+Chat and Video remain deferred. Exact GatewayKH compatibility is a qualification
+task, not implied by replacing the inherited GenStudio name (owner correction,
+2026-09-21).
 
 The owner values editable defaults. Device mode, studio enablement, model choices,
 generation parameters, startup, storage paths and limits, labels and connections are
@@ -30,8 +33,8 @@ do not promise generation on pre-Sonoma systems or through an update restart.
 Install complete model packages by downloading from configured GitHub/original-host
 sources or copying folders into the chosen model library. Both paths verify weights
 and required companion assets before use; executable dependencies remain bundled.
-Keep address/IP, port and token connections independent of GenStudio's deployment,
-so a future standalone GenStudio can use the same API without shared state directories.
+Keep address/IP, port and token connections independent of GatewayKH's deployment,
+so the client can use the API without shared state directories.
 
 ## Existing implementation
 

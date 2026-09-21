@@ -51,11 +51,14 @@ def test_a_finished_item_reports_full_progress(fixture_monitor, monkeypatch):
 
     monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", cached)
     job = {"id": "worker-1", "state": "done", "progress": 0.788,
+           "params": {"client_request_id": "studiohub:batch-1:0"},
            "output_path": "/nonexistent/long-form.wav", "generated_at": time.time(),
            "bytes": 38740844, "sha256": "a" * 64, "runtime_s": 91.4,
            "output_url": "/api/generate/jobs/worker-1/audio", "chunk_total": 6}
     asyncio.run(broker._record_worker_success(
-        WorkerClient(), batch, item, studio, job, {"repo": batch["model"]}, time.time()))
+        WorkerClient(), batch, item, studio, job,
+        {"repo": batch["model"], "client_request_id": "studiohub:batch-1:0"},
+        time.time()))
 
     assert item["state"] == "done"
     assert item["progress"] == 1.0, "a finished job must not report partial progress"

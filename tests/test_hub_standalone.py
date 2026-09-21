@@ -240,6 +240,24 @@ class StandaloneHubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "private endpoint"):
             peers.studio_request(worker, "http://user:password@127.0.0.1:51102/artifact")
 
+    def test_wav_metadata_rejects_truncated_declared_frames(self) -> None:
+        import io
+        import wave
+        from components.hub.backend import artifact_metadata
+
+        target = io.BytesIO()
+        with wave.open(target, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            audio.writeframes(b"\0" * 1600)
+        complete = target.getvalue()
+
+        self.assertEqual(len(complete), 1644)
+        self.assertEqual(artifact_metadata.wav_metadata(complete)["audio_duration_s"], 0.1)
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            artifact_metadata.wav_metadata(complete[:64])
+
 
 if __name__ == "__main__":
     unittest.main()

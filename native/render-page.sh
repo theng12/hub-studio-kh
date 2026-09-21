@@ -18,7 +18,7 @@ PAGE="${1:-audio}"
 [ "$PAGE" = "all" ] && PAGE="overview,audio,subtitle,image,music,video,chat,models,voices,jobs,connections,whats-new,settings"
 OUT="${2:-/tmp/studiohub-render}"
 shift 2 2>/dev/null || true
-SDK_PATH=$(xcrun --sdk macosx26.5 --show-sdk-path)
+source "$ROOT_DIR/native/sdk.sh"
 
 # The app has its own entry point, and a build cannot have two. Everything else is compiled as-is,
 # so the rendered page is the page that ships rather than a copy of it.

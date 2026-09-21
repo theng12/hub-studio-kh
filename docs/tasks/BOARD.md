@@ -2,6 +2,21 @@
 
 ## ▶ TAKE OVER HERE
 
+### Local verification and GatewayKH continuation — 2026-09-21
+
+Owner direction: continue work runnable/testable on this Mac. **GatewayKH replaces
+GenStudio as the current external integration target.** Historical receipts and
+legacy protocol identifiers are not evidence of GatewayKH compatibility.
+R01/R02 are merged at `b5506178cd0543a4734911c4fdb3c91d21ad271b` (PR #12).
+**IN PROGRESS: R03**, base that merge; worktree
+`/build/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
+`codex/local-readiness-gatewaykh`. Root owns review/integration and canonical
+records; the R03 worker owns only its brief's broker/parser/tests/report scope.
+Baseline: 85 Hub regression tests passed locally (two upstream warnings).
+Next: local R04 admission fixtures, then portable setup/native work. GatewayKH
+contract inspection is read-only in parallel; no real enrollment or deployment.
+All earlier "next" statements below are historical where they differ.
+
 ### Active takeover — new computer, resumed 2026-09-21
 
 [MEASURED] **Ordered execution authorized:** the owner asked to plan all remaining
