@@ -1149,3 +1149,9 @@ Instrumental is unticked.
   **official MLX weights**, plus LiteRT/ONNX CPU paths.
 - MiniMax Music 3: 2026-08, open weights, song/vocal-first up to 5 min; the
   community MLX port needs **32 GB minimum / 48 GB recommended**. Parked.
+
+[MEASURED] ACE-Step **6-minute instrumental**: done in 256.41s, exactly 360.0s of
+48kHz stereo audio (69,120,044 bytes), ACK 200. The long-form path works well past
+six minutes (the Mac's tier cap is 600s). Receipt `ace-step-turbo-6min.json`.
+Timing so far: 30s -> 97s, 60s -> 105s, 360s -> 256s wall clock (cold engine each
+probe; the app keeps the engine resident, so repeat jobs are faster).

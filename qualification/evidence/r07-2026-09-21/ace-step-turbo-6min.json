@@ -1,0 +1,42 @@
+{
+  "app": "/Applications/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "ACE-Step/Ace-Step1.5",
+  "prompt": "Six minute ambient piano and strings suite, slow evolving, cinematic, instrumental",
+  "params": {
+    "duration_seconds": 360.0,
+    "steps": 8,
+    "guidance_scale": 1.0,
+    "shift": 3.0,
+    "seed": -1,
+    "instrumental": true,
+    "lyrics": "[Instrumental]",
+    "vocal_language": "unknown"
+  },
+  "ready_seconds": 2.45,
+  "submit_status": 200,
+  "batch_id": "73193eee4f",
+  "generate_seconds": 256.41,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 69120044,
+    "sha256": "2be57bdf277e2400b8b5ec222783e4a40060a06d10b0deb67e20c0dd739d4551",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "music",
+    "machine_id": null,
+    "studio": "music",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 69120044,
+    "sha256": "2be57bdf277e2400b8b5ec222783e4a40060a06d10b0deb67e20c0dd739d4551",
+    "riff_wave": true
+  },
+  "ack_status": 200,
+  "ack_body": "{\"ok\":true}",
+  "ok": true
+}
