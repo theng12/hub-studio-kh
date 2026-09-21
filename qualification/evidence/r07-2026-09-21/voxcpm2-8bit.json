@@ -1,5 +1,5 @@
 {
-  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-clean/Studio Hub.app",
+  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-8bit/Studio Hub.app",
   "models_dir": "/build/StudioHubModels",
   "model": "mlx-community/VoxCPM2-8bit",
   "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
@@ -9,35 +9,44 @@
     "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
     "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
   },
-  "ready_seconds": 2.45,
+  "ready_seconds": 10.06,
   "stage_status": 201,
   "asset": {
     "asset_id": "25990298cb625cf415992458",
     "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
     "bytes": 252084,
     "media_type": "audio/wav",
-    "created_at": 1790011040.0104032,
-    "expires_at": 1790097440.0101278,
+    "created_at": 1790014560.2608871,
+    "expires_at": 1790100960.26061,
     "transcript_supplied": true,
     "origin": "local"
   },
   "submit_status": 200,
-  "batch_id": "a76df7f338",
-  "generate_seconds": 1200.46,
+  "batch_id": "0d72461c66",
+  "generate_seconds": 18.13,
   "final_status": null,
   "item": {
-    "state": "queued",
-    "bytes": null,
-    "sha256": null,
-    "media_type": null,
+    "state": "done",
+    "bytes": 537660,
+    "sha256": "ee0679fbbb56582d7621d83f132ef19d9e6821af85025783a9455c081e27caf2",
+    "media_type": "audio/wav",
     "error": null,
     "error_code": null,
-    "worker_id": null,
+    "worker_id": "voice",
     "machine_id": null,
-    "studio": null,
+    "studio": "voice",
     "metadata": null
   },
-  "ok": false,
-  "service_log_tail": "\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53890 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53889 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53892 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53890 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53889 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53892 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53891 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53891 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53900 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53899 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53902 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53900 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53902 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53899 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53901 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53901 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53906 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53905 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53908 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53906 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53905 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53908 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53907 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53907 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53914 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53913 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53916 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53914 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53913 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53916 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53915 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53915 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53922 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53923 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53925 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53923 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53922 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53925 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53924 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53924 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:49293 - \"GET /api/hub/jobs/a76df7f338 HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53929 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53928 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53931 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53929 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53928 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     127.0.0.1:53931 - \"GET /api/fleet/activity HTTP/1.1\" 200 OK\nINFO:     Shutting down\nINFO:     127.0.0.1:53930 - \"GET /api/health HTTP/1.1\" 200 OK\nINFO:     127.0.0.1:53930 - \"GET /api/fleet/activity HTTP/1.1\" 404 Not Found\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Finished server process [49272]\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Finished server process [49271]\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Finished server process [49270]\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Finished server process [49269]\nINFO:     Finished server process [49265]\n",
-  "note": "VoxCPM2 8-bit is not in the current Voice catalogue (the worker offers VoxCPM2-4bit and VoxCPM2-bf16 only; it is listed as a retired older alternative), so a direct API submission stays queued and never dispatches. Not a model/runtime failure."
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 537660,
+    "sha256": "ee0679fbbb56582d7621d83f132ef19d9e6821af85025783a9455c081e27caf2",
+    "riff_wave": true,
+    "duration_seconds": 5.6,
+    "sample_rate_hz": 48000,
+    "channels": 1
+  },
+  "ack_status": 200,
+  "ack_body": "{\"ok\":true}",
+  "ok": true
 }

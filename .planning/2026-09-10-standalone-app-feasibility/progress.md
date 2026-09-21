@@ -1038,3 +1038,22 @@ Receipt `cancel-music.json`.
 service was stopped and started again on the same data directory, and the batch
 (`46234417f620`) was still listed in transcription history. Receipt
 `history-subtitle.json`. Adds `resilience_probe.py`.
+
+## 2026-09-22 — VoxCPM2 8-bit exposed; R08 layout renders (DeepSeek)
+
+[MEASURED] Owner asked for the 8-bit tier. Added `mlx-community/VoxCPM2-8bit` to
+the Voice catalogue (ascending precision order), removed it from the legacy-repo
+list, and updated the pinned catalogue test. Re-staged and installed commit
+`ff4fd9b`; the running worker catalogue now lists **4-bit, 8-bit and bf16**.
+
+[MEASURED] Real VoxCPM2 8-bit clone: done in 18.13s, valid 5.6s / 48kHz WAV,
+ACK 200. Receipt `voxcpm2-8bit.json`; output `voxcpm2-8bit-r07.wav`.
+
+[MEASURED] R08 layout renders: Image, Audio, Subtitle and Music rendered at the
+minimum 1040x680 and normal 1920x1053 sizes in the disconnected state. All four
+are coherent - form, model picker, preview/history, and the version + What's New
+footer are present and unclipped. Images kept in `qualification/evidence/r08-2026-09-21/`.
+Actual GUI Save-panel clicks, keyboard/focus order and accessibility remain a
+manual gate; the save/verify/ACK logic itself is covered by the native API tests
+(corrupt artifact rejected with no ACK, failed save never ACKs, verified save ACKs
+once, rejected ACK keeps the file).
