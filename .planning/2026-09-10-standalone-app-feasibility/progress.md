@@ -926,3 +926,20 @@ VoxCPM2 path loads, absent from the local cache while offline. Qwen 0.6B/1.7B an
 OmniVoice clones succeed on the same machine and library. The SSD archive has
 `transcription-models/whisper-large-v3-turbo-asr-fp16`. VoxCPM2 8-bit additionally
 sat `queued` for 20 minutes without dispatching.
+
+## 2026-09-22 — installed app replaced with a clean 0.6.38 build (DeepSeek)
+
+[MEASURED] Owner authorized replacing the installed app. Backed up first:
+`~/StudioHubAppBackups/Studio Hub 0.5.4.app` (the old bundle, moved aside) and
+`~/StudioHubAppBackups/StudioHubStandalone-data-0.5.4` (clone of the app data
+directory). `/Applications/Studio Hub.app` is now **0.6.38**, implementation
+commit `c94810d`, `development_build:false`, staged from a clean tree and copied
+through an incoming folder so a failed copy could not remove the old app.
+
+[MEASURED] Before the swap, the new build was started against a **copy** of the
+existing 0.5.4 data directory: ready in 11.0s with all four workers, so the upgrade
+path was proven without touching live state. After install, the app launched and
+its Hub reported `{"ok":true,"workers":4}` on `127.0.0.1:47873`, version 0.6.38;
+`/api/hub/model-packages` shows the imported library under `~/StudioHubModels`.
+The stale-address fix took effect: services started on loopback despite the saved
+LAN/Tailscale addresses. The version + What's New footer is in this build.
