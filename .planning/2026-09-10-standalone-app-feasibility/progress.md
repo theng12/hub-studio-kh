@@ -1227,3 +1227,26 @@ is the re-qualification evidence for the ACE-Step half of the objective.
 `test_music_package_contract.py::test_catalog_and_requests_offer_only_the_packaged_model_set`)
 fail until updated for the new model - expected, and being updated with the worker
 integration. Worker dispatch/packaging/UI still in progress.
+
+[MEASURED] Stable Audio 3 Phase 2 landed (commit `11bbbde`):
+- Worker is engine-aware. `validate_request` dispatches by repo, with SA3 validated
+  as instrumental-only, 1-380 s; `GenerationManager` resolves a per-repo package
+  (`cache.MusicCache(repo=...)` + `catalog.PACKAGE_*` maps) and runs a contained
+  `stable_audio.generate` for SA3 jobs while ACE-Step keeps its executor untouched.
+- The runner points the vendored pure-MLX CLI at the imported package weights via a
+  temp tree of symlinks; it validates the produced WAV (duration within 1.5 s of the
+  request, 16-bit PCM) and returns bytes/sha256/rate/channels.
+- `/api/catalog` now reports each model's own revision, package, limits and
+  readiness; the native Music form hides the vocal controls for an
+  instrumental-only model.
+- Manifest moved to the repo-wide `model/` layout (`model/mlx/<file>`), status
+  `unqualified`, with `urls` and `layout`; the exact-menu test's digest was updated
+  deliberately (`82b64fa9…`).
+
+[MEASURED] Real end-to-end through the worker class: an imported package
+(`files_verified`) rendered a 15.0 s, 44.1 kHz stereo WAV (2,646,044 bytes) in
+4.75-5.67 s with the artifact written. Native build green; music/hub/manifest
+suites 174 passed + 6 subtests.
+
+[MEASURED] Imported the medium package into the owner's real library
+`~/StudioHubModels/stable-audio-3-medium/da6edc54…/` (6.4 GiB, `files_verified`).
