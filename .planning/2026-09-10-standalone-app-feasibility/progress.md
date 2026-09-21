@@ -1057,3 +1057,13 @@ Actual GUI Save-panel clicks, keyboard/focus order and accessibility remain a
 manual gate; the save/verify/ACK logic itself is covered by the native API tests
 (corrupt artifact rejected with no ACK, failed save never ACKs, verified save ACKs
 once, rejected ACK keeps the file).
+
+[MEASURED] R08 regression gate after the catalogue change: full Voice product
+suite + manifest catalog test **732 passed, 19 skipped**; `native/build.sh` exit 0
+(boundary, API, lifecycle checks passed; optimized app built).
+
+[GATE] R08 remaining is the physical GUI interaction: clicking the real Open/Save
+panels, re-reading the saved bytes, watching the ACK land, and checking keyboard
+focus/order and accessibility. The code paths are covered (native API tests + the
+real Hub ACK runs in R07), but only a person at the running app can exercise the
+panels themselves. Steps for the owner are recorded in the status file.
