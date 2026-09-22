@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -2351,7 +2352,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             await client.aclose()
 
 
-def discard_uncertain_item(batch_id: str, item_index: int) -> dict:
+def discard_uncertain_item(batch_id: str, item_index: int, *,
+                           reason: str | None = None) -> dict:
     """Let an operator abandon an uncertain attempt for good.
 
     An uncertain item keeps its physical Mac reserved for reconciliation, because the accepted
@@ -2373,7 +2375,7 @@ def discard_uncertain_item(batch_id: str, item_index: int) -> dict:
         raise ValueError("unknown job item")
     if item.get("state") != "uncertain":
         raise ValueError("Discard is available only for an uncertain job")
-    reason = (
+    reason = reason or (
         "The operator discarded this uncertain attempt. It was abandoned rather than "
         "reconciled, so any result the original worker may still produce is ignored."
     )
@@ -2392,6 +2394,48 @@ def discard_uncertain_item(batch_id: str, item_index: int) -> dict:
     ledger.save_batch(batch)
     _wakeup.set()
     return {"ok": True, "batch_id": batch_id, "item_index": item_index}
+
+
+# An uncertain attempt reserves its Mac because it may still be running. That is
+# right for a while, but an attempt that has been silent for this long is not coming
+# back, and leaving it reserved blocks every later job with no reason shown. The
+# operator can discard sooner by hand; this sweep is the walk-away backstop.
+UNCERTAIN_AUTO_DISCARD_SECONDS = float(
+    os.environ.get("STUDIOHUB_UNCERTAIN_DISCARD_SECONDS", 1800.0))
+
+
+def discard_stale_uncertain(*, now: float | None = None,
+                            max_age: float | None = None) -> list[str]:
+    """Release Macs held by uncertain attempts nobody is coming back for.
+
+    Returns the ``batch:item`` identifiers it discarded, so a caller can log them.
+    """
+    limit = UNCERTAIN_AUTO_DISCARD_SECONDS if max_age is None else max_age
+    moment = time.time() if now is None else now
+    discarded: list[str] = []
+    for batch in list(batches.values()):
+        for item in batch.get("items") or []:
+            if item.get("state") != "uncertain":
+                continue
+            stamps = [item.get(key) for key in
+                      ("last_progress_at", "finished_at", "execution_started_at")]
+            newest = max((value for value in stamps
+                          if isinstance(value, (int, float)) and not isinstance(value, bool)),
+                         default=None)
+            if newest is None:
+                # Only an older record with no item stamps at all falls back to the
+                # batch's own creation time.
+                newest = batch.get("created_at")
+            if newest is None or moment - newest < limit:
+                continue
+            try:
+                discard_uncertain_item(batch["id"], item["index"], reason=(
+                    "The attempt stayed uncertain past the automatic reconciliation "
+                    "window, so the machine was released for later work."))
+            except ValueError:
+                continue
+            discarded.append(f"{batch['id']}:{item['index']}")
+    return discarded
 
 
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
@@ -2662,6 +2706,9 @@ async def _dispatch_loop():
             if sweep_now - last_sweep >= 60:
                 last_sweep = sweep_now
                 evict_finished_batches()
+                # An uncertain attempt that nobody reconciles must not pin the Mac
+                # forever; release it so later work can run.
+                discard_stale_uncertain(now=sweep_now)
             assigned = False
             for batch in list(batches.values()):
                 if (batch.get("modality") in DURABLE_ASYNC_MODALITIES

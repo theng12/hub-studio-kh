@@ -3852,8 +3852,14 @@ class GenerationManager:
                 gen_kwargs["prompt_audio"] = str(ref_path)
                 gen_kwargs["prompt_text"] = transcript
             else:
-                # No transcript: leave mlx-audio's reference-only path untouched.
-                gen_kwargs.pop("ref_text", None)
+                # No saved transcript. Keep an empty `ref_text` rather than dropping
+                # it: dropping it makes mlx-audio load its own STT model
+                # (mlx-community/whisper-large-v3-turbo-asr-fp16) to transcribe the
+                # reference, and that model is not a packaged dependency, so an
+                # offline Mac failed with a misleading "produced no audio". An empty
+                # transcript keeps the reference timbre with no STT load, which is
+                # the owner's accepted trade (2026-09-22).
+                gen_kwargs["ref_text"] = ""
 
         if "prompt_audio" in gen_kwargs and "instruct" in gen_kwargs:
             return "ultimate clone + style"

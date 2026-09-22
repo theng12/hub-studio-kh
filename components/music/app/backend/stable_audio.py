@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,24 @@ MAX_SECONDS = catalog.SA3_MAX_DURATION_SECONDS
 
 class Sa3Error(RuntimeError):
     """A Stable Audio 3 run that did not produce a verified WAV."""
+
+
+class Sa3Cancelled(Sa3Error):
+    """The operator cancelled the run; the job must settle as cancelled, not error."""
+
+
+# The CLI prints these stage headers to stdout whether or not it is a TTY, so the
+# worker can show honest progress without patching the vendored script. It carries
+# no percentage of its own; these are the boundaries between its real phases.
+STAGE_PROGRESS = {
+    "[1/5]": (0.10, "T5Gemma text encode"),
+    "[2/5]": (0.25, "conditioning"),
+    "[3a]": (0.35, "encoding reference"),
+    "[3/5]": (0.45, "DiT sampling"),
+    "[4/5]": (0.80, "SAME decoder"),
+    "[5/5]": (0.95, "writing WAV"),
+}
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def runtime_available() -> str | None:
@@ -80,6 +99,7 @@ def generate(*, prompt: str, seconds: float, weights: Path, output: Path,
              steps: int = DEFAULT_STEPS, seed: int | None = None,
              cfg: float = DEFAULT_CFG,
              cancel_event: threading.Event | None = None,
+             on_progress=None,
              timeout: float = 1800.0) -> dict:
     """Render one clip and return verified facts about the WAV it wrote.
 
@@ -118,12 +138,17 @@ def generate(*, prompt: str, seconds: float, weights: Path, output: Path,
             command, cwd=str(tree), env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             start_new_session=True)
+        log: list[str] = []
+        reader = threading.Thread(target=_read_output,
+                                  args=(process.stdout, log, on_progress),
+                                  daemon=True, name="sa3-output")
+        reader.start()
         try:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     _terminate(process)
                     staging.unlink(missing_ok=True)
-                    raise Sa3Error("cancelled")
+                    raise Sa3Cancelled("cancelled by the operator")
                 try:
                     process.wait(timeout=0.5)
                     break
@@ -132,13 +157,13 @@ def generate(*, prompt: str, seconds: float, weights: Path, output: Path,
                         _terminate(process)
                         staging.unlink(missing_ok=True)
                         raise Sa3Error("Stable Audio 3 run exceeded its time budget")
-            log = process.stdout.read() if process.stdout else ""
+            reader.join(timeout=5.0)
         finally:
             if process.stdout:
                 process.stdout.close()
     if process.returncode != 0 or not staging.is_file():
         staging.unlink(missing_ok=True)
-        tail = (log or "").strip().splitlines()[-6:]
+        tail = [line for line in log if line.strip()][-6:]
         raise Sa3Error("Stable Audio 3 failed: " + " | ".join(tail))
 
     with wave.open(str(staging), "rb") as handle:
@@ -167,6 +192,34 @@ def generate(*, prompt: str, seconds: float, weights: Path, output: Path,
         "media_type": "audio/wav",
         "engine_seconds": round(time.time() - started, 3),
     }
+
+
+def _read_output(stream, sink: list[str], on_progress) -> None:
+    """Drain the CLI's stdout, keeping a tail and reporting stage progress.
+
+    ``PYTHONUNBUFFERED`` is set for the child, so each stage line arrives as it is
+    printed rather than at process exit.
+    """
+    if stream is None:
+        return
+    try:
+        for raw in stream:
+            line = _ANSI.sub("", raw).rstrip()
+            sink.append(line)
+            if len(sink) > 400:
+                del sink[:200]
+            if on_progress is None:
+                continue
+            stripped = line.strip()
+            for marker, (ratio, label) in STAGE_PROGRESS.items():
+                if stripped.startswith(marker):
+                    try:
+                        on_progress(ratio, label)
+                    except Exception:  # noqa: BLE001 - progress must never kill a run
+                        pass
+                    break
+    except (ValueError, OSError):
+        return
 
 
 def _terminate(process: subprocess.Popen) -> None:

@@ -636,7 +636,10 @@ def test_voxcpm_clone_without_transcript_stays_reference_only(tmp_path: Path) ->
     )
 
     assert label == "reference clone"
-    assert kwargs == {"ref_audio": str(reference)}
+    # An empty `ref_text` is kept on purpose: dropping it makes mlx-audio load its
+    # own undeclared STT model, which fails offline. Empty keeps the reference
+    # timbre with no STT load.
+    assert kwargs == {"ref_audio": str(reference), "ref_text": ""}
 
 
 def test_mlx_worker_applies_seed_and_voxcpm_controls() -> None:

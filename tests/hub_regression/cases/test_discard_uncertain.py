@@ -88,3 +88,27 @@ def test_discard_refuses_anything_that_is_not_uncertain(fixture_monitor):
         broker.discard_uncertain_item("no-such-batch", 0)
     with pytest.raises(ValueError):
         broker.discard_uncertain_item(batch["id"], 7)
+
+
+def test_stale_uncertain_is_discarded_automatically(fixture_monitor):
+    batch, item, studio = uncertain_attempt(fixture_monitor)
+    # Silent for longer than the automatic window: nobody is coming back for it.
+    item["last_progress_at"] = time.time() - broker.UNCERTAIN_AUTO_DISCARD_SECONDS - 60
+    assert studio["machine"] in broker.busy_machines()
+
+    discarded = broker.discard_stale_uncertain()
+
+    assert f"{batch['id']}:0" in discarded
+    assert item["state"] == "cancelled"
+    assert item["error_code"] == "DISCARDED_UNCERTAIN"
+    assert "automatic" in item["error"].lower()
+    assert studio["machine"] not in broker.busy_machines()
+
+
+def test_fresh_uncertain_is_left_for_reconciliation(fixture_monitor):
+    batch, item, studio = uncertain_attempt(fixture_monitor)
+    item["last_progress_at"] = time.time()
+    assert broker.discard_stale_uncertain() == []
+    assert item["state"] == "uncertain"
+    assert studio["machine"] in broker.busy_machines()
+

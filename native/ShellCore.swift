@@ -482,7 +482,24 @@ struct WorkerReady: Decodable {
     }
 }
 
+/// The local service log is rotated once it grows past this size. One previous
+/// file is kept, so the pair is bounded at roughly twice this. Without it a
+/// long-running install wrote an unbounded log (263 MB was measured on
+/// 2026-09-22), which is a disk risk for a shipped app.
+let privateLogRotationBytes: off_t = 32 * 1024 * 1024
+
+func rotatePrivateLogIfNeeded(_ url: URL) {
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+          let size = attributes[.size] as? NSNumber,
+          size.int64Value >= privateLogRotationBytes else { return }
+    let previous = url.deletingLastPathComponent()
+        .appendingPathComponent(url.lastPathComponent + ".1")
+    try? FileManager.default.removeItem(at: previous)
+    try? FileManager.default.moveItem(at: url, to: previous)
+}
+
 func openPrivateLog(_ url: URL) throws -> FileHandle {
+    rotatePrivateLogIfNeeded(url)
     let descriptor = open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
     guard descriptor >= 0 else { throw ShellFailure(message: "Cannot open the local service log safely.") }
     var info = stat()

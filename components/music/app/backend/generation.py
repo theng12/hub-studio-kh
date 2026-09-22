@@ -971,7 +971,9 @@ class GenerationManager:
                     steps=params["steps"], seed=seed,
                     cfg=params["guidance_scale"],
                     weights=Path(files["checkpoints_root"]), output=final,
-                    cancel_event=self.cancel_events.get(job_id))
+                    cancel_event=self.cancel_events.get(job_id),
+                    on_progress=lambda ratio, label: self._progress(
+                        job_id, ratio, label))
                 with self.lock:
                     now = time.time()
                     _atomic_json(sidecar, {
@@ -1002,6 +1004,10 @@ class GenerationManager:
                         peak_process_rss_bytes=resource.getrusage(
                             resource.RUSAGE_SELF).ru_maxrss)
                     self._persist()
+            except stable_audio.Sa3Cancelled:
+                final.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                self._finish_failure(job, {"state": "cancelled"})
             except _JobFailed as failure:
                 self._finish_failure(job, failure.outcome)
             except Exception as exc:  # noqa: BLE001 - report the engine's own text
