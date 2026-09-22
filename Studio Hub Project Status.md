@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-22 10:20 +07
+Last updated: 2026-09-22 12:05 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,7 +12,7 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `fd6c038`; installed app build `b4db781`
+- Current HEAD: `539b7fa`; installed app build `b4db781`
 - Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
   `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
   `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
@@ -155,28 +155,27 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-22 10:20 +07
+Timestamp: 2026-09-22 12:05 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
-Current HEAD: `fd6c038`; installed app build `b4db781` (`development_build:false`)
+Current HEAD: `539b7fa`; installed app build `b4db781` (`development_build:false`)
 Uncommitted changes: none.
-Current packet: **both SSDs prepared and verified.**
-- KH-STUDIO-NOVA: kit app 0.6.38/b4db781, new app-format library of 17 packages
-  (48 GB) beside the untouched 153 GB plain archive.
-- KH-STUDIO-UGREEN: same kit update; library 15 -> 17 packages (50 GB); legacy
-  Pinokio bootstrap moved to `.retired-pinokio/`.
-- Both: fixed installer (read-only replace), same saved voices, regenerated kit
-  manifests (problems: []), `Technical/verify-kit.sh` PASS (starts, health 200).
-Model coverage: 17 of the 35 the app advertises. The other 18 (Kokoro, Chatterbox,
-Fish, Orpheus, VibeVoice, LongCat, MOSS, S3Tokenizer, snac, umt5, Echo, Audio8,
-Voxtral) need a network pass, which the owner deferred.
+Current packet: **all four SSDs carry the full library and pass their kit verifier.**
+- KH-STUDIO-NOVA / UGREEN / ATLAS / ORICO: app 0.6.38 (b4db781), fixed installer,
+  35 of 35 catalogue packages `files_verified` (ATLAS and ORICO also carry f5-tts,
+  which the catalogue does not list), kit verifier PASS, 0 quarantined files.
+- Nothing deleted: Pinokio/TerraNash kits moved to `_trash/` on UGREEN, ATLAS and
+  ORICO. `My Stuff`/`Documents` untouched; NOVA's 153 GB plain archive untouched.
+- `.build/prepare-kit.sh <volume>` prepares any future drive in one step.
 Also complete this session: two music engines (ACE-Step + Stable Audio 3), the
 UI/UX pass, P0 stabilisation (SA3 progress/cancel, log rotation, auto-discard,
-no-transcript clones), the progress-stage polish, and the R08 owner pass.
-Evidence: `qualification/evidence/**`, `qualification/{verify-kit.sh,install_app.command}`,
-`.planning/2026-09-10-standalone-app-feasibility/{progress.md,r-music-mlx.md}`.
+no-transcript clones), the progress-stage polish, the R08 owner pass, and the
+owner-facing R08 checklist (`docs/R08-click-through-checklist.md`).
+Remaining optional work: the 18 advertised models are all present now, so nothing
+is missing; Image wheel cache (R05) still needs a network pass if the image runtime
+is ever rebuilt offline; GatewayKH parked by owner decision.
 First command to run:
 `git status --short && git log --oneline -3`
 Important do-not-touch: `~/Downloads/model-library`, `~/StudioHubAppBackups/`,
-other worktrees, `codex/recovered-music-draft`, GatewayKH checkout, and the
-`.retired-pinokio/` folder on UGREEN until the owner says otherwise.
+other worktrees, `codex/recovered-music-draft`, GatewayKH checkout, and every
+`_trash/` folder on the SSDs until the owner empties them.
