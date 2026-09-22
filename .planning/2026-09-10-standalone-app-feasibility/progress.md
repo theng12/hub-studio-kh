@@ -1472,3 +1472,23 @@ node's own operator can still discard locally. Covered by
 `tests/test_fleet_credentials.py` (allowed-path list). Subtitle needs no equivalent:
 transcription uncertain items already self-heal via `recover_stale_uncertain` and do
 not reserve a machine. Fleet + hub + proxy suites: 140 passed, 124 subtests.
+
+[MEASURED] GatewayKH reports all five items done at `f834e9e` (delivery ACK,
+cancellation reaching the Hub, Music modality, voice-reference metadata, uncertain
+as a recovery hold), with a stale-fixture fix of its own. The controller's calls
+were then verified **from this side** against the running Hub (`639fcf9`) using the
+**Fleet credential** (`qualification/evidence/sa3-2026-09-22/verify_gateway_calls.py`):
+
+- `POST /api/hub/jobs` with `X-Hub-Token: <fleet token>` -> **200** (fleet allowlist).
+- poll -> `done`; artifact **200**, 1,764,044 bytes, `X-Content-SHA256` present and
+  matching the fetched bytes.
+- `POST .../items/0/ack` -> **200**, and the Hub recorded `receipt_acked_at`
+  (1790059272.76) on the public item - the delivery receipt path works end to end.
+- `POST .../items/0/discard` with the fleet token -> **400** ("only an uncertain
+  job"), not 403 - proving the new controller-discard allowance reaches the route.
+- `DELETE /api/hub/jobs/{batch}` -> **200**.
+
+[GATE] One assumption in the GatewayKH report is now out of date: it read `5ffdc95`,
+where the brief still called discard operator-only, so its item 5 deliberately
+leaves reconcile/discard to a human and only names the routes. As of `639fcf9` the
+controller **may** discard. Everything else they reported matches the Hub.
