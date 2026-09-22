@@ -49,15 +49,20 @@ def main() -> int:
         response.raise_for_status()
         batch = response.json()["batch_id"]
         receipt["batch_id"] = batch
+        progress_trace: list = []
         while True:
             detail = client.get(base + f"/api/hub/jobs/{batch}", headers=headers).json()
             item = (detail.get("items") or [{}])[0]
+            marker = [item.get("progress"), item.get("progress_stage")]
+            if not progress_trace or progress_trace[-1] != marker:
+                progress_trace.append(marker)
             state = item.get("state")
             if state in {"done", "error", "cancelled", "uncertain"}:
                 break
             if time.monotonic() - started > 1200:
                 raise SystemExit("timed out waiting for the job")
             time.sleep(2.0)
+        receipt["progress_trace"] = progress_trace
         receipt["state"] = state
         receipt["error"] = item.get("error")
         receipt["error_code"] = item.get("error_code")

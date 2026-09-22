@@ -37,6 +37,9 @@ def main() -> int:
     parser.add_argument("--clip", type=Path, default=DEFAULT_CLIP)
     parser.add_argument("--model", default="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit")
     parser.add_argument("--text", default=TRANSCRIPT)
+    parser.add_argument("--no-transcript", action="store_true",
+                        help="stage the reference with no transcript, to prove the "
+                             "clone still works offline")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-wav", type=Path)
     parser.add_argument("--log-out", type=Path)
@@ -82,7 +85,8 @@ def main() -> int:
                 with httpx.Client(timeout=httpx.Timeout(1200.0, connect=10.0)) as client:
                     staged = client.post(
                         base + "/api/hub/voice-references", headers=headers,
-                        data={"transcript": TRANSCRIPT, "language": "en"},
+                        data={"transcript": "" if args.no_transcript else TRANSCRIPT,
+                              "language": "en"},
                         files={"audio": (clip.name, audio, "audio/wav")})
                     receipt["stage_status"] = staged.status_code
                     if staged.status_code >= 400:
