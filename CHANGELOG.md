@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.43 — 2026-09-22 · see the token, and test the address on its own
+
+- **The Fleet token is shown, not masked.** The owner asked to see what was pasted so a wrong
+  copy is obvious; it is a LAN credential already held in a file on both Macs.
+- **Pasted whitespace is removed.** Copying an address or token out of a document brings a
+  trailing newline with it, which landed in the field, displayed as the text dropping to a
+  second line, and made the value wrong without looking wrong. Neither value can contain
+  whitespace, so it is stripped as it arrives.
+- **A Test button** asks the controller's `/api/health` - which needs no credential - before
+  any token is sent. That separates "can this Mac reach the controller?" from "will it accept
+  the token?", which one error message used to mix together.
+- **Network failures now carry their code** (-1004 cannot connect, -1009 no network, -1022
+  App Transport Security, -1200 TLS, -1001 timed out) so a report can be acted on instead of
+  guessed at.
+
 ## 0.6.42 — 2026-09-22 · typing the controller's address, simplified
 
 - **The port is optional.** The Hub's port is fixed, so `100.64.0.5` is now a complete

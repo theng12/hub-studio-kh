@@ -3634,7 +3634,53 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     private static func actionable(_ error: Error, action: String) -> String {
-        "\(action) failed. \(error.localizedDescription)"
+        "\(action) failed. \(describe(error))"
+    }
+
+    /// The message plus, for a network failure, the code that names the kind of failure:
+    /// -1004 cannot connect, -1009 no network, -1022 App Transport Security, -1200 TLS,
+    /// -1001 timed out. Without the number, a report like "it says something about security"
+    /// cannot be told apart from a refused connection or a wrong address.
+    static func describe(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            return "\(urlError.localizedDescription) (code \(urlError.errorCode))"
+        }
+        return error.localizedDescription
+    }
+
+    /// Ask the controller's Hub whether it is there, before any token is sent to it.
+    ///
+    /// This separates the two questions a join failure mixes together: "can this Mac reach the
+    /// controller at all?" and "will it accept the token?". `/api/health` needs no credential,
+    /// so a failure here is the network, the address or the Mac - never the token.
+    func testControllerAddress(_ address: String) async {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            note(.failure, "Type the controller's address first, then test it.")
+            return
+        }
+        do {
+            let target = try Self.privateHTTPAddress(trimmed)
+            var request = URLRequest(url: target.appendingPathComponent("api/health"))
+            request.timeoutInterval = 10
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                note(.failure, "\(trimmed) answered, but not like a Hub.")
+                return
+            }
+            let body = (String(data: data, encoding: .utf8) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if (200..<300).contains(http.statusCode) {
+                note(.success, "Reached the controller at \(target.host ?? trimmed):"
+                     + "\(target.port ?? 0) — HTTP \(http.statusCode). \(body.prefix(160))")
+            } else {
+                note(.failure, "\(trimmed) answered HTTP \(http.statusCode), which is not a "
+                     + "Hub answering its health check. \(body.prefix(160))")
+            }
+        } catch {
+            note(.failure, "Could not reach \(trimmed). \(Self.describe(error))")
+        }
     }
 
     private nonisolated static func makeMultipartFile(

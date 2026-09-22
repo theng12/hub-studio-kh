@@ -2960,8 +2960,15 @@ struct StudioContent: View {
             HStack {
                 TextField("100.x.y.z  ·  or a name like mac.tailnet.ts.net", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                SecureField("Controller's Fleet token", text: $controllerToken)
+                // Visible, not a SecureField: the owner asked to see the token they pasted so a
+                // wrong copy is obvious, and it is a LAN credential they already hold in a file.
+                TextField("Controller's Fleet token", text: $controllerToken)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+                Button("Test") {
+                    Task { await workspace.testControllerAddress(controllerDraft) }
+                }
+                .disabled(!connected || controllerDraft.isEmpty)
+                .help("Ask the controller's Hub whether it is there. This sends no token.")
                 Button(workspace.joiningFleet ? "Joining…" : "Join") {
                     Task {
                         await workspace.joinController(address: controllerDraft, token: controllerToken,
@@ -2973,6 +2980,20 @@ struct StudioContent: View {
                           || controllerDraft.isEmpty || controllerToken.isEmpty)
                 if workspace.joiningFleet { ProgressView().controlSize(.small) }
             }
+            // Pasting from a document brings a trailing newline with it, which used to land in
+            // these fields and show as the text dropping to a second line - and made the address
+            // or the token wrong without looking wrong. Neither value can contain whitespace, so
+            // it is removed as it arrives rather than refused later.
+            .onChange(of: controllerDraft) { _, value in
+                let cleaned = value.filter { !$0.isWhitespace }
+                if cleaned != value { controllerDraft = cleaned }
+            }
+            .onChange(of: controllerToken) { _, value in
+                let cleaned = value.filter { !$0.isWhitespace }
+                if cleaned != value { controllerToken = cleaned }
+            }
+            Text("Neither the address nor the token can contain a space, so pasted spaces and newlines are removed for you. The token is shown so you can check what you pasted.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Kept inline as well as in the banner at the top: this is the spot the operator is
             // looking at the moment they press Join, so the answer belongs here too.
             if let note = workspace.fleetNote {

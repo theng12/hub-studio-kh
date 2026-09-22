@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.43 — 2026-09-22
+
+### You can see the token, and test the address first
+
+The Fleet token is no longer hidden, so you can check at a glance that you pasted the right
+one. And nothing you paste can carry a stray space or newline into the address or the token:
+they are removed as the text arrives, which is what made a pasted address look right and
+behave wrong.
+
+There is also a new **Test** button beside Join. It asks the controller whether it is there
+and reports the answer, without sending your token at all - so if Test fails you know it is
+the address or the network, and if Test succeeds but Join fails, the token is the thing to
+look at. When a connection fails, the app now shows the failure's code as well as its
+description.
+
 ## 0.6.42 — 2026-09-22
 
 ### Joining is just: the address and the token
