@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.41 — 2026-09-22 · the local-network permission macOS was refusing
+
+- **The real block on joining a controller.** macOS gates **local network** access per app,
+  separately from App Transport Security, and an app that declares nothing is refused rather
+  than prompted. The bundle now carries `NSLocalNetworkUsageDescription`, so the first attempt
+  to reach another Mac raises the system prompt and the app appears under
+  **System Settings > Privacy & Security > Local Network**. Reported by the owner as a
+  security message that survived the ATS declaration in 0.6.40; measured here, the LAN case
+  was not ATS at all.
+- Because the app is ad-hoc signed, macOS ties the grant to the current build, so a Mac may
+  ask again after an update. If the app is listed but denied there, switch it on and retry.
+- The ATS declaration from 0.6.40 is kept: there was none, and a tailnet address is the case
+  it covers.
+
 ## 0.6.40 — 2026-09-22 · joining a controller works, and says so when it does not
 
 - **A secure-connection refusal is now covered.** macOS reported the join failure

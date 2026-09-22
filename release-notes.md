@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.41 — 2026-09-22
+
+### The real reason a join was refused
+
+macOS asks each app for permission to use your local network, and an app that does not ask
+properly is simply refused - with a message about security that has nothing to do with your
+token or the address you typed. Studio Hub now asks, so the first time it tries to reach
+another Mac, macOS shows its normal prompt and the app appears in **System Settings >
+Privacy & Security > Local Network**.
+
+If a Mac still refuses after updating, open that setting, make sure **Studio Hub** is switched
+on, and try the join again. Because the app is not signed with a developer certificate, macOS
+may treat a new version as a new app and ask once more.
+
 ## 0.6.40 — 2026-09-22
 
 ### Joining a controller actually works now

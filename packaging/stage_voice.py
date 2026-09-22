@@ -325,6 +325,12 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             'CFBundleName': 'Studio Hub',
             'NSMicrophoneUsageDescription':
                 'Studio Hub uses the microphone to record audio for transcription.',
+            # macOS gates local-network access per app, separately from App Transport Security,
+            # and an app that declares nothing here is refused rather than prompted - which is
+            # what a node hit when it tried to reach its controller. Granting the prompt puts
+            # this app in System Settings > Privacy & Security > Local Network.
+            'NSLocalNetworkUsageDescription':
+                'Studio Hub talks to your other Macs on this network to send and receive work.',
         })
         plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:
