@@ -114,6 +114,15 @@ def _app_version() -> str:
         return "unknown"
 
 
+def _app_build() -> str:
+    """This build's exact commit, so two copies of one product version can be told apart."""
+    try:
+        value = json.loads(Path(os.environ["STUDIOHUB_RELEASE_MANIFEST"]).read_text())["implementation_commit"]
+    except (KeyError, OSError, ValueError, json.JSONDecodeError):
+        return "unknown"
+    return str(value)[:7]
+
+
 def machine_health(states: list[tuple[str, str]]) -> tuple[str, str | None]:
     """One Mac's health from all of its Studios, not from whichever one is listed first.
 
@@ -510,7 +519,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
-        return {"version": _app_version(), "source": "studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}
+        return {"version": _app_version(), "build": _app_build(),
+                "source": "studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}
 
     @app.get("/api/hub/settings")
     def settings() -> dict[str, dict[str, int | bool]]:

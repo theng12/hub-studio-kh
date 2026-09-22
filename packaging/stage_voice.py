@@ -297,6 +297,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'CFBundleIdentifier': 'local.studiohub.hubproof' if include_hub else 'local.studiohub.voiceproof',
         'CFBundleName': 'Studio Hub Local Proof' if include_hub else 'Studio Hub Voice Proof', 'CFBundlePackageType': 'APPL',
         'CFBundleShortVersionString': version, 'CFBundleVersion': '1',
+        # The exact build. The product version is unchanged across releases in a day, so
+        # without this an operator cannot tell two 0.6.38 copies apart when checking whether an
+        # update actually landed.
+        'StudioHubBuild': str(commit)[:7],
         # Finder, the Dock and the About panel all read the icon from the bundle. Without this key
         # the file is present and ignored, which is how the app shipped with no icon at all.
         'CFBundleIconFile': 'app-icon',

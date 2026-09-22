@@ -546,9 +546,15 @@ struct StudioContent: View {
     /// guess. A raw development executable has no bundle version; "Development" is
     /// more honest there than inventing a number.
     private var appVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+        let product = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
             ?? "Development"
+        // The exact build, stamped at packaging time. Two copies of the same product version are
+        // otherwise indistinguishable, which is exactly the question an update raises.
+        let build = (Bundle.main.object(forInfoDictionaryKey: "StudioHubBuild") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let build, !build.isEmpty else { return product }
+        return "\(product) · \(build)"
     }
 
     var body: some View {
@@ -2632,7 +2638,7 @@ struct StudioContent: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Studio Hub & GatewayKH")
             if let identity = workspace.controllerIdentity, let version = workspace.hubVersion {
-                LabeledContent("Hub version", value: version.version)
+                LabeledContent("Hub version", value: version.display)
                 LabeledContent("Data store", value: identity.readiness.sqliteAuthoritative == true ? "Local, authoritative" : identity.settings.databaseMode)
                 LabeledContent("Reported protocol authority", value: identity.settings.globalAuthority ?? "Not reported")
                 LabeledContent("Migration stage", value: identity.settings.migrationStage ?? identity.readiness.migrationStage ?? "local")

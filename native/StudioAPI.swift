@@ -336,7 +336,14 @@ struct NativeControllerReadiness: Decodable, Equatable {
 
 struct NativeVersion: Decodable, Equatable {
     let version: String
+    let build: String?
     let source: String
+
+    /// "0.6.38 · 1d6582f", or just the version when the build is not reported.
+    var display: String {
+        guard let build, !build.isEmpty else { return version }
+        return "\(version) · \(build)"
+    }
 }
 
 /// The Hub's per-device storage policy and the bytes it currently accounts for.
