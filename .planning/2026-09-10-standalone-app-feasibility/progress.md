@@ -1548,3 +1548,17 @@ The refresh therefore could not touch them - the paths did not exist, so nothing
 removed or half-written by it. The drives still hold the models and the `639fcf9`
 app from the previous refresh; they need the same one-command refresh once they are
 plugged back in (`.build/prepare-kit.sh <volume>`, then `verify-kit.sh`).
+
+[MEASURED] GatewayKH's operator discard action (`1768a8c`) verified from the Hub side
+end to end. New `tests/hub_regression/cases/test_discard_route_fleet.py` drives the
+**real HTTP route** with the **Fleet credential** against a fabricated uncertain item:
+`POST /api/hub/jobs/{batch}/items/0/discard` -> **200**, item `cancelled` with
+`error_code=DISCARDED_UNCERTAIN`, and `busy_machines()` no longer holds the machine;
+the same call on a **running** item -> **400** and the item is untouched. That is the
+exact call the GatewayKH action makes, so allowlist + middleware + broker are proven
+together rather than separately. Suite: 2 passed.
+
+[MEASURED] Studio Hub's own app already exposes the same action: the Image, Audio and
+Music history rows offer **Discard** for an `uncertain` job behind a confirmation
+(`native/StudioViews.swift`), calling the same route. No new button is needed on the
+Hub side; a GatewayKH-side button is only worth building if its UI lists the holds.
