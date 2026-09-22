@@ -25,3 +25,6 @@ components/.kh_studio_token
 
 # The graphify knowledge graph is a local index, rebuilt from the tree.
 /graphify-out/
+
+# Recoverable "delete". The owner sorts this folder; it is never committed.
+_trash/

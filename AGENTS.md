@@ -17,3 +17,13 @@
 - One coordinator owns the board and canonical progress; workers own assigned task cards/reports. Serialize shared native, staging and Voice registry edits.
 - Mark DONE only after required evidence, independent review and integration. Preserve partial model/hardware checkpoints and explicit blockers.
 - Per-device generated-output defaults are editable 50 GB total and 30 days; operating defaults are configurable, while integrity/authentication/active-job safeguards remain enforced.
+
+## Working rules
+
+- **Every removal goes to this project's `_trash/` — never `rm`.** This covers *all*
+  of it, not only what the owner asks for: a file he names, and equally a file you
+  decide is clutter while cleaning up. Move it into `_trash/` (create the folder if
+  absent), keep any sub-structure, and say where it went. `_trash/` itself is his to
+  sort out: never delete or tidy anything *inside* it. The one thing that is not a
+  file is a Git branch or remote ref — record its name and SHA in a note under
+  `_trash/` before deleting it, and never rewrite published history.
