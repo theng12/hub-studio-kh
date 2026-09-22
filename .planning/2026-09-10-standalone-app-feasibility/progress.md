@@ -1562,3 +1562,14 @@ together rather than separately. Suite: 2 passed.
 Music history rows offer **Discard** for an `uncertain` job behind a confirmation
 (`native/StudioViews.swift`), calling the same route. No new button is needed on the
 Hub side; a GatewayKH-side button is only worth building if its UI lists the holds.
+
+[MEASURED] Drives reconnected (three of four). Refreshed KH-STUDIO-UGREEN,
+KH-STUDIO-ATLAS and KH-STUDIO-ORICO from `639fcf9` to the current release
+**`61599f2`** (controller/node connection fixes + the hardening): each now reports
+build `61599f2`, the fleet-discard route present, **35/35** packages, 82.8 GiB, and
+`verify-kit.sh` **PASS** (starts, ready, health 200).
+
+[GATE] **KH-STUDIO-NOVA is not connected**: `/Volumes` and `diskutil list` show only
+three external disks, so NOVA could not be refreshed. It still carries `639fcf9`.
+Plug it in and run `.build/prepare-kit.sh KH-STUDIO-NOVA` (or ask) - the other three
+are already at the current build.
