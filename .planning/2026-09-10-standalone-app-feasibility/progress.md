@@ -1626,3 +1626,25 @@ old process survives needs a manual quit/reopen after step 1. Step 2 is models o
 Each now reports `StudioHubBuild = e954040`, carries the fleet-discard route, keeps
 **35/35** packages (82.8 GiB), and passes `verify-kit.sh`. The drives are ready to
 hand out; an operator can confirm the build by the footer (`0.6.38 · e954040`).
+
+[OWNER DECISION 2026-09-22] The controller **must** hold a model locally to accept a job
+for it; a controller will not dispatch a model only a node has. This is intentional and
+`MODEL_NOT_READY` (409) is correct there. No change made.
+
+[MEASURED] Owner placement policy for a fleet of many 8 GB Macs and a few 16 GB+ ones,
+released as `22e3539`. The broker now ranks candidates by memory instead of chip speed:
+- **voice, music, video** prefer the **largest** capable machine (8 GB Macs cannot hold
+  those models; the model's own `min_unified_memory_gb` floor still decides eligibility);
+- **image and subtitle** prefer the **smallest** capable machine, keeping the large Macs
+  free for audio;
+- either way it is a preference, never a filter - every healthy capable worker stays a
+  fallback - and unknown telemetry sorts **last**, not first.
+Retires `_studio_speed_score`. New `tests/hub_regression/cases/test_placement_policy.py`
+(4 cases); hub cases + jobs + operator controls + admission + startup recovery **152
+passed**. All four SSDs refreshed to `22e3539` and verify **PASS**; DMG
+`dist/StudioHub-0.6.38-22e3539.dmg`; installed app `22e3539`.
+
+[GATE] This reverses two figures recorded in the old code: the owner previously measured
+image on a small Mac at 1.6-2.1x the wall clock, and 24 GB as *slower* for TTS. The owner
+chose fleet utilisation over those figures on 2026-09-22; the change is one sort key each
+way if the measurements turn out to matter more.
