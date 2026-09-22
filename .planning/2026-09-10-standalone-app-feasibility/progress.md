@@ -1579,3 +1579,15 @@ own verifier passes: library **35/35**, 88.9 GB, identity `0.6.38 61599f2`,
 `development_build: False`, 0 quarantined files, service starts and answers health.
 Its 153 GB plain archive is untouched. **All four drives now carry the current build
 and pass** (UGREEN/ATLAS/ORICO were refreshed in the previous pass).
+
+[MEASURED] Owner asked for clearer token guidance (no renaming). The Connections page
+now explains both credentials in plain English: the **Hub token** is "this Mac's own
+key", for the owner only, covering settings/models/output/shared voices, never given
+out; the **Fleet token** is "the work badge for the group", given to GatewayKH and to
+every Mac that joins, listing exactly what it allows (send work, follow it, download
+the result, acknowledge, cancel, discard an uncertain one, read model/fleet lists) and
+what it forbids (settings, models, output, shared voices, join/leave). The join form
+now labels its field "Controller's Fleet token" and says explicitly not to use the Hub
+token. Released as `bceaad4`: DMG `dist/StudioHub-0.6.38-bceaad4.dmg`, installed app
+updated, and **all four SSDs refreshed** to `bceaad4` with every `verify-kit.sh`
+**PASS** (35/35 packages).
