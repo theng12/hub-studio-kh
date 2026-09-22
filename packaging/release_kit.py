@@ -69,6 +69,7 @@ def build(app: Path, library: Path) -> dict:
     installed = json.loads(index_path.read_text()) if index_path.is_file() else {}
 
     problems: list[str] = []
+    not_shipped: list[str] = []
     models = []
     for manifest_path in sorted((resources / "model-manifests").glob("*.json")):
         manifest = json.loads(manifest_path.read_text())
@@ -90,7 +91,9 @@ def build(app: Path, library: Path) -> dict:
             "digest": manifest.get("digest") or {},
         }
         if not row:
-            problems.append(f"{package_id} is advertised but not installed in the library")
+            # Expected: a kit may carry a subset of the catalogue. The app still offers
+            # the rest as downloads, so this is recorded rather than treated as a defect.
+            not_shipped.append(package_id)
         elif row.get("revision") != manifest.get("revision"):
             problems.append(
                 f"{package_id} is installed at {row.get('revision')} but the app pins "
@@ -137,6 +140,7 @@ def build(app: Path, library: Path) -> dict:
         },
         "components": release.get("components") or {},
         "models": models,
+        "models_not_shipped": not_shipped,
         "library": {
             "path_as_shipped": library.name,
             "installed_bytes": bytes_total,

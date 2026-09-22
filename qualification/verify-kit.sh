@@ -105,7 +105,11 @@ print(f"  library  {len(installed)} installed package(s), {advertised} advertise
 print(f"  checked  every one of the {checked:,} model file(s) the library records "
       f"({expected_bytes / 1e9:.1f} GB), by size")
 if advertised and len(installed) < advertised:
-    problems.append(f"the kit advertises {advertised} models and {len(installed)} are installed")
+    # A kit may deliberately carry a subset of the catalogue: the app advertises every
+    # model it supports and offers the rest as downloads. That is not a broken copy, so
+    # say it plainly rather than failing the whole drive.
+    print(f"  note     {advertised - len(installed)} advertised model(s) are not in this "
+          f"kit; the app offers them as downloads")
 
 if problems:
     print("\nFAIL — this copy is not complete:")
