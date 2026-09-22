@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.6.39 — 2026-09-22 · the controller/node link works; placement follows the fleet
+
+- **A node could not join a controller at all.** The app offers every worker it runs,
+  including `music`, and `fleet_nodes.NODE_MODALITIES` still held only
+  `image/voice/transcription`, so `POST /api/hub/fleet/nodes` answered 400 ("studio
+  modality must be one of ['image','transcription','voice']"). Every current build was
+  refused. Music is now part of the node vocabulary, and `TRACKED_MODALITIES` matches.
+- **A joined node never became routable.** `StudioMonitor.reload_registry()` had no
+  callers, so a controller kept the registry it built at startup: the node read as
+  reachable on the Fleet page while no work was ever sent to it until a restart. The
+  join and leave routes now reload it.
+- **Remote image and music could never reconcile.** `_validate_image_worker_job` and
+  `_validate_music_worker_job` compared the worker's own `machine_id` against the item's
+  `machine`, which for a remote studio is the *node id* the Hub routes through; the two
+  can never be equal, so every remote attempt was fenced `uncertain`. That one comparison
+  is skipped for remote workers; revisions and `worker_id` are still checked.
+- **Placement follows the fleet** (owner policy). Voice, music and video prefer the
+  largest capable machine; image and subtitle prefer the smallest, keeping the
+  high-memory Macs free for audio. It is a preference, never a filter - the model's own
+  memory floor decides eligibility and every capable worker stays a fallback - and
+  unknown telemetry sorts last, not first. Retires the chip-speed image proxy.
+- **Reachable on Tailscale out of the gate.** A fresh install listens on this Mac's
+  private and Tailscale addresses instead of loopback only, and the reachable-address
+  toggles stay editable while the services run: the change is saved and the existing
+  notice offers the restart that applies it, instead of the control refusing to move.
+- **Each build is identifiable.** The bundle carries `StudioHubBuild` (the commit),
+  `/api/version` reports `build`, and the footer and Connections page show
+  `0.6.39 · <build>`. Two copies of one product version were previously indistinguishable.
+- **The Connections page explains both tokens in plain English** - the Hub token as this
+  Mac's own key that never leaves it, the Fleet token as the group's work badge, each
+  with what it allows and forbids, and the join form names the token it wants.
+- The controller may discard an uncertain job on a node (owner decision); that route is
+  verified end to end with the Fleet credential, and a controller must still hold a model
+  locally to accept a job for it (owner decision, unchanged).
+- Includes the Music studio work, the 8-bit VoxCPM2, the studio UI pass and the P0
+  stabilisation that landed after 0.6.38.
+
 ## 0.6.38 — 2026-09-20 · clone validation compared spelling; the voice suite joins the gate
 
 - **Numeral canonicalization in `qwen_quality`** (root cause of the "flaky" clone rejections). The

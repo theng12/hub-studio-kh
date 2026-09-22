@@ -2,6 +2,44 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.39 — 2026-09-22
+
+### Two Macs can work together
+
+Joining a Mac to a controller did not work in the last builds. The joining Mac offers
+every kind of work it can do, and the controller refused the whole list because it did
+not know about Music - so no Mac could connect. A Mac that did connect was then shown as
+reachable while no work was ever sent to it, and work sent to another Mac could not be
+confirmed when the connection blipped. All three are fixed: a controller and its nodes
+now exchange real jobs, and a remote image or music job finishes and comes back.
+
+### Your fleet is used the way you would use it
+
+Voice, Music and video now prefer the Mac with the most memory, while images and
+subtitles prefer the smaller ones. Your many 8 GB Macs keep working on images and
+subtitles, and the 16 GB+ machines stay free for audio. If the preferred Mac is busy the
+job simply goes to another one - nothing waits for a particular machine.
+
+### Reachable on Tailscale from the start
+
+A new install now answers on Tailscale and your local network, instead of only on the
+Mac itself, so a controller can reach it without you hunting for a setting first. If you
+do change which networks a Mac answers on, the switch moves immediately and the app
+offers the one press that restarts the services and applies it - you no longer have to
+stop everything before you are allowed to change it.
+
+### You can tell one build from another
+
+Every build now shows its own short build number beside the version, at the bottom of
+the window and on the Connections page - for example `0.6.39 · 22e3539`. Two copies that
+both said 0.6.38 used to be impossible to tell apart when you updated a Mac from a drive.
+
+### The Connections page tells you which token to hand out
+
+It now says in plain words that the **Hub token** is that Mac's own key and should not
+leave it, and that the **Fleet token** is the one to give to GatewayKH and to any Mac
+that joins - with what each one can and cannot do.
+
 ## 0.6.38 — 2026-09-20
 
 ### Cloning no longer fails because of how a number is written
