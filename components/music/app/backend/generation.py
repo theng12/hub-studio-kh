@@ -621,8 +621,17 @@ class GenerationManager:
         self.engine_root = str(engine_root or env_root or "").strip()
         self.cache = cache_module.MusicCache(library=library_dir,
                                              manifest_path=manifest_path)
-        self.sa3_cache = cache_module.MusicCache(
-            library=library_dir, repo=catalog.STABLE_AUDIO_REPO)
+        # The second engine must never be a single point of failure for the first:
+        # a missing or unreadable Stable Audio package used to raise here and stop
+        # the Music worker entirely, which took ACE-Step down with it. Record the
+        # problem and let the per-model preflight report it instead.
+        self.sa3_cache = None
+        self.sa3_cache_error: str | None = None
+        try:
+            self.sa3_cache = cache_module.MusicCache(
+                library=library_dir, repo=catalog.STABLE_AUDIO_REPO)
+        except (OSError, ValueError, KeyError) as exc:
+            self.sa3_cache_error = f"{type(exc).__name__}: {exc}"
         package = self.cache.status()
         self.runtime_sha256 = runtime_sha256 or runtime_identity()
         self.executor = EngineExecutor({
@@ -676,6 +685,9 @@ class GenerationManager:
 
     def preflight(self, repo: str | None = None) -> dict:
         stable = catalog.is_stable_audio(repo or "")
+        if stable and self.sa3_cache is None:
+            return {"state": "manifest_unavailable",
+                    "reason": self.sa3_cache_error or "Stable Audio 3 is unavailable"}
         cache = self.sa3_cache if stable else self.cache
         try:
             status = cache.status()

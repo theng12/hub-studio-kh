@@ -1423,3 +1423,35 @@ Installed here at the source:
   82.8 GiB** - and every kit verifier still PASSes.
 
 Nothing was deleted anywhere; the owner empties the `_trash` folders by hand.
+
+## 2026-09-22 — R05 wheel fetch, Mac library sync, self-review (DeepSeek)
+
+[MEASURED] **R05 (image wheel cache) done and proven.** The image runtime build
+pins `uv pip sync --offline`, which failed because 29 of the 73 locked wheels were
+absent from uv's default cache. Fetched them with
+`uv pip install --python .build/voice-runtime/bin/python3 --target .build/image-wheel-fetch -r packaging/image-runtime/requirements.lock.txt`,
+then ran the real build: `bash packaging/image-runtime/build.sh .build/image-runtime-r05`
+→ **exit 0**, offline, producing a runtime with Python 3.12.14, mflux 0.17.5,
+mlx 0.31.2. The fetch must be repeated if uv's cache is ever pruned.
+
+[MEASURED] **This Mac's library synced to the full set.** Imported the 23 packages
+it lacked from `/Volumes/KH-STUDIO-ATLAS`, hash-verified via
+`model_packages.import_folder`: now **35/35, 83 GB**.
+
+[MEASURED] **Self-review written** (`self-review-2026-09-22.md`). Method: full root
+suite OK (10 skipped), `native/build.sh` exit 0, the offline image build above, and
+all four kit verifiers PASS. One real defect found and fixed: the Music worker built
+the Stable Audio cache eagerly and unguarded, so a missing/unreadable Stable Audio
+package stopped the whole worker and took ACE-Step with it (exactly what happened
+during SSD prep when `.studiohub` was not 0700). It is now guarded and surfaced per
+model, with a regression test. Remaining findings are documented trade-offs: the
+30-minute uncertain auto-discard heuristic, operator-only discard (a controller
+cannot release a node), lower-fidelity no-transcript VoxCPM2 clones, and the fact
+that this is a self-review, not an independent one.
+
+[GATE] **GatewayKH ask written** (`gatewaykh-needs-2026-09-22.md`): a paste-ready
+prompt covering the five controller-side gaps (delivery ACK, cancel reaching the Hub
+DELETE routes, Music as a modality, voice-reference metadata, and not collapsing
+`uncertain` into an ordinary failure), plus the three things I need from the owner
+(checkout + authority, scope, and whether the controller may discard uncertain
+jobs).

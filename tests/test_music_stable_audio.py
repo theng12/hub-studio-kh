@@ -54,5 +54,17 @@ class StableAudioRunnerTests(unittest.TestCase):
         self.assertTrue(any("T5Gemma" in line for line in sink))
 
 
+    def test_a_broken_stable_audio_package_does_not_stop_the_other_engine(self):
+        # A missing or unreadable Stable Audio package must not take the Music worker
+        # down; the per-model preflight reports it and ACE-Step keeps working.
+        from components.music.app.backend import catalog, generation  # noqa: PLC0415
+        manager = object.__new__(generation.GenerationManager)
+        manager.sa3_cache = None
+        manager.sa3_cache_error = "PackageError: Model library state must be owner-only (0700)"
+        files = manager.preflight(catalog.STABLE_AUDIO_REPO)
+        self.assertEqual(files["state"], "manifest_unavailable")
+        self.assertIn("owner-only", files["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
