@@ -1591,3 +1591,18 @@ now labels its field "Controller's Fleet token" and says explicitly not to use t
 token. Released as `bceaad4`: DMG `dist/StudioHub-0.6.38-bceaad4.dmg`, installed app
 updated, and **all four SSDs refreshed** to `bceaad4` with every `verify-kit.sh`
 **PASS** (35/35 packages).
+
+[MEASURED] Owner feedback: the reachable-address toggles were read-only while the
+services ran, so a fresh Mac could not be made reachable without first stopping
+everything, and the default was loopback-only. Two changes, released as `1d6582f`:
+- **A fresh install now listens on this Mac's private and Tailscale addresses**
+  (`ShellConfiguration.defaultListenHost()`), so a new node is reachable out of the
+  gate. Loopback is still always added; a public address is never chosen.
+- **The toggles stay editable while the Hub runs.** The change is saved and the
+  existing restart notice offers the one press ("Restart Services") that applies it,
+  instead of the control refusing to move. No more stop-change-start by hand.
+
+[MEASURED] Refreshed the three mounted drives (NOVA, UGREEN, ORICO) to `1d6582f`;
+each verifies **PASS**. DMG `dist/StudioHub-0.6.38-1d6582f.dmg`; installed app
+`1d6582f`. **ATLAS was not mounted** (in use) and still carries `bceaad4`; refresh it
+when it is back.
