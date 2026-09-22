@@ -7,7 +7,7 @@ and the order to set them up.
 | Folder | App | Version | What it does |
 |---|---|---|---|
 | `Story Studio/` | Story Studio KH | 1.4.219 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
-| `GatewayKH/` | GatewayKH | 0.2.1 | The middle man: one address, one model catalogue, routes work to your Macs |
+| `GatewayKH/` | GatewayKH | 0.2.2 | The middle man: one address, one model catalogue, routes work to your Macs |
 | `Studio Hub KH/` | Studio Hub | 0.6.39 | Runs the models themselves — images, voice, subtitles, music |
 
 ---

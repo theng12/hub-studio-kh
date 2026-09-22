@@ -1,6 +1,6 @@
 # GatewayKH — the coordinator
 
-**Version 0.2.1.** Installer: `installers/gateway-kh-0.2.1-722e1f3-202609221240-arm64.dmg`
+**Version 0.2.2.** Installer: `installers/gateway-kh-0.2.2-b1c0d8f-202609221617-arm64.dmg`
 
 ## What it is for
 

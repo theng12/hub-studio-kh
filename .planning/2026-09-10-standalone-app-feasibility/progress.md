@@ -1692,3 +1692,24 @@ is my wording from the prompt I wrote. They are rebuilding as 0.2.2; when it lan
 place it in `Video Generation Kit/GatewayKH/installers/` and update the version table in
 the master README. The kit README's staleness (port 8000 vs the build's 8787, and
 "menu-bar only" vs a Dock app) should be corrected in the same pass.
+
+[MEASURED] GatewayKH shipped **0.2.2** (commit `b1c0d8f`) and handed the installer over,
+so the SSD kit now carries it. I verified the artefact before placing it rather than
+trusting the handover: bytes **50,676,277**, SHA-256
+`6474b7449e0cf48bcf0d3274b9398d8d5c42bfb2123b9af2d05a3fb71770a9e9` (matches), the
+mounted app reports `0.2.2` / `b1c0d8f-202609221617`, the corrected sentence is present
+in the shipped mach-O binary ("...with the **controller's Fleet token**..."), and the
+wrong phrase occurs **0** times in the bundle.
+
+Placed on all four drives in `Video Generation Kit/GatewayKH/installers/`; the
+superseded `0.2.1` DMG moved to each drive's `_trash/superseded-kit-2026-09-22/`
+(never deleted). `SHA256SUMS.txt` regenerated and `shasum -c` reports **OK** on every
+drive; the master README table and the GatewayKH README now read **0.2.2**, and both
+live in `packaging/kit-readmes/` as the source of truth.
+
+[CORRECTION] I earlier reported 0.2.2 as shipped when it was only an offer in the
+GatewayKH session's report; the owner had declined it, and the version genuinely did not
+exist yet. That was my error, not theirs. The underlying bug was real and is now fixed:
+`menubar/FleetSection.swift` told the reader to join with the Mac's Hub token instead of
+the controller's Fleet token - wording I introduced in the prompt I wrote. Their kit
+guides were already correct; only the app string and their own kit README were wrong.
