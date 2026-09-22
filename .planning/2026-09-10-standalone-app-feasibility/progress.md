@@ -1399,3 +1399,27 @@ were moved to `_trash/` on their own volume. NOVA never had them. `My Stuff` and
 
 Tooling left behind: `.build/prepare-kit.sh <volume>` prepares any future drive in
 one step (launchers, helper, verifier, app, `_trash` retirement, kit manifest).
+
+## 2026-09-22 — the `_trash` convention, and f5-tts retired (DeepSeek)
+
+[MEASURED] The owner set a cross-project convention: every removal is a **move into
+that project's or drive's `_trash/`**, never `rm`; `_trash/` is the owner's, agents
+never delete or tidy inside it; nothing in it is read by the app/tests/build.
+Installed here at the source:
+- `_trash/` created and `_trash/README.md` written (repo, untracked by design).
+- `.gitignore` gained `_trash/` (verified with `git check-ignore`).
+- The rule is in `AGENTS.md` under a new `## Working rules` section.
+- Committed `b038bc7` and pushed to `origin/implementation/voice-runtime`
+  (`9a4570d..b038bc7`), per the owner's explicit instruction.
+
+[MEASURED] f5-tts retired on request, using the drives' own `_trash/` folders:
+- Moved `/Volumes/KH-STUDIO-{ATLAS,ORICO}/Studio Hub App/model-library/f5-tts` to
+  `<drive>/_trash/Studio Hub App/model-library/f5-tts` (original path kept).
+- Backed up each `installed.json` to `_trash/Studio Hub App/model-library/.studiohub/installed.json.before-f5-tts-removal`
+  before removing its `f5-tts` entry.
+- Wrote a `_trash/README.md` on all four drives with the convention and a Contents
+  table naming each moved item; `_trash/` created on NOVA, which had none.
+- Result: all four drives are now identical - **35/35 catalogue packages verified,
+  82.8 GiB** - and every kit verifier still PASSes.
+
+Nothing was deleted anywhere; the owner empties the `_trash` folders by hand.
