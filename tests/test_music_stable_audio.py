@@ -12,9 +12,9 @@ ENGINE = ROOT / "components" / "music" / "engines" / "stable_audio_3"
 
 class StableAudioRunnerTests(unittest.TestCase):
     def setUp(self):
-        import sys
-        sys.path.insert(0, str(ROOT / "components" / "music" / "app"))
-        from backend import stable_audio  # noqa: PLC0415
+        # Import by full path: another test module loads the Voice `backend`
+        # package first, so a bare `from backend import ...` would find that one.
+        from components.music.app.backend import stable_audio  # noqa: PLC0415
         self.module = stable_audio
 
     def test_cancelled_is_a_kind_of_failure(self):
