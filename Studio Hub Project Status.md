@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-22 04:20 +07
+Last updated: 2026-09-22 04:55 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,7 +12,7 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `c6c2323`; installed app build `6eba1a5`
+- Current HEAD: `6f2a0b8`; installed app build `333f4de`
 - Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
   `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
   `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
@@ -155,43 +155,32 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-22 04:20 +07
+Timestamp: 2026-09-22 04:55 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current c6c2323: `c6c2323`; installed app build `6eba1a5` (`development_build:false`)
-Uncommitted changes and owners: none.
-Current packet: **Stable Audio 3 is installed and qualified; the ACE-Step MLX
-question is closed.**
-Completed this session: R04 admission; host identity; R05 records; R06 native Music;
-R09 selection; R10 inventory; app version + What's New footer; stale-listen-address
-fix; VoxCPM2 fix + 8-bit exposure; ACE-Step Music (30s/60s/6min, vocal, cancel,
-restart); Whisper Base/Small/Turbo; delivery ACK; the UI/UX pass (sidebar,
-samples, aura, simpler model names, editable duration, discard, player, thumbnails);
-**Stable Audio 3 Medium (MLX) as a second Music engine, verified end to end through
-the installed app.**
-Two music engines now: ACE-Step 1.5 (MIT; vocals; up to 600 s; DiT/VAE already run
-on native MLX - verified from the engine log, only the checkpoint load is PyTorch)
-and Stable Audio 3 Medium (Stability Community Licence; instrumental only; up to
-380 s; pure MLX; ~9 s per 30 s clip, ~62 s for 380 s).
-Model library: `~/StudioHubModels` now also holds `stable-audio-3-medium` (6.4 GiB).
-Evidence: `.planning/2026-09-10-standalone-app-feasibility/{r04,r05,r06}-report.md`,
-`r-music-mlx.md` and `progress.md`; `qualification/evidence/` for every real-model
-receipt; listening copies in `~/Desktop/Studio Hub Test Outputs/`.
-Self-review findings: SA3 startup defects fixed (manifest env override leaked into
-the secondary cache; the runner's symlinked tree wrote weight links into the app
-bundle). The exact-menu manifest test digest was updated deliberately for the new
-package.
-Independent review status: not performed for any packet.
-Remaining known gaps: SA3 has no cancel-in-flight path beyond process termination;
-Video/Chat have no engine; the R08 physical GUI click-through is the owner's;
-GatewayKH scope and the Image wheel cache need authorization.
-External gates: GatewayKH scope; Image wheel-cache network fetch; clean Mac /
-original-M1 / reboot hardware; distribution authority.
-Owned processes / temporary data / cleanup: none outstanding. `.build/` holds ignored
-proof artifacts; keep. `.build/sa3-source` holds the upstream checkout + its venv.
-Next smallest action: owner clicks through the two music models in the app (Music
-picker should now show both), or authorize the Image wheel cache / GatewayKH work.
+Current HEAD: `6f2a0b8`; installed app build `333f4de` (`development_build:false`)
+Uncommitted changes: none.
+Current packet: **P0 stabilisation complete and verified in the installed app.**
+- Stable Audio 3 reports real stage progress and cancel settles `cancelled` with no
+  partial file.
+- The Hub log rotates at 32 MB keeping one previous file (verified live: a 264 MB
+  log became `hub-worker.log.1`).
+- The dispatcher auto-discards uncertain attempts silent past 30 minutes
+  (`STUDIOHUB_UNCERTAIN_DISCARD_SECONDS`), releasing the Mac; manual Discard stays.
+- VoxCPM2 clones with no saved transcript (verified: `done`, ACK 200).
+- R08 owner checklist: `docs/R08-click-through-checklist.md`.
+- Self-review recorded in `progress.md`.
+Two Music engines: ACE-Step 1.5 (MIT; vocals; to 600 s; DiT/VAE already native MLX)
+and Stable Audio 3 Medium (Stability Community Licence; instrumental; to 380 s;
+pure MLX). Model library `~/StudioHubModels` holds both.
+Known small follow-ups (not blockers): plumb the stage label to the app; a native
+test for log rotation; uncertainty auto-discard window is a documented heuristic.
+Remaining owner/authority gates: the R08 click-through (owner); Image wheel cache
+(network); GatewayKH (owner says it is mature enough); distribution to the owner's
+own machines needs no signing per the owner.
+Evidence: `qualification/evidence/{r07-2026-09-21,r08-*,sa3-2026-09-22,music-backends-2026-09-22}/`,
+`.planning/2026-09-10-standalone-app-feasibility/{progress.md,r-music-mlx.md}`.
 First command to run:
 `git status --short && git log --oneline -3`
 Important do-not-touch paths: `~/Downloads/model-library`, `~/StudioHubAppBackups/`,
