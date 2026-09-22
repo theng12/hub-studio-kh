@@ -1656,3 +1656,39 @@ Tailscale-by-default, the build stamp and the token guidance. Release commit `12
 DMG `dist/StudioHub-0.6.39-12c7d7b.dmg`, installed app `0.6.39` build `12c7d7b`, and all
 four SSDs refreshed to **0.6.39** with every `verify-kit.sh` **PASS** (35/35 packages).
 No test pinned the version string, so nothing else needed changing.
+
+[MEASURED] Owner asked for one distribution folder per SSD holding all three products,
+with a readme for the whole setup and one per product. Done, and the owner named this
+repository the owner of the SSD kit.
+
+Structure now on all four drives:
+```
+Video Generation Kit/
+  README.md          the whole setup: three roles, linkage, the three credentials,
+                     setup order, prerequisites, one job's journey
+  GatewayKH/         README.md + the six guides, CHECKLIST, docs/, installers/
+  Story Studio/      README.md + Story Studio KH 1.4.219-arm64.dmg
+  Studio Hub KH/     README.md + the app, model-library, voices and its own guides
+```
+Every move was a rename inside one volume, so the model library was never copied.
+
+[MEASURED] Duplicates moved to each drive's own `_trash/duplicate-kit-2026-09-22/`
+(nothing deleted): the spare `StudioHub-0.6.39-12c7d7b.dmg` that GatewayKH's kit kept
+inside `GatewayKH/installers/`, and GatewayKH's kit README whose content the master
+README now carries. Their guides and `SHA256SUMS.txt` were repointed at the sibling
+`Studio Hub KH/` folder so nothing tells a reader to open a file that moved.
+
+[MEASURED] Verified after the move: Studio Hub **0.6.39 / 12c7d7b** and its model
+library are present on all four drives, every `verify-kit.sh` **PASS**, and every
+installer checksum is unchanged - gateway `75e0938d…`, the moved StudioHub DMG
+`fb7b5609…`, Story Studio `5bace953…`. The layout is reproducible and idempotent via
+`packaging/kit-restructure.sh` (readmes live in `packaging/kit-readmes/`); a second run
+changes nothing and cannot overwrite the preserved originals in `_trash`.
+
+[GATE] GatewayKH is still on the drives at **0.2.1**. Their app text and kit README
+both said a joining node uses the controller's *Hub* token; it is the *Fleet* token.
+The kit README was already correct in `03-join-nodes.md` but wrong in `README.md`, which
+is my wording from the prompt I wrote. They are rebuilding as 0.2.2; when it lands I
+place it in `Video Generation Kit/GatewayKH/installers/` and update the version table in
+the master README. The kit README's staleness (port 8000 vs the build's 8787, and
+"menu-bar only" vs a Dock app) should be corrected in the same pass.
