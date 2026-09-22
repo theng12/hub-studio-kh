@@ -1,6 +1,6 @@
 # Studio Hub — project status (owner-facing checklist and resumption index)
 
-Last updated: 2026-09-22 05:20 +07
+Last updated: 2026-09-22 10:20 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
 `PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
@@ -12,7 +12,7 @@ second planning system.
 - Local repo: `/build/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
-- Current HEAD: `e26e32e`; installed app build `b4db781`
+- Current HEAD: `fd6c038`; installed app build `b4db781`
 - Commit chain this session: `e1d167a` R04 → `b68e7b2` host identity →
   `295daf8` R05 records → `678630e` R04 multipart → `5cad55a` R09 note →
   `d31728f` status → `9f5c1a1` Image probe → `0004850` R09 selection →
@@ -155,33 +155,28 @@ second planning system.
 
 ## RESUME STUDIO HUB
 
-Timestamp: 2026-09-22 04:55 +07
+Timestamp: 2026-09-22 10:20 +07
 Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
-Base commit: `9a4570da57cb9109cd7da1d06d2197f923a71139`
-Current HEAD: `6f2a0b8`; installed app build `333f4de` (`development_build:false`)
+Current HEAD: `fd6c038`; installed app build `b4db781` (`development_build:false`)
 Uncommitted changes: none.
-Current packet: **P0 stabilisation complete and verified in the installed app.**
-- Stable Audio 3 reports real stage progress and cancel settles `cancelled` with no
-  partial file.
-- The Hub log rotates at 32 MB keeping one previous file (verified live: a 264 MB
-  log became `hub-worker.log.1`).
-- The dispatcher auto-discards uncertain attempts silent past 30 minutes
-  (`STUDIOHUB_UNCERTAIN_DISCARD_SECONDS`), releasing the Mac; manual Discard stays.
-- VoxCPM2 clones with no saved transcript (verified: `done`, ACK 200).
-- R08 owner checklist: `docs/R08-click-through-checklist.md`.
-- Self-review recorded in `progress.md`.
-Two Music engines: ACE-Step 1.5 (MIT; vocals; to 600 s; DiT/VAE already native MLX)
-and Stable Audio 3 Medium (Stability Community Licence; instrumental; to 380 s;
-pure MLX). Model library `~/StudioHubModels` holds both.
-Known small follow-ups (not blockers): plumb the stage label to the app; a native
-test for log rotation; uncertainty auto-discard window is a documented heuristic.
-Remaining owner/authority gates: the R08 click-through (owner); Image wheel cache
-(network); GatewayKH (owner says it is mature enough); distribution to the owner's
-own machines needs no signing per the owner.
-Evidence: `qualification/evidence/{r07-2026-09-21,r08-*,sa3-2026-09-22,music-backends-2026-09-22}/`,
+Current packet: **both SSDs prepared and verified.**
+- KH-STUDIO-NOVA: kit app 0.6.38/b4db781, new app-format library of 17 packages
+  (48 GB) beside the untouched 153 GB plain archive.
+- KH-STUDIO-UGREEN: same kit update; library 15 -> 17 packages (50 GB); legacy
+  Pinokio bootstrap moved to `.retired-pinokio/`.
+- Both: fixed installer (read-only replace), same saved voices, regenerated kit
+  manifests (problems: []), `Technical/verify-kit.sh` PASS (starts, health 200).
+Model coverage: 17 of the 35 the app advertises. The other 18 (Kokoro, Chatterbox,
+Fish, Orpheus, VibeVoice, LongCat, MOSS, S3Tokenizer, snac, umt5, Echo, Audio8,
+Voxtral) need a network pass, which the owner deferred.
+Also complete this session: two music engines (ACE-Step + Stable Audio 3), the
+UI/UX pass, P0 stabilisation (SA3 progress/cancel, log rotation, auto-discard,
+no-transcript clones), the progress-stage polish, and the R08 owner pass.
+Evidence: `qualification/evidence/**`, `qualification/{verify-kit.sh,install_app.command}`,
 `.planning/2026-09-10-standalone-app-feasibility/{progress.md,r-music-mlx.md}`.
 First command to run:
 `git status --short && git log --oneline -3`
-Important do-not-touch paths: `~/Downloads/model-library`, `~/StudioHubAppBackups/`,
-other worktrees, `codex/recovered-music-draft`, GatewayKH checkout.
+Important do-not-touch: `~/Downloads/model-library`, `~/StudioHubAppBackups/`,
+other worktrees, `codex/recovered-music-draft`, GatewayKH checkout, and the
+`.retired-pinokio/` folder on UGREEN until the owner says otherwise.
