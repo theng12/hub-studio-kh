@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.44 — 2026-09-23 · a permission change can no longer stop the app starting
+
+- **The Music runtime identity no longer includes file permissions.** `_tree_digest`
+  (music_worker) and `tree_digest` (staging) hashed each file's mode along with its bytes, so
+  a copy that changed 0444 to 0644 - which an install can do - left the Music worker refusing
+  to start with "overlay digest does not match its release identity". The Hub waits for its
+  workers, so **the whole Hub failed to start**: no port, nothing joinable, and the app showed
+  only "Automatic recovery stopped after repeated service failures". The digest is now
+  content-only, and both implementations were checked to agree byte for byte on the same tree.
+- This is the failure the owner hit while trying to join a controller; the installed bundle on
+  this Mac had writable runtime files while the kit's copy was read-only.
+
 ## 0.6.43 — 2026-09-22 · see the token, and test the address on its own
 
 - **The Fleet token is shown, not masked.** The owner asked to see what was pasted so a wrong

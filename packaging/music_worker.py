@@ -50,8 +50,11 @@ def _tree_digest(root: Path) -> str:
             continue
         if not path.is_file():
             raise ValueError(f"Music runtime overlay contains a non-regular file: {relative}")
-        digest.update(relative.encode() + b"\0file\0"
-                      + str(path.stat().st_mode & 0o7777).encode() + b"\0")
+        # Content only, matching packaging/stage_voice.py: the permission bits are not part of
+        # this runtime's identity. Including them meant a copy that changed 0444 to 0644 - which
+        # an install can do - left the Music worker refusing to start with "overlay digest does
+        # not match its release identity", and the Hub never came up.
+        digest.update(relative.encode() + b"\0file\0")
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)

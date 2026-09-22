@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
-import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +33,12 @@ def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
         if path.is_symlink():
             digest.update(b'link\0' + os.readlink(path).encode() + b'\0')
         else:
-            digest.update(b'file\0' + str(stat.S_IMODE(path.stat().st_mode)).encode() + b'\0')
+            # Content only, deliberately not the permission bits. The identity is checked at
+            # startup by the worker, and a tree whose bytes are identical but whose modes differ
+            # - which a copy, an install or a chmod can produce - must not be able to stop the
+            # app from starting. It did: a Music overlay that read 0444 in the kit and 0644 once
+            # installed made the Music worker refuse to run, so the Hub never came up.
+            digest.update(b'file\0')
             with path.open('rb') as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                     digest.update(chunk)

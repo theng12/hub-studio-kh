@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.44 — 2026-09-23
+
+### A permissions change could stop Studio Hub starting
+
+If the app's files ended up writable after an install, one of its workers would refuse to
+start and the whole app would fail to come up - it showed "Automatic recovery stopped after
+repeated service failures", nothing was listening, and no other Mac could connect to it. The
+check that caused this was comparing file permissions as well as file contents; it now looks
+only at the contents, so a copy or an install cannot break the app this way.
+
 ## 0.6.43 — 2026-09-22
 
 ### You can see the token, and test the address first
