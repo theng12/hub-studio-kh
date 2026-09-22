@@ -1455,3 +1455,10 @@ DELETE routes, Music as a modality, voice-reference metadata, and not collapsing
 `uncertain` into an ordinary failure), plus the three things I need from the owner
 (checkout + authority, scope, and whether the controller may discard uncertain
 jobs).
+
+[MEASURED] Release refreshed after the hardening fix: `main` and
+`implementation/voice-runtime` both at `ffe3315`; DMG rebuilt and verified at
+`dist/StudioHub-0.6.38-ffe3315.dmg` (1.2 GB, checksum valid, app 0.6.38 build
+`ffe3315`, `development_build:false`); the installed app was brought to the same
+build and answers healthy with both music models cached. The older `b4db781` DMG was
+moved to `_trash/dist/` rather than deleted.
