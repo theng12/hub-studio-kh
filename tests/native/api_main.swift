@@ -688,7 +688,12 @@ struct NativeAPITests {
                 "the role change must reach the Hub: \(FixtureProtocol.roleRequests())")
         require(store.controllerIdentity?.settings.role == "controller",
                 "the screen must show the Hub's own answer, not the requested value")
-        require(store.roleNote?.contains("Controller") == true, "a role change needs a visible result")
+        // A role change must produce something the operator can read. It now lands in the
+        // Connections banner rather than the small note beside the picker, because the owner
+        // missed the small note entirely.
+        require(store.connectionNotice?.kind == .success
+                && store.connectionNotice?.text.contains("Controller") == true,
+                "a role change needs a visible result")
 
         await store.setRole("nonsense")
         require(store.error?.contains("role must be one of") == true,

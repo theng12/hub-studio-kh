@@ -2634,6 +2634,38 @@ struct StudioContent: View {
         }
     }
 
+    /// The answer to the last join, leave or role change.
+    ///
+    /// A banner rather than a line of small print: it says whether the action worked, quotes the
+    /// controller's own reason when it refused, can be selected to copy into a report, and stays
+    /// until dismissed so a failure cannot scroll away unread.
+    @ViewBuilder private func connectionNoticeBanner(_ notice: ConnectionNotice) -> some View {
+        let tint: Color = notice.kind == .failure ? .orange : .green
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: notice.kind == .failure
+                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(notice.kind == .failure ? "That did not work" : "Done")
+                    .font(.callout).fontWeight(.semibold)
+                Text(notice.text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button { workspace.dismissConnectionNotice() } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.45)))
+    }
+
     private var controllerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Studio Hub & GatewayKH")
@@ -2658,6 +2690,12 @@ struct StudioContent: View {
     private var fleetSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Fleet")
+            // The answer to the last join, leave or role change, at the top where it cannot be
+            // missed, and kept until dismissed. It used to be a line of small grey print further
+            // down, which the owner did not see until the third attempt.
+            if let notice = workspace.connectionNotice {
+                connectionNoticeBanner(notice)
+            }
             // "This Mac is a Not reporting" was what the operator read when the Hub had not
             // answered yet: the article was hard-coded beside a label that is sometimes a phrase.
             // Naming this Mac. The Hub has kept a label for it all along - `machine_name` is what
@@ -2684,6 +2722,7 @@ struct StudioContent: View {
             }
 
             LabeledContent("This Mac is", value: roleTitle(workspace.controllerIdentity?.settings.role))
+            LabeledContent("Group", value: groupStatus)
             Text(roleExplanation(workspace.controllerIdentity?.settings.role))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Picker("Role", selection: Binding(
@@ -2738,7 +2777,7 @@ struct StudioContent: View {
                     set: { studio.setPort($0) }), format: .number)
                     .textFieldStyle(.roundedBorder).frame(width: 90)
                     .disabled(!studio.canConfigure)
-                Text(studio.nodeFacingAddress.map { "A node joins with the address \($0) and this Mac's Hub token below." }
+                Text(studio.nodeFacingAddress.map { "A node joins with the address \($0) and this controller's Fleet token below — not the Hub token." }
                      ?? "Until one of these is on, only this Mac can reach the Hub — a node needs an address like the ones above.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -2757,7 +2796,9 @@ struct StudioContent: View {
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let note = workspace.fleetNote {
+            // The banner at the top of this page already carries the last actionable result, so
+            // the plain note only appears when there is no banner (a quiet startup re-join).
+            if workspace.connectionNotice == nil, let note = workspace.fleetNote {
                 Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
@@ -2930,6 +2971,8 @@ struct StudioContent: View {
                           || controllerDraft.isEmpty || controllerToken.isEmpty)
                 if workspace.joiningFleet { ProgressView().controlSize(.small) }
             }
+            // Kept inline as well as in the banner at the top: this is the spot the operator is
+            // looking at the moment they press Join, so the answer belongs here too.
             if let note = workspace.fleetNote {
                 Text(note).font(.callout).foregroundStyle(.secondary)
             }
@@ -2943,6 +2986,20 @@ struct StudioContent: View {
         case "standalone": return "Standalone"
         default: return "Not reporting"
         }
+    }
+
+    /// One line that answers "is this Mac in a group, and whose?" - the question the role picker
+    /// alone did not answer. `fleet_credential_origin` is the Hub's own record of whether this
+    /// Mac is running on its own credential (minted) or somebody else's (adopted).
+    private var groupStatus: String {
+        guard let settings = workspace.controllerIdentity?.settings else { return "Unknown" }
+        guard settings.fleetCredentialOrigin == "adopted" else {
+            return settings.role == "controller"
+                ? "This Mac is a controller — nodes join it from their own app"
+                : "On its own, not joined to a controller"
+        }
+        let address = workspace.controllerAddress.trimmingCharacters(in: .whitespaces)
+        return address.isEmpty ? "Joined to a controller" : "Joined to \(address)"
     }
 
     private func roleExplanation(_ role: String?) -> String {

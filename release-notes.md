@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.40 — 2026-09-22
+
+### Joining a controller actually works now
+
+Joining a Mac to a controller was blocked before the request ever left the Mac: macOS
+refused the app's plain connection to the controller's address and reported it as a
+secure-connection problem, which had nothing to do with your token or the address you
+typed. The app now asks for the permission it needs to talk to your own network and your
+tailnet, so the join reaches the controller.
+
+Three things that made the failure hard to read are fixed too. If the controller refuses,
+the app repeats **the controller's own reason** instead of a bare number. If the Mac
+registers but cannot take on the controller's token, it no longer says "Joined" - it says
+that step failed, because otherwise that Mac would sit on the controller's list answering
+nothing. And the answer to a join, a leave or a role change is now a **banner that stays
+until you dismiss it**, instead of a line of small grey text that is easy to miss.
+
+### The Connections page says which group you are in
+
+It now states it plainly, right beside the role - "Joined to 100.x.y.z:47873" or "On its
+own, not joined to a controller" - so you can see at a glance what this Mac is doing.
+
 ## 0.6.39 — 2026-09-22
 
 ### Two Macs can work together

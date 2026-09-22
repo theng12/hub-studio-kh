@@ -299,8 +299,18 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'CFBundleShortVersionString': version, 'CFBundleVersion': '1',
         # The exact build. The product version is unchanged across releases in a day, so
         # without this an operator cannot tell two copies of one product version apart when
-        # update actually landed.
+        # checking whether an update actually landed.
         'StudioHubBuild': str(commit)[:7],
+        # The app talks plain HTTP to its own Hub and, on the fleet pages, to controllers on the
+        # LAN and the tailnet. App Transport Security blocks plain HTTP to anything that is not
+        # loopback, which is why joining a controller failed with a "secure connection" error
+        # before the request ever reached it. This is a private, token-authenticated LAN tool:
+        # NSAllowsLocalNetworking is the honest declaration, and arbitrary loads also covers the
+        # tailnet's carrier-grade-NAT addresses, which macOS does not treat as local.
+        'NSAppTransportSecurity': {
+            'NSAllowsLocalNetworking': True,
+            'NSAllowsArbitraryLoads': True,
+        },
         # Finder, the Dock and the About panel all read the icon from the bundle. Without this key
         # the file is present and ignored, which is how the app shipped with no icon at all.
         'CFBundleIconFile': 'app-icon',

@@ -346,6 +346,15 @@ struct NativeVersion: Decodable, Equatable {
     }
 }
 
+/// The outcome of a Connection action (join, leave, role change), shown as a banner that stays
+/// until dismissed rather than as a line of small print that is easy to miss.
+struct ConnectionNotice: Identifiable, Equatable {
+    enum Kind: Equatable { case success, failure }
+    let id = UUID()
+    let kind: Kind
+    let text: String
+}
+
 /// The Hub's per-device storage policy and the bytes it currently accounts for.
 ///
 /// `protectedBytes` is the part cleanup must never touch: unfinished work, output whose
@@ -921,6 +930,24 @@ final class NativeWorkspaceStore: ObservableObject {
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
     @Published private(set) var fleetNote: String?
+    /// The last thing the Connections page did, kept on screen until it is dismissed.
+    ///
+    /// A single small grey line was too easy to miss: the owner pressed Join several times
+    /// before noticing that a failure had been reported at all, and a join is exactly the
+    /// moment a person needs to read the answer. Success and failure both land here.
+    @Published private(set) var connectionNotice: ConnectionNotice?
+
+    func dismissConnectionNotice() { connectionNotice = nil }
+
+    /// Record the outcome of a connection action.
+    ///
+    /// `fleetNote` stays the plain record of the last fleet result - the native contract tests
+    /// read it, and the startup re-join writes it directly - while the banner beside it carries
+    /// the severity the UI colours and keeps on screen.
+    private func note(_ kind: ConnectionNotice.Kind, _ text: String) {
+        connectionNotice = ConnectionNotice(kind: kind, text: text)
+        fleetNote = text
+    }
     /// A note about a file the app had to set aside at startup, or a part of a refresh that could
     /// not be read. Shown with the other messages rather than failing silently.
     @Published private(set) var startupNote: String?
@@ -2593,9 +2620,20 @@ final class NativeWorkspaceStore: ObservableObject {
             // The note names the role the way the picker does, and reports the Hub's answer
             // rather than the operator's request.
             let applied = role == "agent" ? "Node" : role.capitalized
-            roleNote = "This Mac is now a \(applied)."
+            let guidance = role == "agent"
+                ? " It joins a controller from this Mac's own Connections page."
+                : (role == "controller"
+                   ? " Give GatewayKH this Mac's address and Fleet token on its Fleet page to send it work."
+                   : "")
+            note(.success, "This Mac is now a \(applied)." + guidance)
             error = nil
-        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Change this Mac's role") } }
+        } catch {
+            if connectionID == requestConnection {
+                let message = Self.actionable(error, action: "Change this Mac's role")
+                note(.failure, message)
+                self.error = message
+            }
+        }
     }
 
     /// Read the nodes that have joined this Mac, and their live state.
@@ -2674,7 +2712,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     joiningFleet = false
                 }
             }
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard connectionID == requestConnection,
                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard let http = response as? HTTPURLResponse else {
@@ -2690,18 +2728,39 @@ final class NativeWorkspaceStore: ObservableObject {
                 //
                 // Registration first, adoption second: the controller has to accept the node before
                 // the node stops accepting its own credential.
-                do { try await adoptClusterCredential(secret) }
-                catch { if startupAttemptID != nil { throw error } }
+                do {
+                    try await adoptClusterCredential(secret)
+                } catch {
+                    // A join without adoption is not a working join: the controller has this Mac
+                    // on its roster and then gets 401 from it, which reads as "unreachable" with
+                    // no explanation. A startup retry may try again quietly, but a person who
+                    // pressed Join must be told.
+                    if startupAttemptID != nil { throw error }
+                    let message = "The controller accepted this Mac, but taking on its Fleet "
+                        + "token failed, so the controller cannot send it work yet. "
+                        + Self.actionable(error, action: "Adopt the controller's token")
+                    note(.failure, message)
+                    self.error = message
+                    return false
+                }
             }
             guard connectionID == requestConnection,
                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard (200..<300).contains(http.statusCode) else {
-                throw NativeAPIError.message(http.statusCode == 401
-                    ? "The controller refused this Mac's join: check its Hub token."
-                    : "The controller refused the join (\(http.statusCode)).")
+                // Quote the controller's own reason when it gives one - "studio modality must be
+                // one of [...]" is far more use than "refused (400)".
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let reason = (body?["detail"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                throw NativeAPIError.message(reason.isEmpty
+                    ? (http.statusCode == 401
+                        ? "The controller refused this Mac's join (401). Use the controller's Fleet token, not its Hub token."
+                        : "The controller refused the join (\(http.statusCode)).")
+                    : "The controller refused this Mac's join: \(reason)")
             }
             controllerAddress = "\(target.host ?? ""):\(target.port ?? 0)"
-            fleetNote = "Joined the controller at \(controllerAddress)."
+            note(.success, "Joined the controller at \(controllerAddress). "
+                 + "This Mac can now be sent work by it.")
             error = nil
             // Remember it, so this Mac's services can re-join by themselves after a restart
             // instead of waiting for someone to retype an address that may have changed.
@@ -2715,7 +2774,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 // gets a line to read, not a modal failure over a machine that is fine.
                 fleetNote = "Could not reach the controller at \(address): \(error.localizedDescription)"
             } else {
-                self.error = Self.actionable(error, action: "Join the controller")
+                // Both the app-wide line and the Connections banner: the line is the global
+                // signal that something failed, the banner is where the detail and the fix live.
+                let message = Self.actionable(error, action: "Join the controller")
+                note(.failure, message)
+                self.error = message
             }
             return false
         }
@@ -2827,7 +2890,7 @@ final class NativeWorkspaceStore: ObservableObject {
             controllerAddress = ""
             onControllerJoined?(nil)
             await refreshConnection()
-            fleetNote = "This Mac has left the group and now runs on its own credential." + controllerNote
+            note(.success, "This Mac has left the group and now runs on its own credential." + controllerNote)
             error = nil
         } catch {
             guard connectionID == requestConnection else { return }

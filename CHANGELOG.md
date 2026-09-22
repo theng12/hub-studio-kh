@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.40 — 2026-09-22 · joining a controller works, and says so when it does not
+
+- **Joining a controller was blocked by App Transport Security.** The bundle declared no
+  ATS exception, so macOS refused every plain-HTTP request to an address that was not
+  loopback - which is precisely the controller address a node is given. The failure
+  surfaced as a "secure connection" error that named neither the address nor the token.
+  The bundle now declares `NSAllowsLocalNetworking` and `NSAllowsArbitraryLoads`, which is
+  the honest declaration for a token-authenticated tool reached over the LAN and tailnet.
+- **A refused join quotes the controller's own reason.** The response body's `detail` is
+  now read and shown ("studio modality must be one of [...]") instead of "refused (400)",
+  and the 401 text names the **Fleet** token rather than the Hub token.
+- **A join whose credential adoption failed no longer reports success.** Registration and
+  adoption are two steps. A failed adoption left the controller with this Mac on its
+  roster and 401 from it, while the app said "Joined"; a manual join now fails loudly.
+- **The result of a join, leave or role change is a banner that stays until dismissed** -
+  full sentence, selectable, at the top of Connections and inline in the join form. It was
+  a line of small grey print that the owner did not notice until the third attempt.
+- **Connections states the group explicitly** ("Joined to <address>" / "On its own"),
+  which the role picker alone did not answer.
+- Two further "Hub token" references in the app were corrected to the Fleet token.
+
 ## 0.6.39 — 2026-09-22 · the controller/node link works; placement follows the fleet
 
 - **A node could not join a controller at all.** The app offers every worker it runs,
