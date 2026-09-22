@@ -1462,3 +1462,13 @@ jobs).
 `ffe3315`, `development_build:false`); the installed app was brought to the same
 build and answers healthy with both music models cached. The older `b4db781` DMG was
 moved to `_trash/dist/` rather than deleted.
+
+[MEASURED] Owner decision (2026-09-22): the **controller may discard an uncertain
+job on a node**, because the Hub/controller is the thing that must be able to free a
+node whose worker outcome is unknown. Added
+`POST /api/hub/jobs/{batch_id}/items/{index}/discard` to the fleet allowlist
+(`components/hub/backend/auth.py`) with the decision recorded in the comment; the
+node's own operator can still discard locally. Covered by
+`tests/test_fleet_credentials.py` (allowed-path list). Subtitle needs no equivalent:
+transcription uncertain items already self-heal via `recover_stale_uncertain` and do
+not reserve a machine. Fleet + hub + proxy suites: 140 passed, 124 subtests.

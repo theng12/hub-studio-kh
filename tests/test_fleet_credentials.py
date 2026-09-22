@@ -58,6 +58,8 @@ class FleetPermissionTests(unittest.TestCase):
             ("GET", "/api/hub/jobs/abc123/items/0/artifact"),
             ("POST", "/api/hub/jobs/abc123/items/0/ack"),
             ("POST", "/api/hub/jobs/abc123/items/0/reconcile"),
+            # The controller may release a node by discarding an uncertain attempt.
+            ("POST", "/api/hub/jobs/abc123/items/0/discard"),
             ("POST", "/api/hub/transcription/jobs"),
             ("GET", "/api/hub/transcription/jobs"),
             ("GET", "/api/hub/transcription/jobs/batch-1"),

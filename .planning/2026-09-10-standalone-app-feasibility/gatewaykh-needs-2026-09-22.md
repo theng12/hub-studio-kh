@@ -13,11 +13,10 @@ GatewayKH source at `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
    me which.
 2. **Scope.** All five items below, or a subset? My order of value is 1 → 2 → 3 →
    4 → 5.
-3. **One Hub-side policy question.** The Hub's "discard an uncertain job" route is
-   **operator-only**; the fleet/token allowlist deliberately excludes it. So a
-   controller cannot release a node's machine. Do you want the controller to have
-   that power? If yes, it is a small, explicit allowlist change on the Hub side and
-   I should make it deliberately rather than by accident.
+3. **One Hub-side policy question — answered.** The Hub's "discard an uncertain
+   job" route is now **allowed for the controller** (owner decision 2026-09-22), so a
+   controller can release a node whose worker outcome is unknown. The node's own
+   operator can still discard locally. Nothing further is needed here.
 
 ## The prompt to paste into the GatewayKH project
 
@@ -41,7 +40,10 @@ GatewayKH source at `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
 >    only call `store.cancel(job_id)`. Also issue `DELETE /api/hub/jobs/{batch_id}`
 >    (or `DELETE /api/hub/transcription/jobs/{batch_id}`) and record what the Hub
 >    answered. Cancellation after dispatch must not be reported as a remote stop
->    unless the Hub confirmed it.
+>    unless the Hub confirmed it. If the item then settles `uncertain`, the controller
+>    may release the node with `POST /api/hub/jobs/{batch_id}/items/{index}/discard`
+>    (allowed for the controller as of 2026-09-22; it clears the worker identity so
+>    the node's machine is no longer reserved).
 > 3. **Add Music as a first-class modality.** Map engine `music-mlx` → `music` in
 >    discovery, accept `modality: "music"` in `Backend.generate`, and register the
 >    capability. Two models are available:
@@ -86,4 +88,5 @@ GatewayKH source at `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
 | Shared voices | `POST /api/hub/shared-voices?wait=true` (admin token) |
 
 Auth is `X-Hub-Token`. Remote work uses the Fleet/dispatch credential; shared-voice
-administration uses the admin token. The discard route is operator-only today.
+administration uses the admin token. The discard route is allowed for the controller
+(owner decision 2026-09-22) as well as locally.

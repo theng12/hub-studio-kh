@@ -36,11 +36,12 @@ machine checks re-run at the end rather than quoted from earlier.
    ACE-Step run (cold load ~3 min + 600 s at ~2× realtime) is ~23 min, so it should
    not overlap a live job; a much slower Mac could, which is why it is configurable.
 
-4. **Discard is operator-only.** The fleet-token allowlist deliberately excludes
-   the discard route, so a remote controller cannot release a node's machine — only
-   the node's own operator can. That is a least-privilege choice, but it is a real
-   gap for a controller that wants to free a node it sent work to, and it is listed
-   in the GatewayKH request.
+4. **Discard was operator-only; the owner changed that.** The fleet allowlist
+   originally excluded the discard route, so a controller could not release a node's
+   machine. On the owner's decision (2026-09-22) the controller **may** now discard
+   an uncertain attempt on a node it sent work to; the node's own operator can still
+   do it locally. The allowlist change is explicit and covered by
+   `tests/test_fleet_credentials.py`.
 
 5. **VoxCPM2 without a saved transcript clones with lower fidelity.** It now works
    offline (empty `ref_text` avoids mlx-audio's undeclared STT model) but the trade

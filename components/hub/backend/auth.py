@@ -451,7 +451,7 @@ FLEET_ALLOWED = (
     ("POST", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
     ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
-    # Jobs: submit, watch, collect, acknowledge, reconcile, cancel.
+    # Jobs: submit, watch, collect, acknowledge, reconcile, discard, cancel.
     ("POST", r"^/api/hub/jobs$"),
     ("GET", r"^/api/hub/jobs$"),
     ("GET", r"^/api/hub/jobs/[^/]+$"),
@@ -459,6 +459,10 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/jobs/[^/]+/items/[0-9]+/artifact$"),
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/ack$"),
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/reconcile$"),
+    # Owner decision 2026-09-22: the controller may release a node's machine by discarding an
+    # uncertain attempt it sent there. The node's own operator can still do it locally; without
+    # this the controller could not free a node whose worker outcome is unknown.
+    ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/discard$"),
     ("POST", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),
