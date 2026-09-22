@@ -1,6 +1,6 @@
 # Studio Hub KH — the Macs that run the models
 
-**Version 0.6.41** (build `7c713ac`).
+**Version 0.6.42** (build `a39d2b7`).
 
 This folder is the whole Studio Hub kit: the app, the model library, your saved voices,
 and the two installers. Everything here is meant to be copied to each Mac as-is.
@@ -39,7 +39,7 @@ what you should see.
    **Local services ready**.
 
 The app shows its version and build at the bottom of the window — for example
-`0.6.41 · 7c713ac`. That is how you tell whether an update landed.
+`0.6.42 · a39d2b7`. That is how you tell whether an update landed.
 
 ## Setting up a controller
 
@@ -55,7 +55,7 @@ The Hub's port is fixed at **47873** so a node can name this Mac again after a r
 ## Joining a Mac to a controller
 
 On the **joining** Mac's own app: **Connections → Join a controller**, then enter the
-controller's address (`<tailscale-ip>:47873`) and the **controller's Fleet token**. The
+controller's address (`100.x.y.z`, or a name like `mac.tailnet.ts.net` - the port is optional) and the **controller's Fleet token**. The
 controller's Fleet overview will then show whether this Mac is reachable.
 
 ## The two tokens — which is which

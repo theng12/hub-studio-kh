@@ -1793,3 +1793,27 @@ incoming-connection prompt on the **controller** Mac. Because the app is ad-hoc 
 macOS may treat each new build as a new app and ask again - so an update can require the
 grant a second time. I still have not exercised the native app joining a real controller
 over a non-loopback address; that remains the untested path.
+
+[MEASURED] Owner asked why the join needs an address guard at all, and asked for "paste
+the IP + port and the token". The guard was real and stricter than it needed to be: it
+demanded a numeric IPv4 **and** an explicit port, so a MagicDNS name
+(`mac.tailnet.ts.net`) was refused outright and `100.64.0.5` without `:47873` was
+refused too. Released as **0.6.42** (build `a39d2b7`):
+
+- the **port is optional** - the Hub's port is fixed, so 47873 is assumed;
+- a **name is accepted** (MagicDNS, `.local`), with or without `http://` and with or
+  without a port;
+- the safety property is unchanged in substance: a name is **resolved first** and refused
+  unless every address it resolves to is private or Tailscale, so this Mac still cannot be
+  pointed at an arbitrary host on the internet. `getaddrinfo` helpers added
+  (`ipv4`, `isPrivate`, `resolvedIPv4`).
+
+The contract test that treated a missing port as an error was corrected to test the real
+intent (a public address is refused; a private one without a port is accepted and defaults
+to 47873). All four drives at **0.6.42 / a39d2b7**, `NSLocalNetworkUsageDescription`
+present, kit readmes updated, `dist/StudioHub-0.6.42-a39d2b7.dmg`.
+
+[GATE] The two failures the owner hit are **different problems**, and only the second was
+the guard: (1) the macOS local-network refusal, fixed in 0.6.41 and needing the operator to
+grant the prompt; (2) the address format, fixed here. Neither is proven by me end to end -
+the native app joining a real controller over a non-loopback address is still untested.
