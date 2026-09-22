@@ -339,7 +339,7 @@ struct NativeVersion: Decodable, Equatable {
     let build: String?
     let source: String
 
-    /// "0.6.38 · 1d6582f", or just the version when the build is not reported.
+    /// "0.6.39 · 22e3539", or just the version when the build is not reported.
     var display: String {
         guard let build, !build.isEmpty else { return version }
         return "\(version) · \(build)"
