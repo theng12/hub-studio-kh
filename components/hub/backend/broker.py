@@ -406,39 +406,26 @@ def _studio_total_memory_gb(studio: dict) -> float:
     return total if total > 0 else float("inf")
 
 
-# Apple chip generation out of the marketing brand string ("Apple M4 Pro").
-_CHIP_GENERATION = re.compile(r"\bM([1-9])\b")
+def _known_memory_gb(studio: dict) -> float | None:
+    """Total memory when it is known, else None, so an unmeasured machine can sort last.
 
-
-def _studio_speed_score(studio: dict) -> float:
-    """Fastest-first ranking for image workers. A PROXY, not a measurement.
-
-    Nothing in the fleet measures image throughput: Image Studio's /api/health
-    publishes readiness and memory, never seconds-per-image. The one existing
-    speed signal, Render Studio's ``render_score``, is itself this same proxy
-    (``generation * 100 + memory_gb``), so this mirrors its shape rather than
-    inventing a scale.
-
-    Chip generation dominates and is therefore weighted far above RAM. The
-    owner's measured figures: M4/16 GB ~50-60 s/image, M2/8 GB ~90 s,
-    M1/8 GB ~110-120 s — a 1.6-2.1x spread that RAM alone does not explain,
-    since an M2/16 and an M4/16 have equal memory and unequal throughput.
-
-    Replace this whole function the day Image Studio reports a real
-    seconds-per-image figure in health; until then the proxy stands.
-
-    This ranks only. It never admits or excludes: the memory floor still comes
-    from the model's ``min_unified_memory_gb`` via _memory_gate(), and a worker
-    with no hardware telemetry scores 0, sorts last, and stays eligible.
+    `_studio_total_memory_gb` answers infinity for unknown telemetry, which is right for a
+    floor but wrong for a ranking: it would make an unmeasured Mac the *best* audio candidate.
     """
-    host = _host_for_studio(studio) or {}
-    match = _CHIP_GENERATION.search(str(host.get("chip") or "").upper())
-    generation = int(match.group(1)) if match else 0
-    try:
-        memory_gb = max(0.0, float(host.get("total_gb") or 0.0))
-    except (TypeError, ValueError):
-        memory_gb = 0.0
-    return generation * 100 + memory_gb
+    memory = _studio_total_memory_gb(studio)
+    return None if memory == float("inf") else memory
+
+
+def _audio_placement_key(studio: dict) -> tuple[int, float, str]:
+    """High-memory first, for audio and video. A machine with no telemetry sorts last."""
+    memory = _known_memory_gb(studio)
+    return (0 if memory is not None else 1, -(memory or 0.0), studio["id"])
+
+
+def _flexible_placement_key(studio: dict) -> tuple[int, float, str]:
+    """Smallest capable machine first, for image and subtitle. Unknown telemetry sorts last."""
+    memory = _known_memory_gb(studio)
+    return (0 if memory is not None else 1, memory or 0.0, studio["id"])
 
 
 def _batch_memory_constraint_gb(batch: dict) -> float:
@@ -2558,36 +2545,19 @@ def _eligible_studios(modality: str, routing: str) -> list[dict]:
                    .get("render_score", 0)),
             s["id"],
         ))
-    elif modality == "image":
-        # Fastest-free-worker placement. Image work is the fleet's slowest
-        # per-item class and the spread between machines is large, so sending
-        # an image to the smallest free Mac cost 1.6-2.1x the wall clock for
-        # no remaining benefit — see _studio_speed_score() for the figures.
+    elif modality in {"voice", "music", "video"}:
+        # Audio and video belong on the high-memory machines. This fleet is many 8 GB Macs and
+        # a few 16 GB+ ones: the small Macs render images but cannot hold these models, so the
+        # largest capable machine takes the work and image and subtitle stay off it.
         #
-        # This deliberately reverses the best-fit rule below. Best-fit existed
-        # to keep high-memory workers free for audio without reserving them;
-        # 2.11.0 replaced that with audio taking the next free capable worker
-        # outright, so best-fit became a tax on every image for a benefit
-        # already delivered elsewhere.
-        #
-        # Preference only, never a filter: every healthy worker stays in the
-        # list, so a slow Mac still takes the job when it is the only one free.
-        out.sort(key=lambda studio: (-_studio_speed_score(studio), studio["id"]))
+        # A preference only, never a filter: the model's own memory floor already excludes a
+        # machine that cannot run it, and every healthy capable worker remains in the list.
+        out.sort(key=_audio_placement_key)
     else:
-        # Audio (and video) keep best-fit placement, unchanged. Audio must
-        # never gain a preference for high-memory machines — the owner measured
-        # 24 GB as *slower* for TTS — so any Mac clearing the model's declared
-        # floor is an equal audio candidate and the fastest-first rule above is
-        # deliberately image-scoped rather than global.
-        #
-        # Best-fit also still fills an idle small Mac before a large one for a
-        # flexible workload, while every larger worker remains an eligible
-        # fallback when demand exceeds the smaller tier's capacity. Unknown
-        # telemetry sorts last but is not blocked; the worker's own admission
-        # guard remains authoritative.
-        out.sort(key=lambda studio: (
-            _studio_total_memory_gb(studio), studio["id"],
-        ))
+        # Image and subtitle prefer the smallest capable machine, which keeps the high-memory
+        # Macs free for audio. Unknown telemetry sorts last rather than first, so an unmeasured
+        # Mac is not preferred by accident. Preference only; the fallback order is intact.
+        out.sort(key=_flexible_placement_key)
     return out
 
 
