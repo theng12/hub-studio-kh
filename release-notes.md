@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.46 — 2026-09-23
+
+### The sidebar tells you what this Mac is doing
+
+Under the sidebar there is now a pill showing whether this Mac is a **Controller**, a **Node** or
+**Standalone**, with a dot that is green when its group is answering. Below it you can see how
+many of each generator this Mac is offering - images, voice, subtitles and music - followed by
+whether its services are up, and the version you are running.
+
+### The Connections page keeps showing whether you are connected
+
+Joining used to leave only a message at the top of the page, so if you were looking at the join
+form you could not tell whether it had worked. There is now a standing line beside the form: a
+coloured dot, "Connected" or "Joined, but not answering", and the controller's own reply. The
+result of a join is coloured too, instead of grey for both success and failure.
+
 ## 0.6.45 — 2026-09-23
 
 ### Joining a controller over Tailscale

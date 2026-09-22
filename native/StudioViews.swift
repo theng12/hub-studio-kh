@@ -575,10 +575,39 @@ struct StudioContent: View {
             }
             .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom) {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: connected ? "checkmark.circle.fill" : "circle").foregroundStyle(connected ? Color.green : Color.secondary)
-                    Text(studio.status).font(.caption).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 6) {
+                    // The working mode, as a pill. One glance answers "what is this Mac doing?" -
+                    // Controller, Node or Standalone - with the dot beside it saying whether the
+                    // group it belongs to is actually answering.
+                    HStack(spacing: 6) {
+                        Text(roleTitle(workspace.controllerIdentity?.settings.role))
+                            .font(.caption).fontWeight(.semibold)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(modeTint.opacity(0.18), in: Capsule())
+                            .overlay(Capsule().stroke(modeTint.opacity(0.55)))
+                        if workspace.controllerReachable != nil {
+                            Circle().fill(connectionStateTint).frame(width: 7, height: 7)
+                                .help(workspace.controllerHealthNote ?? "")
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    // What this Mac can actually take: one count per kind of generator it is
+                    // running, so a worker that failed to start is visible here.
+                    if !generatorSummary.isEmpty {
+                        Text(generatorSummary)
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: connected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(connected ? Color.green : Color.secondary)
+                        Text(studio.status).font(.caption).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    Text("Studio Hub \(appVersion)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Studio Hub version \(appVersion)")
                 }.padding(16)
             }
             // Not a fixed width: a fixed column cannot give anything back, so when the window is
@@ -613,25 +642,9 @@ struct StudioContent: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
-            // The version lives in the lower-right corner of the page, where an operator can always
-            // see which build they are on without opening Settings - the first question when an old
-            // app is still running. What's New is reachable from the sidebar, so it is not repeated
-            // here.
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 12) {
-                    Spacer(minLength: 0)
-                    Text("Studio Hub \(appVersion)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Studio Hub version \(appVersion)")
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(.bar)
-            }
-            // The page itself may still be wider than a very narrow window; scrolling beats
-            // clipping, because everything stays reachable.
+            // The version used to sit in the page's lower-right corner. It now lives with the rest
+            // of the status, under the sidebar, so everything an operator needs to identify this
+            // Mac - mode, what it offers, whether it is up, which build - is in one place.
             .clipped()
         }
         // A floor that matches the window's own minimum, not the sum of every column: the
@@ -2809,7 +2822,12 @@ struct StudioContent: View {
             Divider()
             joinController
         }
-        .task(id: connected) { if connected { await workspace.refreshFleetNodes() } }
+        .task(id: connected) {
+            if connected {
+                await workspace.refreshFleetNodes()
+                await workspace.refreshControllerHealth()
+            }
+        }
     }
 
     /// Every Mac in the fleet, one row each: is it there, what can it run, how fast, how full.
@@ -2951,6 +2969,25 @@ struct StudioContent: View {
     @ViewBuilder private var joinController: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Join a controller").font(.headline)
+            // Where this Mac stands, right here rather than only in a banner at the top of the
+            // page. The owner joined successfully and could not tell: the result was a line of
+            // grey text that looked the same whether it had worked or not.
+            HStack(alignment: .top, spacing: 8) {
+                Circle()
+                    .fill(connectionStateTint)
+                    .frame(width: 10, height: 10)
+                    .padding(.top, 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(connectionStateTitle).font(.callout).fontWeight(.semibold)
+                    Text(workspace.controllerHealthNote ?? "Checking the controller…")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(connectionStateTint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             Text("Enter the controller's address and its Fleet token — not its Hub token. On the controller Mac, open Connections and copy the Fleet token from there.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("The address is the controller's Tailscale or LAN address; the port is optional and assumed to be 47873. `http://` is optional too.")
@@ -2995,9 +3032,14 @@ struct StudioContent: View {
             Text("Neither the address nor the token can contain a space, so pasted spaces and newlines are removed for you. The token is shown so you can check what you pasted.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Kept inline as well as in the banner at the top: this is the spot the operator is
-            // looking at the moment they press Join, so the answer belongs here too.
+            // looking at the moment they press Join, so the answer belongs here too - and it is
+            // coloured, because a success and a failure used to read identically in grey.
             if let note = workspace.fleetNote {
-                Text(note).font(.callout).foregroundStyle(.secondary)
+                Text(note)
+                    .font(.callout)
+                    .foregroundStyle(workspace.connectionNotice?.kind == .failure ? Color.orange : Color.green)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -3023,6 +3065,40 @@ struct StudioContent: View {
         }
         let address = workspace.controllerAddress.trimmingCharacters(in: .whitespaces)
         return address.isEmpty ? "Joined to a controller" : "Joined to \(address)"
+    }
+
+    /// Green when this Mac is joined and the controller answers, amber when it is joined but not
+    /// answering, grey when it is simply on its own. One dot, so the state is readable at a glance
+    /// without hunting for a sentence.
+    private var connectionStateTint: Color {
+        guard let reachable = workspace.controllerReachable else { return .secondary }
+        return reachable ? .green : .orange
+    }
+
+    private var connectionStateTitle: String {
+        guard let reachable = workspace.controllerReachable else { return "Not joined to a controller" }
+        return reachable ? "Connected" : "Joined, but not answering"
+    }
+
+    /// The colour of the mode pill: a controller is blue, a node takes the connection's colour, and
+    /// a Mac on its own stays quiet.
+    private var modeTint: Color {
+        switch workspace.controllerIdentity?.settings.role {
+        case "controller": return .blue
+        case "agent": return workspace.controllerReachable == true ? .green : .orange
+        default: return .secondary
+        }
+    }
+
+    /// "Image 1 · Voice 1 · Subtitle 1 · Music 1" - what this Mac is offering, in the app's order.
+    private var generatorSummary: String {
+        let order = [("image", "Image"), ("voice", "Voice"),
+                     ("transcription", "Subtitle"), ("music", "Music")]
+        let parts = order.compactMap { key, label -> String? in
+            guard let count = workspace.workerCounts[key], count > 0 else { return nil }
+            return "\(label) \(count)"
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func roleExplanation(_ role: String?) -> String {

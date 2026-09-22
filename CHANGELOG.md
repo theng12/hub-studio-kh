@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.46 — 2026-09-23 · the sidebar says what this Mac is and what it offers
+
+- **A mode pill in the sidebar** - Controller, Node or Standalone - with a dot that is green when
+  the group it belongs to answers, amber when it does not, grey when it is on its own.
+- **The sidebar footer now holds the whole status**: the mode, how many of each generator this
+  Mac is running (`Image 1 · Voice 1 · Subtitle 1 · Music 1`), the local-services line, and the
+  version and build. The version moved here from the page's lower-right corner so an operator
+  has one place to read this Mac's state.
+- **The Connections page keeps a standing connection state** beside the join form - a coloured
+  dot with "Connected" or "Joined, but not answering" and the controller's own answer - instead
+  of only a banner at the top of a page the operator may have scrolled past.
+- **The inline join result is coloured** (green or amber) rather than grey, because a success and
+  a failure used to read identically.
+
 ## 0.6.45 — 2026-09-23 · the ATS keys were cancelling each other out
 
 - **Joining a controller over Tailscale answered `code -1022`** ("...requires the use of a

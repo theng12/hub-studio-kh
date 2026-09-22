@@ -915,6 +915,14 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var fleetOverview: NativeFleetOverview?
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
+    /// How many workers of each modality this Mac is offering, for the status area. A Mac that
+    /// runs one of each is normal; the count is here because a worker that failed to start is the
+    /// difference between "this Mac can take that work" and "it cannot".
+    @Published private(set) var workerCounts: [String: Int] = [:]
+    /// Whether the controller this Mac joined is answering, and a sentence saying so. Kept as
+    /// state, not as a transient note, so the Connections page always has something to read.
+    @Published private(set) var controllerReachable: Bool?
+    @Published private(set) var controllerHealthNote: String?
     /// What this Mac needs to re-join its controller by itself: the address it was told, this
     /// Mac's own fleet credential (which, after joining, *is* the controller's), and the networks
     /// it is reachable on. Set by the app from its saved preferences once the Hub is ready.
@@ -2765,6 +2773,9 @@ final class NativeWorkspaceStore: ObservableObject {
             // Remember it, so this Mac's services can re-join by themselves after a restart
             // instead of waiting for someone to retype an address that may have changed.
             onControllerJoined?(controllerAddress)
+            // Show the standing answer straight away, rather than leaving the operator to work
+            // out from a transient note whether the join took.
+            await refreshControllerHealth()
             return true
         } catch {
             guard connectionID == requestConnection,
@@ -3025,8 +3036,61 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// Read the Hub's own role and identity, plus the version it reports.
+    /// Ask the controller this Mac joined whether it is answering, and keep that answer visible.
+    ///
+    /// The result of a join used to exist only as a banner at the top of the page, so an operator
+    /// sitting at the join form had nothing to read: they had to scroll away from where they were
+    /// working to find out whether they were connected. This is the standing answer, refreshed
+    /// whenever the page is opened or a join or leave finishes.
+    func refreshControllerHealth() async {
+        let address = controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else {
+            controllerReachable = nil
+            controllerHealthNote = "Not joined to a controller."
+            return
+        }
+        guard let target = try? Self.privateHTTPAddress(address) else {
+            controllerReachable = false
+            controllerHealthNote = "Joined to \(address), but that address cannot be used now."
+            return
+        }
+        var request = URLRequest(url: target.appendingPathComponent("api/health"))
+        request.timeoutInterval = 8
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            let body = (String(data: data, encoding: .utf8) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if (200..<300).contains(http.statusCode) {
+                controllerReachable = true
+                controllerHealthNote = "Joined to \(address) and connected. \(body.prefix(140))"
+            } else {
+                controllerReachable = false
+                controllerHealthNote = "Joined to \(address), but it answered HTTP \(http.statusCode)."
+            }
+        } catch {
+            controllerReachable = false
+            controllerHealthNote = "Joined to \(address), but it is not answering now. "
+                + Self.describe(error)
+        }
+    }
+
+    /// Read which workers this Mac is running, counted by modality.
+    func refreshWorkerCounts() async {
+        guard connectionID != nil else { return }
+        do {
+            let response: HubWorkersResponse = try await get(["api", "hub", "workers"])
+            var counts: [String: Int] = [:]
+            for worker in response.workers { counts[worker.modality, default: 0] += 1 }
+            workerCounts = counts
+        } catch {
+            // A label, not an alarm: leave the last known counts rather than blanking them.
+        }
+    }
+
     func refreshConnection() async {
         guard let requestConnection = connectionID else { return }
+        defer { Task { await self.refreshControllerHealth(); await self.refreshWorkerCounts() } }
         do {
             async let identity: NativeControllerIdentity = get(["api", "hub", "controller"])
             async let version: NativeVersion = get(["api", "version"])
