@@ -1358,3 +1358,44 @@ with a complete library and a simple install. Done, verified, no downloads:
    defect. A kit may ship a subset (the app offers the rest as downloads), so this
    is now recorded as `models_not_shipped` and printed as a note (`e666400`).
 5. The node checklist still named 0.5.0; updated to 0.6.38 / b4db781.
+
+## 2026-09-22 — all four SSDs prepared and verified (DeepSeek)
+
+[MEASURED] Owner connected four drives at once (NOVA, UGREEN, ATLAS, ORICO) and
+asked for all four to carry a complete library, with nothing deleted - anything
+displaced moves to a `_trash` folder for the owner to empty.
+
+Final state, verified by each kit's own `Technical/verify-kit.sh`:
+
+| Drive | app | library | verifier |
+|---|---|---|---|
+| KH-STUDIO-NOVA | 0.6.38 / b4db781 | 35/35, 88.9 GB | PASS |
+| KH-STUDIO-UGREEN | 0.6.38 / b4db781 | 35/35, 90.9 GB | PASS |
+| KH-STUDIO-ATLAS | 0.6.38 / b4db781 | 36 installed / 35 advertised, 92.3 GB | PASS |
+| KH-STUDIO-ORICO | 0.6.38 / b4db781 | 36 installed / 35 advertised, 92.3 GB | PASS |
+
+Every library entry is `files_verified` (384-386 files each, checked by size in the
+kit verifier; the app hashes on import and on copy). `identity 0.6.38 b4db781`,
+`development_build: False`, 0 quarantined files, service starts and answers health.
+
+How the full set was assembled, all offline (no downloads):
+- ATLAS and ORICO already carried 33 verified packages (everything but the two
+  music models) plus `f5-tts` (an extra the current catalogue does not list).
+- The 153 GB plain archive on NOVA supplied 16 of the 18 catalogue packages that
+  the 17-package kits lacked - imported with `model_packages.import_folder`, every
+  file hash-checked (`32` imports, `0` failures across NOVA and UGREEN).
+- The two Chatterbox tiers could not come from the archive: its folder had the
+  `Cangjie5_TC.json` bytes (sha `7073fd9d…`) but the manifests also expect a nested
+  `models--ResembleAI--chatterbox/` fragment whose `refs/main` content is
+  `5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18`. ATLAS already had both packages
+  verified, so they were copied from there and registered.
+- The two music packages (ACE-Step 1.5, Stable Audio 3 Medium) came from the
+  owner's `~/StudioHubModels`.
+
+Safety: nothing was deleted. The Pinokio/TerraNash kits on UGREEN, ATLAS and ORICO
+(`studio-mac-bootstrap`, `studio-models`, the TerraNash docs and the fleet marker)
+were moved to `_trash/` on their own volume. NOVA never had them. `My Stuff` and
+`Documents` were not touched, and NOVA's 153 GB plain archive is untouched.
+
+Tooling left behind: `.build/prepare-kit.sh <volume>` prepares any future drive in
+one step (launchers, helper, verifier, app, `_trash` retirement, kit manifest).
