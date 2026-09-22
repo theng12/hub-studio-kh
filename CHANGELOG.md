@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.45 — 2026-09-23 · the ATS keys were cancelling each other out
+
+- **Joining a controller over Tailscale answered `code -1022`** ("...requires the use of a
+  secure connection") against a controller that was up and reachable. 0.6.40 added
+  `NSAllowsLocalNetworking` **and** `NSAllowsArbitraryLoads`; macOS ignores
+  `NSAllowsArbitraryLoads` when a granular key is present, and `NSAllowsLocalNetworking` does
+  not cover the tailnet's `100.64/10` range - the address a node is in fact given. The bundle
+  now declares `NSAllowsArbitraryLoads` **alone**.
+- Worth recording: a standalone URLSession probe cannot be used to test this. Probe bundles
+  with no key, with each key and with both all reached a `100.x.y.z` Hub successfully, so the
+  probe is not subject to the same policy as a launched app. The owner's screenshot is the
+  evidence that the real app was being refused.
+
 ## 0.6.44 — 2026-09-23 · a permission change can no longer stop the app starting
 
 - **The Music runtime identity no longer includes file permissions.** `_tree_digest`

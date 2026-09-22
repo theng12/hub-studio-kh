@@ -305,14 +305,14 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         # without this an operator cannot tell two copies of one product version apart when
         # checking whether an update actually landed.
         'StudioHubBuild': str(commit)[:7],
-        # The app talks plain HTTP to its own Hub and, on the fleet pages, to controllers on the
-        # LAN and the tailnet. App Transport Security blocks plain HTTP to anything that is not
-        # loopback, which is why joining a controller failed with a "secure connection" error
-        # before the request ever reached it. This is a private, token-authenticated LAN tool:
-        # NSAllowsLocalNetworking is the honest declaration, and arbitrary loads also covers the
-        # tailnet's carrier-grade-NAT addresses, which macOS does not treat as local.
+        # App Transport Security blocks plain HTTP to anything that is not loopback. The Hub is
+        # reached over the LAN and the tailnet with a token, so the app needs the broad
+        # exception. It must be declared ALONE: when a granular key is present too, macOS
+        # ignores NSAllowsArbitraryLoads in favour of it, and NSAllowsLocalNetworking does not
+        # cover the tailnet's carrier-grade NAT range - which is exactly the address a node is
+        # given. Shipping both keys produced "requires the use of a secure connection" (code
+        # -1022) against a 100.x.y.z controller that was up and answering.
         'NSAppTransportSecurity': {
-            'NSAllowsLocalNetworking': True,
             'NSAllowsArbitraryLoads': True,
         },
         # Finder, the Dock and the About panel all read the icon from the bundle. Without this key

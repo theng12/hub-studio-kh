@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.45 — 2026-09-23
+
+### Joining a controller over Tailscale
+
+The last version asked macOS for two network permissions at once, and the second quietly
+cancelled the first - so joining a controller at its Tailscale address was refused with a
+message about a secure connection, even though the controller was running and answering. The
+app now asks for the permission it actually needs. If you were stuck at that message, this is
+the fix.
+
 ## 0.6.44 — 2026-09-23
 
 ### A permissions change could stop Studio Hub starting
