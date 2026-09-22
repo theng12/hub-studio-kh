@@ -2703,7 +2703,7 @@ struct StudioContent: View {
             restartNotice
 
             LabeledContent("Listening on", value: listenTitle(studio.configuration.listenHost))
-            Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private.")
+            Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private. A new install starts reachable on its private and Tailscale addresses.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Several addresses at once, because a Mac serving its office LAN and its tailnet is
             // the normal case; loopback is always included by the Hub, so it is never a choice.
@@ -2716,19 +2716,12 @@ struct StudioContent: View {
                         else { hosts.removeAll { $0 == entry.address } }
                         studio.setListenHosts(hosts)
                     }))
-                // Changing where the Hub listens needs a restart, so these are read-only while it
-                // runs. They used to flip and silently revert, which reads as "I just made this
-                // Mac reachable" when nothing happened.
-                .disabled(!studio.canConfigure)
-            }
-            if !studio.canConfigure {
-                Text("Stop the services to change which networks this Mac answers on — a new address only takes effect when the Hub restarts.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // These are editable while the Hub runs: the change is saved and the notice above
+                // offers the restart that applies it, instead of the control refusing to move.
             }
             Toggle("Any address on any network", isOn: Binding(
                 get: { studio.configuration.listenHosts.contains("0.0.0.0") },
                 set: { studio.setListenHosts($0 ? ["0.0.0.0"] : []) }))
-            .disabled(!studio.canConfigure)
             // The port is fixed rather than picked at each start, so an address written down on
             // one Mac still names this one tomorrow. Shown with the address a node types, because
             // that string is the whole handshake.

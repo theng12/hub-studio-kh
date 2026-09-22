@@ -78,6 +78,17 @@ struct LocalAddress: Identifiable, Equatable {
     var title: String {
         isTailscale ? "Tailscale · \(address)" : "\(address) · \(interface)"
     }
+    /// A private address: RFC1918, link-local, or Tailscale's carrier-grade NAT range. Public
+    /// addresses are never chosen by default.
+    var isPrivate: Bool {
+        let parts = address.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        if parts[0] == 10 { return true }
+        if parts[0] == 172, (16...31).contains(parts[1]) { return true }
+        if parts[0] == 192, parts[1] == 168 { return true }
+        if parts[0] == 169, parts[1] == 254 { return true }
+        return isTailscale
+    }
 }
 
 /// The addresses this Mac can be reached at, so the operator picks a real one instead of
@@ -225,6 +236,12 @@ struct ShellConfiguration {
                 recoveryBackoffSeconds = saved.recoveryBackoffSeconds
             }
         }
+        // First run: answer on this Mac's private and Tailscale networks instead of loopback
+        // only. A fresh node was otherwise unreachable until its owner worked out that the Hub
+        // had to be told to listen there - the exact step that stopped it joining a controller.
+        if explicitHost == nil, readPrivateRegularFile(preferencesFile) == nil {
+            listenHost = Self.defaultListenHost()
+        }
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
         if let explicitHost { listenHost = explicitHost }
@@ -237,6 +254,14 @@ struct ShellConfiguration {
             if explicitModels != nil { try Self.requireDirectory(modelsDirectory) }
         }
     }
+    /// The addresses a brand-new install should listen on: every private or Tailscale address
+    /// this Mac currently has. Loopback is always added by the Hub, so it is not listed here, and
+    /// a public address is never included.
+    static func defaultListenHost() -> String {
+        let usable = LocalAddresses.current().filter(\.isPrivate).map(\.address)
+        return usable.isEmpty ? "127.0.0.1" : usable.joined(separator: ",")
+    }
+
     /// The addresses the Hub should listen on: loopback (always added by the Hub itself) plus
     /// whichever of this Mac's addresses the operator picked. A comma-separated list is how a
     /// Mac serves its LAN and its tailnet at once.

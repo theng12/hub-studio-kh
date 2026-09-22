@@ -450,7 +450,6 @@ final class StudioController: ObservableObject {
 
     /// Set every network this Hub should answer on. Loopback is implied and added by the Hub.
     func setListenHosts(_ hosts: [String]) {
-        guard canConfigure else { return }
         let unique = hosts.reduce(into: [String]()) { result, host in
             if !result.contains(host) { result.append(host) }
         }
@@ -462,7 +461,7 @@ final class StudioController: ObservableObject {
     /// Set the port the Hub binds. Fixed rather than chosen by the operating system, because a
     /// node has to be able to name this Mac again after either of them restarts.
     func setPort(_ port: Int) {
-        guard canConfigure, (1024...65535).contains(port), port != configuration.port else { return }
+        guard (1024...65535).contains(port), port != configuration.port else { return }
         configuration.port = port
         saveConfiguration()
         noteRestartNeeded()
@@ -488,10 +487,13 @@ final class StudioController: ObservableObject {
 
     /// Persist a configuration change made from a picker, and say that it needs a restart.
     func saveConfiguration() {
-        guard canConfigure else { return }
         do {
             try configuration.save()
-            fleetNote = "Saved. Restart the services to use this address."
+            // A change made while the services run is remembered and applied at the next start,
+            // and the notice beside the control offers that restart. Refusing the edit outright
+            // was what made the address toggles unusable once the Hub was already up.
+            noteRestartNeeded()
+            fleetNote = "Saved. Restart the services to use this change."
         } catch { failure = error.localizedDescription }
     }
 
