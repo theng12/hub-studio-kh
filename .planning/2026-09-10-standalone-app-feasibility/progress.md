@@ -1492,3 +1492,9 @@ were then verified **from this side** against the running Hub (`639fcf9`) using 
 where the brief still called discard operator-only, so its item 5 deliberately
 leaves reconcile/discard to a human and only names the routes. As of `639fcf9` the
 controller **may** discard. Everything else they reported matches the Hub.
+
+[MEASURED] All four SSDs refreshed from the `b4db781` app they were prepared with to
+the current release `639fcf9` (`prepare-kit.sh` per drive), so they now carry the
+Music-worker hardening and the controller-discard allowance. Each verified:
+build `639fcf9`, fleet-discard route present, **35/35** packages, `verify-kit.sh`
+**PASS**. The owner can share the drives.
