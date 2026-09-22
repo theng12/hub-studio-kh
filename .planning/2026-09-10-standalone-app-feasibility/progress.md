@@ -1722,3 +1722,34 @@ and regenerates the gateway kit's `SHA256SUMS.txt` from whatever is in `installe
 both stay correct when a later DMG replaces the current one. Verified end to end: gateway
 and Story Studio checksums OK and every `verify-kit.sh` **PASS** on all four drives. The
 kit is complete and the drives are safe to eject.
+
+[MEASURED] Owner tried to join a controller from a node and was blocked by a "secure
+connection" error, and reported that role changes and joins gave almost no feedback.
+Three real defects, released as **0.6.40** (build `958e704`):
+
+1. **The join never reached the controller.** The bundle declared **no
+   `NSAppTransportSecurity` key at all**, so macOS refused every plain-HTTP request to an
+   address that was not loopback - exactly the controller address a node is given. The
+   staged plist now declares `NSAllowsLocalNetworking` and `NSAllowsArbitraryLoads`
+   (a private, token-authenticated LAN/tailnet tool), verified present in the built
+   bundle: `ATS=true` on the installed app and on all four drives.
+2. **A failed credential adoption was swallowed on a manual join.**
+   `joinController` caught the adopt error and only rethrew it for a startup attempt, so
+   the app reported "Joined" while the controller held a node that answered 401 to it. A
+   manual join now fails loudly with an explanation.
+3. **Feedback was a line of small grey print.** Join/leave/role outcomes now raise a
+   `ConnectionNotice` rendered as a banner at the top of Connections - icon, full
+   sentence, selectable, dismissed by hand - with the join form keeping its inline note,
+   and the app-wide error line still set for failures. Connections also gained an explicit
+   `Group` row ("Joined to <address>" / "On its own"), and a refused join now quotes the
+   controller's own `detail` instead of "refused (400)".
+
+Two further "Hub token" references were corrected to the Fleet token
+(`StudioViews.swift` node-address line, and the 401 message in `joinController`). Native
+contract tests were updated where the visible-result contract moved to the banner, and
+`tests/test_voice_bundle.py` + `test_release_notes.py` pass (30 passed, 3 skipped).
+
+All four drives refreshed to **0.6.40 / 958e704** with `ATS=true`, every `verify-kit.sh`
+**PASS**, and the kit readmes updated. `.build/prepare-kit.sh` now finds the kit at
+`Video Generation Kit/Studio Hub KH` with the old path as a fallback - the first refresh
+attempt silently found nothing because the restructure had moved it.
