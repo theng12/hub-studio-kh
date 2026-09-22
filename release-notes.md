@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.47 — 2026-09-23
+
+### The sidebar numbers were counting the wrong thing
+
+Under the sidebar, the line that says what this Mac offers was counting its *workers* rather than
+its *models* - and every Mac runs exactly one worker per studio, so it always read "1" even
+beside a voice picker offering eight models. It now counts the models this Mac can actually run,
+so it matches what you see when you open the picker.
+
 ## 0.6.46 — 2026-09-23
 
 ### The sidebar tells you what this Mac is doing

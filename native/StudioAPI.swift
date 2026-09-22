@@ -915,10 +915,6 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var fleetOverview: NativeFleetOverview?
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
-    /// How many workers of each modality this Mac is offering, for the status area. A Mac that
-    /// runs one of each is normal; the count is here because a worker that failed to start is the
-    /// difference between "this Mac can take that work" and "it cannot".
-    @Published private(set) var workerCounts: [String: Int] = [:]
     /// Whether the controller this Mac joined is answering, and a sentence saying so. Kept as
     /// state, not as a transient note, so the Connections page always has something to read.
     @Published private(set) var controllerReachable: Bool?
@@ -3075,22 +3071,9 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    /// Read which workers this Mac is running, counted by modality.
-    func refreshWorkerCounts() async {
-        guard connectionID != nil else { return }
-        do {
-            let response: HubWorkersResponse = try await get(["api", "hub", "workers"])
-            var counts: [String: Int] = [:]
-            for worker in response.workers { counts[worker.modality, default: 0] += 1 }
-            workerCounts = counts
-        } catch {
-            // A label, not an alarm: leave the last known counts rather than blanking them.
-        }
-    }
-
     func refreshConnection() async {
         guard let requestConnection = connectionID else { return }
-        defer { Task { await self.refreshControllerHealth(); await self.refreshWorkerCounts() } }
+        defer { Task { await self.refreshControllerHealth() } }
         do {
             async let identity: NativeControllerIdentity = get(["api", "hub", "controller"])
             async let version: NativeVersion = get(["api", "version"])

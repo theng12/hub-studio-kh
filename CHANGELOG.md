@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.47 — 2026-09-23 · the sidebar counts models, not workers
+
+- The sidebar said `Image 1 · Voice 1 · Subtitle 1 · Music 1` because it counted **workers**, and
+  every Mac runs one worker per studio. Beside a model picker offering eight voice models that
+  read as a bug. It now counts the **models this Mac can run**, with the same filter the pickers
+  use (`function == studio && supported`, and the chosen voice tab for audio), so the sidebar and
+  the picker always agree - `Image 1 · Audio 8 · Subtitle 3 · Music 2`.
+
 ## 0.6.46 — 2026-09-23 · the sidebar says what this Mac is and what it offers
 
 - **A mode pill in the sidebar** - Controller, Node or Standalone - with a dot that is green when

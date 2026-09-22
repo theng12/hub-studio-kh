@@ -3090,13 +3090,18 @@ struct StudioContent: View {
         }
     }
 
-    /// "Image 1 · Voice 1 · Subtitle 1 · Music 1" - what this Mac is offering, in the app's order.
+    /// "Image 1 · Audio 8 · Subtitle 3 · Music 2" - how many models this Mac can run for each
+    /// studio, counted with the same filter the model pickers use, so the sidebar and the picker
+    /// always agree. It counts models, not workers: every Mac runs one worker per studio, so a
+    /// worker count said "1" beside a picker offering eight.
     private var generatorSummary: String {
-        let order = [("image", "Image"), ("voice", "Voice"),
-                     ("transcription", "Subtitle"), ("music", "Music")]
-        let parts = order.compactMap { key, label -> String? in
-            guard let count = workspace.workerCounts[key], count > 0 else { return nil }
-            return "\(label) \(count)"
+        let order: [(StudioFunction, String)] = [(.image, "Image"), (.audio, "Audio"),
+                                                 (.transcription, "Subtitle"), (.music, "Music")]
+        let parts = order.compactMap { function, label -> String? in
+            let count = function == .audio
+                ? workspace.audioModels(for: workspace.audioMode).filter { $0.supported }.count
+                : workspace.models.filter { $0.function == function && $0.supported }.count
+            return count > 0 ? "\(label) \(count)" : nil
         }
         return parts.joined(separator: " · ")
     }
