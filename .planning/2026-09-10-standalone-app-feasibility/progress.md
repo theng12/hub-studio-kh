@@ -1533,3 +1533,18 @@ from **this Mac's** library only, so a controller that lacks a model locally ans
 `409 MODEL_NOT_READY` even when a joined node has it. The common case (both Macs carry
 the SSD library) is unaffected, and remote routing works there; whether a controller
 should be able to dispatch a model only a node holds is the owner's call.
+
+[MEASURED] All three connection bugs fixed and re-verified end to end with the live
+two-Hub harness: node joins (`201`, `reachable`), the controller lists
+`node-a:voice/image/subtitle/music`, and `routing:"remote"` completes an **image**
+(1,260,950-byte artifact, ACK 200) and a **music** (1,764,044-byte artifact, ACK 200)
+job on the node; stopping the node reads `unreachable`. Released as `61599f2`:
+`main` pushed, DMG `dist/StudioHub-0.6.38-61599f2.dmg` (checksum valid), installed app
+updated and healthy. Suite: hub cases + jobs + connections + fleet nodes 180 passed.
+
+[GATE] The four SSDs were **disconnected** before their refresh ran: `/Volumes` held
+only Macintosh HD and Recovery, and `diskutil list external` showed no external disk.
+The refresh therefore could not touch them - the paths did not exist, so nothing was
+removed or half-written by it. The drives still hold the models and the `639fcf9`
+app from the previous refresh; they need the same one-command refresh once they are
+plugged back in (`.build/prepare-kit.sh <volume>`, then `verify-kit.sh`).
