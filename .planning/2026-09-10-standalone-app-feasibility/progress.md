@@ -1817,3 +1817,26 @@ present, kit readmes updated, `dist/StudioHub-0.6.42-a39d2b7.dmg`.
 the guard: (1) the macOS local-network refusal, fixed in 0.6.41 and needing the operator to
 grant the prompt; (2) the address format, fixed here. Neither is proven by me end to end -
 the native app joining a real controller over a non-loopback address is still untested.
+
+[MEASURED] Owner reported no local-network prompt appeared and the join still failed, plus
+two concrete input bugs: the token could not be checked because it was masked, and pasting
+an address or token inserted a space or newline ("it goes down a line"). Released as
+**0.6.43** (build `c851bec`):
+
+- the Fleet token is **shown, not masked** (owner's request - it is a LAN credential already
+  in a file on both Macs);
+- **whitespace is stripped as it arrives** in both fields. Copying from a document brings a
+  trailing newline; it landed in the field, displayed as a second line, and made the value
+  wrong without looking wrong - the most likely reason the join failed after the address was
+  sanitised by the guard but never by the field;
+- a **Test** button asks the controller's `/api/health` (no credential) to separate "can this
+  Mac reach it" from "will it accept the token";
+- **network failures carry their code** (-1004 cannot connect, -1009 no network, -1022 ATS,
+  -1200 TLS, -1001 timed out), so the next report can be acted on rather than guessed at.
+
+All four drives at **0.6.43 / c851bec**, readmes updated, `dist/StudioHub-0.6.43-c851bec.dmg`.
+
+[GATE] The owner is turning this Mac into a node to capture the real failure text. Until that
+text arrives, the cause of "no prompt and it still fails" is unknown: candidates are a
+connection the OS never attempted (address rejected), the controller not listening on its
+tailnet address, or a tailnet ACL. The Test button now distinguishes them.

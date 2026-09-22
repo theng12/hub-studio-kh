@@ -1,6 +1,6 @@
 # Studio Hub KH — the Macs that run the models
 
-**Version 0.6.42** (build `a39d2b7`).
+**Version 0.6.43** (build `c851bec`).
 
 This folder is the whole Studio Hub kit: the app, the model library, your saved voices,
 and the two installers. Everything here is meant to be copied to each Mac as-is.
@@ -39,7 +39,7 @@ what you should see.
    **Local services ready**.
 
 The app shows its version and build at the bottom of the window — for example
-`0.6.42 · a39d2b7`. That is how you tell whether an update landed.
+`0.6.43 · c851bec`. That is how you tell whether an update landed.
 
 ## Setting up a controller
 
