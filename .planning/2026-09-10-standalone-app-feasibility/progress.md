@@ -1288,3 +1288,28 @@ reports it `cached`/ready beside SA3.
   it, so mlx-audio never loads its undeclared STT model. The pinned kwargs test was
   updated deliberately.
 - `docs/R08-click-through-checklist.md` written for the owner.
+
+[MEASURED] P0 verification in the installed app (`333f4de`): SA3 generation through
+the Hub moved 0.45 -> 0.8 -> 1.0 progress and wrote a 25.0 s / 44.1 kHz artifact
+(`sa3-2026-09-22/hub-generation-progress.json`); a VoxCPM2 clone staged with **no
+transcript** completed with ACK 200 (`voxcpm2-4bit-no-transcript.json`); the
+276,849,150-byte Hub log rotated to `hub-worker.log.1` on install. Full root suite
+OK (11 skipped).
+
+### Self-review of the P0 changes (owner asked for a self-review)
+1. SA3 progress: the reader thread is a daemon; if a grandchild ever held the pipe
+   open it could outlive the call, bounded by process death. Acceptable.
+2. The stage *label* is not plumbed to the app - the Hub's `_record_worker_progress`
+   copies only `progress`, and the native rows read only that. The bar moves
+   correctly; showing "DiT sampling" too is a small follow-up, not a correctness
+   gap.
+3. Log rotation has no automated native test; it was verified live on install
+   (264 MB -> `.1`, fresh log). A cheap test would need a >32 MB fixture.
+4. The auto-discard window (default 1800 s, env-overridable) is a judgement call.
+   On this Mac a worst case is a ~3 min cold load plus a 600 s render at ~2x
+   realtime (~23 min), so 30 min should not overlap a live job; on a much slower
+   Mac it could, and the value is configurable for that reason.
+5. A VoxCPM2 clone without a transcript now works offline but clones with less
+   fidelity than one with a transcript - the owner's accepted trade.
+6. Fixed a test-only defect found by the full suite: the new SA3 test imported
+   `backend` by bare name and collided with the Voice package under discovery.
