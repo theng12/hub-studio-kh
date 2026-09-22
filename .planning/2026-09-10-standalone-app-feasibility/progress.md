@@ -1753,3 +1753,27 @@ All four drives refreshed to **0.6.40 / 958e704** with `ATS=true`, every `verify
 **PASS**, and the kit readmes updated. `.build/prepare-kit.sh` now finds the kit at
 `Video Generation Kit/Studio Hub KH` with the old path as a fallback - the first refresh
 attempt silently found nothing because the restructure had moved it.
+
+[MEASURED - SELF-CORRECTION] I claimed the join failure was caused by App Transport
+Security. I then tested that claim and it did not hold up, so the claim was corrected in
+the shipped notes rather than left standing.
+
+What was measured with a small URLSession probe in an ad-hoc bundle on this Mac:
+- plain HTTP to this Mac's LAN address (`192.168.18.248`) returned **HTTP 200 with no ATS
+  key at all**, so ATS does not block an RFC1918 address;
+- plain HTTP to a public host (`example.com`) was refused **-1022** ("...requires the use
+  of a secure connection") - the exact wording the owner reported - **including with
+  `NSAllowsArbitraryLoads` set**, which shows a standalone, unsigned probe bundle's plist
+  is not honoured, so the probe could not validate the declaration itself.
+
+Conclusion recorded honestly: the reported message is ATS's wording, and the declared
+exception is the right thing to have (there was none), but the LAN case is not
+reproducible and the **tailnet (`100.64/10`) case is unproven** - this Mac had no tailnet
+address to test against. The two-Mac join over Tailscale is the real proof. 0.6.40 was
+re-released (build `28e4292`) with the notes stating exactly that, on all four drives and
+as `dist/StudioHub-0.6.40-28e4292.dmg`.
+
+[GATE] Still not proven end to end by me: the **native app** joining a **real** controller
+over a non-loopback address. The two-Hub harness drives the Hub's own Python HTTP, which
+is not subject to ATS, and the native contract tests use a stubbed `URLProtocol` and make
+no network request at all. That gap is exactly why this class of bug reached the owner.
