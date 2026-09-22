@@ -75,10 +75,35 @@ for V in "${DRIVES[@]}"; do
     run cp "$from" "$to"
   done
 
-  # Any "install the Studio Hub DMG from installers/" reference now means the sibling kit.
+  # Regenerate the gateway kit's checksums from whatever installers are actually present,
+  # so this stays correct when the gateway DMG is replaced by a later version. The spare
+  # Studio Hub DMG was moved to _trash above, so it no longer appears here.
   GW="$KIT/GatewayKH"
-  if [ -f "$GW/SHA256SUMS.txt" ]; then
-    run sed -i '' -e '/StudioHub-0\.6\.39-12c7d7b\.dmg/d' "$GW/SHA256SUMS.txt"
+  if [ -d "$GW/installers" ]; then
+    echo "  SHA256SUMS.txt regenerated from installers/"
+    run bash -c "cd '$GW' && shasum -a 256 installers/*.dmg content-shelf-manifest-*.tsv > SHA256SUMS.txt"
   fi
+
+  # A checksum beside each loose installer, computed from the copy that is actually on the
+  # drive, so a reader can prove the drive did not corrupt it. `shasum -c` reads the last
+  # line and ignores the leading '#' notes.
+  for pair in "Story Studio:Story Studio KH 1.4.219-arm64.dmg"; do
+    dir="${pair%%:*}"; file="${pair#*:}"
+    target="$KIT/$dir/$file"
+    [ -f "$target" ] || continue
+    echo "  SHA256.txt -> $dir/"
+    if [ "$DRY" = "1" ]; then
+      echo "  DRY: write $KIT/$dir/SHA256.txt"
+      continue
+    fi
+    hash=$(shasum -a 256 "$target" | awk '{print $1}')
+    bytes=$(stat -f%z "$target")
+    {
+      printf '# %s - installer checksum\n' "$file"
+      printf '# %s bytes\n' "$bytes"
+      printf '# Verify from this folder with:  shasum -a 256 -c SHA256.txt\n'
+      printf '%s  %s\n' "$hash" "$file"
+    } > "$KIT/$dir/SHA256.txt"
+  done
 done
 echo "done (DRY=$DRY)"

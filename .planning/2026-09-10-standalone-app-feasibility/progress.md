@@ -1713,3 +1713,12 @@ exist yet. That was my error, not theirs. The underlying bug was real and is now
 `menubar/FleetSection.swift` told the reader to join with the Mac's Hub token instead of
 the controller's Fleet token - wording I introduced in the prompt I wrote. Their kit
 guides were already correct; only the app string and their own kit README were wrong.
+
+[MEASURED] `SHA256.txt` added beside the Story Studio installer on all four drives,
+after confirming every copy is byte-identical to Story Studio's own `dist/` DMG
+(242,034,101 bytes, sha256 `5bace953…44ba`); `shasum -a 256 -c SHA256.txt` reports OK on
+each. `packaging/kit-restructure.sh` now writes that file from the copy actually present
+and regenerates the gateway kit's `SHA256SUMS.txt` from whatever is in `installers/`, so
+both stay correct when a later DMG replaces the current one. Verified end to end: gateway
+and Story Studio checksums OK and every `verify-kit.sh` **PASS** on all four drives. The
+kit is complete and the drives are safe to eject.
