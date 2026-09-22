@@ -1620,3 +1620,9 @@ graceful quit to "Studio Hub"/"StudioHub", waits 2s, stages the new copy beside 
 old, verifies the runtime, removes the old (chmod first, refuse to swap unless gone)
 and moves the new one in. It does not force-quit or verify the quit, so a Mac whose
 old process survives needs a manual quit/reopen after step 1. Step 2 is models only.
+
+[MEASURED] All four SSDs reconnected and refreshed to the current build **`e954040`**
+(NOVA, UGREEN and ORICO had been on `1d6582f`/`bceaad4`; ATLAS was already current).
+Each now reports `StudioHubBuild = e954040`, carries the fleet-discard route, keeps
+**35/35** packages (82.8 GiB), and passes `verify-kit.sh`. The drives are ready to
+hand out; an operator can confirm the build by the footer (`0.6.38 · e954040`).
