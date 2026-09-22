@@ -2568,8 +2568,10 @@ struct StudioContent: View {
                 }.disabled(studio.connectionToken == nil)
                 if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
             }
-            Text("This Mac's administrative token. GatewayKH needs it only for shared-voice administration; use the Fleet token for work and results.")
+            Text("This Mac's own key. It is for you, on this Mac, and it never leaves it. Use it to change settings, install or remove models, delete output, and manage shared voices.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Do not give it out. Anyone who holds it can do everything on this Mac. GatewayKH needs it only if it will manage shared voices here — to send work, give out the Fleet token below instead.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Two values, and the difference is the safety property: this one is what a joining Mac
             // adopts and what this Mac then presents back to it. Handing a node the Hub token
             // instead would give every node's owner full authority over this Mac.
@@ -2588,10 +2590,14 @@ struct StudioContent: View {
                         connectionNote = "Fleet token copied"
                     }
                 }.disabled(studio.fleetToken == nil)
-                Text("Give this to GatewayKH for work and results, or to each Mac that joins this controller.")
+                Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Text("It lets this controller send work to a Mac and read the results. It cannot change a Mac's settings, delete its output or manage its models — and a node that holds it cannot administer this Mac.")
+            Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, and read the model and fleet lists.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("In short: the Hub token is this Mac's key, the Fleet token is the work badge for the group. Send work with the Fleet token; keep the Hub token to yourself.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -2905,12 +2911,14 @@ struct StudioContent: View {
     @ViewBuilder private var joinController: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Join a controller").font(.headline)
-            Text("Enter the controller's address and its Fleet token, from Connections on that Mac. This Mac registers with it, takes that token on, and the controller then reports whether this Mac is reachable.")
+            Text("Enter the controller's address, and its Fleet token — not its Hub token. On the controller Mac, open Connections and copy the Fleet token from there.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("This Mac registers with the controller and adopts that token, so the controller can send it work. The controller then reports whether this Mac is reachable.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                TextField("192.168.1.21:8080 or 100.x.y.z:8080", text: $controllerDraft)
+                TextField("100.x.y.z:47873", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                SecureField("Controller token", text: $controllerToken)
+                SecureField("Controller's Fleet token", text: $controllerToken)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
                 Button(workspace.joiningFleet ? "Joining…" : "Join") {
                     Task {
