@@ -1319,3 +1319,10 @@ OK (11 skipped).
 the native save/verify/ACK tests and the real-model receipts, R08 is satisfied.
 The app is stable on the owner's own machines; no signing/notarization is required
 for that distribution per the owner's decision.
+
+[MEASURED] Follow-up polish landed: the worker's `progress_stage` now reaches the
+public job item (`_record_worker_progress` takes a stage; `public_item` passes it
+through) and the app renders `Running — 45% · DiT sampling`. Both music engines
+report stages. Added a native log-rotation test (sparse >32 MB fixture rotates to
+`.1`, a small log does not) and a Hub test for the stage field. Native build exit 0;
+hub cases 119 passed.
