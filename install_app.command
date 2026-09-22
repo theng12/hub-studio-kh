@@ -59,14 +59,16 @@ echo
 echo "  Copying... (this takes a few seconds)"
 # A running copy holds its own files open, and replacing one underneath itself is how an install
 # half-lands - the old process keeps serving from deleted files while the folder on disk changes.
+osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
 osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
 sleep 2
-# Copy beside the target and only swap once the copy is complete and has a runtime in it. This used
-# to delete the installed app first, so cancelling the password prompt - or a copy that failed with
-# the disk full - left the Mac with no Studio Hub at all, and said only "the copy failed".
+# The app ships read-only runtimes, so a plain `rm -rf` of an older install fails with
+# "Permission denied" and leaves the old copy in place - the swap then nests the new app inside it.
+# Make the tree writable first, and refuse to swap unless the old copy is really gone.
 STAGING="$TARGET/.studiohub-incoming"
 rm -rf "$STAGING" 2>/dev/null
-REPLACE="rm -rf '$TARGET/$NAME' && mv '$STAGING' '$TARGET/$NAME'"
+REMOVE_OLD="if [ -e '$TARGET/$NAME' ]; then chmod -R u+w '$TARGET/$NAME' 2>/dev/null || true; rm -rf '$TARGET/$NAME'; fi"
+REPLACE="$REMOVE_OLD && test ! -e '$TARGET/$NAME' && mv '$STAGING' '$TARGET/$NAME'"
 if [ "$NEEDS_ADMIN" = "1" ]; then
   # One administrator prompt, the normal macOS way.
   if ! osascript -e "do shell script \"rm -rf '$STAGING' && /bin/cp -Rp '$APP' '$STAGING' && test -x '$STAGING/Contents/Resources/runtimes/voice/bin/python3' && $REPLACE\" with administrator privileges" 2>/dev/null; then
@@ -95,7 +97,18 @@ else
     read _ || true
     exit 1
   fi
-  rm -rf "$TARGET/$NAME" 2>/dev/null
+  if [ -e "$TARGET/$NAME" ]; then
+    chmod -R u+w "$TARGET/$NAME" 2>/dev/null || true
+    rm -rf "$TARGET/$NAME" 2>/dev/null || true
+  fi
+  if [ -e "$TARGET/$NAME" ]; then
+    echo "  Could not remove the previously installed copy, so nothing was replaced."
+    echo "  Close Studio Hub, then run this file again."
+    echo
+    rm -rf "$STAGING" 2>/dev/null
+    read _ || true
+    exit 1
+  fi
   mv "$STAGING" "$TARGET/$NAME" || {
     echo "  Could not move the new copy into place. The previous app is gone; run this again."
     read _ || true
