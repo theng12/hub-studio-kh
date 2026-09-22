@@ -1573,3 +1573,9 @@ build `61599f2`, the fleet-discard route present, **35/35** packages, 82.8 GiB, 
 three external disks, so NOVA could not be refreshed. It still carries `639fcf9`.
 Plug it in and run `.build/prepare-kit.sh KH-STUDIO-NOVA` (or ask) - the other three
 are already at the current build.
+
+[MEASURED] KH-STUDIO-NOVA reconnected and refreshed `639fcf9` -> **`61599f2`**. Its
+own verifier passes: library **35/35**, 88.9 GB, identity `0.6.38 61599f2`,
+`development_build: False`, 0 quarantined files, service starts and answers health.
+Its 153 GB plain archive is untouched. **All four drives now carry the current build
+and pass** (UGREEN/ATLAS/ORICO were refreshed in the previous pass).
