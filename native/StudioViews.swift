@@ -357,6 +357,16 @@ struct StudioContent: View {
     /// A percentage is drawn only when the Hub actually reported one. A queued or unmeasured job
     /// gets an indeterminate linear bar instead, because a bar pinned at zero reads as "stuck" and
     /// a made-up number is worse than no number.
+    /// "Running — 45% · DiT sampling", or just the percentage when the studio
+    /// reported no phase label of its own.
+    static func runningLabel(_ job: NativeJob) -> String {
+        let percent = Int((min(1, max(0, job.progress)) * 100).rounded())
+        if let stage = job.progressStage, !stage.isEmpty {
+            return "Running — \(percent)% · \(stage)"
+        }
+        return "Running — \(percent)%"
+    }
+
     @ViewBuilder private func jobProgress(_ job: NativeJob) -> some View {
         switch job.state {
         case "queued":
@@ -369,13 +379,14 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: 3) {
                     ProgressView(value: min(1, max(0, job.progress)), total: 1)
                         .tint(stateColor(job.state))
-                    Text("Running — \(Int((min(1, max(0, job.progress)) * 100).rounded()))%")
+                    Text(Self.runningLabel(job))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 HStack(spacing: 8) {
                     ProgressView().progressViewStyle(.linear).frame(width: 140)
-                    Text("Running — progress is not reported by this model")
+                    Text(job.progressStage.map { "Running — \($0)" }
+                         ?? "Running — progress is not reported by this model")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

@@ -344,4 +344,22 @@ let legacy = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", legac
 require(legacy.listenHost == "127.0.0.1", "an older preference file must default to loopback")
 require(legacy.clientHost == "127.0.0.1", "a default configuration must reach its own Hub on loopback")
 
+// The service log must not grow without bound. Rotation moves an oversized log to
+// `.1` and leaves a small one alone. A sparse file keeps the test cheap.
+let rotationLog = temporary.appendingPathComponent("hub-worker.log")
+let rotationFD = open(rotationLog.path, O_WRONLY | O_CREAT, 0o600)
+require(rotationFD >= 0, "the rotation fixture must open")
+require(ftruncate(rotationFD, privateLogRotationBytes + 1) == 0, "the fixture must be oversized")
+close(rotationFD)
+rotatePrivateLogIfNeeded(rotationLog)
+let rotatedLog = temporary.appendingPathComponent("hub-worker.log.1")
+require(FileManager.default.fileExists(atPath: rotatedLog.path),
+        "an oversized service log must rotate to .1")
+require(!FileManager.default.fileExists(atPath: rotationLog.path),
+        "rotation must move the log, not copy it")
+try Data("small".utf8).write(to: rotationLog)
+rotatePrivateLogIfNeeded(rotationLog)
+require(FileManager.default.fileExists(atPath: rotationLog.path),
+        "a small service log must not rotate")
+
 print("Native boundary checks passed")

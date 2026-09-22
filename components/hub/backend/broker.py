@@ -2052,7 +2052,8 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             _record_worker_resource_usage(item, job)
             state = job.get("state")
             if state in ("queued", "running", "cancel_requested"):
-                _record_worker_progress(item, job.get("progress"))
+                _record_worker_progress(item, job.get("progress"),
+                                        job.get("progress_stage"))
                 await asyncio.sleep(POLL_S)
                 continue
             if state == "done" and not job.get("error"):
@@ -2170,7 +2171,8 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             recovery.update(phase="health_wait", reason=f"The original {label} job is still active.",
                             updated_at=time.time())
             item["recovery"] = recovery
-            _record_worker_progress(item, job.get("progress"))
+            _record_worker_progress(item, job.get("progress"),
+                                    job.get("progress_stage"))
             ledger.save_batch(batch)
             return result(False)
         code = str(job.get("error_code") or "")
@@ -2297,7 +2299,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             set_voice_recovery(
                 item, "health_wait", "The original Voice job is still active."
             )
-            _record_worker_progress(item, job.get("progress"))
+            _record_worker_progress(item, job.get("progress"),
+                                    job.get("progress_stage"))
             ledger.save_batch(batch)
             return result(False)
 
@@ -2908,8 +2911,11 @@ def _classify_worker_failure(batch: dict, item: dict, studio: dict,
     return _worker_terminal_error(message, code)
 
 
-def _record_worker_progress(item: dict, progress) -> None:
+def _record_worker_progress(item: dict, progress, stage=None) -> None:
     """Keep a real activity timestamp without treating an unchanged poll as progress."""
+    if isinstance(stage, str) and stage.strip():
+        # The studio's own label for the phase ("DiT sampling"); shown beside the bar.
+        item["progress_stage"] = stage.strip()[:120]
     if not isinstance(progress, (int, float)):
         return
     value = max(0.0, min(1.0, float(progress)))
@@ -3439,7 +3445,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             _record_worker_resource_usage(item, j)
             state = j.get("state")
             if state in ("queued", "running", "cancel_requested"):
-                _record_worker_progress(item, j.get("progress"))
+                _record_worker_progress(item, j.get("progress"), j.get("progress_stage"))
                 item["chunk_index"] = j.get("chunk_index")
                 item["chunk_total"] = j.get("chunk_total")
                 continue

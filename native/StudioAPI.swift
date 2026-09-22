@@ -490,6 +490,8 @@ struct NativeJob: Identifiable, Equatable {
     /// is the length of the media produced.
     var generationSeconds: Double? = nil
     var runningSeconds: Double? = nil
+    /// The studio's own label for the phase it is in ("DiT sampling"), when it reports one.
+    var progressStage: String? = nil
     /// Which item in the batch this row is. Single-item app submissions are always 0, but the
     /// Jobs page can show a batch another client submitted, so the discard route is addressed with
     /// the index the Hub actually reported.
@@ -3368,6 +3370,7 @@ final class NativeWorkspaceStore: ObservableObject {
             durationSeconds: item?.audioDurationS,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
+            progressStage: item?.progressStage,
             itemIndex: item?.index ?? 0)
     }
 
@@ -3993,6 +3996,8 @@ private struct HubJobItem: Decodable {
     /// The item's position in the batch, which is what the discard route is addressed with.
     let index: Int?
     let progress: Double?
+    /// The phase label the studio reported with its progress, when it reports one.
+    let progressStage: String?
     let prompt: String?
     let artifactUrl: String?
     let error: String?
