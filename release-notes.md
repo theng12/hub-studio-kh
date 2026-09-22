@@ -6,11 +6,10 @@ Written to be read by the person using the app. Newest first.
 
 ### Joining a controller actually works now
 
-Joining a Mac to a controller was blocked before the request ever left the Mac: macOS
-refused the app's plain connection to the controller's address and reported it as a
-secure-connection problem, which had nothing to do with your token or the address you
-typed. The app now asks for the permission it needs to talk to your own network and your
-tailnet, so the join reaches the controller.
+Joining a Mac to a controller failed with a message about a secure connection - that is
+macOS refusing a plain connection, and it had nothing to do with the token or the address
+you typed. The app now declares the permission it needs for your own network and your
+tailnet, which is what that message was asking for.
 
 Three things that made the failure hard to read are fixed too. If the controller refuses,
 the app repeats **the controller's own reason** instead of a bare number. If the Mac

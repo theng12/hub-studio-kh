@@ -2,12 +2,14 @@
 
 ## 0.6.40 — 2026-09-22 · joining a controller works, and says so when it does not
 
-- **Joining a controller was blocked by App Transport Security.** The bundle declared no
-  ATS exception, so macOS refused every plain-HTTP request to an address that was not
-  loopback - which is precisely the controller address a node is given. The failure
-  surfaced as a "secure connection" error that named neither the address nor the token.
-  The bundle now declares `NSAllowsLocalNetworking` and `NSAllowsArbitraryLoads`, which is
-  the honest declaration for a token-authenticated tool reached over the LAN and tailnet.
+- **A secure-connection refusal is now covered.** macOS reported the join failure
+  with the text App Transport Security produces (`...requires the use of a secure
+  connection`), so the bundle now declares `NSAllowsLocalNetworking` and
+  `NSAllowsArbitraryLoads` - there was no ATS key at all before. Honest limit: this could
+  not be reproduced against an RFC1918 LAN address (a plain-HTTP request there succeeds
+  with no declaration), and a standalone probe bundle could not validate the declaration
+  itself, so the tailnet (`100.64/10`) case is the one this is expected to fix and the
+  two-Mac run is the proof. Recorded rather than claimed.
 - **A refused join quotes the controller's own reason.** The response body's `detail` is
   now read and shown ("studio modality must be one of [...]") instead of "refused (400)",
   and the 401 text names the **Fleet** token rather than the Hub token.
