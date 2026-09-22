@@ -1606,3 +1606,17 @@ everything, and the default was loopback-only. Two changes, released as `1d6582f
 each verifies **PASS**. DMG `dist/StudioHub-0.6.38-1d6582f.dmg`; installed app
 `1d6582f`. **ATLAS was not mounted** (in use) and still carries `bceaad4`; refresh it
 when it is back.
+
+[MEASURED] Owner could not tell two 0.6.38 copies apart when updating a Mac from a
+drive, so an update could not be confirmed. Released `e954040`: the bundle now carries
+`StudioHubBuild` (the 7-character commit), `/api/version` reports `build`, and the
+footer and Connections "Hub version" show `0.6.38 · <build>`. Verified:
+`_app_build()` returns `e954040`; ATLAS refreshed to `e954040` and verifies **PASS**;
+DMG `dist/StudioHub-0.6.38-e954040.dmg`; installed app `e954040`. NOVA/UGREEN/ORICO
+were not mounted (in transit for distribution) and still carry `1d6582f`/`bceaad4`.
+
+[MEASURED] Installer behaviour confirmed by reading `install_app.command`: it sends a
+graceful quit to "Studio Hub"/"StudioHub", waits 2s, stages the new copy beside the
+old, verifies the runtime, removes the old (chmod first, refuse to swap unless gone)
+and moves the new one in. It does not force-quit or verify the quit, so a Mac whose
+old process survives needs a manual quit/reopen after step 1. Step 2 is models only.
