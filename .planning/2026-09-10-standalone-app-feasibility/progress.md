@@ -1326,3 +1326,35 @@ through) and the app renders `Running — 45% · DiT sampling`. Both music engin
 report stages. Added a native log-rotation test (sparse >32 MB fixture rotates to
 `.1`, a small log does not) and a Hub test for the stage field. Native build exit 0;
 hub cases 119 passed.
+
+## 2026-09-22 — both SSDs prepared (DeepSeek)
+
+[MEASURED] Owner plugged in two SSDs and asked for both to be made self-sufficient
+with a complete library and a simple install. Done, verified, no downloads:
+- **KH-STUDIO-NOVA**: app kit updated to `0.6.38` / `b4db781`, a new app-format
+  `model-library` of **17 packages (48 GB)** added beside the untouched **153 GB
+  plain archive**. Old kit app was 0.5.6.
+- **KH-STUDIO-UGREEN**: app kit updated the same way; its library grew from 15 to
+  **17 packages (50 GB)** with ACE-Step and Stable Audio 3. The legacy Pinokio
+  bootstrap (`studio-mac-bootstrap`, `studio-models`, TerraNash docs) was moved to
+  `.retired-pinokio/` so the standalone kit is the only install path.
+- Both kits now carry the fixed `1 - Install the app.command` and the same saved
+  voices; `focused-release-manifest.json` regenerated on each (version 0.6.38,
+  commit b4db781, 47.7 GiB library, **problems: []**).
+- `Technical/verify-kit.sh` **PASSES on both**: identity 0.6.38 / b4db781,
+  `development_build: False`, 0 quarantined files, service starts and answers
+  health 200.
+
+[MEASURED] Defects found and fixed while preparing the drives:
+1. The installer's `rm -rf` could not remove a read-only installed app, so an
+   update nested the new app inside the old one. Now it chmods, refuses to swap
+   unless the old copy is gone, and quits the app by both names (`0099386`).
+   Tested end to end twice in a throwaway HOME: 59,691 files, no nesting.
+2. `ditto` cannot copy the read-only app (it creates read-only directories then
+   cannot fill them); `rsync -a` can. The SSD copies were redone with rsync.
+3. `.studiohub` on the drives was not owner-only; the app refuses a library whose
+   state directory is not 0700. Fixed to `0700` / `0600`.
+4. `release_kit.py` and `verify-kit.sh` treated "advertises 35, ships 17" as a
+   defect. A kit may ship a subset (the app offers the rest as downloads), so this
+   is now recorded as `models_not_shipped` and printed as a note (`e666400`).
+5. The node checklist still named 0.5.0; updated to 0.6.38 / b4db781.

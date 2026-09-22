@@ -1,6 +1,7 @@
 # Setting up a Mac mini node — the honest checklist
 
-Version being deployed: **0.5.0, build `79ded7f2`**, `development_build: false`.
+Version being deployed: **0.6.38, build `b4db781`**, `development_build: false`,
+with 17 model packages (ACE-Step and Stable Audio 3 included).
 
 ## What I have verified
 
