@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.42 — 2026-09-22 · typing the controller's address, simplified
+
+- **The port is optional.** The Hub's port is fixed, so `100.64.0.5` is now a complete
+  answer and 47873 is assumed. It used to demand `host:port` and refuse the address alone.
+- **A name is accepted**, which is what a tailnet actually gives you:
+  `mac.tailnet.ts.net` or `mac-mini.local` now work, with or without a port and with or
+  without `http://`. The safety property is unchanged in substance - a name is resolved
+  first and refused unless every address it resolves to is private or Tailscale, so this Mac
+  still cannot be pointed at an arbitrary host on the internet.
+- Error messages now say what to type instead of what was wrong with the old format.
+
 ## 0.6.41 — 2026-09-22 · the local-network permission macOS was refusing
 
 - **The real block on joining a controller.** macOS gates **local network** access per app,

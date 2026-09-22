@@ -1096,15 +1096,24 @@ struct NativeAPITests {
 
         // The address typed for a controller is checked before any credential is sent to it.
         for good in ["192.168.1.21:8080", "http://192.168.1.21:8080", "100.101.102.103:8080",
-                     "127.0.0.1:9", "10.0.0.4:9000", "172.16.5.5:8080", "169.254.1.1:8080"] {
+                     "127.0.0.1:9", "10.0.0.4:9000", "172.16.5.5:8080", "169.254.1.1:8080",
+                     // The port is optional: the Hub's port is fixed, so the address on its own
+                     // is a complete answer and the operator should not have to know the number.
+                     "192.168.1.21", "100.101.102.103", "http://100.101.102.103"] {
             _ = try NativeWorkspaceStore.privateHTTPAddress(good)
         }
-        for bad in ["93.184.216.34:80", "http://93.184.216.34:80", "controller.local:8080",
-                    "192.168.1.21", "https://192.168.1.21:8080", "192.168.1.21:8080/jobs",
-                    "192.168.1.21:8080?x=1", "user:pass@192.168.1.21:8080", "8.8.8.8:53"] {
+        let withoutPort = try NativeWorkspaceStore.privateHTTPAddress("192.168.1.21").port
+        require(withoutPort == 47873,
+                "a missing port must fall back to the Hub's fixed port")
+        for bad in ["93.184.216.34:80", "http://93.184.216.34:80",
+                    "https://192.168.1.21:8080", "192.168.1.21:8080/jobs",
+                    "192.168.1.21:8080?x=1", "user:pass@192.168.1.21:8080", "8.8.8.8:53",
+                    // A name is allowed only when it resolves to a private address, so a name
+                    // that cannot be looked up is refused rather than attempted.
+                    "no-such-controller.invalid", ""] {
             do {
                 _ = try NativeWorkspaceStore.privateHTTPAddress(bad)
-                fatalError("a non-private controller address was accepted: \(bad)")
+                fatalError("a controller address that cannot be trusted was accepted: \(bad)")
             } catch {}
         }
 

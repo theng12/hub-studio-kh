@@ -2932,32 +2932,96 @@ final class NativeWorkspaceStore: ObservableObject {
     ///
     /// The controller enforces the same rule on what it stores. Doing it here as well is what
     /// keeps this Mac from being talked into sending its credential somewhere unchecked.
+    /// Turn what a person types into the controller's URL.
+    ///
+    /// Accepts `100.64.0.5:47873`, `100.64.0.5` on its own (the Hub's port is fixed, so the
+    /// port is assumed), an `http://` prefix, and a name such as
+    /// `mac.tailnet.ts.net:47873`. A name is allowed because MagicDNS is the natural thing
+    /// to type on a tailnet; what is refused is an address that is not private - the check
+    /// exists so this Mac is never pointed at an arbitrary host on the internet, and a name is
+    /// held to the same rule by resolving it first.
     static func privateHTTPAddress(_ text: String) throws -> URL {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NativeAPIError.message(
+                "Enter your controller's address, for example 100.64.0.5:47873.")
+        }
         let candidate = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
         guard let components = URLComponents(string: candidate),
-              components.scheme == "http", let host = components.host,
-              let port = components.port, (1...65535).contains(port),
+              components.scheme?.lowercased() == "http",
+              let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil,
               components.query == nil, components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
-            throw NativeAPIError.message("Enter an address like 192.168.1.21:8080.")
+            throw NativeAPIError.message(
+                "Enter an address like 100.64.0.5:47873 - just the address and the port.")
         }
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false).compactMap { Int($0) }
-        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }),
-              let url = URL(string: "http://\(host):\(port)") else {
-            throw NativeAPIError.message("Enter a numeric address, not a name. For example 192.168.1.21:8080.")
+        // The Hub's port is fixed rather than picked per start, so an address on its own is a
+        // complete answer and the operator should not have to know the number.
+        let port = components.port ?? ShellConfiguration.defaultPort
+        guard (1...65535).contains(port), let url = URL(string: "http://\(host):\(port)") else {
+            throw NativeAPIError.message("That port is not a valid number between 1 and 65535.")
         }
+        if let literal = ipv4(host) {
+            guard isPrivate(literal) else {
+                throw NativeAPIError.message("That is not a private or Tailscale address. "
+                    + "Enter your controller's LAN or Tailscale address.")
+            }
+            return url
+        }
+        let resolved = resolvedIPv4(host)
+        guard !resolved.isEmpty else {
+            throw NativeAPIError.message("Could not look up \(host). Check the spelling, or type "
+                + "your controller's Tailscale address instead.")
+        }
+        guard resolved.allSatisfy(isPrivate) else {
+            throw NativeAPIError.message("\(host) resolves to a public address, so it is not a "
+                + "controller on your own network. Use its LAN or Tailscale address.")
+        }
+        return url
+    }
+
+    /// Four decimal octets, or nil when the text is a name rather than an address.
+    private static func ipv4(_ host: String) -> [Int]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let numbers = parts.compactMap { Int($0) }
+        guard numbers.count == 4, numbers.allSatisfy({ (0...255).contains($0) }) else { return nil }
+        return numbers
+    }
+
+    /// Private, link-local, or Tailscale's carrier-grade NAT range.
+    private static func isPrivate(_ parts: [Int]) -> Bool {
         let first = parts[0], second = parts[1]
-        let isPrivate = first == 10 || first == 127
+        return first == 10 || first == 127
             || (first == 192 && second == 168)
             || (first == 172 && (16...31).contains(second))
             || (first == 100 && (64...127).contains(second))
             || (first == 169 && second == 254)
-        guard isPrivate else {
-            throw NativeAPIError.message("That is not a private or Tailscale address. Enter your controller's LAN or Tailscale address.")
+    }
+
+    /// Every IPv4 address a name resolves to, so a name that points at the internet is refused.
+    private static func resolvedIPv4(_ host: String) -> [[Int]] {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let head = result else { return [] }
+        defer { freeaddrinfo(head) }
+        var found: [[Int]] = []
+        var pointer: UnsafeMutablePointer<addrinfo>? = head
+        while let current = pointer {
+            if let address = current.pointee.ai_addr {
+                var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(address, socklen_t(current.pointee.ai_addrlen),
+                               &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0,
+                   let octets = ipv4(String(cString: buffer)), !found.contains(octets) {
+                    found.append(octets)
+                }
+            }
+            pointer = current.pointee.ai_next
         }
-        return url
+        return found
     }
 
     /// Read the Hub's own role and identity, plus the version it reports.

@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.42 — 2026-09-22
+
+### Joining is just: the address and the token
+
+You no longer have to type a port, and you no longer have to know the controller's numeric
+address. Paste what Tailscale gives you - `100.x.y.z`, `mac.tailnet.ts.net`, even
+`mac-mini.local` - with or without `http://`, and the app fills in the Hub's port for you.
+If you do include a port, that is used instead.
+
+The app still refuses an address that is not on your own network. It now works that out by
+looking the name up, rather than by requiring you to type numbers.
+
 ## 0.6.41 — 2026-09-22
 
 ### The real reason a join was refused

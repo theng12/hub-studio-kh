@@ -2951,12 +2951,14 @@ struct StudioContent: View {
     @ViewBuilder private var joinController: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Join a controller").font(.headline)
-            Text("Enter the controller's address, and its Fleet token — not its Hub token. On the controller Mac, open Connections and copy the Fleet token from there.")
+            Text("Enter the controller's address and its Fleet token — not its Hub token. On the controller Mac, open Connections and copy the Fleet token from there.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("The address is the controller's Tailscale or LAN address; the port is optional and assumed to be 47873. `http://` is optional too.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("This Mac registers with the controller and adopts that token, so the controller can send it work. The controller then reports whether this Mac is reachable.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                TextField("100.x.y.z:47873", text: $controllerDraft)
+                TextField("100.x.y.z  ·  or a name like mac.tailnet.ts.net", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
                 SecureField("Controller's Fleet token", text: $controllerToken)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
