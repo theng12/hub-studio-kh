@@ -1270,3 +1270,21 @@ bundle, which broke staging. Both fixed (`47955cc`, `78f29b7`).
 [MEASURED] ACE-Step regression: its engine is untouched, its worker path and
 executor are unchanged, the music/hub/manifest suites pass (152-174), and the app
 reports it `cached`/ready beside SA3.
+
+## 2026-09-22 — P0 stabilisation (DeepSeek)
+
+[MEASURED] Fixes landed in `333f4de` and installed (`6eba1a5` -> `333f4de` build):
+- **SA3 cancel/progress**: the worker parses the vendored CLI's `[N/5]` stage lines
+  through a reader thread. A real run reported 0.10 T5Gemma -> 0.25 conditioning ->
+  0.45 DiT sampling -> 0.80 decoder; a mid-flight cancel settled `cancelled` with no
+  partial file. New `tests/test_music_stable_audio.py` (5 tests).
+- **Log rotation**: `openPrivateLog` rotates at 32 MB keeping one previous file.
+  Verified live on install: the 276,849,150-byte (264 MB) log moved to
+  `hub-worker.log.1` and a fresh log started.
+- **Auto-discard**: the dispatcher sweep discards uncertain attempts silent for
+  more than `STUDIOHUB_UNCERTAIN_DISCARD_SECONDS` (default 1800 s), releasing the
+  Mac; manual Discard still works. Two regression tests.
+- **VoxCPM2 without a transcript**: keeps an empty `ref_text` instead of dropping
+  it, so mlx-audio never loads its undeclared STT model. The pinned kwargs test was
+  updated deliberately.
+- `docs/R08-click-through-checklist.md` written for the owner.
