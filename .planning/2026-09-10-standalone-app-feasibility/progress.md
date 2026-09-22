@@ -1648,3 +1648,11 @@ passed**. All four SSDs refreshed to `22e3539` and verify **PASS**; DMG
 image on a small Mac at 1.6-2.1x the wall clock, and 24 GB as *slower* for TTS. The owner
 chose fleet utilisation over those figures on 2026-09-22; the change is one sort key each
 way if the measurements turn out to matter more.
+
+[MEASURED] Version bumped **0.6.38 -> 0.6.39** (owner asked for the bump; patch, matching
+the 0.6.34-0.6.38 pattern). `VERSION`, a CHANGELOG entry and a release-notes entry were
+written for the connection fixes, the Music/UI/P0 work, the owner's placement policy,
+Tailscale-by-default, the build stamp and the token guidance. Release commit `12c7d7b`:
+DMG `dist/StudioHub-0.6.39-12c7d7b.dmg`, installed app `0.6.39` build `12c7d7b`, and all
+four SSDs refreshed to **0.6.39** with every `verify-kit.sh` **PASS** (35/35 packages).
+No test pinned the version string, so nothing else needed changing.
