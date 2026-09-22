@@ -1840,3 +1840,22 @@ All four drives at **0.6.43 / c851bec**, readmes updated, `dist/StudioHub-0.6.43
 text arrives, the cause of "no prompt and it still fails" is unknown: candidates are a
 connection the OS never attempted (address rejected), the controller not listening on its
 tailnet address, or a tailnet ACL. The Test button now distinguishes them.
+
+[MEASURED] Owner joined a controller successfully after 0.6.45 - the ATS key interaction was
+the real join blocker - then reported that the feedback was still poor: the result was grey
+text that looked the same for success and failure, there was no persistent "connected" state
+where they were working, the version was in the page corner rather than with the status, and
+nothing said what this Mac offers. Released as **0.6.46** (build `67dc188`):
+
+- a **mode pill in the sidebar** (Controller / Node / Standalone) with a dot: green when the
+  group answers, amber when it does not, grey when on its own;
+- the **sidebar footer now holds the whole status** - mode, `Image 1 · Voice 1 · Subtitle 1 ·
+  Music 1` from `/api/hub/workers`, the local-services line, and `Studio Hub 0.6.46 · 67dc188`
+  (the version moved here from the page corner);
+- the **Connections page keeps a standing connection state** beside the join form
+  (`refreshControllerHealth()` against `/api/health`, refreshed on open and after a join), and
+  the inline join result is **coloured** instead of grey.
+
+Local installs now go through `packaging/install_local.sh`, which verifies the build that
+landed and fails loudly: the previous ad-hoc step chained the swap with `|| true`, so a swap
+that never happened looked like success. All four drives at **0.6.46 / 67dc188**.

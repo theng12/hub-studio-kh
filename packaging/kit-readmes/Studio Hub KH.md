@@ -38,7 +38,7 @@ what you should see.
 4. Allow the local-network and incoming-connection prompts, and wait for
    **Local services ready**.
 
-The app shows its version and build at the bottom of the window — for example
+The app shows its mode, what it offers, its services and its version and build under the sidebar — for example
 `0.6.43 · c851bec`. That is how you tell whether an update landed.
 
 ## Setting up a controller
