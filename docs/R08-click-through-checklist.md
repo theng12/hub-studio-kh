@@ -71,6 +71,11 @@ message on screen — that is enough to act on.
       confirmation explains it abandons the attempt.
 - [ ] After discarding, other queued jobs start running (the Mac is released).
 
+## Result
+
+Owner click-through 2026-09-22 on build `333f4de`: **no issues found**
+(the owner reported no failures against this checklist).
+
 ## What to send back
 One line per box that failed, with the studio, the click, and the on-screen
 message. Anything that passed needs no comment.

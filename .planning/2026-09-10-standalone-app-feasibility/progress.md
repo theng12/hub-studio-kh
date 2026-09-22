@@ -1313,3 +1313,9 @@ OK (11 skipped).
    fidelity than one with a transcript - the owner's accepted trade.
 6. Fixed a test-only defect found by the full suite: the new SA3 test imported
    `backend` by bare name and collided with the Voice package under discovery.
+
+[MEASURED] R08 owner click-through: build `333f4de` tested by the owner on
+2026-09-22 and **no issues found** (reported directly). With the layout renders,
+the native save/verify/ACK tests and the real-model receipts, R08 is satisfied.
+The app is stable on the owner's own machines; no signing/notarization is required
+for that distribution per the owner's decision.
