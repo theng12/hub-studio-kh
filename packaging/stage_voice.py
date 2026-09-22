@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MUSIC_ENGINE_REPO = 'ace-step/ACE-Step-1.5'
 MUSIC_ENGINE_REVISION = 'ca1e85fe9430179831e6bc6be790c332190a3866'
 MUSIC_ENGINE_SOURCE_SHA256 = 'a55b4bf166464a690e967b4a31862e39efc6bd954ef0214ac91030d99e97cb33'
-MUSIC_OVERLAY_SHA256 = '5f79f4de4856e370d8984e7fdd86cf418f31f731c5092e923264f03718bcbc3e'
+# The audited 177-file overlay, re-pinned on 2026-09-23 when tree_digest stopped including file
+# permissions. The tree is unchanged; only the algorithm is, so this was re-derived from the
+# same source rather than re-vendored.
+MUSIC_OVERLAY_SHA256 = 'f17b81b9bc9feb8e055c6c76ef6ccb78461c991be3727d59c86959d7361d6a67'
 MUSIC_OVERLAY_PACKAGES = {
     'diskcache': '5.6.3', 'einops': '0.8.2', 'einx': '0.3.0',
     'frozendict': '2.4.7', 'loguru': '0.7.3', 'toml': '0.10.2',
