@@ -1498,3 +1498,38 @@ the current release `639fcf9` (`prepare-kit.sh` per drive), so they now carry th
 Music-worker hardening and the controller-discard allowance. Each verified:
 build `639fcf9`, fleet-discard route present, **35/35** packages, `verify-kit.sh`
 **PASS**. The owner can share the drives.
+
+## 2026-09-22 — controller/node connection tested; three real bugs (DeepSeek)
+
+[MEASURED] Built a two-real-Hub harness (`.build/fleet-remote-test.py`) that starts a
+controller and a node with the installed app, joins the node through the same routes
+the Connections UI uses, and forces work with `routing:"remote"`. Findings:
+
+1. **A node could not join at all.** The app reports every local worker, including
+   `music`, and `fleet_nodes.NODE_MODALITIES` still held only
+   `image/voice/transcription`, so `POST /api/hub/fleet/nodes` answered **400**
+   ("studio modality must be one of ['image','transcription','voice']"). No current
+   app could connect to a controller. Fixed by adding `music`; covered by
+   `test_a_node_may_offer_music`.
+2. **A joined node never entered the dispatch registry.** `StudioMonitor.reload_registry()`
+   had **no callers**, so the controller kept the startup registry: the node read as
+   `reachable` in Fleet but `monitor.registry` never listed its studios, and no work
+   could route to it until a restart. The join and leave routes now reload; covered
+   by `test_a_joined_node_enters_the_registry_without_a_restart`.
+3. **Every remote image/music attempt failed to reconcile.** `_validate_*_worker_job`
+   compared the worker's own `machine_id` against the item's `machine`, which for a
+   remote studio is the **node id** (`node-a`) the Hub routes through - they can never
+   be equal, so recovery returned False and the item was fenced `uncertain` ("could not
+   be reconciled"). The remote path now skips that one comparison (revisions and
+   worker_id are still checked); covered by `tests/hub_regression/cases/test_remote_worker_identity.py`.
+
+[MEASURED] After fixes 1-2 the controller lists `node-a:voice/image/subtitle/music`
+and `routing:"remote"` sends an image and a music job to the node
+(`machine: node-a`). Node-down reads `unreachable`. Suites: hub cases + jobs +
+connections + fleet nodes **180 passed**.
+
+[GATE] One design gap left open: the submit gate (`_model_state`) judges readiness
+from **this Mac's** library only, so a controller that lacks a model locally answers
+`409 MODEL_NOT_READY` even when a joined node has it. The common case (both Macs carry
+the SSD library) is unaffected, and remote routing works there; whether a controller
+should be able to dispatch a model only a node holds is the owner's call.

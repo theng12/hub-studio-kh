@@ -2826,7 +2826,7 @@ struct StudioContent: View {
                         ? nil : "machine:\(machine.machine)"
                 }
                 .disabled(!connected)
-                .help("Send new Image, Voice and Subtitle work to this Mac until you clear the pin.")
+                .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
             }
             if let detail = machine.detail {
                 Text(detail).font(.caption).foregroundStyle(.secondary)

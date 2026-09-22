@@ -98,8 +98,10 @@ def validate_address(value: object) -> str:
 
 
 # The modalities a node may offer. A controller dispatches by modality, so this is the only
-# vocabulary the fleet routing understands.
-NODE_MODALITIES = {"image", "voice", "transcription"}
+# vocabulary the fleet routing understands. Music joined the app on 2026-09-22; while it was
+# missing here, a node reporting its Music worker was refused outright at join time, so no
+# current build could connect to a controller at all.
+NODE_MODALITIES = {"image", "voice", "transcription", "music"}
 
 
 def _studios(value: object) -> list[dict[str, str]]:

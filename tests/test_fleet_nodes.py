@@ -128,6 +128,19 @@ class RemoteStudioTests(unittest.TestCase):
         self.assertEqual(url, "http://192.168.1.21:47873/studio/image/api/generate/txt2img")
         self.assertIn("X-Hub-Token", headers)
 
+    def test_a_node_may_offer_music(self) -> None:
+        """Every current app runs Music, so refusing that modality blocks the whole join."""
+        from components.hub.backend import peers
+        fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                          "address": "http://192.168.1.21:47873",
+                          "studios": [{"id": "image", "modality": "image"},
+                                      {"id": "music", "modality": "music"}]})
+        entries = {entry["modality"]: entry for entry in fleet_nodes.remote_studios()}
+        self.assertIn("music", entries)
+        url, _ = peers.studio_request(entries["music"], "/api/generate/txt2music")
+        self.assertEqual(url,
+                         "http://192.168.1.21:47873/studio/music/api/generate/txt2music")
+
 
 class FleetNodeStoreTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -869,6 +869,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             node = fleet.join(body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        # A node that just joined has to enter this controller's dispatch registry now.
+        # The registry is otherwise loaded once at startup, so without this the node was
+        # listed as reachable but no work routed to it until the Hub was restarted.
+        monitor.reload_registry()
         return {"node": node}
 
     @app.delete("/api/hub/fleet/nodes/{node_id}")
@@ -876,6 +880,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet
         if not fleet.leave(node_id):
             raise HTTPException(404, "unknown node")
+        monitor.reload_registry()
         return {"ok": True}
 
     # ── machine memory policy ──────────────────────────────────────────────

@@ -1949,7 +1949,8 @@ def _validate_voice_worker_job(item: dict, job: object, *,
             )
 
 
-def _validate_image_worker_job(item: dict, job: object) -> None:
+def _validate_image_worker_job(item: dict, job: object, *,
+                               remote: bool = False) -> None:
     """Reject a changed Image identity or a completion without a PNG receipt."""
     if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
         raise ValueError("Image worker status did not match the accepted job ID")
@@ -1960,6 +1961,11 @@ def _validate_image_worker_job(item: dict, job: object) -> None:
                             ("runtime_revision", item.get("runtime_revision")),
                             ("worker_id", item.get("worker_id")),
                             ("machine_id", item.get("machine"))):
+        # A remote worker reports its own local machine id, while the Hub stores the node
+        # id it routes through - the two are expected to differ, so only a local worker's
+        # machine identity is a change worth failing on.
+        if remote and field == "machine_id":
+            continue
         if accepted is not None and job.get(field) != accepted:
             raise ValueError(f"Image worker status changed its {field}")
     if state == "done" and not job.get("error"):
@@ -1976,7 +1982,8 @@ def _validate_image_worker_job(item: dict, job: object) -> None:
             raise ValueError("Image worker completion lacks a final PNG receipt")
 
 
-def _validate_music_worker_job(item: dict, job: object) -> None:
+def _validate_music_worker_job(item: dict, job: object, *,
+                               remote: bool = False) -> None:
     """Reject a changed Music identity or a completion without a WAV receipt."""
     if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
         raise ValueError("Music worker status did not match the accepted job ID")
@@ -1987,6 +1994,10 @@ def _validate_music_worker_job(item: dict, job: object) -> None:
                             ("runtime_revision", item.get("runtime_revision")),
                             ("worker_id", item.get("worker_id")),
                             ("machine_id", item.get("machine"))):
+        # See _validate_image_worker_job: a remote worker's own machine id is not the
+        # node id the Hub routes through.
+        if remote and field == "machine_id":
+            continue
         if accepted is not None and job.get(field) != accepted:
             raise ValueError(f"Music worker status changed its {field}")
     if state == "done" and not job.get("error"):
@@ -2003,11 +2014,12 @@ def _validate_music_worker_job(item: dict, job: object) -> None:
             raise ValueError("Music worker completion lacks a final WAV receipt")
 
 
-def _validate_durable_worker_job(modality: str, item: dict, job: object) -> None:
+def _validate_durable_worker_job(modality: str, item: dict, job: object, *,
+                                 remote: bool = False) -> None:
     if modality == "image":
-        _validate_image_worker_job(item, job)
+        _validate_image_worker_job(item, job, remote=remote)
     elif modality == "music":
-        _validate_music_worker_job(item, job)
+        _validate_music_worker_job(item, job, remote=remote)
 
 
 async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
@@ -2045,7 +2057,9 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 if not isinstance(job, dict) or job.get("id") != job_id:
                     return False
                 if b.get("modality") in DURABLE_ASYNC_MODALITIES:
-                    _validate_durable_worker_job(b["modality"], item, job)
+                    _validate_durable_worker_job(
+                        b["modality"], item, job,
+                        remote=not peers.is_local_studio(studio))
             if _voice_recovery_owns(item):
                 return False
             _persist_worker_execution_started_at(b, item, job)

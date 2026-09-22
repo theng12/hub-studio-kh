@@ -204,7 +204,7 @@ def prune_machine_metadata(known_machines: set[str]) -> None:
 # Studio Hub intentionally tracks only the production worker products. The
 # packaged Hub gets its complete local registry from its owner-only worker
 # manifest, so it never guesses a Pinokio checkout or fixed service port.
-TRACKED_MODALITIES = ("image", "voice", "transcription")
+TRACKED_MODALITIES = ("image", "voice", "transcription", "music")
 
 # The tracked sibling studios and their fixed family ports. `app` is the Pinokio
 # launcher folder name under PINOKIO_HOME/api — used by lifecycle control

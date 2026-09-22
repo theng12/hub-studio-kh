@@ -339,6 +339,34 @@ class IndependentClientTests(unittest.TestCase):
         _, listing, _ = self.hub.request("/api/hub/fleet/nodes", token=self.token)
         self.assertEqual(listing["summary"]["total"], 0)
 
+    def test_a_joined_node_enters_the_registry_without_a_restart(self) -> None:
+        """A node's studios must be routable the moment it joins, not after a restart.
+
+        The registry is loaded once at startup, so without an explicit reload a freshly
+        joined node was listed as reachable while no work was ever sent to it.
+        """
+        joined = {"node_id": "studio-9", "name": "Studio 9",
+                  "address": "http://127.0.0.1:9",
+                  "studios": [{"id": "music", "modality": "music"},
+                              {"id": "image", "modality": "image"}]}
+        status, payload, _ = self.hub.post_json("/api/hub/fleet/nodes", joined,
+                                                token=self.token)
+        self.assertEqual(status, 201, payload)
+        status, workers, _ = self.hub.request("/api/hub/workers", token=self.token)
+        self.assertEqual(status, 200)
+        remote = {row["id"]: row for row in workers["workers"]
+                  if row.get("machine") == "studio-9"}
+        self.assertEqual(set(remote), {"studio-9:image", "studio-9:music"})
+        self.assertEqual(remote["studio-9:music"]["modality"], "music")
+
+        # Leaving takes it straight back out of the registry too.
+        status, _, _ = self.hub.request("/api/hub/fleet/nodes/studio-9", method="DELETE",
+                                        token=self.token)
+        self.assertEqual(status, 200)
+        _, workers, _ = self.hub.request("/api/hub/workers", token=self.token)
+        self.assertFalse([row for row in workers["workers"]
+                          if row.get("machine") == "studio-9"])
+
     def test_a_fleet_credential_can_work_but_not_own_the_mac(self) -> None:
         """The credential a controller is given must be narrower than the Hub's own."""
         fleet_file = self.hub.data / ".fleet_token"
