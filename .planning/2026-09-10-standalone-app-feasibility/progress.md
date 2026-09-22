@@ -1777,3 +1777,19 @@ as `dist/StudioHub-0.6.40-28e4292.dmg`.
 over a non-loopback address. The two-Hub harness drives the Hub's own Python HTTP, which
 is not subject to ATS, and the native contract tests use a stubbed `URLProtocol` and make
 no network request at all. That gap is exactly why this class of bug reached the owner.
+
+[MEASURED] The ATS declaration did **not** fix the owner's join refusal, and the second
+report ("still the same error about security") identified the real cause: this Mac runs
+**macOS 27**, which gates **local network** access per app, separately from ATS. The bundle
+declared nothing for it, so macOS refused the connection instead of prompting. Released as
+**0.6.41** (build `7c713ac`): `NSLocalNetworkUsageDescription` is now in the plist, so the
+system prompt appears and the app can be enabled under System Settings > Privacy &
+Security > Local Network. ATS keys kept. All four drives at **0.6.41 / 7c713ac** with the
+key present; kit readmes updated; `dist/StudioHub-0.6.41-7c713ac.dmg`.
+
+[GATE] Two things the owner must do or confirm, neither of which I can do for them: grant
+the Local Network prompt (or switch the app on in that settings pane), and allow the
+incoming-connection prompt on the **controller** Mac. Because the app is ad-hoc signed,
+macOS may treat each new build as a new app and ask again - so an update can require the
+grant a second time. I still have not exercised the native app joining a real controller
+over a non-loopback address; that remains the untested path.
