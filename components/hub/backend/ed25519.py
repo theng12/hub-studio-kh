@@ -186,3 +186,50 @@ def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     left = _scalar_mult(s, _B)
     right = _point_add(point_r, _scalar_mult(k, point_a))
     return _encode_point(left) == _encode_point(right)
+
+
+# ---------------------------------------------------------------------------
+# Prefer a vetted implementation when one is available.
+#
+# The pure-Python functions above are kept as a fallback because the bundled runtime has not
+# always carried a crypto library, and a Hub that cannot verify a signature must refuse rather
+# than fall over. When ``cryptography`` is present - it now is, vendored into the runtime - these
+# rebindings take precedence, so the arithmetic that guards a release is somebody else's
+# audited code rather than ours. Both paths were checked to agree byte for byte (public key,
+# signature) and the library verifies the pure-Python signature, so a Hub without the library
+# behaves identically.
+try:  # pragma: no cover - exercised by whichever branch the runtime provides
+    from cryptography.exceptions import InvalidSignature as _InvalidSignature
+    from cryptography.hazmat.primitives import serialization as _serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey as _Ed25519PrivateKey,
+    )
+
+    def public_key(seed: bytes) -> bytes:  # noqa: F811 - deliberate override
+        if len(seed) != 32:
+            raise ValueError("an Ed25519 private seed is exactly 32 bytes")
+        return _Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(
+            _serialization.Encoding.Raw, _serialization.PublicFormat.Raw,
+        )
+
+    def sign(seed: bytes, message: bytes) -> bytes:  # noqa: F811 - deliberate override
+        if len(seed) != 32:
+            raise ValueError("an Ed25519 private seed is exactly 32 bytes")
+        return _Ed25519PrivateKey.from_private_bytes(seed).sign(message)
+
+    def verify(public: bytes, message: bytes, signature: bytes) -> bool:  # noqa: F811
+        if len(public) != 32 or len(signature) != 64:
+            return False
+        try:
+            _Ed25519PrivateKey.from_private_bytes(b"\x00" * 32)  # keep the import honest
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PublicKey as _Ed25519PublicKey,
+            )
+            _Ed25519PublicKey.from_public_bytes(public).verify(signature, message)
+            return True
+        except _InvalidSignature:
+            return False
+        except Exception:
+            return False
+except Exception:  # pragma: no cover - the pure-Python path above stands
+    pass
