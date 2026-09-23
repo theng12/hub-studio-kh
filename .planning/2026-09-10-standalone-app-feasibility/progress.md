@@ -1868,3 +1868,24 @@ Track A (components-only patch, 1.7 MB of Hub Python, restart only) and Track B
 rollback, report). Trust is the hard part and is why signing should come first; three open
 questions are listed there for the owner (controller or GatewayKH as publisher; whether
 Track A is worth it; signing before or after).
+
+[MEASURED] GatewayKH verified 0.6.49 against a running Hub (not a checkout) and wired it:
+machines_flat carries limitation_code/reason/since/affects verbatim; the Issues list groups by
+(sentence, code, reason) and names all of it while the Hub's sentence stays verbatim; the
+Machines tab shows the phrase and code with the sentence in the tooltip and "—" for a
+fully-reporting machine. Their live check matches ours (machine ready, 15 done, no code), the
+activity warnings are gone from the Fleet page, and their suites pass (35 fleet-routing with 2
+new, 546/546 e2e, 35 console). Their revision: 823608d.
+
+[OWNER/PEER DECISION 2026-09-23] The two questions this Hub asked are answered and the
+boundary closed:
+- **`fleet_activity.machines[]` stays scoped to the image and voice studios.** Not needed to
+  widen: every Mac on this fleet runs image and voice, so no machine is missing a row. Revisit
+  only if a Music-only or Subtitle-only Mac is added, because widening changes what a machine
+  row means for state and performance. This matches the "honest boundary" note shipped in the
+  0.6.49 changelog.
+- **`next_attempt_at` / `eta_seconds` stay as null keys** rather than being omitted. The
+  gateway does not read them, and a null key is more self-describing than an absent one.
+
+The capacity/worker/model-health contract and its addendum are therefore complete on both
+sides. Hub 0.6.49 (build 124a5ce) is the version that carries it.
