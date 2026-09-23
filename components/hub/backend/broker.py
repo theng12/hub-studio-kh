@@ -33,7 +33,7 @@ from pathlib import Path
 import httpx
 
 from . import (artifact_metadata, cloud_guard, execution_assets,
-               execution_identity, ledger, peers, shared_voices)
+               execution_identity, ledger, model_ids, peers, shared_voices)
 from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
 from .peers import studio_request
@@ -1336,6 +1336,27 @@ def _recent_avg(modality: str, model: str, limit: int = 50) -> float | None:
     return round(sum(durs) / len(durs), 1) if durs else None
 
 
+def item_errors(b: dict) -> list[dict]:
+    """The failed items only, as ``{item_index, code, message}``.
+
+    An item that is fine contributes nothing, so an empty list is the honest
+    answer for a healthy batch.  Missing detail stays null rather than being
+    invented.
+    """
+    rows: list[dict] = []
+    for item in b.get("items") or []:
+        if item.get("state") != "error":
+            continue
+        code = item.get("error_code")
+        message = item.get("error")
+        rows.append({
+            "item_index": item.get("index"),
+            "code": (_sanitize_public_error_code(code) if code else None),
+            "message": (_sanitize_public_error(message) if message else None),
+        })
+    return rows
+
+
 def batch_summary(b: dict) -> dict:
     items = b["items"]
     states = [i["state"] for i in items]
@@ -1396,6 +1417,11 @@ def batch_summary(b: dict) -> dict:
     no_progress_s = round(max(0, now - last_activity_at), 1) if active else None
     return {
         "id": b["id"], "modality": b["modality"], "model": b["model"],
+        # model_id: the canonical manifest id, so /api/hub/models and
+        # /api/hub/jobs can be joined on one string. The stored model key is
+        # preserved unchanged.
+        "model_id": model_ids.canonical(b.get("model")),
+        "errors": item_errors(b),
         "created_at": b["created_at"], "finished_at": b.get("finished_at"),
         "cancelled": b["cancelled"],
         "routing": b.get("routing", "pool"),
@@ -2398,6 +2424,54 @@ def discard_uncertain_item(batch_id: str, item_index: int, *,
     ledger.save_batch(batch)
     _wakeup.set()
     return {"ok": True, "batch_id": batch_id, "item_index": item_index}
+
+
+def retry_failed_item(batch_id: str, item_index: int) -> dict:
+    """Put one failed item back in the queue for the dispatcher to run again.
+
+    Only an item whose last attempt ended in ``error`` can be retried: a queued,
+    running or done item is not a failed attempt, and an ``uncertain`` item may
+    still have a worker producing a result, so its outcome has to be discarded
+    before it can be retried.  The item's prompt and params are preserved
+    untouched; only the failed attempt's bookkeeping is cleared.
+    """
+    batch = batches.get(batch_id) or ledger.load_batch(batch_id)
+    if batch is None:
+        raise ValueError("unknown batch")
+    if batch.get("cancelled"):
+        raise ValueError("batch is cancelled")
+    item = next((row for row in batch.get("items", [])
+                 if row.get("index") == item_index), None)
+    if item is None:
+        raise ValueError("unknown job item")
+    state = str(item.get("state") or "")
+    if state == "uncertain":
+        raise ValueError(
+            "item is uncertain and must be discarded before it can be retried"
+        )
+    if state != "error":
+        raise ValueError(
+            f"item is not in a failed state (state is {state or 'unknown'})"
+        )
+    item["state"] = "queued"
+    item["tries"] = 0
+    item["retry_at"] = None
+    for field in ("error", "error_code", "finished_at", "studio", "studio_job_id",
+                  "worker_id", "worker_artifact_url", "machine", "recovery",
+                  "model_revision", "runtime_revision", "worker_accepted_params",
+                  "cancel_signal_sent_at", "cancel_error", "artifact_path",
+                  "artifact_url", "asset_id", "progress", "progress_stage",
+                  "last_progress_at"):
+        item.pop(field, None)
+    batch["finished_at"] = None
+    batch["done_notified"] = False
+    batches[batch_id] = batch
+    ledger.save_batch(batch)
+    _wakeup.set()
+    return {
+        "ok": True, "batch_id": batch_id, "item_index": item_index,
+        "state": "queued",
+    }
 
 
 # An uncertain attempt reserves its Mac because it may still be running. That is

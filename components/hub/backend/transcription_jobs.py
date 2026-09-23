@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx
 from fastapi import HTTPException, UploadFile
 
-from . import broker, execution_identity, ledger, model_exposure, peers
+from . import broker, execution_identity, ledger, model_exposure, model_ids, peers
 from . import routing as routing_rule
 from .peers import studio_request
 from .registry import DATA_DIR, machine_enabled, studio_enabled
@@ -457,6 +457,26 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
 TERMINAL_STATUSES = frozenset({"done", "error", "cancelled", "partial", "uncertain"})
 
 
+def item_errors(batch: dict) -> list[dict]:
+    """The failed items only, as ``{item_index, code, message}``.
+
+    A healthy item contributes nothing, so an empty list is the honest answer.
+    Missing detail stays null rather than being invented.
+    """
+    rows: list[dict] = []
+    for item in batch.get("items") or []:
+        if item.get("state") != "error":
+            continue
+        code = item.get("error_code")
+        message = item.get("error")
+        rows.append({
+            "item_index": item.get("index"),
+            "code": (str(code)[:128] if isinstance(code, str) and code else None),
+            "message": (str(message)[:1000] if isinstance(message, str) else None),
+        })
+    return rows
+
+
 def summary(batch: dict, include_items: bool = True,
             include_metadata: bool = False) -> dict:
     states = [item["state"] for item in batch["items"]]
@@ -478,7 +498,13 @@ def summary(batch: dict, include_items: bool = True,
     out = {
         "id": batch["id"], "status": status, "label": batch.get("label"),
         "project": batch.get("project"), "episode": batch.get("episode"),
-        "model": batch["model"], "language": batch.get("language"),
+        "model": batch["model"],
+        # model_id: the canonical manifest id, so /api/hub/models and
+        # /api/hub/transcription/jobs can be joined on one string. The stored
+        # model key is preserved unchanged.
+        "model_id": model_ids.canonical(batch.get("model")),
+        "errors": item_errors(batch),
+        "language": batch.get("language"),
         "word_timestamps": batch.get("word_timestamps", False),
         "created_at": batch["created_at"], "updated_at": batch.get("updated_at"),
         "finished_at": batch.get("finished_at"), "total": len(states), **counts,
@@ -1152,6 +1178,50 @@ def retry_batch(batch_id: str) -> tuple[dict | None, int]:
         _save(batch)
         _wakeup.set()
     return batch, retried
+
+
+def retry_failed_item(batch_id: str, item_index: int) -> dict:
+    """Put one failed transcription back in the queue for the dispatcher.
+
+    Only an ``error`` item can be retried.  A queued, running or done item is
+    not a failed attempt, and an ``uncertain`` item may still have a worker
+    producing a result, so its outcome has to be discarded before it can be
+    retried.  The uploaded file and its identity are preserved; only the failed
+    attempt's bookkeeping is cleared.
+    """
+    batch = get_batch(batch_id)
+    if not batch:
+        raise ValueError("unknown transcription batch")
+    if batch.get("cancelled"):
+        raise ValueError("batch is cancelled")
+    item = next((row for row in batch.get("items", [])
+                 if row.get("index") == item_index), None)
+    if item is None:
+        raise ValueError("unknown transcription item")
+    state = str(item.get("state") or "")
+    if state == "uncertain":
+        raise ValueError(
+            "item is uncertain and must be discarded before it can be retried"
+        )
+    if state != "error":
+        raise ValueError(
+            f"item is not in a failed state (state is {state or 'unknown'})"
+        )
+    item.update(
+        state="queued", tries=0, error=None, studio=None, studio_task_id=None,
+        interrupted=False, manual_action_required=False, started_at=None,
+        finished_at=None, duration_seconds=None, artifact_path=None,
+    )
+    batch["cancelled"] = False
+    batch["finished_at"] = None
+    batch["governor_note"] = None
+    batches[batch_id] = batch
+    _save(batch)
+    _wakeup.set()
+    return {
+        "ok": True, "batch_id": batch_id, "item_index": item_index,
+        "state": "queued",
+    }
 
 
 def settings() -> dict:

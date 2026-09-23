@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
-from .backend import auth, broker, cloud_guard, control_plane, ledger, routing as routing_rule
+from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
 from .backend import shared_voices, transcription_jobs
 from .backend.monitor import StudioMonitor
 
@@ -648,13 +648,25 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.get("/api/hub/models")
     async def catalog() -> dict[str, Any]:
         """Existing Hub aggregate contract, gathered only through private workers."""
-        return await monitor.aggregate_catalog()
+        # model_id is the manifest's stable identifier, added to every model row
+        # so /api/hub/models and /api/hub/jobs share one join key. The worker's
+        # own repo key is preserved unchanged.
+        return model_ids.annotate(await monitor.aggregate_catalog())
 
     @app.get("/api/hub/model-health")
     def model_health() -> dict[str, Any]:
         """Models the Hub has paused, and why. A pause is Hub state, not worker state, so it is
-        reported here rather than inferred from a catalogue that still calls the model ready."""
-        return {"paused": broker.model_protection_snapshot()}
+        reported here rather than inferred from a catalogue that still calls the model ready.
+
+        ``models`` is the additive per-(machine, model) health answer: one row
+        with a closed-vocabulary ``state`` and an honest ``reason``/``hint``.
+        The existing ``paused`` key is kept unchanged.
+        """
+        from .backend import model_health as model_health_contract
+        return {
+            "paused": broker.model_protection_snapshot(),
+            "models": model_health_contract.snapshot(monitor),
+        }
 
     @app.post("/api/hub/model-health/recheck")
     async def model_health_recheck(body: dict[str, Any]) -> dict[str, Any]:
@@ -1181,6 +1193,14 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post("/api/hub/jobs/{batch_id}/items/{item_index}/retry")
+    async def retry_item(batch_id: str, item_index: int) -> dict[str, Any]:
+        """Put one failed item back in the queue for the dispatcher to run again."""
+        try:
+            return broker.retry_failed_item(batch_id, item_index)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     async def open_worker_artifact(worker: dict[str, Any], artifact_path: str):
         from .backend.peers import studio_request
         url, headers = studio_request(worker, artifact_path)
@@ -1413,6 +1433,14 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def acknowledge_transcription(batch_id: str, item_index: int) -> dict[str, Any]:
         """Verified-delivery receipt for one Subtitle artifact, mirroring the Image ack."""
         return await transcription_jobs.acknowledge_item(monitor, batch_id, item_index)
+
+    @app.post("/api/hub/transcription/jobs/{batch_id}/items/{item_index}/retry")
+    async def retry_transcription_item(batch_id: str, item_index: int) -> dict[str, Any]:
+        """Put one failed transcription back in the queue for the dispatcher."""
+        try:
+            return transcription_jobs.retry_failed_item(batch_id, item_index)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.delete("/api/hub/transcription/jobs/{batch_id}")
     async def cancel_transcription_job(batch_id: str) -> dict[str, Any]:

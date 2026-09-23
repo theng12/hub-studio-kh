@@ -29,20 +29,24 @@ class JobDetailCacheTests(unittest.TestCase):
     def test_cached_jobs_are_shown_without_a_request(self):
         self.assertIn("if let known = finishedJobCache[batch.id] {", API)
 
-    def test_the_assumption_holds_no_route_can_re_open_a_finished_job(self):
-        """The Hub's retry/remove/clear functions exist; none of them is reachable over HTTP.
+    def test_the_only_routes_that_re_open_a_finished_job_are_the_retry_routes(self):
+        """The Hub may re-open exactly one failed item, and only through the retry routes.
 
-        `broker.retry_batch`, `broker.remove_batch` and `broker.clear_terminal` skip or refuse an
-        unfinished batch, and they are only called from tests. If a route for any of them is ever
-        registered, a finished job *can* become queued again, and this cache must be invalidated
-        there - so this test fails and points at it.
+        `broker.retry_batch`, `broker.remove_batch` and `broker.clear_terminal` still have no
+        route. The two retry routes the GatewayKH peer uses can turn a finished batch live
+        again, so the native `finishedJobCache` has to drop the affected batch when it retries
+        one. That native invalidation is deliberately outside this Hub-only change; this test
+        pins the Hub side so the assumption cannot drift silently.
         """
         routes = re.findall(r'@app\.(get|post|put|delete)\("([^"]+)"', HUB_ROUTES)
-        offenders = [f"{method.upper()} {path}" for method, path in routes
-                     if re.search(r"retry|reopen|requeue|clear[-_]?terminal|remove[-_]?batch", path)]
-        self.assertEqual(offenders, [],
-                         "a route can re-open a finished job now; invalidate finishedJobCache in it "
-                         "(native/StudioAPI.swift) and update this test")
+        offenders = sorted(f"{method.upper()} {path}" for method, path in routes
+                           if re.search(r"retry|reopen|requeue|clear[-_]?terminal|remove[-_]?batch",
+                                        path))
+        self.assertEqual(offenders, [
+            "POST /api/hub/jobs/{batch_id}/items/{item_index}/retry",
+            "POST /api/hub/transcription/jobs/{batch_id}/items/{item_index}/retry",
+        ], "only the peer's retry routes may re-open a failed item; "
+           "anything else needs finishedJobCache invalidation in native/StudioAPI.swift")
 
     def test_the_hub_functions_really_have_no_caller(self):
         for name in ("retry_batch", "clear_terminal"):

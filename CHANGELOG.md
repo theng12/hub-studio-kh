@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.48 — 2026-09-23 · the capacity, worker and model-health contract
+
+GatewayKH, which routes Story Studio's work to Studio Hub locations, measured six gaps and
+asked for the Hub side. Five are implemented here, additively.
+
+- **`model_id` on every model row and every batch row** (`model_ids.py`), resolved to the
+  manifest's own `model_id` so one string joins a model to a batch. The `repo`/`model` keys
+  are unchanged.
+- **`workers[].models` and `workers[].supported_operations` are populated.** They were empty
+  because the only source was `model_exposure`, an audit-gated approval workflow in which no
+  catalogue row currently qualifies. The supply view now comes from the worker catalogue's
+  direct evidence; the approval workflow is untouched. `model_supply` and
+  `capacity.by_operation` therefore carry real machine counts, and an explicit
+  `available`/`runtime_ready`/`memory_eligible` of `false` disqualifies a model - absence
+  stays null and is never defaulted to a plausible value.
+- **`GET /api/hub/model-health` returns one row per (machine, model)** with `model_id`,
+  `machine`, `state`, `reason`, `hint`, `observed_at`, over a closed vocabulary
+  (ready, download_required, runtime_missing, unsupported_os, unsupported_chip,
+  insufficient_memory, quarantined, unknown). `paused` is kept.
+- **`errors` on each batch row**: `[{"item_index", "code", "message"}]`, failed items only.
+- **`POST /api/hub/jobs/{batch_id}/items/{index}/retry`** and the transcription equivalent.
+  Retry accepts a failed item and returns it to `queued` with its prompt and params intact;
+  it refuses a non-failed or uncertain item and a cancelled batch.
+- All of it is reachable with the **Fleet** credential, including `model-health`, which was
+  Hub-token only.
+
+Known limits, recorded rather than papered over: there is no discard route for transcription,
+so an uncertain transcription item cannot yet be released that way, and the native job
+detail cache is not invalidated by a retry (it caches only done/cancelled rows).
+
 ## 0.6.47 — 2026-09-23 · the sidebar counts models, not workers
 
 - The sidebar said `Image 1 · Voice 1 · Subtitle 1 · Music 1` because it counted **workers**, and

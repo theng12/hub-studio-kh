@@ -421,6 +421,8 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/models$"),
     ("GET", r"^/api/hub/stats$"),
     ("GET", r"^/api/hub/model-packages$"),
+    # Model health is a read a controller needs to decide where work can go.
+    ("GET", r"^/api/hub/model-health$"),
     ("GET", r"^/api/hub/memory/policy$"),
     # Remote scheduling reads only these worker contracts. Keep each shape
     # explicit so a newly added settings/storage/debug route is denied until
@@ -463,12 +465,17 @@ FLEET_ALLOWED = (
     # uncertain attempt it sent there. The node's own operator can still do it locally; without
     # this the controller could not free a node whose worker outcome is unknown.
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/discard$"),
+    # A controller may put a failed item it sent here back in the node's queue.
+    # The node still decides what can be retried: only an ``error`` item, never
+    # a live or uncertain one.
+    ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/retry$"),
     ("POST", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),
     ("DELETE", r"^/api/hub/transcription/jobs/[^/]+$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+/items/[0-9]+/artifact$"),
     ("POST", r"^/api/hub/transcription/jobs/[^/]+/items/[0-9]+/ack$"),
+    ("POST", r"^/api/hub/transcription/jobs/[^/]+/items/[0-9]+/retry$"),
     # A clone reference travels with the job that uses it.
     ("POST", r"^/api/hub/voice-references$"),
     ("GET", r"^/api/hub/voice-references/[^/]+$"),

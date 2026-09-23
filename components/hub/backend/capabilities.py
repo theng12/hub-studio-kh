@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 
 from . import (broker, chat_jobs, hardware_profiles, memory_admission,
-               model_exposure, peers, transcription_jobs)
+               model_exposure, model_ids, peers, transcription_jobs)
 from .registry import machine_enabled, studio_enabled
 from .resources import host_stats
 
@@ -24,6 +24,9 @@ OPERATION_BY_MODALITY = {
     "music": "music.generation",
     "voice": "voice.tts",
     "transcription": "audio.transcription",
+    # The peer calls the Subtitle worker's lane audio.transcription; a studio
+    # registered as "subtitle" is the same modality under an older name.
+    "subtitle": "audio.transcription",
     "chat": "chat.completion",
     "video": "video.generation",
     "render": "video.render",
@@ -197,6 +200,12 @@ def _capacity_eligible(model: dict, *, online: bool, ready: bool,
         online and ready and not drained and not maintenance
         and not machine_quarantined
         and model.get("runtime_compatible") is not False
+        # The worker's own row is direct evidence.  An explicit False in any of
+        # these fields disqualifies the model; absence stays absent (it never
+        # becomes a plausible True or 0).
+        and model.get("available") is not False
+        and model.get("runtime_ready") is not False
+        and model.get("memory_eligible") is not False
         and model.get("hub_ready") is not False
         and not bool(model.get("hub_catalog_stale"))
         and not bool(model.get("hub_catalog_error"))
@@ -253,6 +262,19 @@ def _model_capability(model: dict, studio: dict, worker: dict,
     installed = bool(model.get("hub_cached"))
     runtime_compatible = model.get("runtime_compatible") is not False
     subsystem_ready = model.get("hub_ready") is not False
+    # Direct worker evidence: the catalogue row says whether the model is
+    # available, whether its runtime is ready, and whether the machine meets its
+    # memory tier.  Only an explicit False is disqualifying; None is "not
+    # reported" and is never turned into a plausible value.
+    reported_available = model.get("available")
+    if type(reported_available) is not bool:
+        reported_available = None
+    reported_runtime_ready = model.get("runtime_ready")
+    if type(reported_runtime_ready) is not bool:
+        reported_runtime_ready = None
+    reported_memory_eligible = model.get("memory_eligible")
+    if type(reported_memory_eligible) is not bool:
+        reported_memory_eligible = None
     qualified_revision_match = model.get("qualified_revision_match")
     if type(qualified_revision_match) is not bool:
         qualified_revision_match = None
@@ -306,6 +328,9 @@ def _model_capability(model: dict, studio: dict, worker: dict,
     model_ready = (
         runtime_compatible and subsystem_ready and not catalog_error
         and not catalog_stale and installed
+        and reported_available is not False
+        and reported_runtime_ready is not False
+        and reported_memory_eligible is not False
         and memory_ready is not False
         and qualified_revision_match is not False
         and execution_ready is not False
@@ -352,6 +377,12 @@ def _model_capability(model: dict, studio: dict, worker: dict,
         reason = "runtime_incompatible"
     elif not subsystem_ready:
         reason = "subsystem_unavailable"
+    elif reported_available is False:
+        reason = "model_not_available"
+    elif reported_runtime_ready is False:
+        reason = "runtime_not_ready"
+    elif reported_memory_eligible is False:
+        reason = "insufficient_memory"
     elif memory_ready is False and admission and (
             (admission.get("observed_total_memory_gb") or 0)
             < (admission.get("effective_min_total_memory_gb") or 0)):
@@ -380,6 +411,13 @@ def _model_capability(model: dict, studio: dict, worker: dict,
     )
     return {
         "operation": operation,
+        # The worker's own operation label when it differs from the canonical
+        # one above; None when the canonical name is the only one known.
+        "reported_operation": (
+            str(model["hub_reported_operation"])[:200]
+            if isinstance(model.get("hub_reported_operation"), str)
+            and model["hub_reported_operation"] else None
+        ),
         "internal_model_id": str(internal_id)[:500],
         "runtime_revision": revision,
         "revision_source": revision_source,
@@ -423,6 +461,11 @@ def _model_capability(model: dict, studio: dict, worker: dict,
             "approved_for_genstudio": True,
             "installed": installed,
             "runtime_compatible": runtime_compatible,
+            # Raw worker evidence, unchanged: None means the studio did not
+            # report the fact rather than a defaulted True/False.
+            "reported_available": reported_available,
+            "reported_runtime_ready": reported_runtime_ready,
+            "reported_memory_eligible": reported_memory_eligible,
             "revision_pinning_ready": revision is not None,
             "subsystem_ready": subsystem_ready,
             "qualified_revision_match": qualified_revision_match,
@@ -656,24 +699,52 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
     """Build schema v3 without mutating or refreshing live worker state."""
     observed = time.time()
     aggregate = monitor.cached_aggregate_catalog()
+    model_index = model_ids.load_index()
     models_by_studio: dict[str, list[dict]] = {}
     for model in aggregate.get("models") or []:
-        candidate = model_exposure.candidate_summary(model)
-        if candidate is None:
-            continue
         studio_id = model.get("hub_studio")
         if not studio_id:
             continue
-        for operation in candidate["approved_operations"]:
-            exposure = model_exposure.state_for(candidate, operation)
-            if exposure.get("state") != "approved":
-                continue
-            models_by_studio.setdefault(str(studio_id), []).append({
+        modality = str(model.get("hub_modality") or "")
+        canonical_operation = OPERATION_BY_MODALITY.get(modality) or (
+            f"{modality}.operation" if modality else None
+        )
+        # The canonical model id is the same string /api/hub/models and
+        # /api/hub/jobs publish, so a peer can join worker supply to its jobs.
+        canonical_id = model_ids.canonical(
+            model.get("repo") or model.get("model_id"), model_index,
+        )
+        candidate = model_exposure.candidate_summary(model)
+        reported_operation = model.get("hub_operation")
+        observed_entries: list[tuple[str, dict | None, dict | None]] = []
+        if candidate is not None:
+            # The audit-gated exposure path is unchanged: an exact approved
+            # operation keeps its candidate, audit and exposure evidence.
+            for operation in candidate["approved_operations"]:
+                exposure = model_exposure.state_for(candidate, operation)
+                if exposure.get("state") != "approved":
+                    continue
+                observed_entries.append((operation, candidate, exposure))
+        if not observed_entries and canonical_operation:
+            # Direct observable evidence: the worker's own catalogue row says it
+            # serves this modality, whether or not it carries an audit candidate.
+            observed_entries.append((canonical_operation, None, None))
+        for operation, approved_candidate, exposure in observed_entries:
+            row = {
                 **model,
+                "model_id": canonical_id,
                 "hub_operation": operation,
-                "hub_candidate": candidate,
-                "hub_exposure": exposure,
-            })
+            }
+            # The worker's own operation label is kept when the canonical
+            # modality maps it to a different name (e.g. music.text_to_music
+            # becomes music.generation), so no evidence is lost.
+            if (isinstance(reported_operation, str) and reported_operation
+                    and reported_operation != operation):
+                row["hub_reported_operation"] = reported_operation
+            if approved_candidate is not None:
+                row["hub_candidate"] = approved_candidate
+                row["hub_exposure"] = exposure
+            models_by_studio.setdefault(str(studio_id), []).append(row)
 
     studios_by_id = {studio["id"]: studio for studio in monitor.registry}
     protections = broker.machine_protection_snapshot()

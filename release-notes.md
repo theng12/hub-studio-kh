@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.48 — 2026-09-23
+
+### Answering GatewayKH about what this Mac can run
+
+GatewayKH routes Story Studio's work to your Studio Hub Macs, and it could not tell which Mac
+could run which model: the Hub was reporting no models against its workers, and no per-model
+capacity. That is fixed - the Hub now lists the models each studio can serve, the operations
+it supports, and one health row per model per machine saying whether it is ready and, when it
+is not, why. A batch also now reports the failed items with their reasons, and a failed item
+can be retried without resubmitting the whole batch.
+
 ## 0.6.47 — 2026-09-23
 
 ### The sidebar numbers were counting the wrong thing
