@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
-import ServiceManagement
 
 struct StudioWindow: View {
     @ObservedObject var studio: StudioController
@@ -2439,8 +2438,9 @@ struct StudioContent: View {
             heading("Settings", "App behavior, local storage and service controls.").padding(28)
             Form {
                 Section("General") {
-                    Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled || studio.loginStatus == .requiresApproval }, set: { studio.setLogin($0) }))
-                    if studio.loginStatus == .requiresApproval { Button("Approve in System Settings") { studio.setLogin(true) } }
+                    Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled }, set: { studio.setLogin($0) }))
+                    Text("One login item starts Studio Hub at login and relaunches it if it crashes. A normal Quit leaves it stopped until you open it again or next sign in.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Toggle("Start services at login", isOn: Binding(
                         get: { studio.configuration.startServicesAtLogin },
                         set: { studio.setStartServicesAtLogin($0) }))
@@ -2473,7 +2473,13 @@ struct StudioContent: View {
                     LabeledContent("Status", value: studio.status)
                     HStack {
                     if studio.canForceStop { Button("Force Stop…") { studio.confirmForceStop() } }
-                    if studio.canCancelRecovery { Button("Cancel Recovery") { studio.stop() } }
+                    if studio.canCancelRecovery {
+                        // The automatic ladder is still running; a manual attempt is offered
+                        // throughout and restarts the ladder from the first rung.
+                        Button("Start Services Now") { studio.start() }
+                            .disabled(!studio.canConfigure || !studio.hasLibrary)
+                        Button("Cancel Recovery") { studio.stop() }
+                    }
                     else if studio.running { Button(studio.stopping ? "Stopping…" : "Stop Services…") { studio.confirmStop() }.disabled(studio.stopping) }
                         else { Button("Start Services") { studio.start() }.disabled(!studio.canConfigure || !studio.hasLibrary) }
                         Button("Release Model Memory") { Task { await workspace.releaseMemory() } }.disabled(!connected)

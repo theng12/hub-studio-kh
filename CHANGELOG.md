@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.53 — 2026-09-23 · surviving a crash, a slow controller and a stubborn service
+
+Three ways an unattended Mac was left dead, and one migration so the fix does not break a Mac it
+is applied to.
+
+- **An app crash was permanent.** "Start at login" used a login item, which does nothing if the
+  app crashes or is quit. It is now a launchd agent that supervises the app's **own executable**
+  (never `open`, which exits immediately and would leave launchd tracking the wrong process),
+  with `RunAtLoad` and `KeepAlive = {SuccessfulExit: false}` - so it relaunches after a crash and
+  leaves a deliberate Quit alone. A login-launch marker keeps "Start services at login" honest,
+  because launchd starts the executable directly and the app would otherwise not know how it was
+  started.
+- **A node that booted before its controller stayed out of the group.** The startup re-join ran
+  once. It now retries at 15s, 30s, 60s and then every 5 minutes, one attempt at a time, stopping
+  on success, on leaving, on a role change or on disconnect. Three consecutive 401/403 answers say
+  so once in the banner and drop to the slow cadence rather than looping in silence.
+- **A service that failed to start gave up after ten seconds.** The ladder is now 1, 3, 10, 60,
+  120 seconds and then every 5 minutes instead of stopping. "Recovering local services..." becomes
+  "Still trying to start the services (last failure: ...)", the failure banner is written once per
+  phase, a manual Start Services resets the ladder, and quitting cancels it.
+- **Migration.** Every Mac already running 0.6.52 has an old login-item registration. On first
+  launch the new build removes it once, records that it did, and reconciles the new agent from the
+  existing "Start at login" setting so login startup is not silently lost. An upgrade that cannot
+  remove the old entry still runs and says so.
+
 ## 0.6.52 — 2026-09-23 · no downgrades, and a download that survives
 
 Two defects found while verifying the first real release push.

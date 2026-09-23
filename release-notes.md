@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.53 — 2026-09-23
+
+### It comes back by itself, including after a crash
+
+Studio Hub now restarts itself if it crashes, and brings its services up on its own. Closing it
+on purpose still keeps it closed - only a crash brings it back. A Mac that is switched back on
+returns without anyone opening the app.
+
+### A Mac that starts before its controller
+
+If a node comes up before its controller is ready, it no longer stays out of the group: it keeps
+trying - after 15 seconds, 30, a minute, then every five minutes - until the controller answers.
+If the controller refuses its token, it says so once instead of retrying in silence.
+
+### A service that will not start keeps trying
+
+It used to give up after ten seconds. It now waits 1, 3, 10, 60 and 120 seconds and then keeps
+trying every five minutes, telling you what failed last and when it will try again. Pressing
+Start Services starts the ladder over.
+
 ## 0.6.52 — 2026-09-23
 
 ### It will not install an older version, and it will not re-download

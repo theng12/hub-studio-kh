@@ -16,7 +16,7 @@ require(config.dataDirectory.path == state.resolvingSymlinksInPath().path, "stat
 require(config.modelsDirectory?.path == library.resolvingSymlinksInPath().path && config.offline, "explicit library and offline must survive")
 require(config.startAtLogin, "login startup defaults on after setup")
 require(!config.startServicesAtLogin, "starting services at login defaults off")
-require(config.recoveryMaxAttempts == 3 && config.recoveryBackoffSeconds == [1, 3, 10], "recovery defaults")
+require(config.recoveryMaxAttempts == 5 && config.recoveryBackoffSeconds == [1, 3, 10, 60, 120], "recovery defaults")
 try config.setRecoveryPolicy(maxAttempts: 4, backoffSeconds: [0.5, 1.5, 4, 8])
 try config.save()
 let restoredConfig = try ShellConfiguration(arguments: ["app", "--data-dir", state.path], bundle: bundle)
@@ -48,7 +48,7 @@ try FileManager.default.createDirectory(at: legacyState, withIntermediateDirecto
 let legacyPreferences = Data("{\"modelsPath\":\"\(library.path)\",\"offline\":false}".utf8)
 try legacyPreferences.write(to: legacyState.appendingPathComponent("app-preferences.json"))
 let legacyConfig = try ShellConfiguration(arguments: ["app", "--data-dir", legacyState.path], bundle: bundle)
-require(legacyConfig.startAtLogin && legacyConfig.recoveryMaxAttempts == 3, "legacy preferences must use safe defaults")
+require(legacyConfig.startAtLogin && legacyConfig.recoveryMaxAttempts == 5, "legacy preferences must use safe defaults")
 require(!legacyConfig.startServicesAtLogin, "preferences written before this setting must not start services")
 // A preferences file written before the port was pinned must use the Hub's own default rather
 // than a number the operating system happened to hand out, and must not claim a controller.
@@ -232,7 +232,10 @@ require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunn
                                   delays: restoredConfig.recoveryBackoffSeconds) == .wait(0.5), "configured recovery delay")
 require(StartupRecovery.nextAction(attempt: 4, libraryAvailable: true, ownerRunning: false, userStopped: false,
                                   maxAttempts: restoredConfig.recoveryMaxAttempts,
-                                  delays: restoredConfig.recoveryBackoffSeconds) == .stop("Automatic recovery stopped after repeated service failures"), "recovery must be bounded")
+                                  delays: restoredConfig.recoveryBackoffSeconds) == .wait(300), "after the configured ladder recovery must keep trying slowly")
+require(StartupRecovery.nextAction(attempt: 9, libraryAvailable: true, ownerRunning: false, userStopped: false,
+                                  maxAttempts: restoredConfig.recoveryMaxAttempts,
+                                  delays: restoredConfig.recoveryBackoffSeconds) == .wait(300), "the slow retry must stay at five minutes")
 require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunning: true, userStopped: false) == .wait(0), "running owner must not be duplicated")
 require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: false, ownerRunning: false, userStopped: false) == .stop("The selected model library is unavailable"), "missing SSD must not create replacement state")
 require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeIntervalSince1970: 100), now: Date(timeIntervalSince1970: 130)) == 2, "brief ready period must retain crash bound")

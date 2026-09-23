@@ -236,7 +236,7 @@ struct NativeLifecycleTests {
             requireLifecycle(secondUnhealthy, "second service did not process its unhealthy response")
             clock = Date(timeIntervalSince1970: 222)
             kill(previousPID!, SIGTERM)
-            let exhausted = await waitUntil { controller.status.contains("repeated service failures") }
+            let exhausted = await waitUntil { controller.status.contains("Still trying to start the services") }
             requireLifecycle(exhausted,
                 "mere readiness reset the crash budget: \(controller.status)")
         }
@@ -297,6 +297,65 @@ struct NativeLifecycleTests {
             try? await Task.sleep(for: .milliseconds(100))
             requireLifecycle(controller.status.contains("repeated service failures"),
                 "late health response overwrote terminal state: \(controller.status)")
+        }
+
+        // The one-time move off the old SMAppService login item. The reader and the unregister are
+        // injected, so neither branch touches the real system; driving it through a real
+        // StudioController proves the persisted flag across two launches.
+        if runs("migration") {
+            let root = temporary.appendingPathComponent("migration")
+            let data = root.appendingPathComponent("state")
+            let models = root.appendingPathComponent("models")
+            try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+            let bundle = URL(fileURLWithPath: "/Applications/StudioHubFixture.app")
+            func makeMigrationController(data: URL,
+                                         status: @escaping () -> LoginMigration.OldStatus,
+                                         unregister: @escaping () throws -> Void) throws -> StudioController {
+                let configuration = try ShellConfiguration(
+                    arguments: ["lifecycle-tests", "--data-dir", data.path, "--models-dir", models.path],
+                    bundle: bundle)
+                return StudioController(configuration: configuration,
+                                        serviceExecutable: root.appendingPathComponent("StudioHubService"),
+                                        loginAgentStatus: { _ in .disabled },
+                                        legacyLoginItemStatus: status,
+                                        legacyLoginItemUnregister: unregister,
+                                        now: Date.init)
+            }
+
+            var unregisterCalls = 0
+            let enabled: () -> LoginMigration.OldStatus = { .enabled }
+            let unregister: () throws -> Void = { unregisterCalls += 1 }
+            do {
+                let first = try makeMigrationController(data: data, status: enabled, unregister: unregister)
+                first.migrateLegacyLoginItemIfNeeded()
+                requireLifecycle(unregisterCalls == 1 && first.configuration.loginMigrationComplete,
+                                 "the first launch must remove the old login item and record it")
+                requireLifecycle(first.failure == nil,
+                                 "a clean migration must not report a failure, got: \(first.failure ?? "nil")")
+            }
+            // The data-folder lock is released when the first controller is gone.
+            let second = try makeMigrationController(data: data, status: enabled, unregister: unregister)
+            requireLifecycle(second.configuration.loginMigrationComplete,
+                             "the recorded migration flag must survive a relaunch")
+            second.migrateLegacyLoginItemIfNeeded()
+            requireLifecycle(unregisterCalls == 1,
+                             "a second launch must not unregister the old login item again")
+            requireLifecycle(second.failure == nil, "the second launch must not repeat a clean migration")
+
+            // A failing unregister must not stop the app; the notice names the manual fix once.
+            let failingData = root.appendingPathComponent("failing-state")
+            try FileManager.default.createDirectory(at: failingData, withIntermediateDirectories: true)
+            var attempts = 0
+            let failing = try makeMigrationController(
+                data: failingData, status: enabled,
+                unregister: { attempts += 1; throw ShellFailure(message: "not permitted") })
+            failing.migrateLegacyLoginItemIfNeeded()
+            requireLifecycle(attempts == 1, "the failing unregister must have been attempted")
+            requireLifecycle(failing.failure?.contains("Login Items") == true,
+                             "a failed migration must keep the app running and say where to remove the old entry, got: \(failing.failure ?? "nil")")
+            requireLifecycle(failing.configuration.loginMigrationComplete,
+                             "a caught failure is still an attempt and must be recorded so it is reported once")
         }
 
         print("Native lifecycle checks passed")

@@ -112,6 +112,10 @@ final class FixtureProtocol: URLProtocol {
     static var holdNextJoin = false
     static var heldJoinStarted = false
     static let releaseJoin = DispatchSemaphore(value: 0)
+    /// When set, the join route answers this status instead of 201, so a stale credential can be
+    /// exercised without a real controller.
+    static var joinRejectStatus: Int?
+    static func setJoinReject(_ value: Int?) { lock.lock(); defer { lock.unlock() }; joinRejectStatus = value }
     static var lastMemoryBody: [String: Any]?
     static var lastMemoryMethod = ""
     static var lastMemoryToken = ""
@@ -392,7 +396,12 @@ final class FixtureProtocol: URLProtocol {
             Self.joinBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             let hold = Self.holdNextJoin
             if hold { Self.holdNextJoin = false; Self.heldJoinStarted = true }
+            let reject = Self.joinRejectStatus
             Self.lock.unlock()
+            if let reject {
+                finish((reject, "application/json", Data(#"{"detail":"invalid fleet token"}"#.utf8)))
+                return
+            }
             if hold {
                 DispatchQueue.global().async { [self] in
                     _ = Self.releaseJoin.wait(timeout: .now() + 5)
@@ -2465,6 +2474,225 @@ struct NativeAPITests {
             require(targetBefore == targetAfter, "a refused staged app must leave the installed app untouched")
         }
         updateStore.disconnect()
+
+        // ── Surviving an unattended Mac: login agent, re-join cadence, start ladder ────────────
+        // Building the agent is a pure function of a path, so every assertion below runs against a
+        // throwaway directory and never touches this machine's real LaunchAgents.
+        let agentRoot = temporary.appendingPathComponent("Agent Fixture")
+        let appRoot = agentRoot.appendingPathComponent("Applications")
+        let appBundle = appRoot.appendingPathComponent("Studio Hub.app")
+        let agentExecutable = appBundle.appendingPathComponent(LaunchAgent.executableRelativePath)
+        try FileManager.default.createDirectory(at: agentExecutable.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: agentExecutable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agentExecutable.path)
+        let agentPlist = agentRoot.appendingPathComponent("LaunchAgents/local.studiohub.standalone.plist")
+
+        let decision = LaunchAgent.installDecision(appBundle: appBundle, applicationsRoot: appRoot,
+                                                   executableExists: { _ in true })
+        require(decision == .install(executablePath: agentExecutable.path),
+                "an app in the applications root with its executable must install, got: \(decision)")
+        let written = try LaunchAgent.write(appBundle: appBundle, to: agentPlist,
+                                            applicationsRoot: appRoot, executableExists: { _ in true })
+        require(written == agentExecutable.path, "the agent must supervise the app's own executable")
+
+        // The written plist, read back: the executable and not `open`, run at load so it covers
+        // login, and `KeepAlive.SuccessfulExit == false` so a crash (non-zero exit) relaunches and
+        // a deliberate Quit (exit 0) does not.
+        let agentValues = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: agentPlist), options: [], format: nil) as? [String: Any]
+        require(agentValues?["Label"] as? String == "local.studiohub.standalone", "the agent label")
+        let program = agentValues?["ProgramArguments"] as? [String]
+        require(program == [agentExecutable.path],
+                "the agent must supervise the app executable, never open: \(String(describing: program))")
+        require(program?.contains("/usr/bin/open") == false,
+                "supervising open tracks a process that exits immediately, so KeepAlive could never work")
+        require(agentValues?["RunAtLoad"] as? Bool == true,
+                "RunAtLoad must be true so the agent also covers start at login")
+        let keepAlive = agentValues?["KeepAlive"] as? [String: Any]
+        require(keepAlive?["SuccessfulExit"] as? Bool == false,
+                "KeepAlive must relaunch after a crash and not after a clean quit, got: \(String(describing: keepAlive))")
+        // launchd starts the executable directly, so the AppleEvent that marked a login item is
+        // absent. The environment marker is what keeps "Start services at login" honoured.
+        let environment = agentValues?["EnvironmentVariables"] as? [String: Any]
+        require(environment?[LaunchAgent.launchedAtLoginEnvironmentKey] as? String == "1",
+                "the agent must mark its launch as a login launch, got: \(String(describing: environment))")
+        let agentPermissions = try FileManager.default.attributesOfItem(atPath: agentPlist.path)[.posixPermissions] as? NSNumber
+        require(agentPermissions?.intValue == 0o600,
+                "the agent plist must be private, got: \(String(describing: agentPermissions))")
+
+        // Reporting the true state reads both the plist and launchd.
+        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in true }) == .enabled,
+                "a present, loaded agent must read as on")
+        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in false }) == .disabled,
+                "a present but unloaded agent must read as off")
+        try LaunchAgent.remove(at: agentPlist)
+        require(!LaunchAgent.isInstalled(at: agentPlist), "removing the agent must remove the plist")
+        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in true }) == .disabled,
+                "an agent that is not on disk must read as off")
+
+        // A dev build outside /Applications is refused rather than writing an agent whose program
+        // will not exist at login, and nothing is left behind.
+        let devBundle = agentRoot.appendingPathComponent("Builds/Studio Hub.app")
+        let outsideRefusal = LaunchAgent.installDecision(appBundle: devBundle, applicationsRoot: appRoot,
+                                                         executableExists: { _ in true })
+        if case .install = outsideRefusal { fatalError("an app outside the applications root must be refused") }
+        do {
+            _ = try LaunchAgent.write(appBundle: devBundle, to: agentPlist,
+                                      applicationsRoot: appRoot, executableExists: { _ in true })
+            fatalError("the refusal must not write an agent")
+        } catch {}
+        require(!FileManager.default.fileExists(atPath: agentPlist.path),
+                "a refused install must leave no agent behind")
+        // And an app in /Applications whose own executable is missing is refused too.
+        let missing = LaunchAgent.installDecision(appBundle: appBundle, applicationsRoot: appRoot,
+                                                  executableExists: { _ in false })
+        if case .install = missing { fatalError("a missing executable must be refused") }
+
+        // The one-time move off the old SMAppService login item. Pure and injected, so no branch
+        // here touches the real system; the app target supplies the real call in one place.
+        var unregisterCalls = 0
+        var statusCalls = 0
+        func oldStatus(_ value: LoginMigration.OldStatus) -> () -> LoginMigration.OldStatus {
+            { statusCalls += 1; return value }
+        }
+        let removed = LoginMigration.run(alreadyRecorded: false, oldStatus: oldStatus(.enabled),
+                                         unregister: { unregisterCalls += 1 })
+        require(removed == .removed && unregisterCalls == 1 && statusCalls == 1,
+                "an enabled old login item must be unregistered exactly once, got: \(removed)")
+        require(LoginMigration.notice(for: removed) == nil, "a clean removal needs no notice")
+        // requiresApproval is still a live old registration.
+        unregisterCalls = 0
+        let approval = LoginMigration.run(alreadyRecorded: false, oldStatus: oldStatus(.requiresApproval),
+                                          unregister: { unregisterCalls += 1 })
+        require(approval == .removed && unregisterCalls == 1,
+                "an old registration needing approval must also be removed, got: \(approval)")
+        // A second launch has the recorded flag: it must not read or unregister again.
+        unregisterCalls = 0; statusCalls = 0
+        let secondLaunch = LoginMigration.run(alreadyRecorded: true, oldStatus: oldStatus(.enabled),
+                                              unregister: { unregisterCalls += 1 })
+        require(secondLaunch == .alreadyDone && unregisterCalls == 0 && statusCalls == 0,
+                "the migration must run once and never read or unregister again, got: \(secondLaunch)")
+        // No old registration: nothing is called and there is nothing to report.
+        unregisterCalls = 0; statusCalls = 0
+        for absent in [LoginMigration.OldStatus.notRegistered, .notFound] {
+            let skipped = LoginMigration.run(alreadyRecorded: false, oldStatus: oldStatus(absent),
+                                             unregister: { unregisterCalls += 1 })
+            require(skipped == .nothingToRemove && unregisterCalls == 0 && statusCalls > 0,
+                    "an absent old registration must not call unregister, got: \(skipped)")
+        }
+        // A failing unregister is returned, not thrown, so startup continues; the notice names the
+        // manual fix.
+        unregisterCalls = 0
+        let throwingUnregister: () throws -> Void = {
+            unregisterCalls += 1
+            throw ShellFailure(message: "not permitted")
+        }
+        let failed = LoginMigration.run(alreadyRecorded: false, oldStatus: oldStatus(.enabled),
+                                        unregister: throwingUnregister)
+        require(failed == .failed("not permitted") && unregisterCalls == 1,
+                "a failed unregister must return a failure, got: \(failed)")
+        let migrationNotice = LoginMigration.notice(for: failed)
+        require(migrationNotice?.contains("Login Items") == true
+                && migrationNotice?.contains("not permitted") == true,
+                "a failed migration must say where to remove the old entry, got: \(String(describing: migrationNotice))")
+        require(LoginMigration.notice(for: .nothingToRemove) == nil
+                && LoginMigration.notice(for: .alreadyDone) == nil
+                && LoginMigration.notice(for: .removed) == nil,
+                "only a failure needs a notice")
+        // ServiceManagement unavailable is also reported, without calling unregister.
+        unregisterCalls = 0
+        let unavailable = LoginMigration.run(alreadyRecorded: false, oldStatus: oldStatus(.unavailable),
+                                             unregister: { unregisterCalls += 1 })
+        require(unavailable == .failed("ServiceManagement is unavailable") && unregisterCalls == 0,
+                "an unavailable ServiceManagement must not call unregister and must be reported, got: \(unavailable)")
+        require(LoginMigration.notice(for: unavailable)?.contains("Login Items") == true,
+                "an unavailable ServiceManagement must still tell the operator where to look")
+
+        // The node re-join schedule: exactly 15, 30, 60, then five minutes.
+        require(RejoinBackoff.delay(afterAttempt: 0) == 15
+                && RejoinBackoff.delay(afterAttempt: 1) == 30
+                && RejoinBackoff.delay(afterAttempt: 2) == 60
+                && RejoinBackoff.delay(afterAttempt: 3) == 300
+                && RejoinBackoff.delay(afterAttempt: 99) == 300,
+                "the re-join cadence must be 15, 30, 60, then 300 seconds")
+        require(RejoinRecovery.nextAction(attempt: 0, isNode: true, hasMembership: true, joined: false) == .wait(15),
+                "a failing node must retry after 15 seconds")
+        require(RejoinRecovery.nextAction(attempt: 3, isNode: true, hasMembership: true, joined: false) == .wait(300),
+                "a failing node must settle on the five-minute cadence")
+        require(RejoinRecovery.nextAction(attempt: 0, isNode: false, hasMembership: true, joined: false) == .stop,
+                "a Mac that is not a node must not re-join")
+        require(RejoinRecovery.nextAction(attempt: 0, isNode: true, hasMembership: false, joined: false) == .stop,
+                "a node with no stored membership must not re-join")
+        require(RejoinRecovery.nextAction(attempt: 0, isNode: true, hasMembership: true, joined: true) == .stop,
+                "a successful re-join must stop the schedule")
+        require(RejoinRecovery.hasRejoinableMembership(address: "192.168.1.21:8080", token: "t"),
+                "a token with an address is a re-joinable membership")
+        require(!RejoinRecovery.hasRejoinableMembership(address: "", token: "t")
+                && !RejoinRecovery.hasRejoinableMembership(address: "  ", token: "t")
+                && !RejoinRecovery.hasRejoinableMembership(address: "192.168.1.21:8080", token: nil)
+                && !RejoinRecovery.hasRejoinableMembership(address: "192.168.1.21:8080", token: ""),
+                "a membership with no address or no token must not be retried")
+
+        // The service-start ladder: 1, 3, 10, 60, 120, then every five minutes. A manual start or
+        // restart resets it to the first rung, which is what `StudioController.start()` does.
+        require(StartupRecovery.defaultMaxAutomaticAttempts == 5
+                && StartupRecovery.defaultDelays == [1, 3, 10, 60, 120],
+                "the default fast ladder must be 1, 3, 10, 60, 120")
+        require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunning: false,
+                                           userStopped: false) == .wait(1), "the ladder starts at one second")
+        require(StartupRecovery.nextAction(attempt: 4, libraryAvailable: true, ownerRunning: false,
+                                           userStopped: false) == .wait(120), "the last fast rung is two minutes")
+        require(StartupRecovery.nextAction(attempt: 5, libraryAvailable: true, ownerRunning: false,
+                                           userStopped: false) == .wait(300), "past the ladder the retry is five minutes")
+        require(StartupRecovery.nextAction(attempt: 50, libraryAvailable: true, ownerRunning: false,
+                                           userStopped: false) == .wait(300), "the slow retry must not drift")
+        require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunning: false,
+                                           userStopped: false, maxAttempts: 0, delays: [1])
+                == .stop("Automatic recovery stopped after repeated service failures"),
+                "zero attempts is the one explicit off switch")
+        var ladder = ServiceStartLadder()
+        require((0...5).map { ladder.delay(forAttempt: $0) } == [1, 3, 10, 60, 120, 300],
+                "the ladder delays must be 1, 3, 10, 60, 120 then 300")
+        require(ladder.isFastPhase, "the first attempt is in the fast phase")
+        for _ in 0..<5 { ladder.advance() }
+        require(!ladder.isFastPhase, "the sixth attempt is past the fast ladder")
+        ladder.reset()
+        require(ladder.attempt == 0 && ladder.delay() == 1,
+                "a manual attempt must reset the ladder to its first rung")
+        let customLadder = ServiceStartLadder(maxFastAttempts: 2, fastDelays: [2, 4])
+        require(customLadder.delay(forAttempt: 0) == 2 && customLadder.delay(forAttempt: 1) == 4
+                && customLadder.delay(forAttempt: 2) == 300,
+                "a configured ladder must still fall through to the five-minute cadence")
+
+        // A stale Fleet token must not spin silently: three consecutive 401 answers earn exactly
+        // one notice, carried by the existing connection banner. The waits are injected so the
+        // test does not sit on the real 15/30/60-second schedule; the cadence itself is asserted
+        // above.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.setJoinReject(401)
+        let authStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await authStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                dataDirectory: temporary.appendingPathComponent("auth-rejoin"),
+                                token: "native-test-token")
+        authStore.rejoinBackoffSeconds = [0.02]
+        await authStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "stale-fleet-token",
+            boundHosts: LocalAddresses.current().map(\.address)))
+        let announced = await eventually(timeout: 3) {
+            authStore.connectionNotice?.kind == .failure
+                && authStore.connectionNotice?.text.contains("refused this Mac's Fleet token") == true
+        }
+        require(announced,
+                "three 401 answers must be reported, got: \(String(describing: authStore.connectionNotice))")
+        require(FixtureProtocol.fleetRequests().filter { $0 == "join" }.count >= 3,
+                "the node must have tried at least three times: \(FixtureProtocol.fleetRequests())")
+        let refused = await eventually(timeout: 2) { authStore.lastJoinAuthStatus == 401 }
+        require(refused, "the refusal status must be recorded")
+        authStore.disconnect()
+        FixtureProtocol.setJoinReject(nil)
+        FixtureProtocol.setCredentialOrigin("minted")
 
         print("Native API contract checks passed")
     }

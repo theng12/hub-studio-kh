@@ -1101,6 +1101,21 @@ final class NativeWorkspaceStore: ObservableObject {
     var storedMembership: FleetMembership?
     private var startupMembershipAttemptID: UUID?
     private var startupRejoinTask: Task<Bool, Never>?
+    /// The backed-off periodic re-join a node keeps while its controller is not up. A single task,
+    /// so one attempt runs at a time; it stops when the join succeeds or this Mac stops being a
+    /// node. `rejoinAttempt` indexes the schedule and `rejoinAuthFailures` counts consecutive
+    /// 401/403 refusals so a stale credential cannot spin silently.
+    private var rejoinTask: Task<Void, Never>?
+    private var rejoinAttempt = 0
+    private var rejoinAuthFailures = 0
+    private var rejoinAuthAnnounced = false
+    /// How long to wait before each automatic re-join retry. Overridable so the contract suite can
+    /// exercise the loop without waiting fifteen minutes; the schedule itself is
+    /// `RejoinBackoff.delays`.
+    var rejoinBackoffSeconds: [TimeInterval] = RejoinBackoff.delays
+    /// The status of the last controller join that was refused for authentication (401/403), else
+    /// nil. Read by the re-join loop to tell a stale credential from a controller that is simply off.
+    private(set) var lastJoinAuthStatus: Int?
     /// Called once a join succeeds, so the app can save the controller for the next start; called
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
@@ -1284,6 +1299,7 @@ final class NativeWorkspaceStore: ObservableObject {
 
     func disconnect() {
         invalidateStartupMembershipAttempt()
+        cancelMembershipRejoin()
         finishedJobCache.removeAll()
         pollTask?.cancel()
         pollTask = nil
@@ -2862,6 +2878,8 @@ final class NativeWorkspaceStore: ObservableObject {
             await refreshConnection()
             // A Mac running its own group is nobody's node, so it keeps no controller to re-join.
             if role == "controller" { onControllerJoined?(nil) }
+            // A role change away from Node ends the periodic re-join: the Mac is no longer a node.
+            if role != "agent" { cancelMembershipRejoin() }
             // The note names the role the way the picker does, and reports the Hub's answer
             // rather than the operator's request.
             let applied = role == "agent" ? "Node" : role.capitalized
@@ -2912,8 +2930,15 @@ final class NativeWorkspaceStore: ObservableObject {
     /// because a token must never be sent to a host that was not checked first.
     @discardableResult
     func joinController(address: String, token: String, boundHosts: [String] = [],
-                        quiet: Bool = false, startupAttemptID: UUID? = nil) async -> Bool {
-        if startupAttemptID == nil { invalidateStartupMembershipAttempt() }
+                        quiet: Bool = false, startupAttemptID: UUID? = nil,
+                        scheduledRejoin: Bool = false) async -> Bool {
+        // A manual join is a person taking over: it cancels the pending startup attempt and the
+        // backed-off loop, and starts its own from scratch. The loop's own calls skip this.
+        if !scheduledRejoin {
+            if startupAttemptID == nil { invalidateStartupMembershipAttempt() }
+            cancelMembershipRejoin()
+        }
+        lastJoinAuthStatus = nil
         guard let requestConnection = connectionID,
               startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
         fleetNote = nil
@@ -2992,6 +3017,8 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection,
                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard (200..<300).contains(http.statusCode) else {
+                lastJoinAuthStatus = (http.statusCode == 401 || http.statusCode == 403)
+                    ? http.statusCode : nil
                 // Quote the controller's own reason when it gives one - "studio modality must be
                 // one of [...]" is far more use than "refused (400)".
                 let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -3053,7 +3080,8 @@ final class NativeWorkspaceStore: ObservableObject {
             invalidateStartupMembershipAttempt()
             return
         }
-        guard let membership = storedMembership, let token = membership.token, !token.isEmpty else {
+        guard let membership = storedMembership, let token = membership.token, !token.isEmpty,
+              !membership.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             invalidateStartupMembershipAttempt()
             return
         }
@@ -3065,7 +3093,14 @@ final class NativeWorkspaceStore: ObservableObject {
             guard self.connectionID == requestConnection,
                   self.startupMembershipAttemptID == attemptID else { return joined }
             self.startupRejoinTask = nil
-            if joined { self.startupMembershipAttemptID = nil }
+            if joined {
+                self.startupMembershipAttemptID = nil
+            } else {
+                // The one-shot attempt is over. Hand off to the backed-off schedule so the
+                // two-second lifecycle refresh does not hammer a controller that is simply down.
+                self.startupMembershipAttemptID = nil
+                self.scheduleMembershipRejoin()
+            }
             return joined
         }
         startupRejoinTask = task
@@ -3077,6 +3112,95 @@ final class NativeWorkspaceStore: ObservableObject {
         startupRejoinTask = nil
         startupMembershipAttemptID = nil
         joiningFleet = false
+    }
+
+    /// Whether this Mac holds a stored membership it can actually re-join with. An address is
+    /// required: a token with nowhere to send it is not a membership, and retrying it would be the
+    /// silent spin this schedule exists to avoid.
+    private var hasRejoinableMembership: Bool {
+        guard let membership = storedMembership else { return false }
+        return RejoinRecovery.hasRejoinableMembership(address: membership.controllerAddress,
+                                                      token: membership.token)
+    }
+
+    /// Retry the controller re-join on the bounded, backed-off schedule while this Mac is a node.
+    ///
+    /// A node that boots before its controller used to stay out of the group until something else
+    /// happened. The retries are 15s, 30s, 60s and then every five minutes, one at a time, and the
+    /// loop stops when the join succeeds or this Mac stops being a node.
+    private func scheduleMembershipRejoin() {
+        guard rejoinTask == nil else { return }
+        guard hasRejoinableMembership,
+              controllerIdentity?.settings.fleetCredentialOrigin == "adopted",
+              let requestConnection = connectionID else { return }
+        // The attempt that just failed is the first of this failure streak, so a 401/403 there
+        // counts towards the three that earn one spoken warning.
+        rejoinAttempt = 0
+        rejoinAuthFailures = (lastJoinAuthStatus == 401 || lastJoinAuthStatus == 403) ? 1 : 0
+        rejoinAuthAnnounced = false
+        rejoinTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                // The pure schedule decides whether there is anything left to do and how long to
+                // wait; the loop only carries it out. Leaving the group, a role change or a lost
+                // membership stops it here rather than re-enrolling a Mac that left.
+                let isNode = self.controllerIdentity?.settings.fleetCredentialOrigin == "adopted"
+                let hasMembership = self.hasRejoinableMembership
+                guard case .wait(let delay) = RejoinRecovery.nextAction(
+                    attempt: self.rejoinAttempt, isNode: isNode, hasMembership: hasMembership,
+                    joined: false, delays: self.rejoinBackoffSeconds) else {
+                    self.rejoinTask = nil
+                    return
+                }
+                if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                guard !Task.isCancelled, self.connectionID == requestConnection else { return }
+                guard let membership = self.storedMembership, let token = membership.token,
+                      !token.isEmpty, self.hasRejoinableMembership,
+                      self.controllerIdentity?.settings.fleetCredentialOrigin == "adopted" else {
+                    self.rejoinTask = nil
+                    return
+                }
+                let joined = await self.joinController(address: membership.controllerAddress,
+                                                       token: token,
+                                                       boundHosts: membership.boundHosts,
+                                                       quiet: true, scheduledRejoin: true)
+                guard !Task.isCancelled, self.connectionID == requestConnection else { return }
+                if joined {
+                    self.rejoinAttempt = 0
+                    self.rejoinAuthFailures = 0
+                    self.rejoinAuthAnnounced = false
+                    self.rejoinTask = nil
+                    return
+                }
+                if let status = self.lastJoinAuthStatus, status == 401 || status == 403 {
+                    self.rejoinAuthFailures += 1
+                } else {
+                    self.rejoinAuthFailures = 0
+                }
+                if RejoinRecovery.shouldAnnounceAuthRefusal(consecutive: self.rejoinAuthFailures,
+                                                            alreadyAnnounced: self.rejoinAuthAnnounced) {
+                    self.rejoinAuthAnnounced = true
+                    // A refused credential is not a controller that is merely down: from here on
+                    // the cadence is the slow one, so three 401s do not become a hammer.
+                    self.rejoinAttempt = max(self.rejoinAttempt, self.rejoinBackoffSeconds.count - 1)
+                    self.note(.failure, "The controller refused this Mac's Fleet token "
+                        + "(\((self.lastJoinAuthStatus ?? 0))) on three re-join attempts. "
+                        + "This Mac will keep trying every five minutes. Get a fresh Fleet token "
+                        + "from the controller's Fleet page and join again.")
+                }
+                self.rejoinAttempt += 1
+            }
+        }
+    }
+
+    /// Stop the backed-off re-join and put it back at the first interval. Called when this Mac is
+    /// no longer a node, when it leaves the group, or when an operator joins by hand.
+    private func cancelMembershipRejoin() {
+        rejoinTask?.cancel()
+        rejoinTask = nil
+        rejoinAttempt = 0
+        rejoinAuthFailures = 0
+        rejoinAuthAnnounced = false
     }
 
     func rejoinControllerIfNeeded() async {
@@ -3095,6 +3219,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// passed only because it called `refreshConnection()` by hand first.
     func adoptStartupMembership(_ membership: FleetMembership) async {
         invalidateStartupMembershipAttempt()
+        cancelMembershipRejoin()
         storedMembership = membership
         // The pinned release key travels with the membership: restore it before any release is
         // read, so the first read verifies against the key pinned at the last join.
@@ -3114,6 +3239,7 @@ final class NativeWorkspaceStore: ObservableObject {
     func leaveGroup() async {
         guard let requestConnection = connectionID else { return }
         invalidateStartupMembershipAttempt()
+        cancelMembershipRejoin()
         fleetNote = nil
         var controllerNote = ""
         if let membership = storedMembership, let token = membership.token, !token.isEmpty,

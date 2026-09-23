@@ -3,11 +3,11 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.52.
+Last updated: 0.6.53.
 
 ## Where things stand
 
-- Release **0.6.52** (build `46ec9d8`). Every release is pushed to `main` and to
+- Release **0.6.53**. Every release is pushed to `main` and to
   `implementation/voice-runtime`; `main` is the release branch.
 - The four SSDs carry `Video Generation Kit/` holding `GatewayKH/`, `Story Studio/` and
   `Studio Hub KH/`, refreshed from the current build on every release.
@@ -86,6 +86,21 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
 - `~/Downloads/model-library`, `~/StudioHubAppBackups/`.
 - Anything inside any `_trash/`.
 - GatewayKH's checkout content — it is another session's project.
+
+## Surviving on an unattended Mac (0.6.53)
+
+- **Crash**: a launchd agent at `~/Library/LaunchAgents/local.studiohub.standalone.plist`
+  supervises the app's own executable with `RunAtLoad` and `KeepAlive={SuccessfulExit:false}` -
+  relaunch on crash, respect a deliberate Quit. It sets `STUDIOHUB_LAUNCHED_AT_LOGIN=1` so the
+  app can still honour "Start services at login". Never supervise `/usr/bin/open`.
+- **Rejoin**: 15/30/60/300 s while the Mac is a node and the rejoin is failing; three 401/403
+  answers are reported once and drop to the slow cadence.
+- **Service ladder**: 1/3/10/60/120 s then every 300 s, with a phase-aware banner; a manual start
+  resets it and quitting cancels it.
+- **Migration**: the old SMAppService login item is removed once on first launch, recorded in
+  preferences, and the new agent is reconciled from the existing "Start at login" setting.
+- **Not exercised by any test**: a real crash-and-relaunch, a real power cycle, and the real
+  `launchctl`/`SMAppService` calls. Prove those on hardware before trusting them fleet-wide.
 
 ## In flight / open
 

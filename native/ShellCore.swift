@@ -163,6 +163,10 @@ struct ShellConfiguration {
     static func clientHost(for listenHost: String) -> String { "127.0.0.1" }
     var recoveryMaxAttempts: Int
     var recoveryBackoffSeconds: [TimeInterval]
+    /// Whether the one-time move off the old `SMAppService` login item has been attempted. Written
+    /// after the attempt, so a crash mid-migration retries on the next launch instead of leaving
+    /// both a login item and a launch agent in place.
+    var loginMigrationComplete: Bool
     /// The exact command line the bundled service is started with.
     ///
     /// This exists because it was once wrong in a way no test caught: the app passed
@@ -199,6 +203,7 @@ struct ShellConfiguration {
         controllerAddress = nil
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
         recoveryBackoffSeconds = StartupRecovery.defaultDelays
+        loginMigrationComplete = false
         var explicitModels: URL?
         var explicitOffline = false
         var explicitHost: String?
@@ -237,6 +242,7 @@ struct ShellConfiguration {
             controllerAddress = saved.controllerAddress
             releasePublisherPublicKey = saved.releasePublisherPublicKey
             releasePublisherFingerprint = saved.releasePublisherFingerprint
+            loginMigrationComplete = saved.loginMigrationComplete
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
                 recoveryMaxAttempts = saved.recoveryMaxAttempts
@@ -433,7 +439,8 @@ struct ShellConfiguration {
                                                         releasePublisherPublicKey: releasePublisherPublicKey,
                                                         releasePublisherFingerprint: releasePublisherFingerprint,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
-                                                        recoveryBackoffSeconds: recoveryBackoffSeconds))
+                                                        recoveryBackoffSeconds: recoveryBackoffSeconds,
+                                                        loginMigrationComplete: loginMigrationComplete))
         try data.write(to: preferencesFile, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesFile.path)
     }
@@ -456,12 +463,16 @@ struct ShellConfiguration {
         let releasePublisherFingerprint: String?
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
+        /// Absent in every preferences file written before the launch agent replaced the login
+        /// item, and absent means the one-time migration has not run yet.
+        let loginMigrationComplete: Bool
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
              listenHost: String, port: Int?, controllerAddress: String?,
              releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
-             recoveryBackoffSeconds: [TimeInterval]) {
+             recoveryBackoffSeconds: [TimeInterval],
+             loginMigrationComplete: Bool) {
             self.modelsPath = modelsPath
             self.offline = offline
             self.startAtLogin = startAtLogin
@@ -473,6 +484,7 @@ struct ShellConfiguration {
             self.releasePublisherFingerprint = releasePublisherFingerprint
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
+            self.loginMigrationComplete = loginMigrationComplete
         }
 
         init(from decoder: Decoder) throws {
@@ -495,6 +507,8 @@ struct ShellConfiguration {
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)
                 ?? StartupRecovery.defaultDelays
+            // Absent means the migration has not run, which is the state an upgrade starts in.
+            loginMigrationComplete = try values.decodeIfPresent(Bool.self, forKey: .loginMigrationComplete) ?? false
         }
     }
 
@@ -566,6 +580,207 @@ func readPrivateRegularFile(_ url: URL) -> Data? {
     }
     let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     return try? handle.readToEnd()
+}
+
+/// Whether the one login mechanism is in place.
+enum LoginAgentStatus: Equatable {
+    case enabled
+    case disabled
+}
+
+/// The one-time move off the old `SMAppService` login item.
+///
+/// A Mac that ran an older build has an `SMAppService` registration; this build writes a launchd
+/// agent instead. Left alone, both would start the app at login and the second instance would fail
+/// on the data-folder lock. The decision is pure and the two side effects are injected, so the
+/// contract suite exercises every branch without touching the real system; the app supplies the
+/// real `SMAppService` calls in one place. The migration never reads or writes the launch agent.
+enum LoginMigration {
+    /// The old registration as `SMAppService` would report it.
+    enum OldStatus: Equatable {
+        case enabled
+        case requiresApproval
+        case notRegistered
+        case notFound
+        /// ServiceManagement could not be used at all, so the old entry cannot be inspected.
+        case unavailable
+    }
+    enum Outcome: Equatable {
+        /// The recorded boolean was already set; nothing was read or changed.
+        case alreadyDone
+        /// No old registration was enabled.
+        case nothingToRemove
+        /// The old registration was found and removed.
+        case removed
+        /// The old registration could not be removed; the app must still run.
+        case failed(String)
+    }
+
+    static func run(alreadyRecorded: Bool,
+                    oldStatus: () -> OldStatus,
+                    unregister: () throws -> Void) -> Outcome {
+        guard !alreadyRecorded else { return .alreadyDone }
+        switch oldStatus() {
+        case .enabled, .requiresApproval:
+            do { try unregister(); return .removed }
+            catch { return .failed(error.localizedDescription) }
+        case .notRegistered, .notFound:
+            return .nothingToRemove
+        case .unavailable:
+            return .failed("ServiceManagement is unavailable")
+        }
+    }
+
+    /// The one-line notice to show when the old entry could not be removed, or nil.
+    static func notice(for outcome: Outcome) -> String? {
+        guard case .failed(let detail) = outcome else { return nil }
+        return "An older \"Start at login\" entry could not be removed (\(detail)). Studio Hub still "
+            + "runs; if it starts twice at login, remove the old entry in System Settings > "
+            + "General > Login Items."
+    }
+}
+
+/// The single mechanism that keeps Studio Hub running on an unattended Mac: a per-user launchd
+/// agent.
+///
+/// It replaced `SMAppService.mainApp`, which starts the app at login but does nothing when the app
+/// crashes or is quit. Supervising the app's own executable is the whole point: supervising
+/// `/usr/bin/open` would track a process that exits immediately, so `KeepAlive` would never work.
+/// `KeepAlive` is `SuccessfulExit: false`, so launchd relaunches after a crash (a non-zero exit or
+/// a signal) and leaves the app stopped after a deliberate Quit, which exits 0.
+enum LaunchAgent {
+    static let label = "local.studiohub.standalone"
+    static let executableRelativePath = "Contents/MacOS/StudioHub"
+    static let defaultApplicationsRoot = URL(fileURLWithPath: "/Applications")
+    /// Set in the agent's environment so a launchd launch is still recognisable as a login launch.
+    /// launchd starts the executable directly, so the AppleEvent that marked a login item is absent;
+    /// without this the app could not tell a login launch from a person opening it, and would start
+    /// the services at login even when "Start services at login" is off.
+    static let launchedAtLoginEnvironmentKey = "STUDIOHUB_LAUNCHED_AT_LOGIN"
+
+    enum InstallDecision: Equatable {
+        case install(executablePath: String)
+        case refuse(String)
+    }
+
+    /// The program launchd must supervise: the app's own executable, never `/usr/bin/open`.
+    static func executablePath(forAppBundle bundle: URL) -> String {
+        bundle.appendingPathComponent(executableRelativePath).path
+    }
+
+    static func defaultPlistURL(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    /// Whether the agent may be written, as a pure decision over the bundle path and whether its
+    /// executable exists. A dev build outside `/Applications` is refused rather than writing an
+    /// agent that points at a path that will not be there at login.
+    static func installDecision(
+        appBundle: URL,
+        applicationsRoot: URL = defaultApplicationsRoot,
+        executableExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> InstallDecision {
+        let root = applicationsRoot.standardizedFileURL.resolvingSymlinksInPath().path
+        let bundle = appBundle.standardizedFileURL.resolvingSymlinksInPath().path
+        guard bundle == root || bundle.hasPrefix(root + "/") else {
+            return .refuse("Studio Hub has to be in \(root) before it can start at login. "
+                + "Move the app there, then turn Start at login on again.")
+        }
+        let executable = executablePath(forAppBundle: appBundle)
+        guard executableExists(executable) else {
+            return .refuse("Studio Hub's own program is missing from \(bundle). "
+                + "Reinstall the app before turning Start at login on.")
+        }
+        return .install(executablePath: executable)
+    }
+
+    /// The agent's property list.
+    static func propertyList(executablePath: String) -> [String: Any] {
+        ["Label": label,
+         "ProgramArguments": [executablePath],
+         "RunAtLoad": true,
+         "KeepAlive": ["SuccessfulExit": false],
+         "EnvironmentVariables": [launchedAtLoginEnvironmentKey: "1"]]
+    }
+
+    static func plistData(executablePath: String) throws -> Data {
+        try PropertyListSerialization.data(fromPropertyList: propertyList(executablePath: executablePath),
+                                           format: .xml, options: 0)
+    }
+
+    /// Write the agent at `plistURL`, atomically and mode 0600. Returns the supervised program.
+    @discardableResult
+    static func write(appBundle: URL, to plistURL: URL,
+                      applicationsRoot: URL = defaultApplicationsRoot,
+                      executableExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) throws -> String {
+        switch installDecision(appBundle: appBundle, applicationsRoot: applicationsRoot,
+                               executableExists: executableExists) {
+        case .refuse(let message):
+            throw ShellFailure(message: message)
+        case .install(let executable):
+            let data = try plistData(executablePath: executable)
+            let directory = plistURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            // `.atomic` writes a sibling and renames it; the chmod closes the window in which the
+            // temporary file would be world-readable.
+            try data.write(to: plistURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plistURL.path)
+            return executable
+        }
+    }
+
+    /// Remove the agent if it is present. Removing a file that is not there is not an error.
+    static func remove(at plistURL: URL) throws {
+        if FileManager.default.fileExists(atPath: plistURL.path) {
+            try FileManager.default.removeItem(at: plistURL)
+        }
+    }
+
+    static func isInstalled(at plistURL: URL) -> Bool {
+        FileManager.default.fileExists(atPath: plistURL.path)
+    }
+
+    /// The state the Settings toggle reports: on only when the plist exists and launchd has the
+    /// job. `isLoaded` is injected so the contract suite can test both without touching this
+    /// machine's real agents.
+    static func status(at plistURL: URL, label: String = LaunchAgent.label,
+                       isLoaded: (String) -> Bool = LaunchAgent.isLoaded) -> LoginAgentStatus {
+        guard isInstalled(at: plistURL), isLoaded(label) else { return .disabled }
+        return .enabled
+    }
+
+    /// `launchctl print gui/<uid>/<label>` exits 0 only when the job is loaded.
+    static func isLoaded(_ label: String = LaunchAgent.label) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/\(label)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    /// Load the agent now, so turning the toggle on also covers this session without a reboot.
+    /// Best-effort: the plist governs the next login even if launchd refuses to load it right away.
+    static func bootstrap(at plistURL: URL) {
+        run(["bootstrap", "gui/\(getuid())", plistURL.path])
+    }
+
+    /// Unload the agent. Best-effort for the same reason.
+    static func bootout(label: String = LaunchAgent.label) {
+        run(["bootout", "gui/\(getuid())/\(label)"])
+    }
+
+    private static func run(_ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
 }
 
 final class InstanceLock {

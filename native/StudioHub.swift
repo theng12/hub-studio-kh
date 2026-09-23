@@ -1,9 +1,34 @@
 import AppKit
 import SwiftUI
+#if canImport(ServiceManagement)
+// Imported only for the one-time migration off the old login item; no other code may touch it.
 import ServiceManagement
+#endif
 import Carbon
 import Combine
 import Darwin
+
+/// The real old-registration reader, in one place. Kept behind injected closures on the
+/// controller so the migration decision is testable without linking ServiceManagement.
+enum LegacyLoginItem {
+#if canImport(ServiceManagement)
+    static func status() -> LoginMigration.OldStatus {
+        switch SMAppService.mainApp.status {
+        case .enabled: return .enabled
+        case .requiresApproval: return .requiresApproval
+        case .notRegistered: return .notRegistered
+        case .notFound: return .notFound
+        @unknown default: return .notFound
+        }
+    }
+    static func unregister() throws { try SMAppService.mainApp.unregister() }
+#else
+    /// No ServiceManagement on this SDK: the old registration cannot be inspected, so the
+    /// migration reports that it may still exist rather than pretending it was cleaned up.
+    static func status() -> LoginMigration.OldStatus { .unavailable }
+    static func unregister() throws {}
+#endif
+}
 
 @MainActor
 final class StudioController: ObservableObject {
@@ -27,7 +52,9 @@ final class StudioController: ObservableObject {
     @Published var restartPending = false
     @Published var canForceStop = false
     @Published var configuration: ShellConfiguration
-    @Published var loginStatus = SMAppService.mainApp.status
+    /// Whether the launch agent that starts the app at login and relaunches it after a crash is
+    /// in place. Read from the plist and launchd, never remembered from the toggle press.
+    @Published var loginStatus: LoginAgentStatus = .disabled
     /// What the operator last did to the fleet address, so the choice reports itself.
     @Published var fleetNote: String?
     let workspace = NativeWorkspaceStore()
@@ -36,23 +63,52 @@ final class StudioController: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var forceStopTask: Task<Void, Never>?
-    private var automaticRestartAttempts = 0
+    private var startLadder = ServiceStartLadder()
+    /// Which recovery phase the persistent banner has already been told about, so the banner
+    /// distinguishes the fast ladder from the slow retry without re-opening the window every time
+    /// the next-attempt time changes.
+    private enum RecoveryPhase { case fast, slow }
+    private var recoveryReportedPhase: RecoveryPhase?
+    /// The concrete reason the last automatic start failed, kept so the slow-phase message can
+    /// name it even after the banner has been replaced by the phase wording.
+    private var lastServiceFailure: String?
     private var healthySince: Date?
     private var startupTimedOut = false
     private var instanceLock: InstanceLock?
     private let serviceExecutable: URL
+    private let appBundle: URL
+    private let agentPlistURL: URL
+    private let loginAgentStatus: (URL) -> LoginAgentStatus
+    /// The old `SMAppService` reader/unregister, injected so the migration can be exercised in
+    /// tests without touching the real system. The default is the only place that calls it.
+    private let legacyLoginItemStatus: () -> LoginMigration.OldStatus
+    private let legacyLoginItemUnregister: () throws -> Void
     private let now: () -> Date
     private let healthRequest: (URLRequest, URLSession) async throws -> (Data, URLResponse)
     var onStopped: (() -> Void)?
 
     init(configuration: ShellConfiguration, serviceExecutable: URL? = nil,
+         appBundle: URL = Bundle.main.bundleURL,
+         agentPlistURL: URL = LaunchAgent.defaultPlistURL(),
+         loginAgentStatus: ((URL) -> LoginAgentStatus)? = nil,
+         legacyLoginItemStatus: (() -> LoginMigration.OldStatus)? = nil,
+         legacyLoginItemUnregister: (() throws -> Void)? = nil,
          now: @escaping () -> Date = Date.init,
          healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil) {
         self.configuration = configuration
         self.serviceExecutable = serviceExecutable
             ?? Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
+        self.appBundle = appBundle
+        self.agentPlistURL = agentPlistURL
+        let statusReader = loginAgentStatus ?? { LaunchAgent.status(at: $0) }
+        self.loginAgentStatus = statusReader
+        self.legacyLoginItemStatus = legacyLoginItemStatus ?? { LegacyLoginItem.status() }
+        self.legacyLoginItemUnregister = legacyLoginItemUnregister ?? { try LegacyLoginItem.unregister() }
         self.now = now
         self.healthRequest = healthRequest ?? { request, session in try await session.data(for: request) }
+        self.startLadder = ServiceStartLadder(maxFastAttempts: configuration.recoveryMaxAttempts,
+                                              fastDelays: configuration.recoveryBackoffSeconds)
+        self.loginStatus = statusReader(agentPlistURL)
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
         catch { failure = error.localizedDescription; status = "Unable to open" }
         // The workspace knows when a join succeeded; only the app owns the preferences file the
@@ -134,7 +190,8 @@ final class StudioController: ObservableObject {
     func start() {
         restartTask?.cancel()
         restartTask = nil
-        automaticRestartAttempts = 0
+        startLadder.reset()
+        recoveryReportedPhase = nil
         healthySince = nil
         start(automaticRecovery: false)
     }
@@ -208,6 +265,8 @@ final class StudioController: ObservableObject {
                         self.readyURL = ready.url
                         self.connectionToken = ready.token
                         self.readFleetToken()
+                        // A service that came up starts a fresh recovery story if it fails later.
+                        self.recoveryReportedPhase = nil
                         self.status = "Local services ready"
                         await self.workspace.connect(baseURL: ready.url,
                                                      dataDirectory: self.configuration.dataDirectory,
@@ -259,6 +318,7 @@ final class StudioController: ObservableObject {
                 }
                 if process.isRunning {
                     self.failure = "The local services did not become ready within two minutes. Open its log, then stop it before retrying."
+                    self.lastServiceFailure = "the services did not become ready within two minutes"
                     self.status = "Startup needs attention"
                     self.starting = false
                     self.startupTimedOut = true
@@ -273,6 +333,7 @@ final class StudioController: ObservableObject {
             try? logHandle?.close()
             logHandle = nil
             failure = error.localizedDescription
+            lastServiceFailure = error.localizedDescription
             status = "Unable to start local services"
             if automaticRecovery { scheduleRecovery() }
         }
@@ -284,8 +345,7 @@ final class StudioController: ObservableObject {
         forceStopTask = nil
         let expectedStop = stopping
         let startupFailure = startupTimedOut
-        automaticRestartAttempts = StartupRecovery.attemptsAfterHealthyUptime(
-            automaticRestartAttempts, readyAt: healthySince, now: now())
+        startLadder.resetAfterHealthyUptime(readyAt: healthySince, now: now())
         healthySince = nil
         worker = nil
         readyURL = nil
@@ -303,6 +363,7 @@ final class StudioController: ObservableObject {
             if startupFailure { scheduleRecovery() }
         } else {
             status = "Local services stopped unexpectedly"
+            lastServiceFailure = "the engine exited (code \(code))"
             failure = "The engine exited (code \(code)). Open its log for details, then try Start again."
             scheduleRecovery()
         }
@@ -314,20 +375,39 @@ final class StudioController: ObservableObject {
     }
     private func scheduleRecovery() {
         guard restartTask == nil else { return }
-        let attempt = automaticRestartAttempts
+        let attempt = startLadder.attempt
         let libraryAvailable = configuration.modelsDirectory.map {
             FileManager.default.fileExists(atPath: $0.path)
         } ?? false
         switch StartupRecovery.nextAction(attempt: attempt, libraryAvailable: libraryAvailable,
                                           ownerRunning: running, userStopped: false,
-                                          maxAttempts: configuration.recoveryMaxAttempts,
-                                          delays: configuration.recoveryBackoffSeconds) {
+                                          maxAttempts: startLadder.maxFastAttempts,
+                                          delays: startLadder.fastDelays) {
         case .stop(let message):
             status = message
             failure = message
         case .wait(let delay):
-            automaticRestartAttempts += 1
-            status = "Recovering local services…"
+            if startLadder.isFastPhase {
+                status = "Recovering local services…"
+                if recoveryReportedPhase != .fast {
+                    recoveryReportedPhase = .fast
+                    failure = "Recovering local services… (last failure: "
+                        + "\(lastServiceFailure ?? "the services did not start"))."
+                }
+            } else {
+                // After the fast ladder the app is still trying, so the message has to say so and
+                // name the next attempt rather than reading as a permanent failure.
+                let next = now().addingTimeInterval(delay)
+                let text = "Still trying to start the services (last failure: "
+                    + "\(lastServiceFailure ?? "the services did not start")). "
+                    + "Next attempt at \(next.formatted(date: .omitted, time: .shortened))."
+                status = text
+                if recoveryReportedPhase != .slow {
+                    recoveryReportedPhase = .slow
+                    failure = text
+                }
+            }
+            startLadder.advance()
             restartTask = Task { [weak self] in
                 if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 guard !Task.isCancelled else { return }
@@ -365,7 +445,8 @@ final class StudioController: ObservableObject {
         let cancelledRecovery = restartTask != nil
         restartTask?.cancel()
         restartTask = nil
-        automaticRestartAttempts = 0
+        startLadder.reset()
+        recoveryReportedPhase = nil
         healthySince = nil
         // A timeout is an automatic stop. An explicit Stop while it is
         // winding down cancels the follow-up recovery without interrupting
@@ -536,17 +617,68 @@ final class StudioController: ObservableObject {
         do {
             try configuration.setRecoveryPolicy(maxAttempts: maxAttempts, backoffSeconds: backoffSeconds)
             try configuration.save()
+            startLadder = ServiceStartLadder(maxFastAttempts: configuration.recoveryMaxAttempts,
+                                             fastDelays: configuration.recoveryBackoffSeconds)
         } catch { failure = error.localizedDescription }
     }
+    func refreshLoginStatus() { loginStatus = loginAgentStatus(agentPlistURL) }
+
+    /// Make the launch agent match the saved "Start at login" choice on every launch.
+    ///
+    /// This is ordinary reconciliation, deliberately separate from the one-time migration: the
+    /// migration must never touch the agent, but after it removes the old login item a Mac whose
+    /// preference is still on must get the agent back without the operator re-picking a library.
+    func reconcileLoginAgent() {
+        // A Mac with no library yet has not been set up, and must not register itself before the
+        // operator picks one; library selection already calls `enableLoginByDefault`.
+        guard configuration.modelsDirectory != nil else { return }
+        enableLoginByDefault()
+    }
+
+    /// The one-time move off the old `SMAppService` login item so the launch agent is the only
+    /// mechanism left. It never touches the launch agent, and it never fails startup: a Mac that
+    /// cannot remove the old entry still runs and is told how to remove it by hand.
+    func migrateLegacyLoginItemIfNeeded() {
+        guard !configuration.loginMigrationComplete else { return }
+        let outcome = LoginMigration.run(alreadyRecorded: configuration.loginMigrationComplete,
+                                         oldStatus: legacyLoginItemStatus,
+                                         unregister: legacyLoginItemUnregister)
+        // Recorded only after the attempt: a crash mid-migration leaves the flag unset and the next
+        // launch tries again rather than leaving both login mechanisms live. A caught failure is
+        // still an attempt, so a broken registration is named once instead of on every launch.
+        configuration.loginMigrationComplete = true
+        do { try configuration.save() } catch { /* not startup-critical; retried next launch */ }
+        if let notice = LoginMigration.notice(for: outcome) { failure = notice }
+    }
+
+    /// Turn the one login mechanism on or off: the launchd agent that starts the app at login and
+    /// relaunches it after a crash. A normal Quit exits 0, so `KeepAlive` leaves the app stopped.
     func setLogin(_ enabled: Bool) {
         configuration.startAtLogin = enabled
         do {
-            if enabled { try SMAppService.mainApp.register() }
-            else { try SMAppService.mainApp.unregister() }
-            loginStatus = SMAppService.mainApp.status
+            if enabled {
+                switch LaunchAgent.installDecision(appBundle: appBundle) {
+                case .refuse(let message):
+                    // The preference is still remembered, but no agent is written: an agent that
+                    // points nowhere would fail at the next login with nothing to read.
+                    failure = message
+                    try? configuration.save()
+                    refreshLoginStatus()
+                    return
+                case .install:
+                    try LaunchAgent.write(appBundle: appBundle, to: agentPlistURL)
+                    LaunchAgent.bootstrap(at: agentPlistURL)
+                }
+            } else {
+                LaunchAgent.bootout(label: LaunchAgent.label)
+                try LaunchAgent.remove(at: agentPlistURL)
+            }
             try configuration.save()
-            if loginStatus == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-        } catch { failure = "Could not change login startup: \(error.localizedDescription)"; loginStatus = SMAppService.mainApp.status }
+            refreshLoginStatus()
+        } catch {
+            failure = "Could not change login startup: \(error.localizedDescription)"
+            refreshLoginStatus()
+        }
     }
     /// Remember whether an at-login launch should also bring the Studio services up.
     ///
@@ -557,15 +689,19 @@ final class StudioController: ObservableObject {
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
     private func enableLoginByDefault() {
-        guard configuration.startAtLogin, loginStatus == .notRegistered else { return }
-        do {
-            try SMAppService.mainApp.register()
-            loginStatus = SMAppService.mainApp.status
-            try configuration.save()
-        } catch {
-            // Registration is optional during setup; keep the actual OS status visible.
-            loginStatus = SMAppService.mainApp.status
+        guard configuration.startAtLogin, loginStatus != .enabled else { return }
+        switch LaunchAgent.installDecision(appBundle: appBundle) {
+        case .refuse:
+            // A dev build or an app moved out of /Applications cannot be started at login, and
+            // the operator is told when they press the toggle themselves.
+            break
+        case .install:
+            do {
+                try LaunchAgent.write(appBundle: appBundle, to: agentPlistURL)
+                LaunchAgent.bootstrap(at: agentPlistURL)
+            } catch { failure = "Could not set up login startup: \(error.localizedDescription)" }
         }
+        refreshLoginStatus()
     }
     func openLog() {
         if FileManager.default.fileExists(atPath: configuration.logFile.path) { NSWorkspace.shared.open(configuration.logFile) }
@@ -587,6 +723,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
+            // One-time, before anything else can offer the login choice: remove the login item an
+            // older build left behind so the launch agent is the only mechanism that can run.
+            controller.migrateLegacyLoginItemIfNeeded()
+            // Then make the agent match the saved choice, so an upgraded Mac whose "Start at login"
+            // is still on does not lose login startup when the old item is removed.
+            controller.reconcileLoginAgent()
         } catch {
             let alert = NSAlert(); alert.messageText = "Studio Hub could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
@@ -650,9 +792,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controller.onStopped = { [weak self] in
             if self?.quitPending == true { NSApp.reply(toApplicationShouldTerminate: true) }
         }
-        // Decided before the window opens, and only once per launch.
+        // Decided before the window opens, and only once per launch. The launchd agent starts the
+        // executable directly, so it carries the login marker in its environment; a login item
+        // launch carries the AppleEvent instead.
         announceReleaseNotes = ReleaseNotesSeen.shouldAnnounce()
-        let loginLaunch = NSAppleEventManager.shared().currentAppleEvent?
+        let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
+        let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
         if !loginLaunch || !controller.hasLibrary { openWindow() }
         // A login launch starts the Studios only when the owner asked for it; the default is
@@ -665,7 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func openWindow() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        controller?.loginStatus = SMAppService.mainApp.status
+        controller?.refreshLoginStatus()
         // A new version announces itself once. The flag is consumed here, so opening the window
         // again - from the Dock, the menu bar icon, or a reopen - leaves the operator where they
         // were.
