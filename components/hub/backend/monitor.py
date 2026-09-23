@@ -626,6 +626,8 @@ class StudioMonitor:
                 self.status[sid]["activity_received_at"] = previous["activity_received_at"]
             if previous.get("activity_support"):
                 self.status[sid]["activity_support"] = previous["activity_support"]
+            if previous.get("activity_support_since") is not None:
+                self.status[sid]["activity_support_since"] = previous["activity_support_since"]
             if health.get("ok"):
                 await self._poll_activity(studio)
             meta = self._catalog_meta.setdefault(sid, {})
@@ -673,6 +675,18 @@ class StudioMonitor:
                 self.status[sid]["health"] = None
             self._note_transition(studio, prev_status, effective_status)
 
+    @staticmethod
+    def _record_activity_support(status: dict, support: str, observed_at: float) -> None:
+        """Set the support value and stamp when the current value was first seen.
+
+        ``activity_support_since`` is only advanced on a real transition, so the
+        Stats limitation can report when the Hub actually observed the condition
+        instead of inventing a start time.  A carried-over value keeps its stamp.
+        """
+        if status.get("activity_support") != support:
+            status["activity_support_since"] = observed_at
+        status["activity_support"] = support
+
     async def _poll_activity(self, studio: dict) -> None:
         """Fetch the optional private activity contract after health succeeds.
 
@@ -692,7 +706,7 @@ class StudioMonitor:
             status_code = getattr(response, "status_code", 200)
             if status_code == 404:
                 previous.pop("activity", None)
-                previous["activity_support"] = "unavailable"
+                self._record_activity_support(previous, "unavailable", time.time())
                 previous.pop("activity_error", None)
                 return
             if status_code >= 400:
@@ -702,15 +716,15 @@ class StudioMonitor:
                 raise RuntimeError("activity reporter returned an invalid snapshot")
             received_at = time.time()
             if abs(snapshot["observed_at"] - received_at) > activity.REPORTER_CLOCK_SKEW_S:
-                previous["activity_support"] = "skew"
+                self._record_activity_support(previous, "skew", received_at)
                 previous["activity_error"] = "reporter clock is outside policy"
                 return
             previous["activity"] = snapshot
             previous["activity_received_at"] = received_at
-            previous["activity_support"] = "available"
+            self._record_activity_support(previous, "available", received_at)
             previous.pop("activity_error", None)
         except Exception:
-            previous["activity_support"] = "error"
+            self._record_activity_support(previous, "error", time.time())
             previous["activity_error"] = "reporter request failed"
 
     # ── catalog ──────────────────────────────────────────────────────────

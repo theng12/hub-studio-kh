@@ -100,6 +100,30 @@ def final_matches(job: dict, path: Path) -> bool:
         return False
 
 
+def _activity_time(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _activity_progress(value: object) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    if not math.isfinite(parsed):
+        parsed = 0.0
+    return max(0.0, min(1.0, parsed))
+
+
+def _activity_error_code(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.strip()[:80] or None
+
+
 class GenerationManager:
     def __init__(self, data: Path, model_library: Path, manifest: dict,
                  runtime_sha256: str, machine: str = 'local') -> None:
@@ -159,6 +183,76 @@ class GenerationManager:
         with self.lock:
             return [dict(job) for job in sorted(self.jobs.values(),
                     key=lambda value: value['created_at'], reverse=True)]
+
+    @staticmethod
+    def _activity_projection(job: dict, *, observed_at: float) -> dict:
+        """Bound one Image job to the Hub's allowlisted activity contract.
+
+        Only job-store fields are used.  The worker cannot tell a Hub-dispatched
+        job from a direct one, so it reports ``source: direct`` and the Hub's
+        broker ownership reconciliation remains authoritative.
+        """
+        params = job.get('params') if isinstance(job.get('params'), dict) else {}
+        model = str(params.get('repo') or '').strip()[:500] or None
+        state = str(job.get('state') or '')
+        created_at = _activity_time(job.get('created_at'))
+        started_at = _activity_time(job.get('started_at'))
+        finished_at = _activity_time(job.get('finished_at'))
+        projection = {
+            'id': str(job.get('id') or '')[:160], 'state': state, 'model': model,
+            'operation': 'image', 'progress': _activity_progress(job.get('progress')),
+            'source': 'direct',
+        }
+        if created_at is not None:
+            projection['created_at'] = created_at
+        if started_at is not None:
+            projection['started_at'] = started_at
+        if state in {'queued', 'running', 'cancel_requested'}:
+            projection['updated_at'] = observed_at
+        else:
+            if finished_at is not None:
+                projection['finished_at'] = finished_at
+            if started_at is not None and finished_at is not None:
+                projection['runtime_s'] = max(0.0, finished_at - started_at)
+            code = _activity_error_code(job.get('error_code'))
+            if code:
+                projection['error_code'] = code
+        return projection
+
+    def activity_snapshot(self, observed_at: float | None = None) -> dict:
+        """Return the private, bounded activity contract the Hub polls.
+
+        The Image job store is the only source.  An empty store yields a valid
+        empty snapshot rather than a 404, so a worker that is up but idle never
+        reads as an absent reporter.
+        """
+        observed = float(time.time() if observed_at is None else observed_at)
+        with self.lock:
+            jobs = [dict(job) for job in self.jobs.values()]
+        running = [job for job in jobs
+                   if job.get('state') in {'running', 'cancel_requested'}]
+        queued = [job for job in jobs if job.get('state') == 'queued']
+        terminal = [job for job in jobs if job.get('state') in TERMINAL]
+        active = max(
+            running or queued,
+            key=lambda job: (job.get('state') in {'running', 'cancel_requested'},
+                             _activity_time(job.get('started_at'))
+                             or _activity_time(job.get('created_at')) or 0.0),
+            default=None,
+        )
+        latest = max(
+            terminal,
+            key=lambda job: (_activity_time(job.get('finished_at'))
+                             or _activity_time(job.get('created_at')) or 0.0,
+                             _activity_time(job.get('created_at')) or 0.0),
+            default=None,
+        )
+        return {
+            'schema': 'kh-studio.activity.v1', 'studio': 'image',
+            'observed_at': observed,
+            'active': self._activity_projection(active, observed_at=observed) if active else None,
+            'latest': self._activity_projection(latest, observed_at=observed) if latest else None,
+        }
 
     def submit(self, raw: dict) -> dict:
         params = validate_request(raw)

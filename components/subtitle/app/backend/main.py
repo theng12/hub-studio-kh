@@ -84,6 +84,11 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
 
     # ── health / catalog ───────────────────────────────────────────────────
 
+    @app.get('/api/fleet/activity')
+    def fleet_activity() -> dict:
+        """The optional private activity contract the Hub polls after health."""
+        return manager.activity_snapshot()
+
     @app.get('/api/health')
     def health() -> dict:
         active = [job for job in manager.list() if job['state'] in ('queued', 'running')]

@@ -76,6 +76,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'running': sum(j['state']=='running' for j in active),
             'runtime_revision': manager.runtime_sha256}}
 
+    @app.get('/api/fleet/activity')
+    def fleet_activity() -> dict:
+        """The optional private activity contract the Hub polls after health."""
+        return manager.activity_snapshot()
+
     @app.get('/api/catalog')
     def catalog() -> dict:
         state = readiness()

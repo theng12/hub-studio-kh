@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.49 — 2026-09-23
+
+### The activity page can say why a machine looks quiet
+
+When the Hub could not read a machine's activity it said so in a sentence with no reason
+behind it, and the gateway had nothing to act on. It now also publishes a short machine code,
+when the condition started, and which fields are missing because of it - so a page can say
+"for 12m" and tell a blip from a standing condition.
+
+Underneath that, the real cause is fixed: only the Voice worker was reporting its activity, so
+the Image, Subtitle and Music workers looked permanently unavailable and every machine with
+more than one studio was reported as partly unreadable. All four report now.
+
 ## 0.6.48 — 2026-09-23
 
 ### Answering GatewayKH about what this Mac can run

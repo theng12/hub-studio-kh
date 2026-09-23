@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.49 — 2026-09-23 · the activity reporter says why, and every studio reports
+
+GatewayKH's addendum, in full.
+
+- **A machine-readable reason beside the sentence.** Each `fleet_activity.machines[]` row now
+  carries `limitation_code` (closed vocabulary: `reporter_unavailable`, `partial_read`,
+  `stale_snapshot`, `waiting_for_worker`), `limitation_reason`, `limitation_since` (epoch
+  seconds, stamped only on a real support transition), `limitation_affects` (the field names
+  genuinely missing, derived from the row), and `next_attempt_at` / `eta_seconds` (present but
+  null - the monitor holds no exact retry time, and inventing one would be worse than saying
+  nothing). The existing `limitation` sentence is unchanged. A machine that reports fully has
+  `limitation` and `limitation_code` both null, and a test asserts those two agree.
+- **The root cause of "Direct activity partially unavailable", fixed.** Only the Voice worker
+  implemented `GET /api/fleet/activity`; image, subtitle and music answered 404, so every
+  machine with more than one studio read as partially unavailable and its state was `unknown`.
+  Image, Subtitle and Music now publish the same snapshot shape (an empty store returns a
+  valid empty snapshot, never 404), and the Hub's validator accepts all four studios and the
+  `music` operation. The 404-still-means-unavailable rule is unchanged, so an older worker is
+  still handled.
+- Honest boundary: `fleet_activity.machines[]` still groups only the `image` and `voice`
+  studios, so the new Subtitle and Music reporters are accepted and recorded but do not yet
+  add a machine row of their own.
+
 ## 0.6.48 — 2026-09-23 · the capacity, worker and model-health contract
 
 GatewayKH, which routes Story Studio's work to Studio Hub locations, measured six gaps and

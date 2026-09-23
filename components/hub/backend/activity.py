@@ -27,8 +27,35 @@ _MAX_ID = 160
 _MAX_MODEL = 500
 _MAX_ERROR_CODE = 80
 VALID_ORIGINS = frozenset({"hub", "local_ui", "api", "unknown"})
-VALID_OPERATIONS = frozenset({"image", "speech", "transcription"})
+# A worker names itself with the modality the Hub registers it under, so the
+# Subtitle worker reports "transcription" (its registry modality) and Music
+# reports "music".  ``expected_studio`` in validate_snapshot is that modality.
+VALID_STUDIOS = frozenset({"image", "voice", "transcription", "music"})
+VALID_OPERATIONS = frozenset({"image", "speech", "transcription", "music"})
+_ALLOWED_OPERATIONS = {
+    "image": frozenset({"image"}),
+    "voice": frozenset({"speech", "transcription"}),
+    "transcription": frozenset({"transcription"}),
+    "music": frozenset({"music"}),
+}
+_DEFAULT_OPERATION = {
+    "image": "image", "voice": "speech",
+    "transcription": "transcription", "music": "music",
+}
 _MAX_ORIGIN_DEVICE = 160
+
+# The closed vocabulary for ``fleet_activity.machines[].limitation_code``.
+# ``None`` means the Hub said nothing; it is never a synonym for "no problem",
+# because a fully reporting machine must also carry a null code.
+LIMITATION_CODES = frozenset({
+    "reporter_unavailable", "partial_read", "stale_snapshot", "waiting_for_worker",
+})
+_LIMITATION_REASONS = {
+    "reporter_unavailable": "No reporter answered",
+    "partial_read": "Some reporters missing",
+    "stale_snapshot": "Reporter snapshot is stale",
+    "waiting_for_worker": "Waiting for reporter data",
+}
 
 
 def _finite(value, *, minimum: float | None = None) -> float | None:
@@ -98,10 +125,8 @@ def _job(value: object, *, studio: str) -> dict | None:
         if runtime > finished - started + 1:
             return None
     error_code = _text(value.get("error_code"), _MAX_ERROR_CODE)
-    operation = value.get("operation", "image" if studio == "image" else "speech")
-    if operation not in VALID_OPERATIONS or (
-        studio == "image" and operation != "image"
-    ) or (studio == "voice" and operation == "image"):
+    operation = value.get("operation", _DEFAULT_OPERATION[studio])
+    if operation not in _ALLOWED_OPERATIONS[studio]:
         return None
     # Reporters may publish a safe generic error message; the Hub never
     # persists arbitrary error text from the worker.
@@ -124,7 +149,7 @@ def validate_snapshot(value: object, *, expected_studio: str | None = None) -> d
         return None
     studio = value.get("studio")
     observed_at = _finite(value.get("observed_at"), minimum=0)
-    if studio not in {"image", "voice"} or observed_at is None or (
+    if studio not in VALID_STUDIOS or observed_at is None or (
         expected_studio is not None and studio != expected_studio
     ):
         return None
@@ -200,6 +225,73 @@ def _reporter_support(status: dict, now: float) -> str | None:
     ):
         return "skew"
     return status.get("activity_support")
+
+
+def _limitation_code(support: set) -> str | None:
+    """Map one machine's reporter support onto the closed vocabulary.
+
+    The human sentence is kept for compatibility; the code is additive.  A
+    reporter that answered with a clock outside policy is reported as
+    ``stale_snapshot``: the Hub has a snapshot but cannot treat it as current.
+    A failed request (``error``) with no available reporter means no reporter
+    is giving activity at all, so it is ``reporter_unavailable``; when another
+    reporter is available the read is only ``partial_read``.  ``None`` is
+    reserved for a fully reporting machine and for "the Hub did not say".
+    """
+    if support == {"available"}:
+        return None
+    if "skew" in support:
+        return "stale_snapshot"
+    if support == {"unavailable"} or (
+        "error" in support and "available" not in support
+    ):
+        return "reporter_unavailable"
+    if not (support - {None}):
+        return "waiting_for_worker"
+    return "partial_read"
+
+
+def _limitation_since(status_rows: list[dict], now: float) -> float | None:
+    """Earliest recorded observation of a currently non-available support.
+
+    The monitor stamps ``activity_support_since`` when a studio's support value
+    changes, so this reports a time the Hub actually observed; it is ``None``
+    when no contributing reporter carries a stamp (for example a status dict
+    restored before this field existed) rather than a fabricated time.
+    """
+    stamps = [
+        _finite(row.get("activity_support_since"), minimum=0)
+        for row in status_rows
+        if _reporter_support(row, now) != "available"
+    ]
+    stamps = [value for value in stamps if value is not None]
+    return min(stamps) if stamps else None
+
+
+def _limitation_affects(*, state: str, has_current: bool, has_latest: bool,
+                        completed: int, failed: int,
+                        median_runtime_s: float | None) -> list[str]:
+    """Name the row fields this machine cannot currently evidence.
+
+    Derived from the row itself: a machine that still shows a current job,
+    a latest terminal job, completed history or a median does not claim those
+    fields are absent.  The aggregate names are the page-facing ones
+    (``median_runtime``), not every raw ledger key.
+    """
+    affected: list[str] = []
+    if state == "unknown":
+        affected.append("state")
+    if not has_current and not has_latest:
+        affected.extend(["studio", "model", "operation", "job_id"])
+    if not has_current:
+        affected.append("progress")
+    if completed == 0:
+        affected.append("completed")
+    if failed == 0:
+        affected.append("failed")
+    if median_runtime_s is None:
+        affected.append("median_runtime")
+    return affected
 
 
 def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
@@ -492,6 +584,22 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
         median_runtime_s, relative = _performance(
             machine, active_events, current, latest, max(since_s, active_since or since_s),
         )
+        limitation_code = _limitation_code(support)
+        # The Hub retries every reporter on its next poll cycle but does not
+        # schedule an exact per-studio attempt, so it has no next_attempt_at or
+        # eta_seconds to publish.  The keys stay present and null rather than
+        # carrying a fabricated retry time.
+        limitation_since = (
+            _limitation_since(status_rows, now) if limitation_code else None
+        )
+        limitation_affects = (
+            _limitation_affects(
+                state=state, has_current=current is not None,
+                has_latest=latest is not None, completed=completed,
+                failed=failed, median_runtime_s=median_runtime_s,
+            )
+            if limitation_code else None
+        )
         timeline = [row for row in events if row["activity_received_at"] >= since_s][:20]
         row = {
             "machine": machine, "state": state, "state_since": state_since,
@@ -514,7 +622,15 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
                 partial=(not complete),
                 active_since=active_since,
             ),
-            "limitation": limitation, "timeline": timeline,
+            "limitation": limitation,
+            "limitation_code": limitation_code,
+            "limitation_reason": (
+                _LIMITATION_REASONS[limitation_code] if limitation_code else None
+            ),
+            "limitation_since": limitation_since,
+            "limitation_affects": limitation_affects,
+            "next_attempt_at": None, "eta_seconds": None,
+            "timeline": timeline,
         }
         rows.append(row)
         pulse[state] += 1
