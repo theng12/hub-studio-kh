@@ -249,15 +249,23 @@ def trusted_publisher() -> dict[str, Any] | None:
 
 
 def set_trusted_publisher(body: Any) -> dict[str, Any]:
-    """Set or replace the trusted gateway key.  Owner action (Hub token only)."""
+    """Set or replace the trusted gateway key.  Owner action (Hub token only).
+
+    ``publisher_id`` is a display label, not part of the trust decision, so it is
+    optional: absent or blank stores ``None`` and the GET route reports it as
+    null.  The 64-hex/base64 ``public_key`` is the only required field.
+    """
     if not isinstance(body, dict):
         raise ReleaseRefused(400, "body must be a JSON object")
-    publisher_id = body.get("publisher_id")
-    if not isinstance(publisher_id, str) or not publisher_id.strip():
-        raise ReleaseRefused(400, "publisher_id must be a non-empty string")
-    publisher_id = publisher_id.strip()
-    if len(publisher_id) > 128:
-        raise ReleaseRefused(400, "publisher_id is longer than 128 characters")
+    raw_publisher_id = body.get("publisher_id")
+    if raw_publisher_id is None:
+        publisher_id = None
+    elif not isinstance(raw_publisher_id, str):
+        raise ReleaseRefused(400, "publisher_id must be a string when given")
+    else:
+        publisher_id = raw_publisher_id.strip() or None
+        if publisher_id is not None and len(publisher_id) > 128:
+            raise ReleaseRefused(400, "publisher_id is longer than 128 characters")
     raw = _parse_public_key(body.get("public_key"))
     key_id = fingerprint(raw)
     record = {

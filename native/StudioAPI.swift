@@ -985,6 +985,12 @@ final class NativeWorkspaceStore: ObservableObject {
     private var offeredReleaseDescriptor: ReleaseDescriptor?
     /// Persist or clear the pinned key with this Mac's controller membership.
     var onReleasePublisherKeyChanged: ((ReleasePublisherKey?) -> Void)?
+    /// The controller's own release-signing identity as its route reports it — what a joining node
+    /// pins. Kept apart from `releasePublisherKey`, which is the key already pinned on this Mac.
+    @Published private(set) var controllerReleaseIdentity: ReleaseIdentity?
+    /// The gateway key the owner has installed on this controller, or nil when none is installed.
+    /// Read from `trusted_publisher` on `GET /api/hub/release`; never inferred from a release.
+    @Published private(set) var trustedPublisher: TrustedPublisher?
     /// The existing restart path, called once, after a verified swap.
     var onReleaseRestartRequested: (() -> Void)?
     /// Performs the swap of a verified artifact. Injectable so the download-and-verify path can be
@@ -1135,6 +1141,8 @@ final class NativeWorkspaceStore: ObservableObject {
         releaseRefusal = nil
         installingRelease = false
         releaseProgress = nil
+        controllerReleaseIdentity = nil
+        trustedPublisher = nil
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -3167,36 +3175,43 @@ final class NativeWorkspaceStore: ObservableObject {
         do {
             let presented = try await readReleaseIdentity()
             guard connectionID == requestConnection else { return }
+            controllerReleaseIdentity = presented
             if let existing = releasePublisherKey {
                 guard existing.fingerprint == presented.fingerprint else {
-                    let descriptor = try? await readRelease()
-                    offeredRelease = descriptor?.offered
-                    offeredReleaseDescriptor = descriptor
+                    let answer = try? await readRelease()
+                    guard connectionID == requestConnection else { return }
+                    trustedPublisher = answer?.trustedPublisher
+                    offeredRelease = answer?.descriptor?.offered
+                    offeredReleaseDescriptor = answer?.descriptor
                     updateOffered = false
                     releaseRefusal = "The controller now presents a different release-signing key (\(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
                     return
                 }
             } else {
                 // Pin it, then wait for the next check to verify anything against it.
-                releasePublisherKey = presented
-                onReleasePublisherKeyChanged?(presented)
-                let descriptor = try? await readRelease()
+                let pinned = presented.publisherKey
+                releasePublisherKey = pinned
+                onReleasePublisherKeyChanged?(pinned)
+                let answer = try? await readRelease()
                 guard connectionID == requestConnection else { return }
-                offeredRelease = descriptor?.offered
-                offeredReleaseDescriptor = descriptor
+                trustedPublisher = answer?.trustedPublisher
+                offeredRelease = answer?.descriptor?.offered
+                offeredReleaseDescriptor = answer?.descriptor
                 updateOffered = false
                 releaseRefusal = "This Mac just pinned the controller's release-signing key (\(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
                 return
             }
             guard let pinnedKey = releasePublisherKey else { return }
-            guard let descriptor = try await readRelease() else {
+            let answer = try await readRelease()
+            guard connectionID == requestConnection else { return }
+            trustedPublisher = answer.trustedPublisher
+            guard let descriptor = answer.descriptor else {
                 offeredRelease = nil
                 offeredReleaseDescriptor = nil
                 updateOffered = false
                 releaseRefusal = nil
                 return
             }
-            guard connectionID == requestConnection else { return }
             offeredRelease = descriptor.offered
             offeredReleaseDescriptor = descriptor
             guard descriptor.controllerKeyId == pinnedKey.fingerprint else {
@@ -3233,6 +3248,44 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             updateOffered = false
             releaseRefusal = Self.actionable(error, action: "Read the update offer")
+        }
+    }
+
+    /// Install or replace the trusted gateway publisher key on this controller.
+    ///
+    /// This is the owner's decision and is never implied by a release or run on a timer: the
+    /// operator presses the button and confirms the dialog, and only then is the route sent. An
+    /// empty key is refused here with a plain sentence, before any request. The publisher id is a
+    /// display label and may be blank. A success refreshes what the route reports and lands in the
+    /// existing Connections notice.
+    func changePublisherKey(publicKey: String, publisherId: String = "") async -> Bool {
+        guard let requestConnection = connectionID else {
+            note(.failure, "Start the local services before changing the publisher key. Nothing was sent.")
+            return false
+        }
+        let key = publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            note(.failure, "Paste the gateway's Ed25519 public key before changing it — nothing was sent.")
+            return false
+        }
+        let named = publisherId.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let requested = ReleaseTrustRequest(publicKey: key,
+                                                publisherId: named.isEmpty ? nil : named)
+            let result: ReleaseTrustResult = try await sendJSON(
+                ["api", "hub", "release", "trust"], method: "POST", body: requested)
+            guard connectionID == requestConnection else { return false }
+            await refreshRelease()
+            guard connectionID == requestConnection else { return false }
+            let fingerprint = result.fingerprint ?? result.publisherKeyId ?? "unknown"
+            let listed = result.publisherId ?? (named.isEmpty ? "no publisher name" : named)
+            note(.success, "Installed the trusted gateway publisher key \(fingerprint) (\(listed)). "
+                 + "This Mac now accepts app releases signed by that key.")
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            note(.failure, Self.actionable(error, action: "Change the publisher key"))
+            return false
         }
     }
 
@@ -3343,12 +3396,12 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    private func readReleaseIdentity() async throws -> ReleasePublisherKey {
+    private func readReleaseIdentity() async throws -> ReleaseIdentity {
         let data = try await performData(makeRequest(["api", "hub", "release", "identity"]))
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReleaseError("The controller's release identity was not a JSON object.")
         }
-        guard object["algorithm"] as? String == "ed25519" else {
+        guard let algorithm = object["algorithm"] as? String, algorithm == "ed25519" else {
             throw ReleaseError("The controller signs releases with \(object["algorithm"] as? String ?? "an unknown algorithm"), not ed25519.")
         }
         guard let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex),
@@ -3356,20 +3409,41 @@ final class NativeWorkspaceStore: ObservableObject {
               ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else {
             throw ReleaseError("The controller's release identity is not a 64-hex Ed25519 key whose fingerprint matches.")
         }
-        return ReleasePublisherKey(publicKey: publicKey, fingerprint: fingerprint)
+        return ReleaseIdentity(algorithm: algorithm, publicKey: publicKey, fingerprint: fingerprint)
     }
 
-    private func readRelease() async throws -> ReleaseDescriptor? {
+    /// The answer to `GET /api/hub/release`: the held descriptor (if any) plus the gateway key the
+    /// owner installed. Keeping them together means one read reports both what is offered and
+    /// whether this Mac could accept it at all.
+    private struct ReleaseAnswer {
+        let descriptor: ReleaseDescriptor?
+        let trustedPublisher: TrustedPublisher?
+    }
+
+    /// Parse the additive `trusted_publisher` value. A null, or an object carrying no 64-hex
+    /// fingerprint, is reported as no installed key rather than a fabricated one.
+    static func parseTrustedPublisher(_ value: Any?) -> TrustedPublisher? {
+        guard let object = value as? [String: Any] else { return nil }
+        let publisherId = (object["publisher_id"] as? String)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex)
+        guard fingerprint != nil || publisherId != nil else { return nil }
+        return TrustedPublisher(publisherId: publisherId, fingerprint: fingerprint)
+    }
+
+    private func readRelease() async throws -> ReleaseAnswer {
         let data = try await performData(makeRequest(["api", "hub", "release"]))
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let release = object["release"] else {
             throw ReleaseError("The controller's release answer was not JSON with a release field.")
         }
-        if release is NSNull { return nil }
+        let trusted = Self.parseTrustedPublisher(object["trusted_publisher"])
+        if release is NSNull { return ReleaseAnswer(descriptor: nil, trustedPublisher: trusted) }
         guard let dictionary = release as? [String: Any], let descriptor = ReleaseDescriptor(json: dictionary) else {
             throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
         }
-        return descriptor
+        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted)
     }
 
     /// Show a credential without publishing it. The app already holds this token to talk to
@@ -4245,6 +4319,19 @@ private struct ModelHealthRecheck: Encodable { let model: String; let studio: St
 private struct HubModelRecheck: Decodable { let ok: Bool }
 
 private struct RoleChange: Encodable { let role: String }
+/// What the owner's app sends to `POST /api/hub/release/trust`. `publisherId` is a display label
+/// and is omitted when blank; the Hub stores null rather than inventing a name.
+private struct ReleaseTrustRequest: Encodable {
+    let publicKey: String
+    let publisherId: String?
+}
+/// The Hub's answer to a trust install. `publisherKeyId` and `fingerprint` are the same value; both
+/// are read so a slightly older Hub that returns only one still reports correctly.
+private struct ReleaseTrustResult: Decodable {
+    let publisherId: String?
+    let publisherKeyId: String?
+    let fingerprint: String?
+}
 private struct JoinRequest: Encodable {
     let nodeId: String
     let name: String

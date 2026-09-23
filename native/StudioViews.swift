@@ -278,6 +278,12 @@ struct StudioContent: View {
     @StateObject private var thumbnails = ImageThumbnailStore()
     /// The uncertain job the operator asked to discard, held until they confirm.
     @State private var pendingDiscard: PendingDiscard?
+    /// The gateway public key being pasted, and its optional label. Kept as plain text so the
+    /// operator can read back exactly what they pasted before confirming.
+    @State private var publisherKeyDraft = ""
+    @State private var publisherIdDraft = ""
+    /// Set while the confirmation dialog is up. The key is not sent until the operator confirms.
+    @State private var confirmingPublisherKeyChange = false
     /// A sample is seeded into an empty prompt the first time a studio is opened, so a brand-new
     /// user has something to press Generate on. The flag keeps it from refilling a field the
     /// operator deliberately cleared.
@@ -660,6 +666,26 @@ struct StudioContent: View {
                 Button("Keep", role: .cancel) { pendingDiscard = nil }
             } message: { _ in
                 Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
+            }
+        // Changing the trusted publisher key decides which Macs may update this Mac, so it is a
+        // confirmation like discarding an attempt: the action is spelled out and the cost is named.
+        .confirmationDialog(
+            "Change the trusted publisher key?",
+            isPresented: $confirmingPublisherKeyChange,
+            titleVisibility: .visible) {
+                Button("Change Publisher Key", role: .destructive) {
+                    let key = publisherKeyDraft
+                    let publisher = publisherIdDraft
+                    Task {
+                        if await workspace.changePublisherKey(publicKey: key, publisherId: publisher) {
+                            publisherKeyDraft = ""
+                            publisherIdDraft = ""
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This changes which Macs are allowed to update this Mac. A wrong key means releases will be refused, and putting the right key back requires the owner to paste it on this Mac again.")
             }
     }
 
@@ -2528,6 +2554,7 @@ struct StudioContent: View {
                 Text("Local creation works independently. Connecting a controller is optional.").font(.headline)
                 Divider()
                 releaseUpdateSection
+                appUpdatesSection
                 localAPI
                 Divider()
                 fleetSection
@@ -2590,6 +2617,100 @@ struct StudioContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.45)))
+        }
+    }
+
+    /// The owner's front door to the gateway key this Mac trusts for app releases.
+    ///
+    /// Two fingerprints are shown, and the difference matters: this Mac's own publisher key is what
+    /// a joining node pins, while the trusted gateway key is what allows GatewayKH to push a
+    /// release here. Only the second is changeable here, and changing it decides which Macs may
+    /// update this Mac, so the button confirms first and says what a wrong key costs.
+    @ViewBuilder private var appUpdatesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("App updates")
+            publisherIdentityRow
+            Divider()
+            trustedPublisherRow
+            Divider()
+            publisherKeyControl
+        }
+    }
+
+    /// This controller's own release-signing key: the fingerprint a joining node pins.
+    @ViewBuilder private var publisherIdentityRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("This Mac's publisher key").font(.callout).fontWeight(.semibold)
+            if let identity = workspace.controllerReleaseIdentity {
+                LabeledContent("Fingerprint") {
+                    Text(identity.fingerprint)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Algorithm", value: identity.algorithm)
+                Text("A Mac that joins this one pins this fingerprint, so this is who it will accept an app release from.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(connected
+                     ? "This Mac's publisher key is unavailable until the services refresh."
+                     : "Start the local services to read this Mac's publisher key.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The gateway key the owner has installed, or plainly that none is installed.
+    @ViewBuilder private var trustedPublisherRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Trusted gateway key").font(.callout).fontWeight(.semibold)
+            if let fingerprint = workspace.trustedPublisher?.installedFingerprint {
+                LabeledContent("Fingerprint") {
+                    Text(fingerprint)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                }
+                if let publisher = workspace.trustedPublisher?.publisherId {
+                    LabeledContent("Publisher", value: publisher)
+                }
+                Text("A release pushed by GatewayKH is accepted only when it is signed by this key.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("No publisher key installed yet — this Mac cannot accept an app release.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Paste a replacement key. The button confirms before anything is sent, and an empty field is
+    /// refused with a message rather than a request.
+    @ViewBuilder private var publisherKeyControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Change publisher key").font(.callout).fontWeight(.semibold)
+            HStack {
+                TextField("64 hex or base64 Ed25519 public key", text: $publisherKeyDraft)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
+                    .font(.system(.callout, design: .monospaced))
+                TextField("Publisher id (optional)", text: $publisherIdDraft)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Button("Change Publisher Key") {
+                    // An empty paste has nothing to confirm: refuse it with the same clear message
+                    // the store gives, and never send the route.
+                    if publisherKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Task { _ = await workspace.changePublisherKey(publicKey: publisherKeyDraft,
+                                                                     publisherId: publisherIdDraft) }
+                    } else {
+                        confirmingPublisherKeyChange = true
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!connected)
+                Text("Paste the public key GatewayKH publishes. It must be 64 hex characters (either case) or standard base64.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

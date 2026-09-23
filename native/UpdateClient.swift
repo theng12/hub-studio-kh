@@ -117,6 +117,37 @@ struct ReleasePublisherKey: Equatable {
     var shortFingerprint: String { String(fingerprint.prefix(12)) }
 }
 
+/// The controller's own release-signing identity as `GET /api/hub/release/identity` reports it:
+/// what a joining node pins. The algorithm is carried rather than assumed so the screen can say
+/// what the controller actually signs with.
+struct ReleaseIdentity: Equatable {
+    /// The route's own algorithm string (the app refuses anything but ``ed25519``).
+    let algorithm: String
+    /// Lowercase hex of the raw 32-byte public key.
+    let publicKey: String
+    /// Lowercase hex SHA-256 of the raw public key.
+    let fingerprint: String
+
+    /// A short, human-readable fingerprint for the refusal banner.
+    var shortFingerprint: String { String(fingerprint.prefix(12)) }
+
+    var publisherKey: ReleasePublisherKey {
+        ReleasePublisherKey(publicKey: publicKey, fingerprint: fingerprint)
+    }
+}
+
+/// The gateway publisher key the owner installed on this controller, reported by
+/// `GET /api/hub/release` as ``trusted_publisher``. ``nil`` (the whole value) means no key has
+/// been installed, so this Mac cannot accept a pushed release. A body carrying neither a
+/// publisher id nor a 64-hex fingerprint is treated the same way rather than invented.
+struct TrustedPublisher: Equatable {
+    let publisherId: String?
+    let fingerprint: String?
+
+    /// The fingerprint to show, or nil when there is no usable key.
+    var installedFingerprint: String? { fingerprint }
+}
+
 enum ReleaseSignature {
     static func isHex64(_ text: String) -> Bool {
         text.count == 64 && text.allSatisfy { $0.isHexDigit }

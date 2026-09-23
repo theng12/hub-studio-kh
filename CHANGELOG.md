@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.51 — 2026-09-23 · the publisher key has a front door
+
+- **Connections now shows and changes the trusted publisher key.** The gateway's Ed25519 key -
+  the one that decides which releases this Mac will accept - was installable only by curl. The
+  section shows this Mac's own publisher fingerprint (what a joining node pins) and the installed
+  gateway fingerprint, or plainly says none is installed and that this Mac cannot accept an app
+  release. Pasting a key and pressing Change asks for confirmation first, because it changes who
+  may update this Mac and a wrong key means every release is refused.
+- **An omitted publisher id is accepted** by `POST /api/hub/release/trust`; the public key is
+  still the only required field and is still validated.
+- **`GET /api/hub/release` reports `trusted_publisher`** ({publisher_id, fingerprint} or null),
+  so a page can say which key is installed. `release` is unchanged.
+
 ## 0.6.50 — 2026-09-23 · updating a Mac from its controller
 
 The remote-update design's two halves are now built. Nothing changes for a fleet until

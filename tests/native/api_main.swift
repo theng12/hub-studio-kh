@@ -125,6 +125,11 @@ final class FixtureProtocol: URLProtocol {
     static var releaseArtifactData = Data()
     static var releaseArtifactOverride: Data?
     static var releaseArtifactReads = 0
+    /// The gateway key the owner has installed, as the fixture's `GET /api/hub/release` reports it
+    /// under `trusted_publisher`. `nil` means none is installed. A trust POST records the body and,
+    /// when the key parses, replaces this value the way the real Hub would.
+    static var releaseTrustedPublisher: [String: Any]?
+    static var releaseTrustBodies: [[String: Any]] = []
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -169,12 +174,14 @@ final class FixtureProtocol: URLProtocol {
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
     static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
     static func setMemoryUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; memoryUnavailable = value }
-    static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil) {
+    static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil,
+                           trustedPublisher: [String: Any]? = nil) {
         lock.lock(); defer { lock.unlock() }
         releaseIdentityData = identity
         releaseBodyData = body
         releaseArtifactData = artifact
         releaseArtifactOverride = override
+        releaseTrustedPublisher = trustedPublisher
     }
     static func clearRelease() {
         lock.lock(); defer { lock.unlock() }
@@ -182,8 +189,16 @@ final class FixtureProtocol: URLProtocol {
         releaseBodyData = nil
         releaseArtifactData = Data()
         releaseArtifactOverride = nil
+        releaseTrustedPublisher = nil
+        releaseTrustBodies = []
     }
     static func releaseReads() -> Int { lock.lock(); defer { lock.unlock() }; return releaseArtifactReads }
+    static func releaseTrustRequests() -> [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }; return releaseTrustBodies
+    }
+    static func setTrustedPublisher(_ value: [String: Any]?) {
+        lock.lock(); defer { lock.unlock() }; releaseTrustedPublisher = value
+    }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
@@ -657,8 +672,40 @@ final class FixtureProtocol: URLProtocol {
             result = releaseIdentity.map { (200, "application/json", $0) }
                 ?? (404, "application/json", Data(#"{"detail":"no release identity"}"#.utf8))
         case ("GET", "/api/hub/release"):
-            Self.lock.lock(); let releaseBody = Self.releaseBodyData; Self.lock.unlock()
-            result = (200, "application/json", releaseBody ?? Data(#"{"release":null}"#.utf8))
+            Self.lock.lock()
+            let releaseBody = Self.releaseBodyData
+            let trustedPublisher = Self.releaseTrustedPublisher
+            Self.lock.unlock()
+            var answer: [String: Any] = ["release": NSNull()]
+            if let releaseBody,
+               let parsed = (try? JSONSerialization.jsonObject(with: releaseBody)) as? [String: Any] {
+                answer = parsed
+            }
+            answer["trusted_publisher"] = trustedPublisher ?? NSNull()
+            result = (200, "application/json",
+                      (try? JSONSerialization.data(withJSONObject: answer))
+                          ?? Data(#"{"release":null,"trusted_publisher":null}"#.utf8))
+        case ("POST", "/api/hub/release/trust"):
+            let body = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]) ?? [:]
+            Self.lock.lock()
+            Self.releaseTrustBodies.append(body)
+            let typedKey = body["public_key"] as? String
+            if let typedKey, let fingerprint = ReleaseSignature.fingerprint(publicKeyHex: typedKey) {
+                let named = (body["publisher_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                Self.releaseTrustedPublisher = ["publisher_id": named ?? NSNull(),
+                                                "fingerprint": fingerprint]
+            }
+            let installed = Self.releaseTrustedPublisher
+            Self.lock.unlock()
+            let fingerprint = installed?["fingerprint"] as? String
+            let publisherId = installed?["publisher_id"] as? String
+            result = (200, "application/json",
+                      (try? JSONSerialization.data(withJSONObject: [
+                        "ok": true,
+                        "publisher_id": publisherId.map { $0 as Any } ?? NSNull(),
+                        "publisher_key_id": fingerprint.map { $0 as Any } ?? NSNull(),
+                        "fingerprint": fingerprint.map { $0 as Any } ?? NSNull(),
+                      ])) ?? Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/release/artifact"):
             Self.lock.lock()
             Self.releaseArtifactReads += 1
@@ -2064,6 +2111,74 @@ struct NativeAPITests {
                 "the report must say the services restart: \(updateStore.connectionNotice?.text ?? "nil")")
         require(updateStore.currentAppBuild == "newbuild",
                 "the installed build must become the current one so the banner clears")
+        FixtureProtocol.clearRelease()
+
+        // ── The owner's publisher-key front door ───────────────────────────────────────────
+        // A separate store and connection, exercised on its own. Every key below is generated here
+        // and thrown away; no real key is trusted.
+        let trustDirectory = temporary.appendingPathComponent("Trust State")
+        let trustStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await trustStore.connect(baseURL: URL(string: "http://127.0.0.1:45691")!,
+                                 dataDirectory: trustDirectory, token: "native-test-token")
+        trustStore.currentAppBuild = "currentbuild"
+
+        let ownKey = Curve25519.Signing.PrivateKey()
+        let ownFingerprint = releaseSha256(ownKey.publicKey.rawRepresentation)
+        let trustIdentity = releaseIdentityJSON(publicKey: ownKey.publicKey.rawRepresentation,
+                                                fingerprint: ownFingerprint)
+        FixtureProtocol.setRelease(identity: trustIdentity, body: nil, artifact: Data(),
+                                   trustedPublisher: ["publisher_id": "gatewaykh",
+                                                      "fingerprint": ownFingerprint])
+        await trustStore.refreshRelease()
+        require(trustStore.controllerReleaseIdentity?.fingerprint == ownFingerprint,
+                "the controller's own publisher fingerprint must be read from its route: \(String(describing: trustStore.controllerReleaseIdentity))")
+        require(trustStore.controllerReleaseIdentity?.publicKey
+                    == releaseHex(ownKey.publicKey.rawRepresentation),
+                "the controller's own public key must be read too")
+        require(trustStore.controllerReleaseIdentity?.algorithm == "ed25519",
+                "the identity must carry the algorithm the controller reports")
+        require(trustStore.trustedPublisher?.installedFingerprint == ownFingerprint,
+                "the installed trusted fingerprint must be displayed from the fixture: \(String(describing: trustStore.trustedPublisher))")
+        require(trustStore.trustedPublisher?.publisherId == "gatewaykh",
+                "the installed publisher id must be displayed")
+
+        // Changing it posts the exact key that was typed, then refreshes the reported state.
+        let typedKey = Curve25519.Signing.PrivateKey()
+        let typedHex = releaseHex(typedKey.publicKey.rawRepresentation)
+        let typedFingerprint = releaseSha256(typedKey.publicKey.rawRepresentation)
+        let postsBefore = FixtureProtocol.releaseTrustRequests().count
+        let changed = await trustStore.changePublisherKey(publicKey: typedHex,
+                                                          publisherId: "gatewaykh-two")
+        require(changed, "a valid publisher-key change must report success")
+        let trustPosts = FixtureProtocol.releaseTrustRequests()
+        require(trustPosts.count == postsBefore + 1,
+                "exactly one POST /api/hub/release/trust must be sent, got \(trustPosts.count - postsBefore)")
+        require(trustPosts.last?["public_key"] as? String == typedHex,
+                "the key that was typed must reach the route: \(String(describing: trustPosts.last))")
+        require(trustPosts.last?["publisher_id"] as? String == "gatewaykh-two",
+                "the publisher id that was typed must reach the route")
+        require(trustStore.trustedPublisher?.installedFingerprint == typedFingerprint,
+                "a successful change must refresh the installed fingerprint: \(String(describing: trustStore.trustedPublisher))")
+        require(trustStore.connectionNotice?.kind == .success,
+                "a successful change must be reported through the connection notice")
+
+        // An empty paste is refused with a clear message and never reaches the route.
+        let postsBeforeEmpty = FixtureProtocol.releaseTrustRequests().count
+        let emptyAccepted = await trustStore.changePublisherKey(publicKey: "   ", publisherId: "")
+        require(!emptyAccepted, "an empty publisher key must be refused")
+        require(FixtureProtocol.releaseTrustRequests().count == postsBeforeEmpty,
+                "an empty publisher key must not send the trust route")
+        require(trustStore.connectionNotice?.kind == .failure,
+                "an empty publisher key must report a clear message")
+        require(trustStore.connectionNotice?.text.contains("Paste") == true,
+                "the refusal must say what to do: \(trustStore.connectionNotice?.text ?? "nil")")
+
+        // A trust answer with no fingerprint is reported as no installed key, never invented.
+        FixtureProtocol.setTrustedPublisher(["publisher_id": "nameless", "fingerprint": NSNull()])
+        await trustStore.refreshRelease()
+        require(trustStore.trustedPublisher?.installedFingerprint == nil,
+                "a body with no 64-hex fingerprint must not invent one")
+        trustStore.disconnect()
         FixtureProtocol.clearRelease()
 
         // The swap itself: staged beside the target, the bundled runtime required, the old copy

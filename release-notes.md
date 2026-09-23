@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.51 — 2026-09-23
+
+### You can now set the key that allows app updates
+
+Under Connections there is a small "App updates" section. It shows the controller's own key
+fingerprint, and the key currently trusted for updates - or says plainly that none is installed
+and this Mac cannot accept an app release. Paste the gateway's key, press Change, confirm, and
+this Mac will accept releases signed by it. The confirmation is there on purpose: this setting
+decides which Macs may update this one.
+
 ## 0.6.50 — 2026-09-23
 
 ### A Mac can now update itself from its controller

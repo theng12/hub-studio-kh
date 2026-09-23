@@ -914,7 +914,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/hub/release")
     def get_release() -> dict[str, Any]:
-        return {"release": app_release.load_release()}
+        """What this controller holds, plus the gateway key the owner installed.
+
+        The ``release`` key is unchanged.  ``trusted_publisher`` is additive: the
+        gateway key the owner installed with ``POST /api/hub/release/trust``, or
+        null when none has been installed - so a Mac reading this route can say
+        plainly whether it can accept a pushed release at all.
+        """
+        trusted = app_release.trusted_publisher()
+        return {
+            "release": app_release.load_release(),
+            "trusted_publisher": None if trusted is None else {
+                "publisher_id": trusted.get("publisher_id"),
+                "fingerprint": trusted.get("fingerprint"),
+            },
+        }
 
     @app.post("/api/hub/release")
     def push_release(body: dict[str, Any]) -> dict[str, Any]:

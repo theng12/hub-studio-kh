@@ -157,10 +157,14 @@ def test_good_release_is_accepted_stored_and_countersigned(hub):
     assert app_release.ARTIFACT_FILE.read_bytes() == artifact
     assert json.loads(app_release.RELEASE_FILE.read_text()) == stored
 
-    # GET returns exactly what is held.
+    # GET returns exactly what is held, plus the installed trust anchor.
     fetched = hub.get("/api/hub/release", headers=_fleet_headers())
     assert fetched.status_code == 200, fetched.text
-    assert fetched.json() == {"release": stored}
+    assert fetched.json()["release"] == stored
+    assert fetched.json()["trusted_publisher"] == {
+        "publisher_id": "gatewaykh",
+        "fingerprint": hashlib.sha256(ed25519.public_key(gateway_seed)).hexdigest(),
+    }
 
     # The private key stays private, on disk 0600.
     mode = stat.S_IMODE(os.stat(app_release.CONTROLLER_KEY_FILE).st_mode)
@@ -200,7 +204,7 @@ def test_artifact_sha256_mismatch_is_refused_and_nothing_is_stored(hub):
     assert "sha256" in response.json()["detail"].lower()
     assert _nothing_stored()
     assert hub.get("/api/hub/release",
-                   headers=_fleet_headers()).json() == {"release": None}
+                   headers=_fleet_headers()).json()["release"] is None
 
 
 def test_release_signed_by_the_wrong_key_is_refused(hub):
@@ -327,7 +331,8 @@ def test_trust_is_hub_only_and_get_routes_are_fleet_readable(hub):
 
     seed, public = _keypair()
     empty = hub.get("/api/hub/release", headers=_fleet_headers())
-    assert empty.status_code == 200 and empty.json() == {"release": None}
+    assert empty.status_code == 200
+    assert empty.json() == {"release": None, "trusted_publisher": None}
 
     refused = hub.post("/api/hub/release/trust", headers=_fleet_headers(),
                        json={"public_key": public.hex(), "publisher_id": "gatewaykh"})
@@ -362,3 +367,75 @@ def test_trust_rejects_a_bad_key(hub):
     response = hub.post("/api/hub/release/trust", headers=_hub_headers(),
                         json={"public_key": "", "publisher_id": "gatewaykh"})
     assert response.status_code == 400, response.text
+
+
+# ── what GET /api/hub/release reports about the installed key ──────────────
+
+
+def test_get_release_reports_the_installed_trusted_publisher(hub):
+    """The additive ``trusted_publisher`` field: null before an owner installs a
+    gateway key, the exact fingerprint after, and never a fabricated value."""
+    from components.hub.backend import ed25519
+
+    seed, public = _keypair()
+    fingerprint = hashlib.sha256(public).hexdigest()
+
+    # Before any trust install the key is absent, reported as an explicit null.
+    before = hub.get("/api/hub/release", headers=_fleet_headers())
+    assert before.status_code == 200, before.text
+    assert before.json() == {"release": None, "trusted_publisher": None}
+    assert "trusted_publisher" in before.json()
+
+    # After the owner installs one, GET reports it verbatim.
+    _trust(hub, seed, publisher_id="gatewaykh")
+    after = hub.get("/api/hub/release", headers=_fleet_headers())
+    assert after.status_code == 200, after.text
+    assert after.json() == {
+        "release": None,
+        "trusted_publisher": {"publisher_id": "gatewaykh",
+                              "fingerprint": fingerprint},
+    }
+
+    # Setting a second key replaces the reported one; the old key is never kept.
+    other_seed, other_public = _keypair()
+    _trust(hub, other_seed, publisher_id="gatewaykh-two")
+    replaced = hub.get("/api/hub/release", headers=_fleet_headers())
+    assert replaced.json()["trusted_publisher"] == {
+        "publisher_id": "gatewaykh-two",
+        "fingerprint": hashlib.sha256(other_public).hexdigest(),
+    }
+
+    # The "release" key still carries exactly the held descriptor (null here).
+    assert replaced.json()["release"] is None
+
+
+def test_get_release_release_key_is_unchanged_by_the_added_field(hub):
+    """The ``release`` value a node reads must be byte-for-byte what it was."""
+    gateway_seed, _ = _keypair()
+    _trust(hub, gateway_seed)
+    artifact = b"descriptor-is-not-touched"
+    descriptor = _descriptor(artifact, gateway_seed)
+    stored = hub.post("/api/hub/release", headers=_fleet_headers(),
+                      json=_body(descriptor, artifact)).json()
+
+    answer = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    assert set(answer) == {"release", "trusted_publisher"}
+    assert answer["release"] == stored
+    # The descriptor itself gained nothing from the additive response field.
+    assert set(answer["release"]) == set(stored)
+    assert "trusted_publisher" not in answer["release"]
+
+
+def test_trust_accepts_an_omitted_publisher_id(hub):
+    """The publisher id is a display label; the owner's app may leave it blank."""
+    seed, public = _keypair()
+    response = hub.post("/api/hub/release/trust", headers=_hub_headers(),
+                        json={"public_key": public.hex()})
+    assert response.status_code == 200, response.text
+    assert response.json()["fingerprint"] == hashlib.sha256(public).hexdigest()
+    assert response.json()["publisher_id"] is None
+    reported = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    assert reported["trusted_publisher"] == {
+        "publisher_id": None,
+        "fingerprint": hashlib.sha256(public).hexdigest(),
+    }
