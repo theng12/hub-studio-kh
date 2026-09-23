@@ -1859,3 +1859,12 @@ nothing said what this Mac offers. Released as **0.6.46** (build `67dc188`):
 Local installs now go through `packaging/install_local.sh`, which verifies the build that
 landed and fails loudly: the previous ad-hoc step chained the swap with `|| true`, so a swap
 that never happened looked like success. All four drives at **0.6.46 / 67dc188**.
+
+[OWNER DECISION 2026-09-23] Remote update: **designed, not implemented.** The owner will
+keep copying from an SSD for now. The design is recorded in
+`.planning/2026-09-10-standalone-app-feasibility/remote-update-design.md`:
+Track A (components-only patch, 1.7 MB of Hub Python, restart only) and Track B
+(controller-served full app update: publish, advertise, fetch with ranges, verify, swap,
+rollback, report). Trust is the hard part and is why signing should come first; three open
+questions are listed there for the owner (controller or GatewayKH as publisher; whether
+Track A is worth it; signing before or after).
