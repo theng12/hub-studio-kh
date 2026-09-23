@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.52 — 2026-09-23
+
+### It will not install an older version, and it will not re-download
+
+If a controller was holding an older release than the one on your Mac, the app offered it as an
+update. It now says so plainly - "Older release available" - and gives you no button, so a stale
+controller cannot roll a Mac backwards. A rebuild of the same version is still offered.
+
+And if a 1.2 GB download was interrupted, or the install failed after it finished, the app used
+to start again from nothing. It now keeps what it already has, carries on from where it stopped,
+and keeps the finished download until an install actually succeeds.
+
 ## 0.6.51 — 2026-09-23
 
 ### You can now set the key that allows app updates

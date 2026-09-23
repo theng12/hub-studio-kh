@@ -679,6 +679,174 @@ private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// Streams one ranged artifact download to a file, appending to an existing fragment when the
+/// controller honours Range.
+///
+/// URLSession's async byte sequence yields one byte at a time, which is useless for a gigabyte
+/// image, so this holds its own session and data-task delegate and writes each received chunk
+/// straight to disk. It leaves the file in place on every failure: the caller resumes from its
+/// length, or discards it when it proves not to be the signed artifact.
+private final class ResumableArtifactDownloader: NSObject, URLSessionDataDelegate {
+    private let configuration: URLSessionConfiguration
+    private let destination: URL
+    private let startingOffset: Int64
+    private let expectedSha256: String
+    private let onProgress: (Int64) -> Void
+
+    private var handle: FileHandle?
+    private var continuation: CheckedContinuation<Int64, Error>?
+    private var failure: Error?
+    private var received: Int64
+    private var lastReported: Int64
+    private var expectedHost: String?
+    private var expectedPort: Int?
+
+    init(configuration: URLSessionConfiguration,
+         destination: URL,
+         startingOffset: Int64,
+         expectedSha256: String,
+         onProgress: @escaping (Int64) -> Void) {
+        self.configuration = configuration
+        self.destination = destination
+        self.startingOffset = startingOffset
+        self.expectedSha256 = expectedSha256
+        self.onProgress = onProgress
+        self.received = startingOffset
+        self.lastReported = startingOffset
+        super.init()
+    }
+
+    /// Download `request` (already carrying a Range header when resuming) and return the number of
+    /// bytes now on disk. Throws with the partial file left in place.
+    func run(_ request: URLRequest) async throws -> Int64 {
+        let configuration = configuration.copy() as! URLSessionConfiguration
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        expectedHost = request.url?.host
+        expectedPort = request.url?.port
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            session.dataTask(with: request).resume()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse else {
+            failure = ReleaseError("The controller's artifact route returned no HTTP response.")
+            completionHandler(.cancel)
+            return
+        }
+        guard http.url?.host == expectedHost, http.url?.port == expectedPort else {
+            failure = ReleaseError("The controller's artifact route answered from an address this Mac did not ask.")
+            completionHandler(.cancel)
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            failure = ReleaseError("The controller's artifact route answered HTTP \(http.statusCode). Nothing was installed.")
+            completionHandler(.cancel)
+            return
+        }
+        // The route advertises the digest; the signed descriptor's sha256 stays authoritative and
+        // is checked over the bytes too. A disagreement here is refused all the same.
+        if let announced = http.value(forHTTPHeaderField: "X-Content-SHA256"),
+           announced.lowercased() != expectedSha256 {
+            failure = ReleaseError("The controller's artifact route advertises SHA-256 \(announced), not the signed \(expectedSha256). Nothing was installed.")
+            completionHandler(.cancel)
+            return
+        }
+        do {
+            var resumeAt = received
+            if startingOffset > 0, http.statusCode == 200 {
+                // The server ignored the Range header and is sending the whole artifact, so the
+                // stale fragment is replaced rather than appended to.
+                resumeAt = 0
+                try? FileManager.default.removeItem(at: destination)
+            } else if startingOffset > 0, http.statusCode == 206 {
+                // A 206 must actually start where the fragment ends, or the bytes would land at
+                // the wrong offset in the file.
+                if let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
+                   let start = Self.rangeStart(contentRange), start != received {
+                    try? FileManager.default.removeItem(at: destination)
+                    failure = ReleaseError("The controller answered a range starting at byte \(start), not the \(received) this Mac has. The part-downloaded file was discarded; press Install again.")
+                    completionHandler(.cancel)
+                    return
+                }
+            } else {
+                // Nothing to resume from: start a clean file.
+                try? FileManager.default.removeItem(at: destination)
+            }
+            if !FileManager.default.fileExists(atPath: destination.path) {
+                guard FileManager.default.createFile(atPath: destination.path, contents: nil,
+                                                     attributes: [.posixPermissions: 0o600]) else {
+                    throw ReleaseError("Could not create the private update file.")
+                }
+            }
+            let handle = try FileHandle(forWritingTo: destination)
+            try handle.seekToEnd()
+            // A fragment seeded or left by an earlier attempt must be private too.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                   ofItemAtPath: destination.path)
+            self.handle = handle
+            received = resumeAt
+            completionHandler(.allow)
+        } catch {
+            failure = error
+            completionHandler(.cancel)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let handle else { return }
+        do {
+            try handle.write(contentsOf: data)
+            received += Int64(data.count)
+            // Report at most every 8 MB; a callback per chunk is thousands of main-actor hops.
+            if received - lastReported >= 8 << 20 {
+                lastReported = received
+                onProgress(received)
+            }
+        } catch {
+            failure = ReleaseError("Could not write the update to disk: \(error.localizedDescription)")
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        try? handle?.close()
+        handle = nil
+        let continuation = continuation
+        self.continuation = nil
+        if let failure {
+            continuation?.resume(throwing: failure)
+        } else if let error {
+            let receivedText = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
+            continuation?.resume(throwing: ReleaseError("The download stopped after \(receivedText): \(error.localizedDescription). The part-downloaded file is kept; press Install again to resume."))
+        } else {
+            continuation?.resume(returning: received)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+
+    /// `bytes 1000-4095/4096` -> `1000`.
+    private static func rangeStart(_ contentRange: String) -> Int64? {
+        let trimmed = contentRange.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasPrefix("bytes ") else { return nil }
+        let afterUnit = trimmed.dropFirst("bytes ".count)
+        guard let range = afterUnit.split(separator: "/").first,
+              let start = range.split(separator: "-").first else { return nil }
+        return Int64(start)
+    }
+}
+
 @MainActor
 final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playing = false
@@ -956,9 +1124,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The release the controller holds, if any. Shown even when it cannot be installed, so the
     /// reason is visible rather than the offer silently vanishing.
     @Published private(set) var offeredRelease: OfferedRelease?
-    /// True only when the release is signed by the pinned controller key, differs from this app's
-    /// own StudioHubBuild, and has an artifact form this Mac can install.
+    /// True only when the release is signed by the pinned controller key, is newer than (or a
+    /// rebuild of) the version installed here, and has an artifact form this Mac can install.
     @Published private(set) var updateOffered = false
+    /// True when the controller holds a release older than the version installed here. Shown
+    /// distinctly and with no Install button, so a stale controller cannot roll this Mac backwards.
+    @Published private(set) var offeredReleaseIsOlder = false
     /// Why an offered release cannot be installed, in a sentence the banner shows verbatim.
     @Published private(set) var releaseRefusal: String?
     /// True while the artifact is downloading, verifying or being swapped in.
@@ -978,6 +1149,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The build this running app was packaged as. Read from the bundle, and writable so the
     /// contract tests can stand in for a packaged app; a plain CLI has no StudioHubBuild.
     var currentAppBuild: String? = Bundle.main.object(forInfoDictionaryKey: "StudioHubBuild") as? String
+    /// The product version this running app was packaged as (`CFBundleShortVersionString`), used
+    /// with `currentAppBuild` to order an advertised release against this one. Writable for tests.
+    var currentAppVersion: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     /// The app bundle an update replaces.
     var installedAppURL: URL = Bundle.main.bundleURL
     /// The descriptor behind `offeredRelease`, kept for install so verification runs against the
@@ -1013,6 +1187,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
     private let session: URLSession
+    /// The same configuration `session` was built from, so the artifact downloader's own session
+    /// (which needs its own data delegate) still uses the fixture protocol in tests.
+    private let sessionConfiguration: URLSessionConfiguration
     private let redirectDelegate: RejectRedirects
     private var baseURL: URL?
     private var hubToken: String?
@@ -1051,6 +1228,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let configuration = sessionConfiguration.copy() as! URLSessionConfiguration
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
+        self.sessionConfiguration = configuration
         redirectDelegate = RejectRedirects()
         session = URLSession(configuration: configuration, delegate: redirectDelegate, delegateQueue: nil)
     }
@@ -1138,6 +1316,7 @@ final class NativeWorkspaceStore: ObservableObject {
         offeredRelease = nil
         offeredReleaseDescriptor = nil
         updateOffered = false
+        offeredReleaseIsOlder = false
         releaseRefusal = nil
         installingRelease = false
         releaseProgress = nil
@@ -2966,6 +3145,7 @@ final class NativeWorkspaceStore: ObservableObject {
             offeredRelease = nil
             offeredReleaseDescriptor = nil
             updateOffered = false
+            offeredReleaseIsOlder = false
             releaseRefusal = nil
             onControllerJoined?(nil)
             await refreshConnection()
@@ -3173,6 +3353,7 @@ final class NativeWorkspaceStore: ObservableObject {
     func refreshRelease() async {
         guard let requestConnection = connectionID else { return }
         do {
+            offeredReleaseIsOlder = false
             let presented = try await readReleaseIdentity()
             guard connectionID == requestConnection else { return }
             controllerReleaseIdentity = presented
@@ -3234,19 +3415,33 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             guard let ownBuild = currentAppBuild, !ownBuild.isEmpty else {
                 updateOffered = false
+                offeredReleaseIsOlder = false
                 releaseRefusal = "This app cannot read its own StudioHubBuild, so it cannot tell whether the offered release is different."
                 return
             }
-            if descriptor.build == ownBuild {
-                updateOffered = false
-                releaseRefusal = nil
-            } else {
+            switch ReleaseOffer.decide(advertisedVersion: descriptor.version,
+                                       advertisedBuild: descriptor.build,
+                                       installedVersion: currentAppVersion,
+                                       installedBuild: ownBuild) {
+            case .offered:
                 updateOffered = true
+                offeredReleaseIsOlder = false
+                releaseRefusal = nil
+            case .sameVersionSameBuild:
+                updateOffered = false
+                offeredReleaseIsOlder = false
+                releaseRefusal = nil
+            case .olderRelease:
+                // A stale controller cannot roll this Mac backwards: the release stays visible,
+                // with the reason, but there is no install action.
+                updateOffered = false
+                offeredReleaseIsOlder = true
                 releaseRefusal = nil
             }
         } catch {
             guard connectionID == requestConnection else { return }
             updateOffered = false
+            offeredReleaseIsOlder = false
             releaseRefusal = Self.actionable(error, action: "Read the update offer")
         }
     }
@@ -3320,7 +3515,6 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
             let artifact = try await downloadReleaseArtifact(descriptor: descriptor)
-            defer { try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent()) }
             releaseProgress = "Verifying the downloaded bytes…"
             try Self.verifyArtifactFile(artifact, descriptor: descriptor)
             releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
@@ -3331,8 +3525,13 @@ final class NativeWorkspaceStore: ObservableObject {
             // The running process is still the old build; treat the installed one as current so the
             // banner does not offer the update we just took. A relaunch reads the new Info.plist.
             currentAppBuild = landed
+            currentAppVersion = descriptor.version
             updateOffered = false
             releaseRefusal = nil
+            // Only a completed install makes the artifact disposable. Every failure above leaves it
+            // in place, so the next press reuses or resumes it rather than re-downloading.
+            try? FileManager.default.removeItem(at: artifact)
+            try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent())
             note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Restarting the local services now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
@@ -3342,39 +3541,88 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    /// Stream the artifact to a private temporary file. Uses URLSession's download task, which
-    /// writes to disk, so a 1.2 GB image is never held in memory.
+    /// Download the signed artifact to a stable, private file, resuming a kept partial file when
+    /// the controller's route honours Range.
+    ///
+    /// The file is not removed here: it stays until the install succeeds, so a failed swap does
+    /// not throw away a gigabyte of transfer. It lives under this Mac's data directory, keyed by
+    /// the release identity, created 0700 with the artifact itself 0600.
     private func downloadReleaseArtifact(descriptor: ReleaseDescriptor) async throws -> URL {
-        let requestConnection = connectionID
-        var request = try makeRequest(["api", "hub", "release", "artifact"])
-        request.timeoutInterval = 600
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("studiohub-update-\(UUID().uuidString)", isDirectory: true)
+        guard let base = dataDirectory else {
+            throw ReleaseError("This Mac has no private updates folder, so the release could not be downloaded.")
+        }
+        let directory = ReleaseArtifactStore.directory(base: base, descriptor: descriptor)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let destination = directory.appendingPathComponent(descriptor.filename)
-        do {
-            let (temporary, response) = try await session.download(for: request)
-            guard connectionID == requestConnection else {
-                throw ReleaseError("The local engine connection changed while the update was downloading.")
-            }
-            try validateResponse(data: Data(), response: response, request: request)
-            // The route advertises the digest; the signed descriptor's sha256 stays authoritative
-            // and is checked over the bytes below. A disagreement here is refused all the same.
-            if let announced = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Content-SHA256"),
-               announced.lowercased() != descriptor.sha256 {
-                throw ReleaseError("The controller's artifact route advertises SHA-256 \(announced), not the signed \(descriptor.sha256). Nothing was installed.")
-            }
+
+        var offset = Self.artifactSize(destination)
+        if offset > descriptor.bytes {
+            // A file larger than the signed size cannot be a prefix of the artifact, so it is not
+            // resumable and is discarded rather than trusted and appended to.
             try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: temporary, to: destination)
-        } catch let error as ReleaseError {
-            try? FileManager.default.removeItem(at: directory)
-            throw error
+            offset = 0
+            releaseProgress = "Discarded a partial update larger than the signed \(descriptor.bytes) bytes; starting again…"
+        } else if offset == descriptor.bytes {
+            // A complete artifact was kept from an earlier failed install. It is reused without a
+            // second transfer once it still matches the signed size and digest.
+            do {
+                try Self.verifyArtifactFile(destination, descriptor: descriptor)
+                releaseProgress = "Using the update already downloaded — \(descriptor.offered.sizeDisplay)."
+                return destination
+            } catch {
+                try? FileManager.default.removeItem(at: destination)
+                offset = 0
+                releaseProgress = "Discarded a downloaded file that did not match the signed artifact; downloading again…"
+            }
+        }
+
+        if offset > 0 {
+            releaseProgress = "Resuming from \(Self.sizeDisplay(offset)) of \(descriptor.offered.sizeDisplay)…"
+        } else {
+            releaseProgress = "Starting download of \(descriptor.offered.sizeDisplay)…"
+        }
+
+        let requestConnection = connectionID
+        var request = try makeRequest(["api", "hub", "release", "artifact"])
+        request.timeoutInterval = 600
+        if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
+
+        let downloader = ResumableArtifactDownloader(
+            configuration: sessionConfiguration,
+            destination: destination,
+            startingOffset: offset,
+            expectedSha256: descriptor.sha256
+        ) { [weak self] received in
+            Task { @MainActor in
+                guard let self, self.installingRelease else { return }
+                self.releaseProgress = "Downloading… \(Self.sizeDisplay(received)) of \(descriptor.offered.sizeDisplay)"
+            }
+        }
+        // On any failure the fragment stays on disk; the next press of Install resumes it.
+        _ = try await downloader.run(request)
+        guard connectionID == requestConnection else {
+            throw ReleaseError("The local engine connection changed while the update was downloading.")
+        }
+        // Completeness is proved against the signed descriptor before the bytes go any further. A
+        // file that is short or hashes wrong is not a resumable prefix, so it is discarded.
+        do {
+            try Self.verifyArtifactFile(destination, descriptor: descriptor)
         } catch {
-            try? FileManager.default.removeItem(at: directory)
-            throw ReleaseError("Could not download the update: \(Self.describe(error))")
+            try? FileManager.default.removeItem(at: destination)
+            throw ReleaseError("\(error.localizedDescription) The downloaded file was discarded.")
         }
         return destination
+    }
+
+    private static func artifactSize(_ url: URL) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return 0 }
+        return size.int64Value
+    }
+
+    private static func sizeDisplay(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     /// The signed descriptor's SHA-256 over the bytes on disk. Throws with a plain sentence on any

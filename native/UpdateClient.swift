@@ -304,6 +304,114 @@ struct OfferedRelease: Equatable {
     }
 }
 
+// MARK: - Version ordering and the offer decision
+
+/// A dotted numeric version such as `0.6.51`, compared component by component.
+///
+/// Both the advertised `version` and this app's own `CFBundleShortVersionString` are parsed this
+/// way. Trailing zero components are dropped, so `0.6` and `0.6.0` compare equal. A string with a
+/// non-numeric component (for example `0.6.51-beta`) does not parse; the caller then falls back to
+/// the build-inequality rule instead of refusing an unfamiliar version string outright.
+struct ReleaseVersion: Equatable, Comparable {
+    let components: [Int]
+
+    init?(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty else { return nil }
+        var values: [Int] = []
+        values.reserveCapacity(parts.count)
+        for part in parts {
+            guard !part.isEmpty,
+                  part.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let value = Int(part) else { return nil }
+            values.append(value)
+        }
+        // "0.6.0" and "0.6" are the same version, not two.
+        while values.count > 1, values.last == 0 { values.removeLast() }
+        self.components = values
+    }
+
+    static func < (lhs: ReleaseVersion, rhs: ReleaseVersion) -> Bool {
+        let count = max(lhs.components.count, rhs.components.count)
+        for index in 0..<count {
+            let left = index < lhs.components.count ? lhs.components[index] : 0
+            let right = index < rhs.components.count ? rhs.components[index] : 0
+            if left != right { return left < right }
+        }
+        return false
+    }
+}
+
+/// The pure result of comparing an advertised release with the app installed here.
+enum ReleaseOfferDecision: Equatable {
+    /// The advertised version is newer, or is the same version with a different build (a rebuild).
+    case offered
+    /// Same version and same build: there is nothing to install.
+    case sameVersionSameBuild
+    /// The advertised version is older than the installed one: a downgrade, never offered.
+    case olderRelease
+}
+
+enum ReleaseOffer {
+    /// Decide whether a signed release should be offered for installation.
+    ///
+    /// The rule is deliberate: the release is offered only when the advertised dotted numeric
+    /// version is GREATER than the installed version, OR the versions are EQUAL and the build
+    /// differs. A rebuild of the same version is the controller's normal push and must still be
+    /// offered; an older version must never be, so a stale controller cannot roll this Mac
+    /// backwards. When either version cannot be parsed this falls back to the original
+    /// build-inequality rule (offer iff the builds differ) rather than silently refusing a release
+    /// whose version string is unfamiliar.
+    static func decide(advertisedVersion: String,
+                       advertisedBuild: String,
+                       installedVersion: String?,
+                       installedBuild: String) -> ReleaseOfferDecision {
+        if let advertised = ReleaseVersion(advertisedVersion),
+           let installedVersion, let installed = ReleaseVersion(installedVersion) {
+            if advertised > installed { return .offered }
+            if advertised == installed {
+                return advertisedBuild == installedBuild ? .sameVersionSameBuild : .offered
+            }
+            return .olderRelease
+        }
+        // Unparseable version: fall back to the build-inequality rule.
+        return advertisedBuild == installedBuild ? .sameVersionSameBuild : .offered
+    }
+}
+
+// MARK: - Kept artifact location
+
+/// Where a release artifact lives while it is downloaded and installed.
+///
+/// The directory is keyed by the release identity — schema, version, build and digest — rather
+/// than a fresh random temporary name, so the fragment a failed attempt left behind is found again
+/// on the next press. It sits under the app's private data directory (created 0700, artifact 0600)
+/// instead of a world-readable temporary folder.
+enum ReleaseArtifactStore {
+    /// Lowercase hex SHA-256 of the identity that names one artifact on disk.
+    static func identityKey(version: String, build: String, sha256: String) -> String {
+        let identity = "\(ReleaseDescriptor.schema)|\(version)|\(build)|\(sha256)"
+        return SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The stable directory holding `descriptor`'s artifact, under the app's data directory.
+    static func directory(base: URL, descriptor: ReleaseDescriptor) -> URL {
+        base.appendingPathComponent("Updates", isDirectory: true)
+            .appendingPathComponent(
+                identityKey(version: descriptor.version, build: descriptor.build,
+                            sha256: descriptor.sha256),
+                isDirectory: true)
+    }
+
+    /// The stable file a download writes to and a retry resumes from.
+    static func artifactURL(base: URL, descriptor: ReleaseDescriptor) -> URL {
+        directory(base: base, descriptor: descriptor)
+            .appendingPathComponent(descriptor.filename)
+    }
+}
+
 // MARK: - Artifact form
 
 /// Which artifact shape is published. A disk image is implemented; anything else is refused with

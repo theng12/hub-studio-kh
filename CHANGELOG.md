@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.52 — 2026-09-23 · no downgrades, and a download that survives
+
+Two defects found while verifying the first real release push.
+
+- **An older release was offered as an update.** The offer decided on "the advertised build
+  differs from mine", with no version order, so a controller holding 0.6.50 while the Mac ran
+  0.6.51 offered a rollback - one click from installing an older app over a newer one. The rule
+  is now numeric: offered when the advertised version is greater, or the same version with a
+  different build (a rebuild is normal and still offered); an OLDER version shows as "Older
+  release available" with no install button and the install path refuses it. An unparseable
+  version falls back to the build rule rather than silently refusing everything.
+- **A part-downloaded artifact was thrown away.** A 1.2 GB release streamed into a fresh temp
+  directory each attempt, so a dropped connection or a failed swap meant downloading it all
+  again. It now keeps the fragment in a stable location keyed by the release identity, sends
+  `Range: bytes=<have>-` and appends, and handles a server that ignores the range by restarting
+  the file cleanly instead of corrupting it. The completed artifact stays until an install
+  SUCCEEDS, so pressing Install again after a failure does not re-download a gigabyte. Progress
+  reads "Resuming from N of X" in the existing banner.
+
+Safety order is unchanged: the controller's countersignature is verified with the pinned key
+before the download is trusted, the hash before the swap, and never against a key fetched
+alongside the artifact.
+
 ## 0.6.51 — 2026-09-23 · the publisher key has a front door
 
 - **Connections now shows and changes the trusted publisher key.** The gateway's Ed25519 key -

@@ -125,6 +125,12 @@ final class FixtureProtocol: URLProtocol {
     static var releaseArtifactData = Data()
     static var releaseArtifactOverride: Data?
     static var releaseArtifactReads = 0
+    /// How the artifact route treats a `Range` request: answer 206 with the remainder, or answer
+    /// 200 with the whole body as a server that ignores ranges would. The controller honours it.
+    enum ArtifactRangeMode { case honour, ignore }
+    static var releaseArtifactRangeMode: ArtifactRangeMode = .honour
+    /// Every `Range` header the artifact route was sent, so a test can assert the exact resume.
+    static var releaseArtifactRangeHeaders: [String] = []
     /// The gateway key the owner has installed, as the fixture's `GET /api/hub/release` reports it
     /// under `trusted_publisher`. `nil` means none is installed. A trust POST records the body and,
     /// when the key parses, replaces this value the way the real Hub would.
@@ -191,8 +197,21 @@ final class FixtureProtocol: URLProtocol {
         releaseArtifactOverride = nil
         releaseTrustedPublisher = nil
         releaseTrustBodies = []
+        releaseArtifactRangeMode = .honour
+        releaseArtifactRangeHeaders = []
     }
     static func releaseReads() -> Int { lock.lock(); defer { lock.unlock() }; return releaseArtifactReads }
+    static func setArtifactRangeMode(_ mode: ArtifactRangeMode) {
+        lock.lock(); defer { lock.unlock() }; releaseArtifactRangeMode = mode
+    }
+    static func artifactRangeHeaders() -> [String] {
+        lock.lock(); defer { lock.unlock() }; return releaseArtifactRangeHeaders
+    }
+    static func resetArtifactRequests() {
+        lock.lock(); defer { lock.unlock() }
+        releaseArtifactReads = 0
+        releaseArtifactRangeHeaders = []
+    }
     static func releaseTrustRequests() -> [[String: Any]] {
         lock.lock(); defer { lock.unlock() }; return releaseTrustBodies
     }
@@ -286,6 +305,29 @@ final class FixtureProtocol: URLProtocol {
                 }
                 return
             }
+        }
+        // The artifact route is range-capable like the controller's. A `Range` request is answered
+        // with 206 and the remainder, unless the test asks this server to ignore ranges (200 with
+        // the whole body), which is exactly the case a resuming client must handle.
+        if method == "GET", path == "/api/hub/release/artifact" {
+            Self.lock.lock()
+            Self.releaseArtifactReads += 1
+            let range = request.value(forHTTPHeaderField: "Range")
+            if let range { Self.releaseArtifactRangeHeaders.append(range) }
+            let mode = Self.releaseArtifactRangeMode
+            let releaseArtifact = Self.releaseArtifactOverride ?? Self.releaseArtifactData
+            Self.lock.unlock()
+            if mode == .honour, let range, let start = Self.rangeStart(range),
+               start > 0, start < releaseArtifact.count {
+                let slice = releaseArtifact.subdata(in: start..<releaseArtifact.count)
+                finish((206, "application/octet-stream", slice), headers: [
+                    "Content-Range": "bytes \(start)-\(releaseArtifact.count - 1)/\(releaseArtifact.count)",
+                    "Accept-Ranges": "bytes",
+                ])
+                return
+            }
+            finish((200, "application/octet-stream", releaseArtifact), headers: ["Accept-Ranges": "bytes"])
+            return
         }
         let result: (Int, String, Data)
         if method == "GET", path.hasPrefix("/api/hub/jobs/") { Self.noteJobDetail() }
@@ -706,12 +748,6 @@ final class FixtureProtocol: URLProtocol {
                         "publisher_key_id": fingerprint.map { $0 as Any } ?? NSNull(),
                         "fingerprint": fingerprint.map { $0 as Any } ?? NSNull(),
                       ])) ?? Data(#"{"ok":true}"#.utf8))
-        case ("GET", "/api/hub/release/artifact"):
-            Self.lock.lock()
-            Self.releaseArtifactReads += 1
-            let releaseArtifact = Self.releaseArtifactOverride ?? Self.releaseArtifactData
-            Self.lock.unlock()
-            result = (200, "application/octet-stream", releaseArtifact)
         default:
             result = (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
         }
@@ -730,12 +766,22 @@ final class FixtureProtocol: URLProtocol {
     private static let catalogFixture = Data(
 #"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2}]}"#.utf8)
 
-    private func finish(_ result: (Int, String, Data)) {
+    private func finish(_ result: (Int, String, Data), headers: [String: String] = [:]) {
+        var fields = headers
+        if fields["Content-Type"] == nil { fields["Content-Type"] = result.1 }
         let response = HTTPURLResponse(url: request.url!, statusCode: result.0,
-            httpVersion: "HTTP/1.1", headerFields: ["Content-Type": result.1])!
+            httpVersion: "HTTP/1.1", headerFields: fields)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: result.2)
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    /// `bytes=1000-` -> `1000`.
+    private static func rangeStart(_ range: String) -> Int? {
+        guard range.lowercased().hasPrefix("bytes=") else { return nil }
+        let spec = range.dropFirst("bytes=".count)
+        guard let start = spec.split(separator: "-").first else { return nil }
+        return Int(start)
     }
 
     override func stopLoading() {}
@@ -775,7 +821,8 @@ private func releaseSign(_ object: [String: Any], removing field: String,
 
 /// One descriptor matching the controller's contract, signed by throwaway keys generated in the
 /// test. `controllerKeyId` may name a key that did not sign, which is how an impostor is modelled.
-private func makeReleaseDescriptor(build: String,
+private func makeReleaseDescriptor(version: String = "0.6.50",
+                                   build: String,
                                    artifact: Data,
                                    gateway: Curve25519.Signing.PrivateKey,
                                    controllerSigning: Curve25519.Signing.PrivateKey,
@@ -786,7 +833,7 @@ private func makeReleaseDescriptor(build: String,
     var descriptor: [String: Any] = [
         "schema": "studiohub.app-release.v1",
         "schema_version": 1,
-        "version": "0.6.50",
+        "version": version,
         "build": build,
         "filename": filename,
         "bytes": bytes ?? artifact.count,
@@ -2016,6 +2063,37 @@ struct NativeAPITests {
         await updateStore.connect(baseURL: URL(string: "http://127.0.0.1:45690")!,
                                   dataDirectory: updateDirectory, token: "native-test-token")
         updateStore.currentAppBuild = "currentbuild"
+        updateStore.currentAppVersion = "0.6.50"
+
+        // The pure version-order rule behind the offer. Both the advertised version and this Mac's
+        // own CFBundleShortVersionString are dotted numeric strings compared component by component.
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.52", advertisedBuild: "b",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .offered,
+                "a newer advertised version must be offered")
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.51", advertisedBuild: "b",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .offered,
+                "a rebuild of the same version must be offered")
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.51", advertisedBuild: "a",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .sameVersionSameBuild,
+                "the same version and build is not an update")
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.50", advertisedBuild: "b",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .olderRelease,
+                "an older advertised version must never be offered")
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.100", advertisedBuild: "b",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .offered,
+                "version components must compare numerically, not as strings")
+        require(ReleaseOffer.decide(advertisedVersion: "nightly", advertisedBuild: "b",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .offered,
+                "an unparseable version falls back to build inequality (different builds)")
+        require(ReleaseOffer.decide(advertisedVersion: "nightly", advertisedBuild: "a",
+                                    installedVersion: "0.6.51", installedBuild: "a") == .sameVersionSameBuild,
+                "an unparseable version falls back to build inequality (same build)")
+        require(ReleaseOffer.decide(advertisedVersion: "0.6.51", advertisedBuild: "b",
+                                    installedVersion: nil, installedBuild: "a") == .offered,
+                "a missing installed version falls back to build inequality")
+        require(ReleaseVersion("0.6") == ReleaseVersion("0.6.0") && ReleaseVersion("0.6") != nil,
+                "trailing zero components are the same version")
+        require(ReleaseVersion("0.6.51-beta") == nil, "a non-numeric component does not parse")
 
         let controllerKey = Curve25519.Signing.PrivateKey()
         let gatewayKey = Curve25519.Signing.PrivateKey()
@@ -2055,6 +2133,40 @@ struct NativeAPITests {
         require(!updateStore.updateOffered, "a release matching this app's own build is not an update")
         updateStore.currentAppBuild = "currentbuild"
 
+        // A controller holding an OLDER version must not offer it: a stale controller cannot roll
+        // this Mac backwards. It stays visible with its reason, but with no install action.
+        updateStore.currentAppVersion = "0.6.51"
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        require(updateStore.offeredRelease?.version == "0.6.50",
+                "an older release is still shown so the reason is visible")
+        require(!updateStore.updateOffered, "an older release must not be offered")
+        require(!updateStore.showingUpdateBanner,
+                "an older release must show no install banner")
+        require(updateStore.offeredReleaseIsOlder,
+                "an older release must be flagged as older rather than as a refusal")
+        require(updateStore.releaseRefusal == nil,
+                "an older release is not a verification failure: \(updateStore.releaseRefusal ?? "nil")")
+        var olderInstallerRan = false
+        updateStore.installVerifiedArtifact = { _, _ in olderInstallerRan = true; return "newbuild" }
+        await updateStore.installOfferedRelease()
+        require(!olderInstallerRan, "an older release must have no working Install action")
+
+        // A NEWER version must be offered even when its build string is identical to this Mac's.
+        let newerDescriptor = makeReleaseDescriptor(version: "0.6.52", build: "currentbuild",
+                                                    artifact: artifact, gateway: gatewayKey,
+                                                    controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(newerDescriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered,
+                "a newer version must be offered even when the build matches: \(updateStore.releaseRefusal ?? "nil")")
+        require(!updateStore.offeredReleaseIsOlder, "a newer version is not flagged as older")
+
+        // Back to the baseline: same version as this Mac, different build.
+        updateStore.currentAppVersion = "0.6.50"
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+
         // A release whose controller_signature does not verify against the pinned key is refused.
         let impostor = Curve25519.Signing.PrivateKey()
         let impostorDescriptor = makeReleaseDescriptor(
@@ -2093,6 +2205,13 @@ struct NativeAPITests {
         require(updateStore.connectionNotice?.kind == .failure, "a SHA-256 mismatch must be reported")
         require(updateStore.connectionNotice?.text.lowercased().contains("sha-256") == true,
                 "the report must name the hash: \(updateStore.connectionNotice?.text ?? "nil")")
+        // A completed download whose hash is wrong is not a resumable prefix, so it is discarded.
+        let shaDescriptor = ReleaseDescriptor(json: descriptor)!
+        let shaArtifactURL = ReleaseArtifactStore.artifactURL(base: updateDirectory.standardizedFileURL,
+                                                              descriptor: shaDescriptor)
+        require(!FileManager.default.fileExists(atPath: shaArtifactURL.path),
+                "a completed download whose hash is wrong must be discarded, not kept for a resume")
+        require(FixtureProtocol.releaseReads() >= 1, "the wrong-hash attempt must have downloaded once")
 
         // The happy path: a verified artifact reaches the swap, and the existing restart path is
         // asked exactly once. The installer is stubbed, so nothing touches /Applications.
@@ -2111,6 +2230,126 @@ struct NativeAPITests {
                 "the report must say the services restart: \(updateStore.connectionNotice?.text ?? "nil")")
         require(updateStore.currentAppBuild == "newbuild",
                 "the installed build must become the current one so the banner clears")
+        require(updateStore.currentAppVersion == "0.6.50",
+                "the installed version must become the current one too")
+
+        // A kept partial file is found again and resumed with a Range request, completing to the
+        // exact signed artifact. The Range header sent is asserted, and the bytes the swap sees.
+        let rangeDescriptorJSON = makeReleaseDescriptor(version: "0.6.52", build: "rangebuild",
+                                                        artifact: artifact, gateway: gatewayKey,
+                                                        controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(rangeDescriptorJSON), artifact: artifact)
+        FixtureProtocol.setArtifactRangeMode(.honour)
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the range release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+        let rangeDescriptor = ReleaseDescriptor(json: rangeDescriptorJSON)!
+        let rangeURL = ReleaseArtifactStore.artifactURL(base: updateDirectory.standardizedFileURL,
+                                                        descriptor: rangeDescriptor)
+        try FileManager.default.createDirectory(at: rangeURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data(artifact.prefix(1000)).write(to: rangeURL)
+        var capturedRangeBytes: Data?
+        updateStore.installVerifiedArtifact = { file, _ in
+            capturedRangeBytes = try? Data(contentsOf: file)
+            return "rangebuild"
+        }
+        await updateStore.installOfferedRelease()
+        require(capturedRangeBytes == artifact, "the resumed download must be the complete artifact")
+        require(FixtureProtocol.artifactRangeHeaders().contains("bytes=1000-"),
+                "the retry must ask for the remainder with a Range header: \(FixtureProtocol.artifactRangeHeaders())")
+        require(updateStore.connectionNotice?.kind == .success,
+                "a resumed install must be reported as success: \(updateStore.connectionNotice?.text ?? "nil")")
+
+        // A server that ignores Range answers 200 with the whole body; the stale fragment must be
+        // replaced, never appended to, or the artifact would be corrupt.
+        let ignoreDescriptorJSON = makeReleaseDescriptor(version: "0.6.53", build: "ignorebuild",
+                                                         artifact: artifact, gateway: gatewayKey,
+                                                         controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(ignoreDescriptorJSON), artifact: artifact)
+        FixtureProtocol.setArtifactRangeMode(.ignore)
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the ignore-range release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+        let ignoreDescriptor = ReleaseDescriptor(json: ignoreDescriptorJSON)!
+        let ignoreURL = ReleaseArtifactStore.artifactURL(base: updateDirectory.standardizedFileURL,
+                                                         descriptor: ignoreDescriptor)
+        try FileManager.default.createDirectory(at: ignoreURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data(repeating: 0x00, count: 1000).write(to: ignoreURL)
+        var capturedRestartBytes: Data?
+        updateStore.installVerifiedArtifact = { file, _ in
+            capturedRestartBytes = try? Data(contentsOf: file)
+            return "ignorebuild"
+        }
+        await updateStore.installOfferedRelease()
+        require(capturedRestartBytes == artifact,
+                "a 200 answer must restart the file cleanly rather than append to the stale fragment")
+        require(FixtureProtocol.artifactRangeHeaders().contains("bytes=1000-"),
+                "the request must still offer the range: \(FixtureProtocol.artifactRangeHeaders())")
+
+        // A failed swap keeps the completed artifact; pressing Install again reuses it with no
+        // second transfer, and only a successful install removes it.
+        let keepDescriptorJSON = makeReleaseDescriptor(version: "0.6.54", build: "keepbuild",
+                                                       artifact: artifact, gateway: gatewayKey,
+                                                       controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(keepDescriptorJSON), artifact: artifact)
+        FixtureProtocol.setArtifactRangeMode(.honour)
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the keep release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+        let keepDescriptor = ReleaseDescriptor(json: keepDescriptorJSON)!
+        let keepURL = ReleaseArtifactStore.artifactURL(base: updateDirectory.standardizedFileURL,
+                                                       descriptor: keepDescriptor)
+        require(!FileManager.default.fileExists(atPath: keepURL.path),
+                "the keep test must start with no artifact")
+        var failSwap = true
+        updateStore.installVerifiedArtifact = { _, _ in
+            if failSwap { throw ReleaseError("simulated swap failure") }
+            return "keepbuild"
+        }
+        await updateStore.installOfferedRelease()
+        require(FileManager.default.fileExists(atPath: keepURL.path),
+                "a failed swap must keep the completed artifact")
+        require(updateStore.connectionNotice?.kind == .failure, "a failed swap must be reported")
+        let keepPermissions = try FileManager.default.attributesOfItem(atPath: keepURL.path)[.posixPermissions] as? NSNumber
+        require(keepPermissions?.intValue == 0o600, "the kept artifact must be private")
+        let readsAfterFailure = FixtureProtocol.releaseReads()
+        failSwap = false
+        await updateStore.installOfferedRelease()
+        require(!FileManager.default.fileExists(atPath: keepURL.path),
+                "a successful install must remove the kept artifact")
+        require(FixtureProtocol.releaseReads() == readsAfterFailure,
+                "a kept complete artifact must be reused instead of re-downloaded")
+        require(updateStore.connectionNotice?.kind == .success,
+                "the retry from a kept artifact must install")
+
+        // A partial file LARGER than the signed size cannot be a prefix of the artifact, so it is
+        // discarded and the download starts clean rather than being appended to.
+        let oversizedDescriptorJSON = makeReleaseDescriptor(version: "0.6.55", build: "oversizedbuild",
+                                                            artifact: artifact, gateway: gatewayKey,
+                                                            controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(oversizedDescriptorJSON), artifact: artifact)
+        FixtureProtocol.setArtifactRangeMode(.honour)
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the oversized release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+        let oversizedDescriptor = ReleaseDescriptor(json: oversizedDescriptorJSON)!
+        let oversizedURL = ReleaseArtifactStore.artifactURL(base: updateDirectory.standardizedFileURL,
+                                                            descriptor: oversizedDescriptor)
+        try FileManager.default.createDirectory(at: oversizedURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try (artifact + Data(repeating: 0x7f, count: 100)).write(to: oversizedURL)
+        var capturedOversizedBytes: Data?
+        updateStore.installVerifiedArtifact = { file, _ in
+            capturedOversizedBytes = try? Data(contentsOf: file)
+            return "oversizedbuild"
+        }
+        await updateStore.installOfferedRelease()
+        require(capturedOversizedBytes == artifact,
+                "a partial file larger than the signed size must be discarded, not appended to")
+        require(!FixtureProtocol.artifactRangeHeaders().contains(where: { $0.hasPrefix("bytes=") }),
+                "an oversized fragment must not be used as a resume offset: \(FixtureProtocol.artifactRangeHeaders())")
         FixtureProtocol.clearRelease()
 
         // ── The owner's publisher-key front door ───────────────────────────────────────────

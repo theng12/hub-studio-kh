@@ -2601,6 +2601,24 @@ struct StudioContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.blue.opacity(0.40)))
+        } else if workspace.offeredReleaseIsOlder, let release = workspace.offeredRelease {
+            // A stale controller must not be able to roll this Mac backwards, so this is shown as
+            // its own state — not a verification failure — and carries no Install button.
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Older release available — this Mac is on a newer version")
+                        .font(.callout).fontWeight(.semibold)
+                    Text("The controller holds \(release.version) (\(release.build)), older than the \(workspace.currentAppVersion ?? "newer") version installed here. It is not offered, so a stale controller cannot roll this Mac backwards.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.35)))
         } else if let refusal = workspace.releaseRefusal {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(.orange)
