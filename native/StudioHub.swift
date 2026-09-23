@@ -30,6 +30,30 @@ enum LegacyLoginItem {
 #endif
 }
 
+/// The app-side actions for a redundant launch, kept out of `ExistingInstance` so the decision and
+/// its present/exit contract stay testable in the contract suite.
+enum ExistingInstanceHandler {
+    /// Bring the already-running Studio Hub forward, if it can be found. Both copies share the
+    /// bundle identifier, so the other one is the process that is not this one.
+    static func presentRunningApp() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let current = ProcessInfo.processInfo.processIdentifier
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        where app.processIdentifier != current {
+            app.activate(options: [.activateAllWindows])
+            return
+        }
+    }
+
+    /// Leave with status 0 so `KeepAlive` (SuccessfulExit false) never relaunches this copy, and
+    /// leave at most one line where a log collects it. No alert, ever: the operator should not see
+    /// "Studio Hub could not open" because they double-clicked an app that is already open.
+    static func noteAndExit() {
+        FileHandle.standardError.write(Data("Studio Hub is already running; this launch exits.\n".utf8))
+        exit(ExistingInstance.redundantLaunchExitCode)
+    }
+}
+
 @MainActor
 final class StudioController: ObservableObject {
     @Published var selection: StudioPage = .overview
@@ -75,6 +99,9 @@ final class StudioController: ObservableObject {
     private var healthySince: Date?
     private var startupTimedOut = false
     private var instanceLock: InstanceLock?
+    /// True when the data-folder lock is held by another copy of Studio Hub. The app then presents
+    /// that copy and exits quietly instead of showing a failure.
+    private(set) var existingInstanceDetected = false
     private let serviceExecutable: URL
     private let appBundle: URL
     private let agentPlistURL: URL
@@ -110,6 +137,17 @@ final class StudioController: ObservableObject {
                                               fastDelays: configuration.recoveryBackoffSeconds)
         self.loginStatus = statusReader(agentPlistURL)
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
+        catch let error as InstanceLockError {
+            // "Already held" is not a failure: another copy of Studio Hub is the real app. The
+            // launch path uses `existingInstanceDetected` to bring it forward and exit 0.
+            switch error {
+            case .alreadyHeld:
+                existingInstanceDetected = true
+            case .unavailable(let message):
+                failure = message
+                status = "Unable to open"
+            }
+        }
         catch { failure = error.localizedDescription; status = "Unable to open" }
         // The workspace knows when a join succeeded; only the app owns the preferences file the
         // answer has to be written to, so the two are wired together here rather than in a view.
@@ -656,29 +694,27 @@ final class StudioController: ObservableObject {
     func setLogin(_ enabled: Bool) {
         configuration.startAtLogin = enabled
         do {
-            if enabled {
-                switch LaunchAgent.installDecision(appBundle: appBundle) {
-                case .refuse(let message):
-                    // The preference is still remembered, but no agent is written: an agent that
-                    // points nowhere would fail at the next login with nothing to read.
-                    failure = message
-                    try? configuration.save()
-                    refreshLoginStatus()
-                    return
-                case .install:
-                    try LaunchAgent.write(appBundle: appBundle, to: agentPlistURL)
-                    LaunchAgent.bootstrap(at: agentPlistURL)
-                }
-            } else {
-                LaunchAgent.bootout(label: LaunchAgent.label)
-                try LaunchAgent.remove(at: agentPlistURL)
-            }
+            try applyLoginAgent(enabled: enabled)
             try configuration.save()
             refreshLoginStatus()
         } catch {
-            failure = "Could not change login startup: \(error.localizedDescription)"
+            // The preference is remembered even when the plist cannot be written, so a refusal is
+            // not silently forgotten; the toggle state and the banner report the truth.
+            failure = (error as? ShellFailure)?.message
+                ?? "Could not change login startup: \(error.localizedDescription)"
+            try? configuration.save()
             refreshLoginStatus()
         }
+    }
+    /// The live login-agent side effects. Enabling writes the plist only: bootstrapping a
+    /// `RunAtLoad` job while this app is running would start a second copy of it.
+    private func applyLoginAgent(enabled: Bool) throws {
+        let operations = LoginAgentOperations(
+            write: { try LaunchAgent.write(appBundle: self.appBundle, to: self.agentPlistURL) },
+            bootout: { LaunchAgent.bootout(label: LaunchAgent.label) },
+            remove: { try LaunchAgent.remove(at: self.agentPlistURL) },
+            bootstrap: { LaunchAgent.bootstrap(at: self.agentPlistURL) })
+        try LoginAgent.apply(enabled: enabled, using: operations)
     }
     /// Remember whether an at-login launch should also bring the Studio services up.
     ///
@@ -696,10 +732,10 @@ final class StudioController: ObservableObject {
             // the operator is told when they press the toggle themselves.
             break
         case .install:
-            do {
-                try LaunchAgent.write(appBundle: appBundle, to: agentPlistURL)
-                LaunchAgent.bootstrap(at: agentPlistURL)
-            } catch { failure = "Could not set up login startup: \(error.localizedDescription)" }
+            // Writes the plist only. launchd loads it at login; bootstrapping it here would start
+            // a second copy of this already-running app because the plist sets RunAtLoad.
+            do { try applyLoginAgent(enabled: true) }
+            catch { failure = "Could not set up login startup: \(error.localizedDescription)" }
         }
         refreshLoginStatus()
     }
@@ -723,11 +759,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
+            // A redundant launch (for example launchd starting a previously loaded agent while the
+            // app is open) presents the running app and exits 0, before any window or alert.
+            ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
+                                    present: ExistingInstanceHandler.presentRunningApp,
+                                    exitQuietly: ExistingInstanceHandler.noteAndExit)
             // One-time, before anything else can offer the login choice: remove the login item an
             // older build left behind so the launch agent is the only mechanism that can run.
             controller.migrateLegacyLoginItemIfNeeded()
             // Then make the agent match the saved choice, so an upgraded Mac whose "Start at login"
-            // is still on does not lose login startup when the old item is removed.
+            // is still on does not lose login startup when the old item is removed. This writes the
+            // plist only; it must not bootstrap a RunAtLoad job while the app is running.
             controller.reconcileLoginAgent()
         } catch {
             let alert = NSAlert(); alert.messageText = "Studio Hub could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return

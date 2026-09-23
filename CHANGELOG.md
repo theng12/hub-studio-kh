@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.54 — 2026-09-23 · the app no longer launches a second copy of itself
+
+0.6.53 introduced the crash keep-alive, and with it a real defect, reported by the owner within
+the hour.
+
+- **Enabling "Start at login" started a second instance.** The startup reconciliation called
+  `launchctl bootstrap`, which loads the job, and `RunAtLoad` then started the job at once -
+  while the app doing the enabling was already running. The second copy took the instance lock,
+  failed, and showed "Studio Hub could not open". The enabling path now **writes the plist and
+  never bootstraps**: `~/Library/LaunchAgents` is read by launchd at login, which is what "start
+  at login" means, and there is no launchctl call that loads a `RunAtLoad` job without starting
+  it. A job already loaded by the older build is left alone and replaced at the next login.
+- **The toggle no longer lies.** Its state came from "is the job loaded", and a correctly
+  installed agent is deliberately *not* loaded while the app runs - so the switch would have read
+  off. It reads the plist instead.
+- **A redundant launch is quiet.** A second instance detects that the lock is specifically
+  already held, brings the running app forward, logs one line, and exits **0** - no alert, and
+  nothing for `KeepAlive` to relaunch.
+- Disabling still takes effect immediately: bootout, then remove the plist.
+
 ## 0.6.53 — 2026-09-23 · surviving a crash, a slow controller and a stubborn service
 
 Three ways an unattended Mac was left dead, and one migration so the fix does not break a Mac it

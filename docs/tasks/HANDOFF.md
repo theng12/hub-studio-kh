@@ -3,11 +3,11 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.53.
+Last updated: 0.6.54.
 
 ## Where things stand
 
-- Release **0.6.53**. Every release is pushed to `main` and to
+- Release **0.6.54**. Every release is pushed to `main` and to
   `implementation/voice-runtime`; `main` is the release branch.
 - The four SSDs carry `Video Generation Kit/` holding `GatewayKH/`, `Story Studio/` and
   `Studio Hub KH/`, refreshed from the current build on every release.
@@ -99,6 +99,9 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   resets it and quitting cancels it.
 - **Migration**: the old SMAppService login item is removed once on first launch, recorded in
   preferences, and the new agent is reconciled from the existing "Start at login" setting.
+- **Never `launchctl bootstrap` a `RunAtLoad` job from the running app.** It starts the job at
+  once, which for our own agent means a second copy of the app - 0.6.53 shipped exactly that and
+  the owner saw it immediately. Enabling writes the plist and stops; launchd reads it at login.
 - **Not exercised by any test**: a real crash-and-relaunch, a real power cycle, and the real
   `launchctl`/`SMAppService` calls. Prove those on hardware before trusting them fleet-wide.
 

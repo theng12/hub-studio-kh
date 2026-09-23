@@ -2521,14 +2521,14 @@ struct NativeAPITests {
         require(agentPermissions?.intValue == 0o600,
                 "the agent plist must be private, got: \(String(describing: agentPermissions))")
 
-        // Reporting the true state reads both the plist and launchd.
-        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in true }) == .enabled,
-                "a present, loaded agent must read as on")
-        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in false }) == .disabled,
-                "a present but unloaded agent must read as off")
+        // The toggle reads the plist alone: launchd loads the agent at login, so a correctly
+        // installed agent is deliberately not loaded while the app runs. `status` makes no
+        // launchctl call at all.
+        require(LaunchAgent.status(at: agentPlist) == .enabled,
+                "a present agent plist must read as on without asking launchd")
         try LaunchAgent.remove(at: agentPlist)
         require(!LaunchAgent.isInstalled(at: agentPlist), "removing the agent must remove the plist")
-        require(LaunchAgent.status(at: agentPlist, isLoaded: { _ in true }) == .disabled,
+        require(LaunchAgent.status(at: agentPlist) == .disabled,
                 "an agent that is not on disk must read as off")
 
         // A dev build outside /Applications is refused rather than writing an agent whose program
@@ -2548,6 +2548,69 @@ struct NativeAPITests {
         let missing = LaunchAgent.installDecision(appBundle: appBundle, applicationsRoot: appRoot,
                                                   executableExists: { _ in false })
         if case .install = missing { fatalError("a missing executable must be refused") }
+
+        // The toggle's plan: enabling writes the plist and must NEVER bootstrap, because the plist
+        // sets RunAtLoad and launchd would start a second copy of the running app. Disabling boots
+        // the loaded job out first so it takes effect immediately, then removes the plist. The
+        // side effects are spies plus the real writer, so no launchctl process is ever started.
+        var wroteCount = 0
+        var bootoutCount = 0
+        var removedCount = 0
+        var bootstrapCount = 0
+        func togglePlan() -> LoginAgentOperations {
+            LoginAgentOperations(
+                write: {
+                    wroteCount += 1
+                    _ = try LaunchAgent.write(appBundle: appBundle, to: agentPlist,
+                                              applicationsRoot: appRoot, executableExists: { _ in true })
+                },
+                bootout: { bootoutCount += 1 },
+                remove: { removedCount += 1; try LaunchAgent.remove(at: agentPlist) },
+                bootstrap: { bootstrapCount += 1 })
+        }
+        try LoginAgent.apply(enabled: true, using: togglePlan())
+        require(wroteCount == 1 && LaunchAgent.isInstalled(at: agentPlist)
+                && bootoutCount == 0 && removedCount == 0 && bootstrapCount == 0,
+                "enabling must write the plist and must not bootstrap while the app is running")
+        require(LaunchAgent.status(at: agentPlist) == .enabled, "the written plist must read as on")
+        try LoginAgent.apply(enabled: false, using: togglePlan())
+        require(bootoutCount == 1 && removedCount == 1 && !LaunchAgent.isInstalled(at: agentPlist)
+                && bootstrapCount == 0,
+                "disabling must boot the job out and remove the plist, still without bootstrapping")
+        require(LaunchAgent.status(at: agentPlist) == .disabled, "a removed agent must read as off")
+
+        // A redundant launch presents the running app and leaves with status 0; no alert, and no
+        // failure banner. The present/exit actions are injected so the test process does not exit.
+        require(ExistingInstance.decide(lockHeldByAnother: true) == .presentAndExit,
+                "a held lock must present the running app and exit")
+        require(ExistingInstance.decide(lockHeldByAnother: false) == .continueStarting,
+                "the only instance must keep starting")
+        require(ExistingInstance.redundantLaunchExitCode == 0,
+                "a redundant launch must exit 0 so KeepAlive never relaunches it")
+        var presentedCount = 0
+        var exitedCount = 0
+        ExistingInstance.handle(.presentAndExit,
+                                present: { presentedCount += 1 },
+                                exitQuietly: { exitedCount += 1 })
+        require(presentedCount == 1 && exitedCount == 1,
+                "a redundant launch must present the running app and leave with status 0")
+        presentedCount = 0; exitedCount = 0
+        ExistingInstance.handle(.continueStarting,
+                                present: { presentedCount += 1 },
+                                exitQuietly: { exitedCount += 1 })
+        require(presentedCount == 0 && exitedCount == 0,
+                "the only instance must neither present another app nor exit")
+        // A held lock is specifically "already held", which is what makes a second launch exit
+        // quietly rather than read as a failure to open the app.
+        let lockDirectory = temporary.appendingPathComponent("instance-lock")
+        let heldLock = try InstanceLock(directory: lockDirectory)
+        do {
+            _ = try InstanceLock(directory: lockDirectory)
+            fatalError("a second lock must be refused")
+        } catch let error as InstanceLockError {
+            require(error == .alreadyHeld, "a held lock must be reported as already held, got: \(error)")
+        }
+        withExtendedLifetime(heldLock) {}
 
         // The one-time move off the old SMAppService login item. Pure and injected, so no branch
         // here touches the real system; the app target supplies the real call in one place.

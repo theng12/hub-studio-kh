@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.54 — 2026-09-23
+
+### Opening Studio Hub no longer opens a second one
+
+The crash-restart feature added a bug: turning on "Start at login" also started a second copy of
+the app while you were already using it, which then complained that it could not open. That is
+fixed. Opening Studio Hub when it is already running now simply brings the running app to the
+front, with no error.
+
 ## 0.6.53 — 2026-09-23
 
 ### It comes back by itself, including after a crash

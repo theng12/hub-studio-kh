@@ -740,34 +740,25 @@ enum LaunchAgent {
         FileManager.default.fileExists(atPath: plistURL.path)
     }
 
-    /// The state the Settings toggle reports: on only when the plist exists and launchd has the
-    /// job. `isLoaded` is injected so the contract suite can test both without touching this
-    /// machine's real agents.
-    static func status(at plistURL: URL, label: String = LaunchAgent.label,
-                       isLoaded: (String) -> Bool = LaunchAgent.isLoaded) -> LoginAgentStatus {
-        guard isInstalled(at: plistURL), isLoaded(label) else { return .disabled }
-        return .enabled
+    /// Whether the operator sees "Start at login" as on.
+    ///
+    /// The plist existing is the signal. launchd loads `~/Library/LaunchAgents` at login, so a
+    /// correctly installed agent is deliberately NOT loaded while the app is running; asking
+    /// `launchctl print` would answer false for it and make the toggle lie. The launchd
+    /// disabled-overrides database is not consulted either, because reading it costs a launchctl
+    /// subprocess on every status refresh and the operator's choice is the plist itself.
+    static func status(at plistURL: URL) -> LoginAgentStatus {
+        isInstalled(at: plistURL) ? .enabled : .disabled
     }
 
-    /// `launchctl print gui/<uid>/<label>` exits 0 only when the job is loaded.
-    static func isLoaded(_ label: String = LaunchAgent.label) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "gui/\(getuid())/\(label)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
-    }
-
-    /// Load the agent now, so turning the toggle on also covers this session without a reboot.
-    /// Best-effort: the plist governs the next login even if launchd refuses to load it right away.
+    /// Load the agent. Kept as a real function so the toggle's plan can hold it as a spy field:
+    /// enabling must never call it while the app is running, because the plist sets RunAtLoad and
+    /// launchd would start a second copy of the app immediately.
     static func bootstrap(at plistURL: URL) {
         run(["bootstrap", "gui/\(getuid())", plistURL.path])
     }
 
-    /// Unload the agent. Best-effort for the same reason.
+    /// Unload the agent. This is what makes disabling take effect immediately.
     static func bootout(label: String = LaunchAgent.label) {
         run(["bootout", "gui/\(getuid())/\(label)"])
     }
@@ -783,16 +774,94 @@ enum LaunchAgent {
     }
 }
 
+/// The side effects the "Start at login" toggle performs, injected so the contract suite can assert
+/// exactly which launchctl calls happen and, just as importantly, which do not.
+struct LoginAgentOperations {
+    var write: () throws -> Void
+    var bootout: () -> Void
+    var remove: () throws -> Void
+    /// Present only so a test can prove the enabling path never calls it. Enabling must not
+    /// bootstrap: the plist sets `RunAtLoad`, so loading the job would start a second copy of the
+    /// app that is already running.
+    var bootstrap: () -> Void
+}
+
+enum LoginAgent {
+    /// Apply the toggle.
+    ///
+    /// Enabling only writes the plist. A plist in `~/Library/LaunchAgents` is loaded by launchd at
+    /// login, which is exactly what "Start at login" means, and `RunAtLoad` then starts the app.
+    /// Calling `launchctl bootstrap` here would load the job immediately and start a second copy of
+    /// the running app. A job already loaded with an older copy of the plist is left alone: there is
+    /// no launchctl call that loads a `RunAtLoad` job without starting it, so the next login picks
+    /// the new plist up. `operations.bootstrap` is deliberately never called.
+    ///
+    /// Disabling takes effect immediately: the loaded job is booted out before the plist is removed.
+    static func apply(enabled: Bool, using operations: LoginAgentOperations) throws {
+        if enabled {
+            try operations.write()
+            return
+        }
+        operations.bootout()
+        try operations.remove()
+    }
+}
+
+/// Why the app could not take its data-folder lock. The distinction matters: "already held" means
+/// another copy of Studio Hub is the real app, while "unavailable" is a real failure to open.
+enum InstanceLockError: LocalizedError, Equatable {
+    case alreadyHeld
+    case unavailable(String)
+    var errorDescription: String? {
+        switch self {
+        case .alreadyHeld:
+            return "Studio Hub is already using this data folder. Open the running app from its menu-bar icon."
+        case .unavailable(let message):
+            return message
+        }
+    }
+}
+
 final class InstanceLock {
     private let descriptor: Int32
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         descriptor = open(directory.appendingPathComponent("app.lock").path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
-        guard descriptor >= 0 else { throw ShellFailure(message: "Cannot open the app's data folder lock.") }
+        guard descriptor >= 0 else { throw InstanceLockError.unavailable("Cannot open the app's data folder lock.") }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             close(descriptor)
-            throw ShellFailure(message: "Studio Hub is already using this data folder. Open the running app from its menu-bar icon.")
+            throw InstanceLockError.alreadyHeld
         }
     }
     deinit { close(descriptor) }
+}
+
+/// What a redundant launch does when another process already owns the data folder.
+///
+/// This is the second copy launchd can start (for example, a previously loaded agent) while the
+/// real app is running. The new process must never show the "Studio Hub could not open" alert: it
+/// brings the running app forward if it can and leaves with status 0, which `KeepAlive` treats as a
+/// clean exit and never relaunches. The present/exit actions are injected so the contract suite can
+/// prove the behaviour without AppKit or terminating the test process.
+enum ExistingInstance {
+    enum Decision: Equatable {
+        case continueStarting
+        case presentAndExit
+    }
+
+    /// The status a redundant launch exits with. 0 is a clean exit, so launchd's
+    /// `KeepAlive { SuccessfulExit: false }` never relaunches the copy.
+    static let redundantLaunchExitCode: Int32 = 0
+
+    static func decide(lockHeldByAnother: Bool) -> Decision {
+        lockHeldByAnother ? .presentAndExit : .continueStarting
+    }
+
+    static func handle(_ decision: Decision,
+                       present: () -> Void,
+                       exitQuietly: () -> Void) {
+        guard decision == .presentAndExit else { return }
+        present()
+        exitQuietly()
+    }
 }
