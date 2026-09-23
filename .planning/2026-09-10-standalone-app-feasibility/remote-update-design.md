@@ -124,7 +124,7 @@ GatewayKH publishes; the controller mirrors and serves; the node pulls.
 | GatewayKH | the release publish + advertise routes | source of truth, published once |
 | Controller | `GET /api/hub/release` | what this controller has mirrored: version, build, size, sha256, publisher key id, signature, published_at |
 | Controller | `GET /api/hub/release/artifact` | the bundle or DMG, range-capable |
-| Controller | `POST /api/hub/release` | mirror/replace what this controller holds (Hub token: it is the Mac owner's decision) |
+| Controller | `POST /api/hub/release` | accept a pushed release (Fleet token; verified by signature) |
 
 Node side: an "Update available" banner in Connections showing the advertised version, its size
 and who signed it, with one button; the existing restart notice applies the services restart.
@@ -194,7 +194,7 @@ signature and then the hash is enough, and either failing refuses the release.
 
 | Route | Token | Purpose |
 |---|---|---|
-| `POST /api/hub/release` | Hub | accept a pushed release: `{"descriptor": {...}, "artifact_base64": ...}` or multipart; verify the gateway signature, verify the sha256, store both, countersign |
+| `POST /api/hub/release` | Fleet | accept a pushed release: `{"descriptor": {...}, "artifact_base64": ...}` or multipart; verify the gateway signature, verify the sha256, store both, countersign. Fleet, not Hub: the gateway holds only the Fleet token, and the **signature** is the real authorisation - a peer can offer a release but cannot make an untrusted one be accepted |
 | `GET /api/hub/release` | Fleet | what this controller holds: the descriptor with the controller's countersignature, or `{"release": null}` |
 | `GET /api/hub/release/artifact` | Fleet | the artifact, range-capable, `X-Content-SHA256` |
 | `POST /api/hub/release/trust` | Hub | set or replace the trusted gateway publisher key — an owner action on this Mac, never implied |
