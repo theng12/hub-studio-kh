@@ -484,6 +484,16 @@ FLEET_ALLOWED = (
     ("POST", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/overview$"),
+    # Remote app update: a controller mirrors a signed release and its nodes pull it. Publishing
+    # is fleet-reachable because GatewayKH holds only the Fleet token; the signature made with the
+    # key the owner installed via POST /api/hub/release/trust is what authorises the release.
+    # Installing that trusted key is the owner's decision, so /trust is deliberately NOT here and
+    # stays Hub-token only, as does replacing what this Mac holds without a valid signature.
+    ("POST", r"^/api/hub/release$"),
+    ("GET", r"^/api/hub/release$"),
+    ("GET", r"^/api/hub/release/artifact$"),
+    # The controller's publisher public key and fingerprint, so a joining node can pin it.
+    ("GET", r"^/api/hub/release/identity$"),
 )
 _FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
 

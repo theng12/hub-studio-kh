@@ -52,6 +52,7 @@ os.environ.update({
 
 from components.hub.backend import (  # noqa: E402
     alerts,
+    app_release,
     auth,
     broker,
     control_plane,
@@ -96,6 +97,7 @@ def reset_state() -> StudioMonitor:
     auth.TOKEN_FILE.chmod(0o600)
     for directory in (execution_assets.ROOT, shared_voices.ROOT, transcription_jobs.ROOT):
         _remove(directory)
+    app_release.reset_for_tests()
 
     alerts._recent.clear()
     auth._login_failures.clear()

@@ -25,7 +25,7 @@ from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import shared_voices, transcription_jobs
+from .backend import app_release, shared_voices, transcription_jobs
 from .backend.monitor import StudioMonitor
 
 
@@ -904,6 +904,47 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown node")
         monitor.reload_registry()
         return {"ok": True}
+
+    # ── remote app-update release (controller side) ────────────────────────
+    # GatewayKH pushes a signed release; this Mac verifies and mirrors it, and
+    # its own nodes pull it.  The signature, not the token, is what authorises a
+    # release: POST /release is fleet-reachable (a gateway holds only the Fleet
+    # token), while installing the trusted gateway key is an owner action and
+    # stays Hub-token only.  See backend/app_release.py for the byte contract.
+
+    @app.get("/api/hub/release")
+    def get_release() -> dict[str, Any]:
+        return {"release": app_release.load_release()}
+
+    @app.post("/api/hub/release")
+    def push_release(body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return app_release.accept_release(body)
+        except app_release.ReleaseRefused as exc:
+            raise HTTPException(exc.status_code, exc.message) from exc
+
+    @app.get("/api/hub/release/artifact")
+    def release_artifact() -> FileResponse:
+        descriptor = app_release.load_release()
+        if descriptor is None:
+            raise HTTPException(404, "no release is held")
+        return FileResponse(
+            app_release.ARTIFACT_FILE,
+            media_type="application/octet-stream",
+            headers={"X-Content-SHA256": str(descriptor.get("sha256") or "")},
+        )
+
+    @app.get("/api/hub/release/identity")
+    def release_identity() -> dict[str, Any]:
+        """The controller's publisher public key + fingerprint, for a node to pin."""
+        return app_release.controller_identity()
+
+    @app.post("/api/hub/release/trust")
+    def trust_release_publisher(body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return app_release.set_trusted_publisher(body)
+        except app_release.ReleaseRefused as exc:
+            raise HTTPException(exc.status_code, exc.message) from exc
 
     # ── machine memory policy ──────────────────────────────────────────────
     # One route pair for every Studio's idle-release choice, so the app never has to know
