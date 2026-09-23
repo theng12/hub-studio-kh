@@ -10,12 +10,12 @@ xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 \
   -o "$ROOT_DIR/.build/native-boundary-tests"
 "$ROOT_DIR/.build/native-boundary-tests"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 \
-  "$ROOT_DIR/native/ShellCore.swift" "$ROOT_DIR/native/StartupRecovery.swift" "$ROOT_DIR/native/ReleaseNotes.swift" "$ROOT_DIR/native/StudioAPI.swift" "$ROOT_DIR/tests/native/api_main.swift" \
+  "$ROOT_DIR/native/ShellCore.swift" "$ROOT_DIR/native/StartupRecovery.swift" "$ROOT_DIR/native/ReleaseNotes.swift" "$ROOT_DIR/native/UpdateClient.swift" "$ROOT_DIR/native/StudioAPI.swift" "$ROOT_DIR/tests/native/api_main.swift" \
   -o "$ROOT_DIR/.build/native-api-tests"
 "$ROOT_DIR/.build/native-api-tests"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -D LIFECYCLE_TESTING -parse-as-library \
   "$ROOT_DIR/native/ReleaseNotes.swift" "$ROOT_DIR/native/ShellCore.swift" "$ROOT_DIR/native/StartupRecovery.swift" \
-  "$ROOT_DIR/native/StudioAPI.swift" "$ROOT_DIR/native/StudioViews.swift" "$ROOT_DIR/native/StudioHub.swift" \
+  "$ROOT_DIR/native/UpdateClient.swift" "$ROOT_DIR/native/StudioAPI.swift" "$ROOT_DIR/native/StudioViews.swift" "$ROOT_DIR/native/StudioHub.swift" \
   "$ROOT_DIR/tests/native/lifecycle_main.swift" -o "$ROOT_DIR/.build/native-lifecycle-tests"
 "$ROOT_DIR/.build/native-lifecycle-tests"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O -parse-as-library \

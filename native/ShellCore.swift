@@ -146,6 +146,11 @@ struct ShellConfiguration {
     /// The controller this Mac joined, so its services can re-join by themselves after a restart.
     /// Not a credential: after joining, this Mac's own fleet token *is* the controller's.
     var controllerAddress: String?
+    /// The controller's release-signing key, pinned the first time this Mac reads its identity.
+    /// Kept with the membership: it is restored when the services start, and leaving the group
+    /// clears it. A different key presented later is refused, never adopted silently.
+    var releasePublisherPublicKey: String?
+    var releasePublisherFingerprint: String?
     /// The address this app's own Hub answers on. Always loopback.
     ///
     /// Loopback is bound in every configuration - `bind_hosts` adds it unconditionally - and the
@@ -230,6 +235,8 @@ struct ShellConfiguration {
             listenHost = saved.listenHost
             port = saved.port ?? Self.defaultPort
             controllerAddress = saved.controllerAddress
+            releasePublisherPublicKey = saved.releasePublisherPublicKey
+            releasePublisherFingerprint = saved.releasePublisherFingerprint
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
                 recoveryMaxAttempts = saved.recoveryMaxAttempts
@@ -423,6 +430,8 @@ struct ShellConfiguration {
                                                         listenHost: listenHost,
                                                         port: port,
                                                         controllerAddress: controllerAddress,
+                                                        releasePublisherPublicKey: releasePublisherPublicKey,
+                                                        releasePublisherFingerprint: releasePublisherFingerprint,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds))
         try data.write(to: preferencesFile, options: .atomic)
@@ -441,11 +450,17 @@ struct ShellConfiguration {
         let port: Int?
         /// Absent for every Mac that has never joined a controller, which is most of them.
         let controllerAddress: String?
+        /// The controller's pinned release-signing key. Absent until the first release read, and
+        /// absent again after leaving the group.
+        let releasePublisherPublicKey: String?
+        let releasePublisherFingerprint: String?
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
-             listenHost: String, port: Int?, controllerAddress: String?, recoveryMaxAttempts: Int,
+             listenHost: String, port: Int?, controllerAddress: String?,
+             releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
+             recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval]) {
             self.modelsPath = modelsPath
             self.offline = offline
@@ -454,6 +469,8 @@ struct ShellConfiguration {
             self.listenHost = listenHost
             self.port = port
             self.controllerAddress = controllerAddress
+            self.releasePublisherPublicKey = releasePublisherPublicKey
+            self.releasePublisherFingerprint = releasePublisherFingerprint
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
         }
@@ -472,6 +489,8 @@ struct ShellConfiguration {
             listenHost = try values.decodeIfPresent(String.self, forKey: .listenHost) ?? "127.0.0.1"
             port = try values.decodeIfPresent(Int.self, forKey: .port)
             controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
+            releasePublisherPublicKey = try values.decodeIfPresent(String.self, forKey: .releasePublisherPublicKey)
+            releasePublisherFingerprint = try values.decodeIfPresent(String.self, forKey: .releasePublisherFingerprint)
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)

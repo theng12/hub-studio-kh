@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.50 — 2026-09-23
+
+### A Mac can now update itself from its controller
+
+Nothing changes by itself: when your controller has no release to offer, the app says nothing.
+Once GatewayKH publishes a build, each Mac shows an "Update available" banner on Connections
+with the version, the size and who signed it, and an Install button. Installing verifies the
+signature and the file, replaces the app the careful way, restarts the services and tells you
+what happened.
+
+It is always your click - never automatic, never on a timer - because installing restarts the
+services and stops any work in progress. A Mac that has not yet been told which key to trust
+says so instead of offering the update.
+
+### A bug in the restart button
+
+The "Restart Services" button added recently did nothing: it was disabled by a check that is
+false whenever the services are running, which is exactly when you would press it. Fixed.
+
 ## 0.6.49 — 2026-09-23
 
 ### The activity page can say why a machine looks quiet

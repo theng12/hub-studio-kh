@@ -2527,6 +2527,7 @@ struct StudioContent: View {
                 heading("Connections", "Optional API access and external Studio Hub or GatewayKH control.")
                 Text("Local creation works independently. Connecting a controller is optional.").font(.headline)
                 Divider()
+                releaseUpdateSection
                 localAPI
                 Divider()
                 fleetSection
@@ -2535,6 +2536,61 @@ struct StudioContent: View {
             }.padding(28)
         }
         .task { if connected { await workspace.refreshConnection() } }
+    }
+
+    /// The controller's app update, next to the connection state it comes from.
+    ///
+    /// It never installs silently or on a timer: the operator presses Install, and the text says
+    /// plainly that the local services restart and running work stops. A release that cannot be
+    /// verified against the key already pinned on this Mac is shown without an Install button.
+    @ViewBuilder private var releaseUpdateSection: some View {
+        if workspace.showingUpdateBanner, let release = workspace.offeredRelease {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Update available — \(release.version) (\(release.build))")
+                            .font(.callout).fontWeight(.semibold)
+                        Text("\(release.sizeDisplay) · signed by controller key \(release.shortSigner)… · from \(release.publisherId)")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Text("Installing replaces this app and restarts the local services. Any work running right now will stop.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let progress = workspace.releaseProgress {
+                            Text(progress).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Button(workspace.installingRelease ? "Installing…" : "Install") {
+                        Task { await workspace.installOfferedRelease() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(workspace.installingRelease)
+                    Button("Dismiss") { workspace.dismissOfferedRelease() }
+                        .disabled(workspace.installingRelease)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.blue.opacity(0.40)))
+        } else if let refusal = workspace.releaseRefusal {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Update cannot be verified").font(.callout).fontWeight(.semibold)
+                    Text(refusal).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Check Again") { Task { await workspace.refreshRelease() } }
+                        .disabled(workspace.installingRelease)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.45)))
+        }
     }
 
     /// ST-10.2 — the private address, the identity behind it, and the credential, with the

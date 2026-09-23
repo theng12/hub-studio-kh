@@ -60,6 +60,14 @@ final class StudioController: ObservableObject {
         workspace.onControllerJoined = { [weak self] address in
             self?.rememberController(address)
         }
+        // The pinned release key belongs with the membership the app already persists, and the
+        // restart after a verified swap is the same path the restart notice uses.
+        workspace.onReleasePublisherKeyChanged = { [weak self] key in
+            self?.rememberReleasePublisherKey(key)
+        }
+        workspace.onReleaseRestartRequested = { [weak self] in
+            self?.restartServices()
+        }
     }
     var running: Bool { worker?.isRunning == true }
     var canConfigure: Bool { !running && !starting && !stopping && instanceLock != nil }
@@ -218,7 +226,8 @@ final class StudioController: ObservableObject {
                         await self.workspace.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
                             controllerAddress: self.configuration.controllerAddress ?? "",
                             token: self.fleetToken,
-                            boundHosts: self.configuration.listenHosts))
+                            boundHosts: self.configuration.listenHosts,
+                            releasePublisherKey: self.pinnedReleasePublisherKey))
                         guard !Task.isCancelled, !self.stopping, process.isRunning,
                               self.worker === process else { return }
                         let session = URLSession(configuration: .ephemeral)
@@ -337,12 +346,16 @@ final class StudioController: ObservableObject {
     /// stop the services first, change the setting, and start them again. Three steps, two of them
     /// invisible. This is the one button.
     func restartServices() {
-        guard canConfigure else { return }
         restartPending = false
         guard running || starting else {
+            // Nothing is running: this is a start, which still needs a configuration it can run.
+            guard canConfigure else { return }
             start()
             return
         }
+        // Running: stop, then start again from `workerExited`. The previous guard was `canConfigure`,
+        // which is false while the services run, so this branch was unreachable and the button did
+        // nothing exactly when it was offered - including after an update replaced the app on disk.
         restartAfterStop = true
         status = "Restarting to apply the change…"
         stop()
@@ -482,6 +495,22 @@ final class StudioController: ObservableObject {
     func rememberController(_ address: String?) {
         configuration.controllerAddress = address
         readFleetToken()
+        do { try configuration.save() } catch { failure = error.localizedDescription }
+    }
+
+    /// The release key stored with the membership, if it is internally consistent. A stored pair
+    /// whose fingerprint does not match its own key is ignored rather than trusted.
+    var pinnedReleasePublisherKey: ReleasePublisherKey? {
+        guard let publicKey = configuration.releasePublisherPublicKey,
+              let fingerprint = configuration.releasePublisherFingerprint,
+              ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else { return nil }
+        return ReleasePublisherKey(publicKey: publicKey, fingerprint: fingerprint)
+    }
+
+    /// Persist a pinned release key, or clear it when the workspace has left the group.
+    func rememberReleasePublisherKey(_ key: ReleasePublisherKey?) {
+        configuration.releasePublisherPublicKey = key?.publicKey
+        configuration.releasePublisherFingerprint = key?.fingerprint
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
 

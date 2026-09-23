@@ -117,6 +117,14 @@ final class FixtureProtocol: URLProtocol {
     static var lastMemoryToken = ""
     static var memoryReleaseCount = 0
     static var memoryUnavailable = false
+    /// Remote app-update fixture: the controller's identity, the descriptor it holds, and the
+    /// artifact bytes its route returns. `releaseArtifactOverride` exists so a signed descriptor
+    /// can be paired with different bytes to exercise the SHA-256 refusal.
+    static var releaseIdentityData: Data?
+    static var releaseBodyData: Data?
+    static var releaseArtifactData = Data()
+    static var releaseArtifactOverride: Data?
+    static var releaseArtifactReads = 0
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -161,6 +169,21 @@ final class FixtureProtocol: URLProtocol {
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
     static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
     static func setMemoryUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; memoryUnavailable = value }
+    static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        releaseIdentityData = identity
+        releaseBodyData = body
+        releaseArtifactData = artifact
+        releaseArtifactOverride = override
+    }
+    static func clearRelease() {
+        lock.lock(); defer { lock.unlock() }
+        releaseIdentityData = nil
+        releaseBodyData = nil
+        releaseArtifactData = Data()
+        releaseArtifactOverride = nil
+    }
+    static func releaseReads() -> Int { lock.lock(); defer { lock.unlock() }; return releaseArtifactReads }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
@@ -629,6 +652,19 @@ final class FixtureProtocol: URLProtocol {
                 : (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job/items/0/artifact"):
             result = (200, "audio/wav", Self.wav)
+        case ("GET", "/api/hub/release/identity"):
+            Self.lock.lock(); let releaseIdentity = Self.releaseIdentityData; Self.lock.unlock()
+            result = releaseIdentity.map { (200, "application/json", $0) }
+                ?? (404, "application/json", Data(#"{"detail":"no release identity"}"#.utf8))
+        case ("GET", "/api/hub/release"):
+            Self.lock.lock(); let releaseBody = Self.releaseBodyData; Self.lock.unlock()
+            result = (200, "application/json", releaseBody ?? Data(#"{"release":null}"#.utf8))
+        case ("GET", "/api/hub/release/artifact"):
+            Self.lock.lock()
+            Self.releaseArtifactReads += 1
+            let releaseArtifact = Self.releaseArtifactOverride ?? Self.releaseArtifactData
+            Self.lock.unlock()
+            result = (200, "application/octet-stream", releaseArtifact)
         default:
             result = (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
         }
@@ -656,6 +692,68 @@ final class FixtureProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+// MARK: - Remote update fixtures (throwaway keys only)
+
+private func releaseHex(_ data: Data) -> String {
+    data.map { String(format: "%02x", $0) }.joined()
+}
+
+private func releaseSha256(_ data: Data) -> String {
+    releaseHex(Data(SHA256.hash(data: data)))
+}
+
+private func releaseIdentityJSON(publicKey: Data, fingerprint: String,
+                                 algorithm: String = "ed25519") -> Data {
+    try! JSONSerialization.data(withJSONObject: [
+        "algorithm": algorithm,
+        "public_key": releaseHex(publicKey),
+        "fingerprint": fingerprint,
+    ])
+}
+
+private func releaseBody(_ descriptor: [String: Any]) -> Data {
+    try! JSONSerialization.data(withJSONObject: ["release": descriptor])
+}
+
+private func releaseSign(_ object: [String: Any], removing field: String,
+                         key: Curve25519.Signing.PrivateKey) -> String {
+    var body = object
+    body.removeValue(forKey: field)
+    guard let bytes = try? ReleaseCanonicalJSON.encode(body),
+          let signature = try? key.signature(for: bytes) else { return "" }
+    return signature.base64EncodedString()
+}
+
+/// One descriptor matching the controller's contract, signed by throwaway keys generated in the
+/// test. `controllerKeyId` may name a key that did not sign, which is how an impostor is modelled.
+private func makeReleaseDescriptor(build: String,
+                                   artifact: Data,
+                                   gateway: Curve25519.Signing.PrivateKey,
+                                   controllerSigning: Curve25519.Signing.PrivateKey,
+                                   controllerKeyId: String? = nil,
+                                   filename: String = "StudioHub-0.6.50-abc1234.dmg",
+                                   sha256: String? = nil,
+                                   bytes: Int? = nil) -> [String: Any] {
+    var descriptor: [String: Any] = [
+        "schema": "studiohub.app-release.v1",
+        "schema_version": 1,
+        "version": "0.6.50",
+        "build": build,
+        "filename": filename,
+        "bytes": bytes ?? artifact.count,
+        "sha256": sha256 ?? releaseSha256(artifact),
+        "published_at": 1790000000,
+        "publisher_id": "gatewaykh",
+        "publisher_key_id": releaseSha256(gateway.publicKey.rawRepresentation),
+    ]
+    descriptor["signature"] = releaseSign(descriptor, removing: "signature", key: gateway)
+    descriptor["controller_key_id"] = controllerKeyId
+        ?? releaseSha256(controllerSigning.publicKey.rawRepresentation)
+    descriptor["controller_signature"] = releaseSign(descriptor, removing: "controller_signature",
+                                                     key: controllerSigning)
+    return descriptor
 }
 
 @main
@@ -1863,6 +1961,156 @@ struct NativeAPITests {
                 "the Music draft must persist like the other workspaces")
         let mode = try FileManager.default.attributesOfItem(atPath: preferences.path)[.posixPermissions] as? NSNumber
         require(mode?.intValue == 0o600, "workspace choices must be private")
+
+        // ── Remote app update ──────────────────────────────────────────────────────────────
+        // Every signing key below is generated here and thrown away: no real key is trusted.
+        let updateDirectory = temporary.appendingPathComponent("Update State")
+        let updateStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await updateStore.connect(baseURL: URL(string: "http://127.0.0.1:45690")!,
+                                  dataDirectory: updateDirectory, token: "native-test-token")
+        updateStore.currentAppBuild = "currentbuild"
+
+        let controllerKey = Curve25519.Signing.PrivateKey()
+        let gatewayKey = Curve25519.Signing.PrivateKey()
+        let controllerFingerprint = releaseSha256(controllerKey.publicKey.rawRepresentation)
+        let identity = releaseIdentityJSON(publicKey: controllerKey.publicKey.rawRepresentation,
+                                           fingerprint: controllerFingerprint)
+        let artifact = Data(repeating: 0x61, count: 4096)
+        let descriptor = makeReleaseDescriptor(build: "newbuild", artifact: artifact,
+                                               gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
+
+        // The first successful read pins the controller key and does not verify a release against
+        // a key fetched at the same time; the operator is told to check again.
+        await updateStore.refreshRelease()
+        require(updateStore.releasePublisherKey?.fingerprint == controllerFingerprint,
+                "the first successful identity read must pin the controller key")
+        require(!updateStore.updateOffered,
+                "a key pinned in the same read must not verify the release it arrived with")
+        require(updateStore.releaseRefusal?.contains("pinned") == true,
+                "the operator must be told the key was just pinned: \(updateStore.releaseRefusal ?? "nil")")
+
+        // The second read verifies the countersignature against the stored pin.
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered,
+                "an offered release for a different build must be installable: \(updateStore.releaseRefusal ?? "nil")")
+        require(updateStore.offeredRelease?.version == "0.6.50", "the offered version must be exposed")
+        require(updateStore.offeredRelease?.build == "newbuild", "the offered build must be exposed")
+        require(updateStore.offeredRelease?.bytes == Int64(artifact.count), "the offered size must be exposed")
+        require(updateStore.offeredRelease?.sha256 == releaseSha256(artifact), "the offered digest must be exposed")
+        require(updateStore.offeredRelease?.controllerKeyId == controllerFingerprint,
+                "the offered release must name who signed it")
+        require(updateStore.releaseRefusal == nil, "a verified offer carries no refusal")
+
+        // The advertised build matching this app's own build is not an update.
+        updateStore.currentAppBuild = "newbuild"
+        await updateStore.refreshRelease()
+        require(!updateStore.updateOffered, "a release matching this app's own build is not an update")
+        updateStore.currentAppBuild = "currentbuild"
+
+        // A release whose controller_signature does not verify against the pinned key is refused.
+        let impostor = Curve25519.Signing.PrivateKey()
+        let impostorDescriptor = makeReleaseDescriptor(
+            build: "newbuild", artifact: artifact, gateway: gatewayKey,
+            controllerSigning: impostor, controllerKeyId: controllerFingerprint)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(impostorDescriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        require(!updateStore.updateOffered, "an unverifiable countersignature must not be offered")
+        require(updateStore.releaseRefusal?.lowercased().contains("signature") == true,
+                "the refusal must name the signature: \(updateStore.releaseRefusal ?? "nil")")
+
+        // A different controller key presented later must not replace the pin.
+        let otherKey = Curve25519.Signing.PrivateKey()
+        let otherFingerprint = releaseSha256(otherKey.publicKey.rawRepresentation)
+        let otherIdentity = releaseIdentityJSON(publicKey: otherKey.publicKey.rawRepresentation,
+                                                fingerprint: otherFingerprint)
+        let otherDescriptor = makeReleaseDescriptor(build: "newbuild", artifact: artifact,
+                                                    gateway: gatewayKey, controllerSigning: otherKey)
+        FixtureProtocol.setRelease(identity: otherIdentity, body: releaseBody(otherDescriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        require(updateStore.releasePublisherKey?.fingerprint == controllerFingerprint,
+                "a different controller key must not replace the pinned one")
+        require(!updateStore.updateOffered,
+                "a release signed by an unpinned key must not be offered")
+
+        // A signed descriptor whose artifact bytes hash differently is refused before the swap.
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact,
+                                   override: Data(repeating: 0x62, count: artifact.count))
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered,
+                "the good descriptor must still verify: \(updateStore.releaseRefusal ?? "nil")")
+        var installerRan = false
+        updateStore.installVerifiedArtifact = { _, _ in installerRan = true; return "newbuild" }
+        await updateStore.installOfferedRelease()
+        require(!installerRan, "a SHA-256 mismatch must never reach the swap")
+        require(updateStore.connectionNotice?.kind == .failure, "a SHA-256 mismatch must be reported")
+        require(updateStore.connectionNotice?.text.lowercased().contains("sha-256") == true,
+                "the report must name the hash: \(updateStore.connectionNotice?.text ?? "nil")")
+
+        // The happy path: a verified artifact reaches the swap, and the existing restart path is
+        // asked exactly once. The installer is stubbed, so nothing touches /Applications.
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the good release must be offered again: \(updateStore.releaseRefusal ?? "nil")")
+        var swaps = 0
+        var restarts = 0
+        updateStore.onReleaseRestartRequested = { restarts += 1 }
+        updateStore.installVerifiedArtifact = { _, _ in swaps += 1; return "newbuild" }
+        await updateStore.installOfferedRelease()
+        require(swaps == 1, "a verified artifact must reach the swap exactly once")
+        require(restarts == 1, "a completed install must ask the existing restart path exactly once")
+        require(updateStore.connectionNotice?.kind == .success, "a completed install must be reported")
+        require(updateStore.connectionNotice?.text.contains("Restarting") == true,
+                "the report must say the services restart: \(updateStore.connectionNotice?.text ?? "nil")")
+        require(updateStore.currentAppBuild == "newbuild",
+                "the installed build must become the current one so the banner clears")
+        FixtureProtocol.clearRelease()
+
+        // The swap itself: staged beside the target, the bundled runtime required, the old copy
+        // removed only after the landed Info.plist reads back. A scratch target, never /Applications.
+        let installParent = temporary.appendingPathComponent("Install Target")
+        try FileManager.default.createDirectory(at: installParent, withIntermediateDirectories: true)
+        let targetApp = installParent.appendingPathComponent("Studio Hub.app")
+        let stagedApp = installParent.appendingPathComponent("staged/Studio Hub.app")
+        func makeFakeApp(at app: URL, build: String, withRuntime: Bool) throws {
+            let contents = app.appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>StudioHubBuild</key><string>\(build)</string></dict></plist>"
+            try Data(plist.utf8).write(to: contents.appendingPathComponent("Info.plist"))
+            let runtime = app.appendingPathComponent(ReleaseInstaller.requiredRuntime)
+            try FileManager.default.createDirectory(at: runtime.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if withRuntime {
+                try Data("#!/bin/sh\n".utf8).write(to: runtime)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.path)
+            }
+        }
+        try makeFakeApp(at: targetApp, build: "currentbuild", withRuntime: true)
+        try makeFakeApp(at: stagedApp, build: "newbuild", withRuntime: true)
+        let installer = ReleaseInstaller(targetApp: targetApp, attach: { _, _ in }, detach: { _ in })
+        let swapDescriptor = ReleaseDescriptor(json: descriptor)!
+        let landed = try installer.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
+        require(landed == "newbuild", "the swap must report the build that actually landed")
+        require(!FileManager.default.fileExists(atPath: stagedApp.path),
+                "the staged app must be moved into place, not left behind")
+        let landedPlist = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist")),
+            options: [], format: nil) as? [String: Any]
+        require(landedPlist?["StudioHubBuild"] as? String == "newbuild",
+                "the target must hold the new build after the swap")
+
+        // An incomplete staged app is refused before anything is moved.
+        let incomplete = installParent.appendingPathComponent("incomplete/Studio Hub.app")
+        try makeFakeApp(at: incomplete, build: "newbuild", withRuntime: false)
+        let targetBefore = try Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist"))
+        do {
+            _ = try installer.swapStagedApp(staged: incomplete, descriptor: swapDescriptor)
+            fatalError("an app with no bundled python3 must be refused")
+        } catch {
+            let targetAfter = try Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist"))
+            require(targetBefore == targetAfter, "a refused staged app must leave the installed app untouched")
+        }
+        updateStore.disconnect()
 
         print("Native API contract checks passed")
     }

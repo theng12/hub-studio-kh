@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.50 — 2026-09-23 · updating a Mac from its controller
+
+The remote-update design's two halves are now built. Nothing changes for a fleet until
+GatewayKH pushes a release: a controller with none answers `{"release": null}`.
+
+- **The controller mirrors a release.** `POST /api/hub/release` accepts a release pushed by
+  GatewayKH (Fleet token, because the gateway holds no Hub token - the **signature** is the real
+  authorisation), verifies the gateway signature and the artifact hash, stores both, and
+  countersigns. `GET /api/hub/release`, `/artifact` (range-capable) and `/identity` serve it.
+  `POST /api/hub/release/trust` installs the trusted gateway key and is Hub-token only: that is
+  the owner's decision and the actual gate.
+- **A Mac offers the update and installs it on request.** Connections shows an "Update
+  available" banner (version, build, size, who signed it) with Install and Dismiss, or an
+  orange "cannot be verified" banner when there is no pinned key. Installing verifies the
+  controller's countersignature with CryptoKit, verifies the artifact hash, swaps with the same
+  staged discipline as `install_local.sh`, restarts the services and reports.
+- **Trust is a pinned key, not a fetched one.** The controller's key is pinned the first time it
+  is read and stored with the membership; a release whose key does not match is refused, a
+  different key is never adopted, and a Mac with no pinned key is offered no install button.
+  Verifying against a key fetched alongside the artifact would prove nothing.
+- **Ed25519 now prefers a vetted library.** `cryptography` is vendored into the runtime and used
+  when present; the pure-Python implementation remains a fallback. The Hub refuses rather than
+  guesses when it cannot verify.
+- **Fixed: the "Restart Services" button did nothing.** `restartServices()` guarded on
+  `canConfigure`, which is false whenever the services are running - so the button was inert
+  exactly when it was offered, including the restart an update needs.
+- Artifact form: **DMG**. An app bundle is refused with a clear message rather than guessed at.
+
 ## 0.6.49 — 2026-09-23 · the activity reporter says why, and every studio reports
 
 GatewayKH's addendum, in full.

@@ -926,6 +926,9 @@ final class NativeWorkspaceStore: ObservableObject {
         let controllerAddress: String
         let token: String?
         let boundHosts: [String]
+        /// The controller's release key pinned on first read. Part of the membership: it is
+        /// restored with it at startup and cleared when this Mac leaves the group.
+        var releasePublisherKey: ReleasePublisherKey? = nil
     }
     var storedMembership: FleetMembership?
     private var startupMembershipAttemptID: UUID?
@@ -942,6 +945,51 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var connectionNotice: ConnectionNotice?
 
     func dismissConnectionNotice() { connectionNotice = nil }
+
+    // MARK: Remote app update
+
+    /// The controller's release-signing key, pinned on this Mac the first time its identity is
+    /// read. Once pinned it is never replaced by a later read: a new key is an explicit act on
+    /// this Mac, not something the network can do. Held with the fleet membership and restored
+    /// from it at startup.
+    @Published private(set) var releasePublisherKey: ReleasePublisherKey?
+    /// The release the controller holds, if any. Shown even when it cannot be installed, so the
+    /// reason is visible rather than the offer silently vanishing.
+    @Published private(set) var offeredRelease: OfferedRelease?
+    /// True only when the release is signed by the pinned controller key, differs from this app's
+    /// own StudioHubBuild, and has an artifact form this Mac can install.
+    @Published private(set) var updateOffered = false
+    /// Why an offered release cannot be installed, in a sentence the banner shows verbatim.
+    @Published private(set) var releaseRefusal: String?
+    /// True while the artifact is downloading, verifying or being swapped in.
+    @Published private(set) var installingRelease = false
+    /// A one-line progress sentence while `installingRelease` is true.
+    @Published private(set) var releaseProgress: String?
+    /// The build whose banner the operator dismissed. An offer stays dismissed until a different
+    /// build is advertised; nothing installs on a timer.
+    @Published private(set) var dismissedReleaseBuild: String?
+
+    var showingUpdateBanner: Bool {
+        updateOffered && offeredRelease?.build != dismissedReleaseBuild
+    }
+
+    func dismissOfferedRelease() { dismissedReleaseBuild = offeredRelease?.build }
+
+    /// The build this running app was packaged as. Read from the bundle, and writable so the
+    /// contract tests can stand in for a packaged app; a plain CLI has no StudioHubBuild.
+    var currentAppBuild: String? = Bundle.main.object(forInfoDictionaryKey: "StudioHubBuild") as? String
+    /// The app bundle an update replaces.
+    var installedAppURL: URL = Bundle.main.bundleURL
+    /// The descriptor behind `offeredRelease`, kept for install so verification runs against the
+    /// same bytes that were offered rather than a second, possibly different, read.
+    private var offeredReleaseDescriptor: ReleaseDescriptor?
+    /// Persist or clear the pinned key with this Mac's controller membership.
+    var onReleasePublisherKeyChanged: ((ReleasePublisherKey?) -> Void)?
+    /// The existing restart path, called once, after a verified swap.
+    var onReleaseRestartRequested: (() -> Void)?
+    /// Performs the swap of a verified artifact. Injectable so the download-and-verify path can be
+    /// driven in tests without writing to /Applications.
+    var installVerifiedArtifact: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.install
 
     /// Record the outcome of a connection action.
     ///
@@ -1081,6 +1129,12 @@ final class NativeWorkspaceStore: ObservableObject {
         modelNote = nil
         modelNoteRepo = nil
         updatingModels = false
+        offeredRelease = nil
+        offeredReleaseDescriptor = nil
+        updateOffered = false
+        releaseRefusal = nil
+        installingRelease = false
+        releaseProgress = nil
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -2855,6 +2909,9 @@ final class NativeWorkspaceStore: ObservableObject {
     func adoptStartupMembership(_ membership: FleetMembership) async {
         invalidateStartupMembershipAttempt()
         storedMembership = membership
+        // The pinned release key travels with the membership: restore it before any release is
+        // read, so the first read verifies against the key pinned at the last join.
+        releasePublisherKey = membership.releasePublisherKey
         startupMembershipAttemptID = UUID()
         // Read the identity before deciding: the credential origin is what says whether this Mac
         // borrowed somebody else's token and therefore belongs to a group.
@@ -2895,6 +2952,13 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             storedMembership = nil
             controllerAddress = ""
+            // Leaving the group ends the trust that group had: the pinned release key goes with it.
+            releasePublisherKey = nil
+            onReleasePublisherKeyChanged?(nil)
+            offeredRelease = nil
+            offeredReleaseDescriptor = nil
+            updateOffered = false
+            releaseRefusal = nil
             onControllerJoined?(nil)
             await refreshConnection()
             note(.success, "This Mac has left the group and now runs on its own credential." + controllerNote)
@@ -3086,6 +3150,226 @@ final class NativeWorkspaceStore: ObservableObject {
             controllerIdentity = nil
             hubVersion = nil
         }
+        // Read the release offer on the same visit that reads the connection state, so the banner
+        // sits next to what it belongs to. It never installs anything: the operator presses a button.
+        guard connectionID == requestConnection else { return }
+        await refreshRelease()
+    }
+
+    /// Read what the controller currently offers and decide whether this Mac may install it.
+    ///
+    /// The first successful read of the controller's identity **pins** its key and does not verify
+    /// the release in the same pass: a key fetched at the same moment as the artifact proves
+    /// nothing, so the caller is told to check again. Later reads verify the countersignature with
+    /// the stored pin, and a different key presented later is refused rather than adopted.
+    func refreshRelease() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let presented = try await readReleaseIdentity()
+            guard connectionID == requestConnection else { return }
+            if let existing = releasePublisherKey {
+                guard existing.fingerprint == presented.fingerprint else {
+                    let descriptor = try? await readRelease()
+                    offeredRelease = descriptor?.offered
+                    offeredReleaseDescriptor = descriptor
+                    updateOffered = false
+                    releaseRefusal = "The controller now presents a different release-signing key (\(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
+                    return
+                }
+            } else {
+                // Pin it, then wait for the next check to verify anything against it.
+                releasePublisherKey = presented
+                onReleasePublisherKeyChanged?(presented)
+                let descriptor = try? await readRelease()
+                guard connectionID == requestConnection else { return }
+                offeredRelease = descriptor?.offered
+                offeredReleaseDescriptor = descriptor
+                updateOffered = false
+                releaseRefusal = "This Mac just pinned the controller's release-signing key (\(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
+                return
+            }
+            guard let pinnedKey = releasePublisherKey else { return }
+            guard let descriptor = try await readRelease() else {
+                offeredRelease = nil
+                offeredReleaseDescriptor = nil
+                updateOffered = false
+                releaseRefusal = nil
+                return
+            }
+            guard connectionID == requestConnection else { return }
+            offeredRelease = descriptor.offered
+            offeredReleaseDescriptor = descriptor
+            guard descriptor.controllerKeyId == pinnedKey.fingerprint else {
+                updateOffered = false
+                releaseRefusal = "The release names controller key \(descriptor.controllerKeyId.prefix(12))…, which is not the key pinned on this Mac (\(pinnedKey.shortFingerprint)…). Refusing it."
+                return
+            }
+            guard ReleaseSignature.verifyControllerSignature(
+                descriptor: descriptor.raw,
+                signatureBase64: descriptor.controllerSignature,
+                publicKeyHex: pinnedKey.publicKey) else {
+                updateOffered = false
+                releaseRefusal = "The controller's signature on this release does not verify against the key pinned on this Mac. Refusing it."
+                return
+            }
+            if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
+                updateOffered = false
+                releaseRefusal = reason
+                return
+            }
+            guard let ownBuild = currentAppBuild, !ownBuild.isEmpty else {
+                updateOffered = false
+                releaseRefusal = "This app cannot read its own StudioHubBuild, so it cannot tell whether the offered release is different."
+                return
+            }
+            if descriptor.build == ownBuild {
+                updateOffered = false
+                releaseRefusal = nil
+            } else {
+                updateOffered = true
+                releaseRefusal = nil
+            }
+        } catch {
+            guard connectionID == requestConnection else { return }
+            updateOffered = false
+            releaseRefusal = Self.actionable(error, action: "Read the update offer")
+        }
+    }
+
+    /// Install the offered release, once the operator has pressed the button.
+    ///
+    /// Order is the contract's: verify the controller countersignature with the pinned key before
+    /// trusting anything else, download the artifact to a temporary file (streamed to disk, never
+    /// held in memory), verify the SHA-256 of those bytes, then swap. Nothing is installed
+    /// silently, and the whole thing is abandoned on the first failure.
+    func installOfferedRelease() async {
+        guard !installingRelease else { return }
+        guard updateOffered, let descriptor = offeredReleaseDescriptor, let pinned = releasePublisherKey else {
+            note(.failure, releaseRefusal ?? "No verified update is being offered.")
+            return
+        }
+        installingRelease = true
+        releaseProgress = "Verifying the controller's signature…"
+        defer {
+            installingRelease = false
+            releaseProgress = nil
+        }
+        do {
+            guard descriptor.controllerKeyId == pinned.fingerprint,
+                  ReleaseSignature.verifyControllerSignature(
+                    descriptor: descriptor.raw,
+                    signatureBase64: descriptor.controllerSignature,
+                    publicKeyHex: pinned.publicKey) else {
+                throw ReleaseError("The controller's signature on this release does not verify against the key pinned on this Mac. Nothing was downloaded or installed.")
+            }
+            if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
+                throw ReleaseError(reason)
+            }
+            releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
+            let artifact = try await downloadReleaseArtifact(descriptor: descriptor)
+            defer { try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent()) }
+            releaseProgress = "Verifying the downloaded bytes…"
+            try Self.verifyArtifactFile(artifact, descriptor: descriptor)
+            releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
+            let landed = try installVerifiedArtifact(artifact, descriptor)
+            guard landed == descriptor.build else {
+                throw ReleaseError("The app that landed reports build \(landed), not \(descriptor.build).")
+            }
+            // The running process is still the old build; treat the installed one as current so the
+            // banner does not offer the update we just took. A relaunch reads the new Info.plist.
+            currentAppBuild = landed
+            updateOffered = false
+            releaseRefusal = nil
+            note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Restarting the local services now — running work will stop.")
+            onReleaseRestartRequested?()
+            await refreshRelease()
+        } catch {
+            note(.failure, Self.actionable(error, action: "Install the update"))
+            await refreshRelease()
+        }
+    }
+
+    /// Stream the artifact to a private temporary file. Uses URLSession's download task, which
+    /// writes to disk, so a 1.2 GB image is never held in memory.
+    private func downloadReleaseArtifact(descriptor: ReleaseDescriptor) async throws -> URL {
+        let requestConnection = connectionID
+        var request = try makeRequest(["api", "hub", "release", "artifact"])
+        request.timeoutInterval = 600
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("studiohub-update-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let destination = directory.appendingPathComponent(descriptor.filename)
+        do {
+            let (temporary, response) = try await session.download(for: request)
+            guard connectionID == requestConnection else {
+                throw ReleaseError("The local engine connection changed while the update was downloading.")
+            }
+            try validateResponse(data: Data(), response: response, request: request)
+            // The route advertises the digest; the signed descriptor's sha256 stays authoritative
+            // and is checked over the bytes below. A disagreement here is refused all the same.
+            if let announced = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Content-SHA256"),
+               announced.lowercased() != descriptor.sha256 {
+                throw ReleaseError("The controller's artifact route advertises SHA-256 \(announced), not the signed \(descriptor.sha256). Nothing was installed.")
+            }
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: temporary, to: destination)
+        } catch let error as ReleaseError {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw ReleaseError("Could not download the update: \(Self.describe(error))")
+        }
+        return destination
+    }
+
+    /// The signed descriptor's SHA-256 over the bytes on disk. Throws with a plain sentence on any
+    /// mismatch; a corruption check, not the trust decision.
+    static func verifyArtifactFile(_ file: URL, descriptor: ReleaseDescriptor) throws {
+        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
+        guard size == descriptor.bytes else {
+            throw ReleaseError("The downloaded update is \(size.map(String.init) ?? "an unknown number of") bytes but the signed descriptor says \(descriptor.bytes). Nothing was installed.")
+        }
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard digest == descriptor.sha256 else {
+            throw ReleaseError("The downloaded update is not the artifact the controller signed: its SHA-256 is \(digest.prefix(16))…, not \(descriptor.sha256.prefix(16))…. Nothing was installed.")
+        }
+    }
+
+    private func readReleaseIdentity() async throws -> ReleasePublisherKey {
+        let data = try await performData(makeRequest(["api", "hub", "release", "identity"]))
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ReleaseError("The controller's release identity was not a JSON object.")
+        }
+        guard object["algorithm"] as? String == "ed25519" else {
+            throw ReleaseError("The controller signs releases with \(object["algorithm"] as? String ?? "an unknown algorithm"), not ed25519.")
+        }
+        guard let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex),
+              let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex),
+              ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else {
+            throw ReleaseError("The controller's release identity is not a 64-hex Ed25519 key whose fingerprint matches.")
+        }
+        return ReleasePublisherKey(publicKey: publicKey, fingerprint: fingerprint)
+    }
+
+    private func readRelease() async throws -> ReleaseDescriptor? {
+        let data = try await performData(makeRequest(["api", "hub", "release"]))
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let release = object["release"] else {
+            throw ReleaseError("The controller's release answer was not JSON with a release field.")
+        }
+        if release is NSNull { return nil }
+        guard let dictionary = release as? [String: Any], let descriptor = ReleaseDescriptor(json: dictionary) else {
+            throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
+        }
+        return descriptor
     }
 
     /// Show a credential without publishing it. The app already holds this token to talk to
