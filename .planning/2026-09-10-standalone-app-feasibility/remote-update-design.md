@@ -151,3 +151,59 @@ A node that does not already hold the publisher's key says so instead of offerin
 Decided 2026-09-23 (the three questions above are answered at the top of this file). Nothing
 here is implemented; `main` carries the design only. The owner continues to update Macs from an
 SSD, which stays the bootstrap path for a new Mac either way.
+
+## Wire contract (chosen, to build against)
+
+**Push, not pull.** GatewayKH already reaches controllers and holds their Fleet tokens; a
+controller reaching GatewayKH would be a new outbound path and a second credential on every
+Hub. So GatewayKH **pushes** a release to each controller.
+
+**Two signatures, one chain.** The node's trust anchor is its controller, because that is what
+it pinned at join.
+
+```
+GatewayKH signs the descriptor          controller verifies it, then countersigns
+        |                                        |
+        +--> POST /api/hub/release -------------+--> node verifies the CONTROLLER's
+             (artifact + descriptor)                  countersignature with the key it
+                                                      pinned, and the sha256 inside it
+```
+
+**Release descriptor** — one JSON object, canonical form is sorted keys, no whitespace:
+
+```json
+{
+  "schema": "studiohub.app-release.v1",
+  "schema_version": 1,
+  "version": "0.6.50",
+  "build": "abc1234",
+  "filename": "StudioHub-0.6.50-abc1234.dmg",
+  "bytes": 1234567,
+  "sha256": "<64 hex over the artifact bytes>",
+  "published_at": 1790000000,
+  "publisher_id": "gatewaykh",
+  "publisher_key_id": "<hex fingerprint of the signing key>",
+  "signature": "<base64 ed25519 over the canonical descriptor WITHOUT this field>"
+}
+```
+
+The `sha256` is inside the signed bytes, so the signature binds the artifact: verifying the
+signature and then the hash is enough, and either failing refuses the release.
+
+**Controller routes (Studio Hub Hub):**
+
+| Route | Token | Purpose |
+|---|---|---|
+| `POST /api/hub/release` | Hub | accept a pushed release: `{"descriptor": {...}, "artifact_base64": ...}` or multipart; verify the gateway signature, verify the sha256, store both, countersign |
+| `GET /api/hub/release` | Fleet | what this controller holds: the descriptor with the controller's countersignature, or `{"release": null}` |
+| `GET /api/hub/release/artifact` | Fleet | the artifact, range-capable, `X-Content-SHA256` |
+| `POST /api/hub/release/trust` | Hub | set or replace the trusted gateway publisher key — an owner action on this Mac, never implied |
+
+**Node side:** reads `GET /api/hub/release` through its controller, compares `build` with its own
+`StudioHubBuild`, and offers the update; on accept it verifies the countersignature against the
+key pinned at join, verifies the sha256, swaps with the same staged path as
+`packaging/install_local.sh`, restarts, and reports the new build back.
+
+**Trust bootstrap:** the controller's own publisher key is generated on first use and shown with
+its fingerprint, so a joining node can pin it; the gateway's key is set on the controller by the
+owner (`/api/hub/release/trust`) and is what makes a pushed release acceptable.
