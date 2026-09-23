@@ -1,0 +1,104 @@
+# Studio Hub — session handoff
+
+**Read this first in a new session.** It is kept current with every release; see the rule in
+`AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
+
+Last updated: 0.6.52.
+
+## Where things stand
+
+- Release **0.6.52** (build `46ec9d8`). Every release is pushed to `main` and to
+  `implementation/voice-runtime`; `main` is the release branch.
+- The four SSDs carry `Video Generation Kit/` holding `GatewayKH/`, `Story Studio/` and
+  `Studio Hub KH/`, refreshed from the current build on every release.
+- The app is **unsigned**. First launch needs right-click → Open; the kit's
+  `1 - Install the app.command` clears the quarantine itself. (The owner has decided not to
+  sign — do not raise it.)
+- The canonical plan and history are in `.planning/2026-09-10-standalone-app-feasibility/`,
+  with `progress.md` appended to throughout and `CHANGELOG.md` + `release-notes.md` per version.
+
+## The release loop, exactly
+
+1. `VERSION` → the new number.
+2. Write the `CHANGELOG.md` and `release-notes.md` entries (both, every time; the release notes
+   are read by the owner, the changelog by a developer).
+3. Stage:
+   ```sh
+   .build/voice-runtime/bin/python3 -B packaging/stage_voice.py \
+     --runtime .build/voice-runtime --native-shell .build/StudioHub \
+     --image-runtime .build/st03-image-runtime-worker \
+     --music-runtime .build/music-runtime \
+     --music-engine .build/music-engine-source \
+     --output ".build/StudioHub-<n>/Studio Hub.app"
+   ```
+4. Install: `bash packaging/install_local.sh ".build/StudioHub-<n>/Studio Hub.app"`.
+   It verifies what landed. **Never** `cp` a bundle into `/Applications` by hand, and never
+   chain a swap with `|| true` — that is how a stale app went unnoticed for three releases.
+5. DMG: `bash .build/make-dmg.sh "<stage>" "dist/StudioHub-<version>-<build>.dmg"`, and move the
+   previous DMG into `_trash/dist/`.
+6. Drives: point `.build/prepare-kit.sh` at the new stage, then run
+   `bash .build/prepare-kit.sh <VOLUME>` for each, and verify each with
+   `sh "/Volumes/<VOLUME>/Video Generation Kit/Studio Hub KH/Technical/verify-kit.sh"`.
+7. Kit readmes: edit `packaging/kit-readmes/` and copy `README.md` and `Studio Hub KH.md` into
+   each drive's kit.
+8. Push `implementation/voice-runtime`, then `git branch -f main HEAD` and push `main`.
+9. **Update this file.**
+
+## Paths
+
+| What | Where |
+|---|---|
+| Build runtime (Python, holds `cryptography`) | `.build/voice-runtime` |
+| Native shell binary | `.build/StudioHub` |
+| Image runtime | `.build/st03-image-runtime-worker` |
+| Music overlay (177 files) | `.build/music-runtime`, digest pinned in `packaging/stage_voice.py` as `MUSIC_OVERLAY_SHA256` |
+| Music engine source | `.build/music-engine-source` |
+| The Mac's model library | `~/StudioHubModels` |
+| Hub data (settings, jobs DB, keys) | `~/Library/Application Support/StudioHub Standalone/` |
+
+The overlay digest is **content-only** on purpose: permissions were in it once, and a copy that
+changed 0444→0644 stopped the Music worker and therefore the whole Hub from starting.
+
+## Rules that cost us time — do not relearn them
+
+- **Move, never `rm`.** Every removal goes to `_trash/` (see `AGENTS.md`). `_trash/` itself is
+  the owner's to empty.
+- **Verify the artefact, not the handover.** Mount the DMG, read its version and build, check the
+  hash — before it goes in the kit.
+- **App Transport Security: declare `NSAllowsArbitraryLoads` ALONE.** A granular key
+  (`NSAllowsLocalNetworking`) makes macOS ignore it, and the tailnet's `100.64/10` is not treated
+  as local, so a join is refused with code -1022.
+- **A runtime identity must not include file permissions**, for the reason above.
+- **The runtime tree is read-only**: `chmod -R u+w .build/voice-runtime` before adding anything.
+- **The drives are frequently ejected.** `prepare-kit.sh` expects
+  `KH-STUDIO-{NOVA,UGREEN,ATLAS,ORICO}`; if a drive is renamed, pass the new name rather than
+  assuming. Four kit drives, plus sometimes an unrelated drive appears (`ORICO 2TB` is not a kit).
+- **A test that passes against a fixture is not a test of the wire.** The native suites stub the
+  network; the two-Hub harness drives Python HTTP, which is not subject to ATS. That is exactly
+  why the join bug reached the owner.
+- Confirmed pre-existing and unrelated: `tests/test_subtitle_standalone.py::test_a_small_mac_is_warned_about_not_refused`
+  fails when run in a full-file order and passes alone.
+
+## Do not touch
+
+- Other repos and checkouts: `~/Developer/gateway-kh` (read-only), `story-studio-kh`,
+  `media-studio-kh`, `label-studio-kh`, `chrome-extensions`.
+- `~/Downloads/model-library`, `~/StudioHubAppBackups/`.
+- Anything inside any `_trash/`.
+- GatewayKH's checkout content — it is another session's project.
+
+## In flight / open
+
+- **Remote update**: built on both sides (Hub controller routes + node UI), **never exercised
+  across a real fleet**. GatewayKH publishes → controllers mirror → nodes pull. Trust is the
+  publisher key pinned on the node; `POST /api/hub/release/trust` is Hub-token only and now has a
+  UI under Connections → App updates.
+- **Honest gaps**: no SwiftUI render tests; the live `hdiutil` mount/swap is unit-tested only;
+  no resume test at 1.2 GB; no independent review of any of this work — it is all self-reviewed.
+- **GatewayKH's contracts** are answered in 0.6.48 (capacity/worker/model-health) and 0.6.49
+  (the activity reporter).
+
+## Secrets
+
+None in this repo. Controller addresses and Fleet tokens live on the drives (`Token and Stuff.md`
+in each kit) and with the owner. If a task needs them, ask for them.

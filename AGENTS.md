@@ -27,3 +27,7 @@
   sort out: never delete or tidy anything *inside* it. The one thing that is not a
   file is a Git branch or remote ref — record its name and SHA in a note under
   `_trash/` before deleting it, and never rewrite published history.
+- **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and
+  keep it current: the version and build, anything newly learned, anything newly
+  forbidden, and what is still open. A stale handoff is worse than none, because it is
+  trusted — if it disagrees with the code, the code wins and the file gets fixed.
