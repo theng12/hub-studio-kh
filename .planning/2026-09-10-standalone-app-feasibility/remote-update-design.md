@@ -30,35 +30,55 @@ it, installs it and restarts — without a drive visit. New Macs still bootstrap
 
 ## Two tracks, because the changes are not the same size
 
-### Track A — components-only patch (the fast path, and the common case)
+## Decisions (owner, 2026-09-23)
 
-Most of our updates are Hub-side: Python under `Contents/Resources/components/`, plus
-`hub_worker.py` and the worker modules. That set is **1.7 MB**, not 2.8 GB.
+1. **GatewayKH holds the release** — it already holds the installers in its kit and is the one
+   address Story Studio uses, so a build is published once for the whole estate.
+2. **Track A is not wanted.** A full swap it is; see below for why, kept here so the reasoning
+   is not lost.
+3. **The node pins the publisher at pairing** — no Apple Developer ID. An update must be signed
+   by the key the node already trusts, so the network cannot hand it arbitrary code.
 
-- The controller publishes a signed digest list of the changed files plus their contents.
-- A node fetches the set, verifies every file against the digest, writes them into the bundle,
-  and restarts only the Hub services.
-- Limits, stated plainly: it edits inside an **ad-hoc signed** bundle, so the signature is
-  invalidated (macOS tolerates this for ad-hoc, but it is not clean), and the release
-  manifest's payload digest must be told that this is an expected, verified change rather
-  than a corruption. If the native shell also changed — which it does whenever the UI moves —
-  Track A cannot help and the node needs Track B.
+### The consequence of (1) worth stating plainly
 
-### Track B — controller-served app update (the real answer)
+Nodes never talk to GatewayKH: the gateway talks to **controllers only**, and a node's only peer
+is its controller. So "GatewayKH holds the release" makes it the **source of truth**, not the
+thing every node fetches from. The chain is therefore:
+
+```
+build -> GatewayKH (publishes)  ->  controller (mirrors)  ->  node (pulls from its controller)
+```
+
+A controller caches the artifact once from GatewayKH and serves it to its own nodes, which keeps
+the existing topology intact and keeps the trust anchor where it already is: the node pinned its
+**controller's** key when it joined, so the controller is who it can verify.
+
+The alternative — giving every node the gateway's address for updates — would be a new outbound
+path and a second trust relationship per node, for no gain.
+
+## Track A — considered and NOT chosen
+
+Most of our recent releases change the native shell as well as the Hub, so a components-only
+patch would rarely apply; it edits *inside* an ad-hoc-signed bundle, invalidating the signature;
+and it breaks the one property Track B gives us, that every Mac is running a byte-identical,
+**verified** artifact. A one-minute full swap that keeps every Mac provably identical is worth
+more than saving the minute. Revisit only if many Hub-only fixes start shipping.
+
+### Track B — the app update (the chosen path)
 
 ```
 publisher                controller                         node
-  build -> DMG/manifest -> serves /api/hub/release/*  <----  GET manifest
-                              |                             verify publisher hash
+  build -> DMG/manifest -> mirrors from GatewayKH     <----  GET manifest
+                              |                             verify against the pinned key
                               |                        <----  GET bundle (range/resume)
                               |                             verify, swap, restart
                               |                             report the new build back
 ```
 
-1. **Publish.** A build is published to a controller as an *app release*: the bundle (or DMG),
-   its SHA-256, the version and build string, and a publisher signature or, until the app is
-   signed, a publisher-supplied hash kept on the controller.
-2. **Advertise.** `GET /api/hub/release` on the controller returns what it holds. Additive;
+1. **Publish.** A build is published to GatewayKH as an *app release*: the bundle (or DMG), its
+   SHA-256, the version and build string, and its signature by the publisher key.
+2. **Mirror.** A controller fetches the release once and holds it, so its nodes do not need to
+   reach the gateway. `GET /api/hub/release` on the controller returns what it holds. Additive;
    Fleet-token reachable, so every node can read it.
 3. **Decide.** A node compares its own `StudioHubBuild` with the advertised one. The node's
    owner chooses when to take it — never silent: an update restarts the Hub and drops any
@@ -75,30 +95,40 @@ publisher                controller                         node
 8. **Roll back** by keeping the previous bundle until the new one has started and answered its
    health check. If it does not, put the old one back and say so.
 
-## Trust, which is the whole difficulty
+## Trust — the publisher key is pinned at pairing
 
-A node is being asked to install a bundle over the network. Without code signing there is no
-identity to check, so the minimum is:
+A node is asked to install a bundle over the network, so it must be able to tell an update from
+an impostor. The decision is to **pin the publisher's key on the node when it pairs**:
 
-- the artifact's **SHA-256**, published with the release;
-- the **publisher's** identity recorded on the controller (its own keyed hash of the release),
-  so a node is not trusting an arbitrary middlebox;
-- **https or a tailnet-only listener** for the transfer, which the tailnet already gives;
-- an **explicit operator action** on the node. No silent installs.
+- At join, the node records the controller's publisher key (fingerprint + public key) with the
+  membership it already stores. That is the trust anchor, and it is established once, out of
+  band, the same way the Fleet token is.
+- Every release carries a signature by that key. A node verifies the signature **before** it
+  looks at the hash, and refuses a release whose key it does not already hold.
+- A rotating or replaced key is an explicit act on the node, not something the network can do:
+  a new key must be accepted by the Mac's owner, which is the point.
+- The SHA-256 stays as a corruption check, not as the trust decision.
+- The transfer is tailnet-only, and the install is an **explicit operator action**. No silent
+  installs.
 
-This is the strongest argument for doing the app's code signing first: with a Developer ID the
-node can verify the signature instead of trusting a hash the network handed it.
+No Apple Developer ID is involved, so this does not change distribution and does not remove the
+first-launch right-click. It does close the hole that hash-only trust leaves open: a compromised
+controller can no longer push arbitrary code to its nodes.
 
 ## Proposed additive surface (not built)
 
-| Route | Purpose |
-|---|---|
-| `GET /api/hub/release` | what this controller holds: version, build, size, sha256, published_at, publisher |
-| `GET /api/hub/release/artifact` | the bundle or DMG, range-capable |
-| `POST /api/hub/release` | publish/replace what this controller holds (Hub token: it is the Mac owner's decision) |
+GatewayKH publishes; the controller mirrors and serves; the node pulls.
 
-Node side: an "Update available" banner in Connections with the advertised version, the size,
-and one button; the existing restart notice for the services.
+| Side | Route | Purpose |
+|---|---|---|
+| GatewayKH | the release publish + advertise routes | source of truth, published once |
+| Controller | `GET /api/hub/release` | what this controller has mirrored: version, build, size, sha256, publisher key id, signature, published_at |
+| Controller | `GET /api/hub/release/artifact` | the bundle or DMG, range-capable |
+| Controller | `POST /api/hub/release` | mirror/replace what this controller holds (Hub token: it is the Mac owner's decision) |
+
+Node side: an "Update available" banner in Connections showing the advertised version, its size
+and who signed it, with one button; the existing restart notice applies the services restart.
+A node that does not already hold the publisher's key says so instead of offering the update.
 
 ## Non-goals
 
@@ -107,20 +137,17 @@ and one button; the existing restart notice for the services.
 - No update of the **models** — those are already a separate copy step and are unchanged by an
   app release.
 - No rollback of an update the node itself initiated and completed successfully.
+- No auto-accept of a new publisher key. That is an owner decision on the node.
 
 ## Effort, roughly
 
-- Track A alone: small — a route, a verifier and a restart path. Half a day.
-- Track B: the larger piece. Publishing plus advertising plus the node UI plus the verified
-  swap and rollback: a day or two, most of it in the swap and the failure paths.
-- Signing: independent, and it makes Track B's trust story much simpler.
+- The controller's mirror routes and the node's fetch-and-verify path: the bulk of it.
+- The verified swap and rollback already exist in spirit — `packaging/install_local.sh` does
+  exactly this dance locally, and the node update should reuse it.
+- The publisher key pinning is small; the discipline is in refusing everything else.
 
-## Open questions for the owner
+## Status
 
-1. Should the **controller** hold the release, or **GatewayKH** (which already holds the
-   installers in its kit and is the one address Story Studio uses)? The controller is closer to
-   the nodes; GatewayKH is where a build is published once for everything.
-2. Do we want Track A at all, or is a 1-minute full swap acceptable now that Track B exists?
-3. Sign the app before this, or ship the hash-only trust model first?
-
-Recorded 2026-09-23. Nothing here is implemented; `main` carries the design only.
+Decided 2026-09-23 (the three questions above are answered at the top of this file). Nothing
+here is implemented; `main` carries the design only. The owner continues to update Macs from an
+SSD, which stays the bootstrap path for a new Mac either way.

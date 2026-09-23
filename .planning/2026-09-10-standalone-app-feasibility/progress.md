@@ -1889,3 +1889,15 @@ boundary closed:
 
 The capacity/worker/model-health contract and its addendum are therefore complete on both
 sides. Hub 0.6.49 (build 124a5ce) is the version that carries it.
+
+[OWNER DECISION 2026-09-23] Remote update, the three questions answered:
+1. **GatewayKH holds the release** (publisher/source of truth).
+2. **Track A (components-only patch) is dropped** - a full verified swap keeps every Mac
+   byte-identical, and recent releases change the native shell anyway.
+3. **The publisher key is pinned on the node at pairing** - no Apple Developer ID. An update is
+   signed by the key the node already holds; a new key needs the Mac owner's say-so.
+Consequence recorded in the design: nodes never talk to GatewayKH, so the chain is
+GatewayKH (publishes) -> controller (mirrors) -> node (pulls from its controller), which keeps
+the existing topology and puts the trust anchor where it already is. Design updated at
+`.planning/2026-09-10-standalone-app-feasibility/remote-update-design.md`; still not
+implemented.
