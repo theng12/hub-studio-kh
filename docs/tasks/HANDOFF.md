@@ -17,6 +17,15 @@ Hub's admission — never in the app's `blockReason`.
 
 ## Where things stand
 
+- **The shared checkout is reconciled and clean at `928ebd4` on `implementation/voice-runtime`
+  (2026-09-24).** All four parallel sessions' work is committed in dependency order: image fix +
+  label (`2f2dabd`), TTS prune (`7f6e663`, `e60d194`), Chat Studio (`d4cefc8`, `02b81da`), video
+  research (`258d6e6`), plus the coordinator docs. `git status` is empty. The image
+  text-rendering qualification is recorded in `research/text-rendering-model-shortlist.md` and
+  `research/image-memory-pressure.md`: **Z-Image-Turbo is the only candidate that reaches the
+  16 GB fleet tier** — Ideogram 4 (22.5 GB peak) and Qwen-Image-2.1 both abort at their larger
+  size on the 32 GB M2 Max `Mac14,13` with macOS's Metal "Impacting Interactivity" error.
+
 - Release **0.6.55**. Every release is pushed to `main` and to
   `implementation/voice-runtime`; `main` is the release branch. **0.6.55 is cut locally but not
   yet pushed**: staged, installed to `/Applications`, DMG built, and all four drive kits
@@ -138,20 +147,18 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   written, and the implementation committed locally at `3ab8984`. **Not pushed.** The owner runs
   the two pushes (step 8) and updates `main`. The Khmer adoption is written up in
   `research/khmer-tts-adoption-2026-09-24.md` and tracked by `docs/tasks/ST-12.md`.
-- **ST-13 TTS menu pruning — source and libraries done, NOT yet shipped.** The owner cut the
-  Voice menu to 12 entries after a full listening review
+- **ST-13 TTS menu pruning — source, tests and catalog are green; the drives need one final
+  re-stage.** The owner cut the Voice menu after a full listening review
   (`research/tts-archive-walkthrough-2026-09-24.md`, `research/tts-offer-review-2026-09-24.md`).
-  `catalog.py` is 7 families / 12 entries; 18 manifests moved to `_trash/manifests-2026-09-24/`;
-  all four kit libraries and the Mac library pruned (each kit now 20 entries, 19 packages,
-  ~58.6 GB); the capture tool's cut rows removed. **The test suite is not green**: ~58 failures
-  remain in tests built around cut models, concentrated in `test_section_size_control.py` (37,
-  the Qwen 1.7B 8-bit v2 audit suite) and `test_long_form_policy.py` (16). See `ST-13.md` for
-  the measured list and what was already fixed. **Do not stage or refresh the drives until those
-  are green**, and note ST-14 is serialized behind this. **The drives' 0.6.55 app bundle still
-  advertises the cut models**, so the kits must be re-staged before `release_kit.py` or
-  `verify-kit.sh` is trusted — expect advertised-but-missing until then. `generation.py` still
-  carries inert per-family wiring for the cut families. ST-13.A (pocket-tts adoption) is planned
-  but not started.
+  `catalog.py` carries the reduced menu; the 18 cut manifests are preserved in
+  `_trash/model-manifests-pruned-2026-09-24/`; all four kit libraries and the Mac library are
+  pruned; the capture tool's cut rows are removed. **The reduced-menu tests are green** — the
+  eight voice modules run **216 passed / 2 skipped**, and `test_qwen_base_standalone`,
+  `test_section_policy` and `test_model_manifest_catalog` all pass. The earlier "~58 failures"
+  claim in this file was stale. **The drives' installed app still predates the reduced Voice
+  catalog**, so a re-stage is owed: `verify-kit.sh` passes on the pruned libraries, but the app
+  bundle on them advertises the old menu. `generation.py` still carries inert per-family wiring
+  for the cut families. ST-13.A (pocket-tts adoption) is planned but not started.
 - **ST-14 local Chat Studio — scope change; app-side structure DONE, distribution BLOCKED
   (2026-09-24).** The owner directed that Chat is no longer deferred. Built and verified: a
   packaged MLX chat worker (`components/chat/`, `packaging/chat_worker.py`) with JSON mode and
