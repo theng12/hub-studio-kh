@@ -174,7 +174,7 @@
       "engine": "image-mflux",
       "family": "FLUX.2 Klein 4B MLX 4-bit",
       "lock_path": "packaging/image-runtime/requirements.lock.txt",
-      "runtime_lock_sha256": "5fd5e79db7f8bec7dfa5c3ebc0fd1495ba7460138b44caf06bb6c0346c186b4f",
+      "runtime_lock_sha256": "c4fdad2f82f1c83554b581cf04b33fa79cb888d9d2ad9e87107b9bf0780e8f0b",
       "required_imports": [
         "mflux",
         "mlx.core",
@@ -192,11 +192,11 @@
         "python": "3.12"
       },
       "readiness": "runtime-inputs-only",
-      "native_binary_floor_audit": "Historical ST-01 observations below retain their original evidence. ST-03 resolved Image relocation and added the private HTTP worker dependencies; its current immutable runtime passes 194 Mach-O binaries with zero failures at macOS 14.0. Original-M1/Sonoma inference still requires physical qualification.",
+      "native_binary_floor_audit": "Historical ST-01 observations below retain their original evidence. ST-03 resolved Image relocation and added the private HTTP worker dependencies; the runtime it audited passed 194 Mach-O binaries with zero failures at macOS 14.0. The engine bump to mflux 0.20.0 / mlx 0.32.2 rebuilt that runtime and its own build reported 193 binaries with zero failures at the same target - one binary fewer, because mflux 0.20.0 no longer pulls the twine-only subtree. Original-M1/Sonoma inference still requires physical qualification.",
       "provenance": {
-        "mflux": "PyPI mflux 0.17.5, SHA-256 hashes in requirements.lock.txt; installed METADATA declares MIT License",
-        "mlx": "0.31.2 macosx_14_0_arm64 wheel, SHA-256 e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f",
-        "mlx_metal": "0.31.2 macosx_14_0_arm64 wheel, SHA-256 b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc"
+        "mflux": "PyPI mflux 0.20.0, SHA-256 hashes in requirements.lock.txt; bumped from 0.17.5 for the Z-Image-Turbo engine",
+        "mlx": "0.32.2 macosx_14_0_arm64 wheel, SHA-256 77217798a2b036bae9f213b851d4cde4581893787c9964458b7d471f86036bd6",
+        "mlx_metal": "0.32.2 macosx_14_0_arm64 wheel, SHA-256 3825fff379dbc107dd3413e564a06caeaa24819910ec49c0439e454c06a1b9b8"
       },
       "build_side_import_proof": {
         "command": "uv pip sync --python .build/st01-image-runtime-31214/bin/python packaging/image-runtime/requirements.lock.txt && .build/st01-image-runtime-31214/bin/python -I -B packaging/image-runtime/smoke_imports.py",

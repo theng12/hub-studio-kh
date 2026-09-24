@@ -88,9 +88,25 @@ class ST01RuntimeContractTests(unittest.TestCase):
         image = next(runtime for runtime in payload["runtimes"] if runtime["engine"] == "image-mflux")
         lock = (ROOT / image["lock_path"]).read_text(encoding="utf-8")
 
-        self.assertIn("mflux==0.17.5", lock)
-        self.assertIn("mlx-0.31.2-cp312-cp312-macosx_14_0_arm64.whl#sha256=", lock)
-        self.assertIn("mlx_metal-0.31.2-py3-none-macosx_14_0_arm64.whl#sha256=", lock)
+        # The contract this protects is the macOS 14 floor and the arm64 wheel, not a particular
+        # version. These three assertions used to hardcode mflux==0.17.5 and mlx-0.31.2, so the
+        # engine bump for Z-Image failed them while nothing was actually wrong. The expected
+        # versions now come from the contract record, which stays the single source of truth, and
+        # the floor is still asserted explicitly.
+        mflux_match = re.search(r"mflux (\d+\.\d+\.\d+)", image["provenance"]["mflux"])
+        mlx_match = re.search(r"(\d+\.\d+\.\d+) macosx_14_0_arm64", image["provenance"]["mlx"])
+        metal_match = re.search(r"(\d+\.\d+\.\d+) macosx_14_0_arm64", image["provenance"]["mlx_metal"])
+        self.assertIsNotNone(mflux_match, "the contract must name the mflux version it pins")
+        self.assertIsNotNone(mlx_match, "the contract must name a macOS 14 arm64 mlx wheel")
+        self.assertIsNotNone(metal_match, "the contract must name a macOS 14 arm64 mlx-metal wheel")
+        mflux_version, mlx_version = mflux_match.group(1), mlx_match.group(1)
+        self.assertIn(f"mflux=={mflux_version}", lock)
+        self.assertIn(f"mlx-{mlx_version}-cp312-cp312-macosx_14_0_arm64.whl#sha256=", lock)
+        self.assertIn(f"mlx_metal-{mlx_version}-py3-none-macosx_14_0_arm64.whl#sha256=", lock)
+        self.assertEqual(
+            metal_match.group(1), mlx_version,
+            "mlx and mlx-metal must ship the same version",
+        )
         self.assertIn("mflux", image["required_imports"])
         self.assertIn("mlx.core", image["required_imports"])
         self.assertNotEqual(image["lock_path"], next(

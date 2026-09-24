@@ -17,6 +17,11 @@ EXPECTED = {
     # The second Music engine: Stability's MLX Stable Audio 3, instrumental only.
     "stable-audio-3-medium": ("stabilityai/stable-audio-3-optimized", "da6edc54ddba10bfd79a077102ded687f80e882b", "music-mlx"),
     "flux2-klein-4b-mlx-4bit": ("AITRADER/FLUX2-klein-4B-mlx-4bit", "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "image-mflux"),
+    # ST-16: the second Image model. Its publisher snapshot root *is* the model
+    # directory (there is no `model/` subdir on disk). The manifest keeps the library's
+    # uniform `model/` destination and aliases each flat publisher path through
+    # `source_path`, which is what the import fallback reads.
+    "z-image-turbo-mflux-4bit": ("filipstrand/Z-Image-Turbo-mflux-4bit", "b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b", "image-mflux"),
     # ST-14: the local Chat Studio's MLX text model (owner-selected, text-only accepted).
     "qwen3-5-9b-4bit": ("mlx-community/Qwen3.5-9B-4bit", "8b2b98c00a6b4d291155e4890773ca8f769aee53", "chat-mlx"),
     "qwen3-tts-12hz-0-6b-base-8bit": ("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "50f45ef0047cde7e84c2ef04326acb8ada2436a7", "voice-mlx"),
@@ -112,6 +117,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Updated only by a deliberate recapture of the exact pinned revisions.
             "ace-step-1-5-turbo": "0e06526df7a27784c28f9e0e40dbc71a4392c9f0cfbbfb538bb9c0b43f16e0f6",
             "flux2-klein-4b-mlx-4bit": "d49528a1b5da899519099f3312a7d1a60174c5f6c0858a6ac35daf16d1e0012d",
+            # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
+            # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
+            # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
+            "z-image-turbo-mflux-4bit": "df042f1a8eec72df794036e76cd3e48601408d8f11d06f035ddd7d610665ed2d",
             "qwen3-5-9b-4bit": "b6b8287be6856056ce9b6976b780cbc373a2127f88b57fc23022a29710c43922",
             "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
             "qwen3-tts-12hz-0-6b-base-8bit": "23404870afb1a3ef651c496de9d0891f20c9f99488a92792bebcfd08ec54233e",
@@ -176,6 +185,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def test_required_generation_assets_and_shared_whisper_processors_are_present(self):
         for package_id, prefix in {
             "flux2-klein-4b-mlx-4bit": ("model/text_encoder/", "model/transformer/", "model/vae/", "model/tokenizer/"),
+            "z-image-turbo-mflux-4bit": ("model/text_encoder/", "model/transformer/", "model/vae/", "model/tokenizer/"),
             "qwen3-5-9b-4bit": ("model/model-00001-of-00002.safetensors", "model/config.json"),
             "qwen3-tts-12hz-0-6b-base-8bit": ("model/model.safetensors", "model/speech_tokenizer/model.safetensors", "model/vocab.json"),
             "voxcpm2-4bit": ("model/model.safetensors", "model/tokenizer.json"),

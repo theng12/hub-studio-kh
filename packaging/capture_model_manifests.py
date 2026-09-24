@@ -31,6 +31,17 @@ PROCESSOR_FILES = frozenset({
 
 CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "flux2-klein-4b-mlx-4bit", "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit", "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "engine": "image-mflux"},
+    # ── ST-16: the second Image model, Z-Image-Turbo on mflux 0.20.0 ──
+    # The publisher snapshot's root *is* the model directory: `transformer/`,
+    # `text_encoder/`, `vae/` and `tokenizer/` sit at the top level with no
+    # intervening `model/`. The capture keeps the library's uniform destination
+    # (`path` = `model/<publisher path>`) and records the flat publisher path as the
+    # `source_path` alias, which is what `model_packages._file_path` falls back to
+    # when the installed `model/` path is absent - so the raw pack imports, or
+    # registers in place, without a worker special case. `.DS_Store` and the three
+    # example images are publisher furniture, not inference data; `README.md` and
+    # `.gitattributes` are dropped by `required_primary_paths` already.
+    {"package_id": "z-image-turbo-mflux-4bit", "model_id": "filipstrand/Z-Image-Turbo-mflux-4bit", "revision": "b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b", "engine": "image-mflux", "exclude": (".DS_Store", "z_image_example.png", "z_image_example_4bit.png", "z_image_turbo_example.jpg")},
     {"package_id": "qwen3-tts-12hz-0-6b-base-8bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", "revision": "50f45ef0047cde7e84c2ef04326acb8ada2436a7", "engine": "voice-mlx", "requires_packages": ["whisper-turbo"]},
     {"package_id": "qwen3-tts-12hz-1-7b-base-4bit", "model_id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", "revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c", "engine": "voice-mlx", "requires_packages": ["whisper-turbo"]},
     {"package_id": "voxcpm2-4bit", "model_id": "mlx-community/VoxCPM2-4bit", "revision": "dc9e5c187858da5f4a13dc4c247e297339216381", "engine": "voice-mlx"},
@@ -55,6 +66,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
 
 DETAILS: dict[str, dict[str, Any]] = {
     "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (16, 16, "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.")},
+    "z-image-turbo-mflux-4bit": {"defaults": {"width": 1280, "height": 720, "steps": 9, "guidance_ignored": True, "guidance_note": "CFG is disabled on this distilled model; mflux ignores --guidance (and --negative-prompt) and warns.", "parameters_source": "qualification/z-image-turbo-2026-09-24.md"}, "memory": (16, 16, "Measured on a 32 GB M2 Max at 1280x720, 9 steps: 17.64-17.70 GB peak footprint at the engine default and 7.12-7.24 GB with --low-ram, so the 16 GB tier needs low-RAM mode; 0 swaps at every setting on 32 GB. The 8 GB tier is unmeasured - an owner run is in progress - so no 8 GB floor is claimed.")},
     "qwen3-tts-12hz-0-6b-base-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (8, 16, "The 0.6B Base tier is the 8 GB cloning model, which is what the Voice catalog and the native app advertise; the earlier 16 GB figure was inventory guidance and disagreed with both.")},
     "qwen3-tts-12hz-1-7b-base-4bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (12, 16, "Weight size sits between the 0.6B and 1.7B 8-bit tiers; the floor is inferred from file size and awaits a local measurement.")},
     "voxcpm2-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Owner report: the 4-bit build runs on 8 GB Apple-silicon Macs. The 8-bit and bf16 builds stay at 16 GB. Speed and peak memory are still unmeasured here.")},

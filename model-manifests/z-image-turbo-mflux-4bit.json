@@ -1,0 +1,180 @@
+{
+  "defaults": {
+    "guidance_ignored": true,
+    "guidance_note": "CFG is disabled on this distilled model; mflux ignores --guidance (and --negative-prompt) and warns.",
+    "height": 720,
+    "parameters_source": "qualification/z-image-turbo-2026-09-24.md",
+    "steps": 9,
+    "width": 1280
+  },
+  "engine": "image-mflux",
+  "files": [
+    {
+      "path": "model/text_encoder/0.safetensors",
+      "sha256": "5857538440e94dbe89f44ee3bb192aad7fd8d0559fb2f3cbe05807e5dda1ab67",
+      "size": 2135435096,
+      "source_path": "text_encoder/0.safetensors",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/text_encoder/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/1.safetensors",
+      "sha256": "e03b87c090d445a66f6d35c6cc5d6e6fc897ba2bd2e76e16387bf524f954da2d",
+      "size": 127582112,
+      "source_path": "text_encoder/1.safetensors",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/text_encoder/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/model.safetensors.index.json",
+      "sha256": "89528fb26ddfb5dae4e4d8403fb6e0319d2eb989ab55451519d9b13c3c9ebf4b",
+      "size": 51337,
+      "source_path": "text_encoder/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/text_encoder/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/added_tokens.json",
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680",
+      "size": 707,
+      "source_path": "tokenizer/added_tokens.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/chat_template.jinja",
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "size": 4168,
+      "source_path": "tokenizer/chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/tokenizer/merges.txt",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "size": 1671853,
+      "source_path": "tokenizer/merges.txt",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/merges.txt"
+      ]
+    },
+    {
+      "path": "model/tokenizer/special_tokens_map.json",
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+      "size": 613,
+      "source_path": "tokenizer/special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/tokenizer.json",
+      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+      "size": 11422654,
+      "source_path": "tokenizer/tokenizer.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/tokenizer_config.json",
+      "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0",
+      "size": 5404,
+      "source_path": "tokenizer/tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer/vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size": 2776833,
+      "source_path": "tokenizer/vocab.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/tokenizer/vocab.json"
+      ]
+    },
+    {
+      "path": "model/transformer/0.safetensors",
+      "sha256": "49d6d45165cbf65e387f4fdcacf0ae25b84b39ecdd382bba846e86cc3d9d4b65",
+      "size": 2140225941,
+      "source_path": "transformer/0.safetensors",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/transformer/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/1.safetensors",
+      "sha256": "6a47e761ae3a772d2e1b07a214ac7d15b85aeb9664018ad44463fc549b94a8b5",
+      "size": 1323528964,
+      "source_path": "transformer/1.safetensors",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/transformer/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/model.safetensors.index.json",
+      "sha256": "1be39a7a0df7ec91a2833634704780c82a3f8a3571d719e4668bf180d658c872",
+      "size": 61611,
+      "source_path": "transformer/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/transformer/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/vae/0.safetensors",
+      "sha256": "d4309faa3683186faccb490afe237cae63c599b3e4fbb5ce9ef90393bb775a80",
+      "size": 164654116,
+      "source_path": "vae/0.safetensors",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/vae/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae/model.safetensors.index.json",
+      "sha256": "eb1eb483645f78002af507c36f28576a068ef1a9ec9edb3bcce3c4c53e778b3c",
+      "size": 17383,
+      "source_path": "vae/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/filipstrand/Z-Image-Turbo-mflux-4bit/resolve/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/vae/model.safetensors.index.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "filipstrand/Z-Image-Turbo-mflux-4bit",
+  "package_id": "z-image-turbo-mflux-4bit",
+  "qualification": {
+    "memory_evidence": "Measured on a 32 GB M2 Max at 1280x720, 9 steps: 17.64-17.70 GB peak footprint at the engine default and 7.12-7.24 GB with --low-ram, so the 16 GB tier needs low-RAM mode; 0 swaps at every setting on 32 GB. The 8 GB tier is unmeasured - an owner run is in progress - so no 8 GB floor is claimed.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "filipstrand/Z-Image-Turbo-mflux-4bit",
+        "revision": "b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "filipstrand/Z-Image-Turbo-mflux-4bit",
+        "revision": "b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/filipstrand/Z-Image-Turbo-mflux-4bit/revision/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b",
+        "tree_api_url": "https://huggingface.co/api/models/filipstrand/Z-Image-Turbo-mflux-4bit/tree/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}
