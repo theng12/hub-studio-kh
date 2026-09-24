@@ -95,6 +95,12 @@ sparkle and foliage edges; flat interiors are near zero. On the golden scene the
 identical in wording, typeface, size and line breaks — including the model's pre-existing
 "GOLEN" typo, which the bump neither fixed nor worsened.
 
+**Method, because these hashes look irreproducible without it** (and were reported as such):
+they are the SHA-256 of the **zlib-inflated IDAT stream, i.e. the raw scanlines**. Hashing the
+decoded image through PIL instead gives different values for the same pixels — `ab9f8cca…` for the
+R07 file — because PIL hands back a repacked RGB buffer, not the PNG's scanline bytes. Both are
+deterministic; only the scanline method reproduces the numbers below and the repo's R07 receipt.
+
 `67a27847…` is the repo's own R07 baseline PNG, so the 0.17.5 harness reproduced the shipped
 output exactly and 0.20.0 genuinely differs.
 

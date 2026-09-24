@@ -74,12 +74,40 @@ live-free floor has a 2 GB default nobody chose for these models.** Traced throu
 sole source. The free floor is `catalog_entry["min_free_memory_gb"]`, else
 `DEFAULT_MIN_FREE_MEMORY_GB` = **2.0 GB**.
 
+**Correction, from the adapter job's own tracing: the total-memory floor is computed but NOT
+enforced.** `memory_admission.describe` returns `effective_min_total_memory_gb = 0.0` unless an
+operator override names one — `min_unified_memory_gb` only feeds the *displayed* default (FLUX 8,
+Z-Image 16). The gate that actually refuses work is `broker._memory_gate` against
+`effective_min_free_memory_gb`. So the free floor is the only enforced one, which makes it the one
+that matters, and it also means **Z-Image's 16 GB tier does not keep it off an 8 GB Mac** — the 8 GB
+tier stays unclaimed rather than being refused.
+
 The FLUX entry publishes `min_total_memory_gb` and `min_unified_memory_gb` but no
-`min_free_memory_gb`, so it runs on that 2 GB default today. For Z-Image — measured 17.6 GB
+`min_free_memory_gb`, so it runs on that 2 GB default today; Z-Image publishes **8.0**, the measured
+bounded footprint, so it waits for ~8 GB free instead of dispatching onto 3 GB free. For Z-Image — measured 17.6 GB
 footprint at the engine default, 7.1-7.2 GB with low-RAM — a 2 GB free floor means the Hub will
 dispatch onto a Mac with 3 GB free and let it thrash rather than refusing cleanly. Z-Image should
 publish a free floor consistent with its chosen memory mode (≈8 GB if low-RAM), and the 8 GB tier
 stays unclaimed until the owner's run returns. Raised with the adapter job.
+
+**Two defects found by the adapter job and NOT fixed here — recorded because both are real:**
+
+1. **`components/model_packages.py` cannot import a package from a normal Hugging Face cache.**
+   `_source_stream` allows a `blobs` directory only as `folder.parent.parent/'blobs'`, but the shared
+   HF cache layout is `hub/models--<org>--<repo>/blobs/<2>/<sha>`, which is deeper and does not match
+   — so a symlinked snapshot file is refused as "Broken or external source link". The adapter hit
+   this and imported from the SSD copy instead. Anyone installing from a cache rather than a
+   download would hit it. Outside the adapter's file ownership, so reported rather than edited.
+2. **The measured low-RAM penalty does not reproduce.** The record carries "166 s → 236 s" for
+   low-RAM at 1280x720; the worker measured **166.9 s low-RAM against 187.0 s default** — low-RAM
+   was *faster*. The 236 s figure came from the earlier standalone qualification. Either the engine
+   moved under it or the original sample was noisy; what matters is that the memory-saving
+   configuration is not reliably slower, which strengthens rather than weakens the case for
+   choosing it on small hosts. The recorded penalty should not be quoted as fact.
+
+**Also noted, correcting my own commit message:** `86d06ff` says `validate_request` "gained
+`math.isfinite` on guidance". It did not — the check was already there at `3fa8b53` line 66. The
+commit is published and is not being rewritten; the record is corrected here.
 
 **Verified this round, independently of the agents that produced them:**
 
