@@ -2,6 +2,55 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-18 — Z-Image kit rollout: what has to move before it ships
+
+Recorded so the packaging side is not discovered during a 50-machine install. All of this is
+**measured from the repo and the drives**, not assumed.
+
+**The kit layout is fixed and Z-Image does not match it yet.** Every shipped model sits at
+
+```
+model-library/<package_id>/<revision>/model/<weights>
+```
+
+verified against `flux2-klein-4b-mlx-4bit/7fd2482…/model/{transformer,text_encoder,tokenizer,vae}`
+on all four drives, and it is what `qualification/copy_models_for_this_mac.py` resolves to
+(`folder = library / package_id / revision`) and what `model_packages.import_folder` validates
+against the manifest's `model/...` paths.
+
+Z-Image is currently at `optional-models/z-image-turbo-mflux-4bit/{transformer,text_encoder,…}`
+— **no `model/` prefix**, and mixed in with a README, three example images and two dotfiles.
+
+**When the adapter lands, the drive copy must become:**
+
+```
+model-library/z-image-turbo-mflux-4bit/b3a8f31115a11f2f9e2fa0bfbc8d78dcc3e6568b/model/
+    transformer/  text_encoder/  tokenizer/  vae/
+```
+
+with the README kept outside `model/`. Then `verify-kit.sh`'s advertised count goes 20 → 21 and
+the kit stops being able to over-promise, because the model becomes a real one.
+
+**Do not move it before the adapter ships.** It sits outside `model-library/` deliberately: the app
+has no adapter yet, so the kit must not advertise it. Moving it early would put a model in the
+advertised list that no Mac can run.
+
+**Ship path needs no code change.** `packaging/stage_voice.py --image-runtime <dir>` accepts any
+runtime, calls `validate_runtime` on it and records its own `tree_digest` as
+`components.image.runtime_sha256`. Nothing pins the old runtime's digest, so shipping the bump is
+the stage argument `.build/image-runtime-mflux020` and nothing else. The
+`c9cd56a6…` in `qualification/focused-release-manifest.json` is a **record of the 0.17.5 runtime**,
+not an enforced pin, and it becomes historical when the new runtime ships — per AGENTS.md that is
+a compatibility target until re-qualified on the shipped bundle.
+
+**Cross-check that passed:** the Z-Image pack on `/Volumes/KH-STUDIO-ATLAS/…/optional-models/` is
+byte-identical to the HF cache snapshot — 19 non-dotfile files, same sizes and SHA-256 — so the
+kits can supply these weights without a re-download.
+
+**Correct byte total for the manifest:** 15 model files, **5,907,438,792** bytes. The figure
+5,911,138,787 that appears in earlier notes counts the README and the two dotfiles and must not
+reach a manifest.
+
 ### ST-17 — Image text-rendering tests, 16:9 spec (owner, 2026-09-24)
 
 Owner's standing spec from 2026-09-24: **16:9 landscape, 1280x720**, two images —
