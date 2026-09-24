@@ -36,6 +36,38 @@ memory reduction (below). The cache-limit flag is nearly free.
 is what Activity Monitor shows and what the OS actually accounts for. The default footprint is
 inflated by MLX's buffer cache, which grows into free RAM — `--low-ram` is what removes it.
 
+## How this compares with FLUX.2 Klein 4-bit — like for like
+
+The two are close, and an earlier summary of this note compared the wrong pair: Z-Image's
+**low-RAM** peak against FLUX's **default** peak. Same configuration, both measured on the same
+32 GiB M2 Max:
+
+| | FLUX.2 Klein **4-bit** | Z-Image-Turbo **4-bit** |
+| --- | --- | --- |
+| peak MLX, default | 12.90 GB | **12.04 GB** |
+| peak MLX, low-RAM | *no such mode* | **6.26 GB** |
+| weights on disk | 4.62 GB (11 files) | 5.91 GB (15 files) |
+
+So in the same configuration Z-Image is marginally **lighter** than FLUX, not heavier, and it
+additionally has a low-RAM mode FLUX has no equivalent of. The one real disadvantage is disk:
+**+28 % weights**.
+
+**Why FLUX is qualified on 8 GB and this model is not is a difference in measurement, not in
+weight.** `components/hub/backend/memory_admission.py` states the doctrine — "a model's published
+RAM floor is a qualification tier, not a wall... no model is excluded from a machine by its total
+memory" — and records FLUX as fleet-qualified from **tens of thousands of completed runs on the
+owner's 8 GB nodes**. Z-Image-Turbo 4-bit has **zero** runs there.
+
+A 12-13 GB peak on this host also does not mean 13 GB is required to run: peak MLX here is
+cache-inflated, because MLX grows its buffer cache into whatever RAM is free. On an 8 GB Mac the
+cache cannot grow, so the peak measured there is lower — which is how a model reporting a 12.9 GB
+peak runs on 8 GB at all.
+
+The honest reading is therefore **plausible, not doubtful**: the evidence suggests Z-Image-Turbo
+4-bit fits 8 GB, in its low-RAM mode, but no one has watched it happen. The 8 GB measurement
+settles it either way, and until then this record should not be quoted as though the tier were in
+question.
+
 ## Requirements by machine tier
 
 | Tier | Verdict | Basis |
