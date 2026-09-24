@@ -242,8 +242,8 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   pruned; the capture tool's cut rows are removed. **The reduced-menu tests are green** — the
   eight voice modules run **216 passed / 2 skipped**, and `test_qwen_base_standalone`,
   `test_section_policy` and `test_model_manifest_catalog` all pass. The earlier "~58 failures"
-  claim in this file was stale. **The drives' installed app still predates the reduced Voice
-  catalog**, so a re-stage is owed: `verify-kit.sh` passes on the pruned libraries, but the app
+  claim in this file was stale. **CLOSED by the 0.6.59 refresh** — see the kit stocking note above: the app now advertises
+  exactly the reduced catalog. Historically the drives' installed app predated it, so a re-stage was owed: `verify-kit.sh` passes on the pruned libraries, but the app
   bundle on them advertises the old menu. `generation.py` still carries inert per-family wiring
   for the cut families. ST-13.A (pocket-tts adoption) is planned but not started.
 - **ST-14 local Chat Studio — built, packaged and proven on the 32 GB tier (2026-09-24).** The
