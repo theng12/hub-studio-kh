@@ -176,9 +176,10 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   [`qualification/st14-chat-2026-09-24.md`](../../qualification/st14-chat-2026-09-24.md). The
   thinking fix (`apply_chat_template(enable_thinking=False)` by default, plus a per-request
   toggle) is committed with a test.
-  **Still owed:** the four kit libraries could not be stocked (the `KH-STUDIO-*` SSDs were
-  unmounted), 8/16/24 GB throughput is unmeasured, the packaged GUI interaction is unproven, and
-  **ST-14.8 independent review has not happened**. gateway-kh remains read-only here and does not
+  **Kit stocking is done** — all four `KH-STUDIO-*` kits carry the chat-capable app (`4e87afd`)
+  and the 5.98 GB model, and each verifies 20 installed / 20 advertised, 181 files, 64.5 GB,
+  `RESULT: PASS`. **Still owed:** 8/16/24 GB throughput is unmeasured, the packaged GUI
+  interaction is unproven, and **ST-14.8 independent review has not happened**. gateway-kh remains read-only here and does not
   serve chat on its `studio_hub` kind (`research/chat-studio-gateway-bridge.md`). Streaming
   through the Hub is buffered by `studio_proxy`, so the app uses non-streaming.
 - **The VibeVoice offer is dead in 0.6.55** (loader remap bug, see the board's cautions). It is

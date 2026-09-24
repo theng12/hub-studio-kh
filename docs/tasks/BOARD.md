@@ -36,8 +36,8 @@ completion with **no thinking trace**, and **JSON mode with `json_valid: true`**
 Evidence: [qualification/st14-chat-2026-09-24.md](../../qualification/st14-chat-2026-09-24.md).
 
 **Still owed:**
-1. **Kit stocking** — the four `KH-STUDIO-*` SSDs were unmounted, so `qwen3-5-9b-4bit` is only
-   in the Mac library.
+1. ~~**Kit stocking**~~ — **done:** all four `KH-STUDIO-*` kits carry the chat-capable app and
+   the model, and each verifies 20 installed / 20 advertised with `RESULT: PASS`.
 2. **Per-tier throughput** (8/16/24 GB) is unmeasured; the manifest publishes a 16 GB floor that
    nothing has yet qualified.
 3. **ST-14.8 independent review** has not happened.
