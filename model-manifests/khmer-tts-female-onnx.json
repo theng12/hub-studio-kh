@@ -1,0 +1,58 @@
+{
+  "defaults": {
+    "parameters_source": "model/tts_meta.json"
+  },
+  "engine": "voice-vits",
+  "files": [
+    {
+      "path": "model/khmer_tts_v3.onnx",
+      "sha256": "4a7dbd45b74892c83d95bf742d380725c977db481f0163701b519c568d206a12",
+      "size": 114696756,
+      "source_path": "khmer_tts_v3.onnx",
+      "urls": [
+        "https://huggingface.co/sengtha/khmer-tts-female-v2/resolve/c6fde511a839c4f20cdce96e2a35735d493030d2/khmer_tts_v3.onnx"
+      ]
+    },
+    {
+      "path": "model/tts_meta.json",
+      "sha256": "157d8120182f0194804e62e967f6c53270b54f2928d1bfdbb9539220d63db646",
+      "size": 1922,
+      "source_path": "tts_meta.json",
+      "urls": [
+        "https://huggingface.co/sengtha/khmer-tts-female-v2/resolve/c6fde511a839c4f20cdce96e2a35735d493030d2/tts_meta.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "sengtha/khmer-tts-female-v2",
+  "package_id": "khmer-tts-female-onnx",
+  "qualification": {
+    "memory_evidence": "A ~115 MB VITS ONNX graph on CPU; the Voice catalogue publishes an 8 GB floor.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "sengtha/khmer-tts-female-v2",
+        "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "sengtha/khmer-tts-female-v2",
+        "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/sengtha/khmer-tts-female-v2/revision/c6fde511a839c4f20cdce96e2a35735d493030d2",
+        "tree_api_url": "https://huggingface.co/api/models/sengtha/khmer-tts-female-v2/tree/c6fde511a839c4f20cdce96e2a35735d493030d2?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.55 — 2026-09-24
+
+### Two Khmer voices, on your Mac
+
+Voice Studio now has two Khmer text-to-speech voices, both working fully offline:
+
+- **Khmer TTS (MMS VITS)** — a clear single speaker at 16 kHz.
+- **Khmer TTS Female (VITS/ONNX)** — a female voice at 22.05 kHz.
+
+Both are small (about 332 MB and 115 MB) and run on any Apple Silicon Mac, including the 8 GB
+ones. They speak Khmer only, each has one built-in voice, and they do not clone a reference clip —
+for cloning, keep using OmniVoice or VoxCPM2. Choose one, type your Khmer text and generate; long
+scripts are split and joined for you.
+
+Both voices are already in the model library on every kit drive, so there is nothing to download.
+
 ## 0.6.54 — 2026-09-23
 
 ### Opening Studio Hub no longer opens a second one

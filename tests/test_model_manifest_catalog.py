@@ -54,6 +54,10 @@ EXPECTED = {
     "umt5-base": ("google/umt5-base", "0de9394d54f8975e71838d309de1cb496c894ab9", "voice-mlx"),
     "vibevoice-realtime-0-5b-4bit": ("mlx-community/VibeVoice-Realtime-0.5B-4bit", "550877a15358642c1e062aa38ce1fe0623beaa1b", "voice-mlx"),
     "voxtral-4b-tts-2603-mlx-4bit": ("mlx-community/Voxtral-4B-TTS-2603-mlx-4bit", "f98fc91b9cb5adc7dab56102c690458276c14c6a", "voice-mlx"),
+    # ── Khmer VITS families (ST-12, owner request 2026-09-24) ──
+    # Two single-speaker Khmer engines packed under the `voice-vits` engine.
+    "khmer-tts-mms": ("khmerttsopensource/khmer-tts", "c9380a9d1c817f2b21980d54f29f7a61b0d626f5", "voice-vits"),
+    "khmer-tts-female-onnx": ("sengtha/khmer-tts-female-v2", "c6fde511a839c4f20cdce96e2a35735d493030d2", "voice-vits"),
 }
 PROCESSOR_FILES = {
     "added_tokens.json", "merges.txt", "normalizer.json", "special_tokens_map.json",
@@ -125,6 +129,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "voxtral-4b-tts-2603-mlx-4bit": "2216037cd62d29e5723f7b104419c3cccbbb3e771d7056fd9b6cc129f04f3a53",
             # Stable Audio 3's MLX bundle, captured from the ungated optimized repo.
             "stable-audio-3-medium": "82b64fa98763e4e4fcf1b8bbbe24c40dcd8ef1a03900b82423c1dbad0039516f",
+            # Khmer VITS families captured 2026-09-24 from the pinned revisions.
+            "khmer-tts-mms": "706c460d7816acda84de7c6995936a8b2b8b5c4ddeff62ee8d91db6418568964",
+            "khmer-tts-female-onnx": "2e9af294a76f38fd0e28078b084948c33b5f222ea6dd2fc5e23f2ad7ccf548bc",
         }
         self.assertEqual(set(expected_digests), set(EXPECTED))
         for package_id, manifest in self.manifests.items():
@@ -177,6 +184,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "whisper-turbo": ("model/weights.safetensors",),
             "whisper-small": ("model/weights.npz",),
             "whisper-base": ("model/weights.npz",),
+            "khmer-tts-mms": ("model/model.safetensors", "model/config.json", "model/vocab.json"),
+            "khmer-tts-female-onnx": ("model/khmer_tts_v3.onnx", "model/tts_meta.json"),
         }.items():
             paths = {file["path"] for file in self.manifests[package_id]["files"]}
             for required in prefix:

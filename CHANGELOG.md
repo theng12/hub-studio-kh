@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.55 — 2026-09-24 · two Khmer voices, and a manifest capture that no longer truncates
+
+Voice Studio gains two single-speaker Khmer families (ST-12, owner request). Every other TTS
+family is mlx-audio, with F5-TTS the only PyTorch exception; neither new model is MLX, so each got
+its own worker and dispatch branch under a new packaging engine, `voice-vits`.
+
+- **`khmer-tts-mms`** — `khmerttsopensource/khmer-tts` @ `c9380a9…`, Meta's MMS Khmer VITS
+  fine-tune: 83M parameters at 16 kHz through transformers `VitsModel` on CPU. No new Python
+  dependency; `torch` and `transformers` were already pinned.
+- **`khmer-tts-onnx`** — `sengtha/khmer-tts-female-v2` @ `c6fde511…`, a Coqui VITS female voice at
+  22.05 kHz through ONNX Runtime on CPU (`khmer_tts_v3.onnx`). Adds `onnxruntime>=1.20` to the
+  generation requirements; the 998 MB training checkpoint is excluded.
+- Both are single-speaker and Khmer-only, and **refuse a reference voice** rather than ignoring it.
+  Long scripts use the existing conservative sectioning, so no long-form-policy change was needed.
+  Model-cache slots, eviction, memory preflight, readiness and diagnostics all cover the two
+  families.
+- **Manifest capture no longer silently truncates.** The Hub `/tree` API pages at 50 entries and
+  the capture tool read a single page, so the MMS repository captured 2 of the 9 required files
+  while the manifest looked complete. The tool now follows the `Link` header and supports a
+  per-choice `exclude` filter. The manifest catalog grows to 37 packages (89,369,563,824 bytes).
+
+Verified locally on a 16 GB M4 Mac mini: both voices render real Khmer audio, and a 576-character
+script sectioned into 3 and was joined through the spawned native worker (MMS 31.3 s @16 kHz, ONNX
+42.4 s @22.05 kHz). Voice suite 716 passed / 2 skipped; root suite 659 passed / 11 skipped / 1
+pre-existing order-dependent Subtitle failure.
+
 ## 0.6.54 — 2026-09-23 · the app no longer launches a second copy of itself
 
 0.6.53 introduced the crash keep-alive, and with it a real defect, reported by the owner within

@@ -1,0 +1,121 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "voice-vits",
+  "files": [
+    {
+      "path": "model/added_tokens.json",
+      "sha256": "790075aa7c444d298744a71182497accf58329fff2beb8fee4cf2dcc3f99cf4c",
+      "size": 18,
+      "source_path": "added_tokens.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "ac84dc9f7306b8536771e9a556b230640fd9144942875e211c874822893c1119",
+      "size": 1987,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/config.json"
+      ]
+    },
+    {
+      "path": "model/examples/inference.py",
+      "sha256": "ea390203cb7cf491a8179a115341cae256fab405581d5bca4ed53d5de0ef7086",
+      "size": 1037,
+      "source_path": "examples/inference.py",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/examples/inference.py"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "e691800bfdf718af491cdf53762091b3ec95be1a90b84a0b7782284d60b98076",
+      "size": 332188360,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "72877422bd3ff8f768c8a9e839ddf60c2832ad1fab580d546035c6ca96bb0c87",
+      "size": 254,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/requirements.txt",
+      "sha256": "526cc5fd6405c5209cbd159cd836e74e26e75420caa1b8dd236426d4061f7dca",
+      "size": 37,
+      "source_path": "requirements.txt",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/requirements.txt"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "a3120d4cd97bbfbbbd3126ab1991afa236b6ca9160c0f3ba1fda4bca9f8ac950",
+      "size": 277,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "cb3beccec589c3d2a131a837b3bfa68898aeb928e793f78e2ebd321387c98129",
+      "size": 704,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "b7549cb60a0851e2ad333bd259c62d9caa54e9e4d523e63334ddea8a4d22e91f",
+      "size": 945,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/khmerttsopensource/khmer-tts/resolve/c9380a9d1c817f2b21980d54f29f7a61b0d626f5/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "khmerttsopensource/khmer-tts",
+  "package_id": "khmer-tts-mms",
+  "qualification": {
+    "memory_evidence": "An 83M-parameter VITS on torch; the Voice catalogue publishes an 8 GB floor and local inference measured a sub-1 GB footprint.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "khmerttsopensource/khmer-tts",
+        "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "khmerttsopensource/khmer-tts",
+        "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/khmerttsopensource/khmer-tts/revision/c9380a9d1c817f2b21980d54f29f7a61b0d626f5",
+        "tree_api_url": "https://huggingface.co/api/models/khmerttsopensource/khmer-tts/tree/c9380a9d1c817f2b21980d54f29f7a61b0d626f5?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

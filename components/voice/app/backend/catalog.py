@@ -476,6 +476,46 @@ FAMILIES: dict[str, Family] = {
             note="Long scripts are split privately at sentence-safe ~300-character sections using the same reference clip, then joined into one final file.",
         ),
     ),
+    "khmer-tts-mms": Family(
+        id="khmer-tts-mms",
+        label="Khmer TTS (MMS VITS)",
+        summary=(
+            "A Khmer text-to-speech model fine-tuned from Meta's Massively "
+            "Multilingual Speech (MMS) Khmer VITS checkpoint, running offline on "
+            "PyTorch/Transformers — not MLX. Compact (83M parameters) and "
+            "single-speaker at 16 kHz. Khmer only."
+        ),
+        how_to_use=(
+            "Type or paste Khmer text and generate. This family has one built-in "
+            "speaker and no reference clip, so leave the voice and reference "
+            "fields empty. Long scripts are split privately into sentence-safe "
+            "sections and joined into one final file."
+        ),
+        text_guidance=TextGuidance(
+            soft_max_chars=None,
+            chunking="auto-split",
+            note="Long scripts are split privately into conservative sentence-safe sections and joined into one final file. One built-in speaker; no reference clip is used.",
+        ),
+    ),
+    "khmer-tts-onnx": Family(
+        id="khmer-tts-onnx",
+        label="Khmer TTS Female (VITS/ONNX)",
+        summary=(
+            "A single-speaker female Khmer VITS voice trained on the "
+            "DDD-Cambodia read-speech corpus and exported to ONNX. Runs fully "
+            "offline through ONNX Runtime at 22.05 kHz. Khmer only, no cloning."
+        ),
+        how_to_use=(
+            "Type or paste Khmer text and generate. One built-in female speaker, "
+            "no reference clip. Long scripts are split privately into "
+            "sentence-safe sections and joined into one final file."
+        ),
+        text_guidance=TextGuidance(
+            soft_max_chars=None,
+            chunking="auto-split",
+            note="Long scripts are split privately into conservative sentence-safe sections and joined into one final file. One built-in female speaker; no reference clip is used.",
+        ),
+    ),
 }
 
 
@@ -1604,6 +1644,88 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("weak",  "Only English is locally verified — the card's 20-language claim is unaudited for this checkpoint"),
             ("weak",  "No zero-shot mode — a reference voice is always required"),
             ("avoid", "Voice design or preset speakers — cloning only"),
+        ),
+    ),
+
+    # ──────────── Khmer TTS (MMS VITS) ────────────
+    # Single-speaker Khmer VITS fine-tune of facebook/mms-tts-khm. Inference is
+    # transformers VitsModel on PyTorch — deliberately NOT an mlx-audio family,
+    # so it has its own worker (see generation._generate_khmer_vits).
+    ModelEntry(
+        repo="khmerttsopensource/khmer-tts",
+        label="Khmer TTS (MMS VITS) — single speaker",
+        family="khmer-tts-mms",
+        # 332,188,360 B weights + a few KB of config/tokenizer.
+        size_gb=0.34,
+        gated=False,
+        min_unified_memory_gb=8,
+        recommended_hardware="Any Apple Silicon Mac with 8 GB. CPU/MPS VITS — under 1 GB peak.",
+        capabilities=("tts", "multilingual"),
+        best_for=(
+            "A purpose-built, compact Khmer voice that runs fully offline. One "
+            "built-in speaker, 16 kHz output. Meta's MMS VITS Khmer checkpoint, "
+            "fine-tuned with an 83M-parameter model whose tokenizer covers Khmer "
+            "script directly."
+        ),
+        sample_rate_hz=16000,
+        languages=("km",),
+        ignore_patterns=(
+            "eval/*",
+            "training/*",
+            "README.md",
+            "LICENSE.md",
+            "UPLOAD.md",
+            ".gitattributes",
+        ),
+        use_cases=(
+            ("good", "Purpose-built Khmer model — Khmer characters are real tokens, not byte fallback"),
+            ("good", "Compact and fast: ~332 MB of weights, comfortably fits an 8 GB Mac"),
+            ("good", "Fully offline — no cloud dependency"),
+            ("weak", "Single built-in speaker — no cloning, presets, or voice design"),
+            ("weak", "16 kHz output is narrower than the 24–48 kHz families"),
+            ("weak", "Khmer only — it cannot speak English"),
+            ("avoid", "Voice cloning or multi-language narration"),
+        ),
+    ),
+
+    # ──────────── Khmer TTS Female (VITS/ONNX) ────────────
+    # sengtha's Coqui VITS export. Inference is onnxruntime — its own worker
+    # (see generation._generate_khmer_onnx). Only khmer_tts_v3.onnx + tts_meta
+    # are needed; the 998 MB best_model.pth training checkpoint is skipped.
+    ModelEntry(
+        repo="sengtha/khmer-tts-female-v2",
+        label="Khmer TTS Female (VITS/ONNX) — single speaker",
+        family="khmer-tts-onnx",
+        # khmer_tts_v3.onnx 114,696,756 B + tts_meta.json 1,922 B.
+        size_gb=0.115,
+        gated=False,
+        min_unified_memory_gb=8,
+        recommended_hardware="Any Apple Silicon Mac with 8 GB. ONNX Runtime on CPU — a ~115 MB model.",
+        capabilities=("tts", "multilingual"),
+        best_for=(
+            "A single female Khmer voice exported to ONNX for fully on-device "
+            "use, trained on roughly 727 hours of the DDD-Cambodia read-speech "
+            "corpus. 22.05 kHz, offline, no cloning."
+        ),
+        sample_rate_hz=22050,
+        languages=("km",),
+        ignore_patterns=(
+            "best_model.pth",
+            "khmer_tts.onnx",
+            "khmer_tts_ls100.onnx",
+            "khmer_tts_ls115.onnx",
+            "config.json",
+            "README.md",
+            ".gitattributes",
+        ),
+        use_cases=(
+            ("good", "Natural single female Khmer voice trained on a large read-speech corpus"),
+            ("good", "Tiny (~115 MB) and fast — ONNX Runtime, no GPU required"),
+            ("good", "Fully offline — no cloud dependency"),
+            ("weak", "Single built-in speaker — no cloning, presets, or voice design"),
+            ("weak", "Khmer only — it cannot speak English"),
+            ("weak", "22.05 kHz output is narrower than the 24–48 kHz families"),
+            ("avoid", "Voice cloning or multi-language narration"),
         ),
     ),
 )

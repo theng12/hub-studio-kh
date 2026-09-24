@@ -553,6 +553,11 @@ def _have_f5_tts() -> bool:
     return _package_installed("f5_tts")
 
 
+def _have_onnxruntime() -> bool:
+    """Presence check for the ONNX Runtime used by the Khmer VITS female family."""
+    return _package_installed("onnxruntime")
+
+
 VOXCPM_EMOTION_EXAMPLES = [
     "calm and measured",
     "excited and happy",
@@ -599,6 +604,9 @@ _PACKAGE_CHECKLIST = [
     # F5-TTS (SWivid) — flow-matching voice cloning.
     ("f5_tts",        "F5-TTS flow-matching TTS engine"),
     ("vocos",         "VoCoS vocoder used by F5-TTS"),
+    # Khmer VITS families (khmer-tts-mms uses torch/transformers above; the
+    # ONNX female voice uses ONNX Runtime).
+    ("onnxruntime",   "ONNX Runtime for the Khmer TTS Female (VITS/ONNX) family"),
 ]
 
 _ENGINE_REQUIREMENTS = {
@@ -632,7 +640,17 @@ _ENGINE_REQUIREMENTS = {
     "echo-tts":       ["mlx", "mlx_audio", "soundfile", "numpy"],
     # F5-TTS (PyTorch, flow-matching). Wired in v1.3.0.
     "f5-tts":     ["f5_tts", "torch", "torchaudio", "vocos", "soundfile"],
+    # Khmer VITS families (v0.6.55). Two distinct engines, neither MLX:
+    # khmer-tts-mms runs Meta's MMS Khmer VITS through transformers on torch;
+    # khmer-tts-onnx runs sengtha's Coqui VITS export through ONNX Runtime.
+    "khmer-tts-mms":  ["torch", "transformers", "soundfile", "numpy"],
+    "khmer-tts-onnx": ["onnxruntime", "soundfile", "numpy"],
 }
+
+# The two Khmer VITS families, which are sectioned like the MLX families but
+# dispatched to their own workers. Kept as one name so the parent sectioning
+# path, the dependency registry and the dispatch table cannot drift apart.
+_KHMER_VITS_FAMILIES = frozenset({"khmer-tts-mms", "khmer-tts-onnx"})
 
 # Which engines have an actual worker implemented in this app — i.e. picking
 # one of these models won't trip a NotImplementedError. Keep in sync with the
@@ -647,6 +665,8 @@ _WIRED_FAMILIES = {
     "arktts", "moss-tts-nano", "echo-tts", "longcat-audiodit",
     # Its own loader (f5_tts.api.F5TTS) — separate worker.
     "f5-tts",
+    # Khmer VITS: transformers VitsModel and ONNX Runtime workers below.
+    "khmer-tts-mms", "khmer-tts-onnx",
 }
 
 
@@ -1882,6 +1902,13 @@ class GenerationManager:
         # cold-start because the vocoder also loads from HF.
         self._f5_tts_model = None
         self._f5_tts_model_repo: Optional[str] = None
+        # Khmer VITS engines — one cache slot each. They are small, but a repo
+        # switch still evicts so `loaded_model_keys` can name exactly what is
+        # resident and memory policy can release it.
+        self._khmer_vits_model = None
+        self._khmer_vits_model_repo: Optional[str] = None
+        self._khmer_onnx_model = None
+        self._khmer_onnx_model_repo: Optional[str] = None
         # Native models belong to a clean spawned process, never this server
         # process. The mirror is only public inventory for memory policy/UI.
         self._native_executor = ExclusiveNativeExecutor(_native_dispatch_payload)
@@ -2026,6 +2053,14 @@ class GenerationManager:
             loaded.append((self._mlx_audio_model_repo, "tts-mlx"))
         if self._f5_tts_model is not None and self._f5_tts_model_repo:
             loaded.append((self._f5_tts_model_repo, "f5-tts"))
+        if getattr(self, "_khmer_vits_model", None) is not None and getattr(
+            self, "_khmer_vits_model_repo", None
+        ):
+            loaded.append((self._khmer_vits_model_repo, "khmer-tts-mms"))
+        if getattr(self, "_khmer_onnx_model", None) is not None and getattr(
+            self, "_khmer_onnx_model_repo", None
+        ):
+            loaded.append((self._khmer_onnx_model_repo, "khmer-tts-onnx"))
         for item in getattr(self, "_native_loaded_model_keys", []):
             if item not in loaded:
                 loaded.append(item)
@@ -2052,6 +2087,10 @@ class GenerationManager:
             return _have_mlx_audio()
         if family == "f5-tts":
             return _have_f5_tts()
+        if family == "khmer-tts-mms":
+            return TTS_AVAILABLE
+        if family == "khmer-tts-onnx":
+            return _have_onnxruntime()
         return False
 
     def model_runtime_status(self, model_entry) -> dict:
@@ -2333,7 +2372,8 @@ class GenerationManager:
             elif outcome.state == "uncertain":
                 self._native_loaded_model_keys = []
                 actions.append("native executor cache ownership became uncertain")
-        for attr in ("_mlx_audio_model", "_f5_tts_model"):
+        for attr in ("_mlx_audio_model", "_f5_tts_model",
+                     "_khmer_vits_model", "_khmer_onnx_model"):
             model = getattr(self, attr, None)
             if model is not None:
                 setattr(self, attr, None)
@@ -2341,6 +2381,8 @@ class GenerationManager:
             model = None
         self._mlx_audio_model_repo = None
         self._f5_tts_model_repo = None
+        self._khmer_vits_model_repo = None
+        self._khmer_onnx_model_repo = None
         _release_device_memory("mps")
         actions.append("cleared Python, PyTorch, MLX and Metal allocator caches")
         return {"released": bool(loaded), "models": loaded, "actions": actions, "reason": reason}
@@ -2374,6 +2416,12 @@ class GenerationManager:
             or (model_entry.family == "f5-tts"
                 and self._f5_tts_model_repo == model_entry.repo
                 and self._f5_tts_model is not None)
+            or (model_entry.family == "khmer-tts-mms"
+                and getattr(self, "_khmer_vits_model_repo", None) == model_entry.repo
+                and getattr(self, "_khmer_vits_model", None) is not None)
+            or (model_entry.family == "khmer-tts-onnx"
+                and getattr(self, "_khmer_onnx_model_repo", None) == model_entry.repo
+                and getattr(self, "_khmer_onnx_model", None) is not None)
         )
         required = _required_free_memory_gb(model_entry, loaded=cached)
         available = float(snapshot["available_gb"])
@@ -3029,7 +3077,11 @@ class GenerationManager:
         """
         model = catalog.get_model(str(job.params.get("repo") or ""))
         text = str(job.params.get("text") or "").strip()
-        if model is not None and model.family in MLX_AUDIO_FAMILIES and text:
+        if (
+            model is not None
+            and (model.family in MLX_AUDIO_FAMILIES or model.family in _KHMER_VITS_FAMILIES)
+            and text
+        ):
             normalized = _normalized_speech_text(model.family, text, job.params)
             chunks = _internal_mlx_text_chunks(
                 model.family, model.repo, normalized,
@@ -3184,6 +3236,20 @@ class GenerationManager:
                     "Replace it with a tested standalone release that includes the runtime, then relaunch."
                 )
             self._generate_f5_tts(job, model, output_path)
+        elif family == "khmer-tts-mms":
+            if not TTS_AVAILABLE:
+                raise RuntimeError(
+                    "The `torch`/`transformers` runtime is unavailable in this packaged app. "
+                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
+                )
+            self._generate_khmer_vits(job, model, output_path)
+        elif family == "khmer-tts-onnx":
+            if not _have_onnxruntime():
+                raise RuntimeError(
+                    "The `onnxruntime` runtime is unavailable in this packaged app. "
+                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
+                )
+            self._generate_khmer_onnx(job, model, output_path)
         elif family in MLX_AUDIO_FAMILIES:
             if not _have_mlx_audio():
                 raise RuntimeError(
@@ -4398,6 +4464,155 @@ class GenerationManager:
         sf.write(str(output_path), wav, sr, format="WAV", subtype="PCM_16")
         print(f"[gen] f5-tts saved WAV at {sr} Hz, {len(wav)/sr:.2f}s: {output_path}", flush=True)
 
+    # ----- Khmer TTS (MMS VITS, transformers) -----
+
+    def _khmer_vits_get_model(self, repo: str):
+        """Lazy-load + cache the transformers VitsModel for `repo`.
+
+        VITS runs on CPU: the model is tiny (83M) and the MPS backend has gaps
+        in the stochastic-duration path for some VITS checkpoints. One cache
+        slot; a repo switch evicts so `loaded_model_keys` stays truthful.
+        """
+        if self._khmer_vits_model_repo == repo and self._khmer_vits_model is not None:
+            return self._khmer_vits_model
+        if self._khmer_vits_model is not None:
+            print(f"[gen] evicting cached Khmer VITS model ({self._khmer_vits_model_repo})", flush=True)
+            self._khmer_vits_model = None
+            self._khmer_vits_model_repo = None
+        from transformers import AutoTokenizer, VitsModel
+        snapshot_path = self._mlx_audio_snapshot_path(repo)
+        print(f"[gen] loading Khmer VITS (transformers) from {snapshot_path}", flush=True)
+        tokenizer = AutoTokenizer.from_pretrained(str(snapshot_path))
+        model = VitsModel.from_pretrained(str(snapshot_path))
+        model.eval()
+        self._khmer_vits_model = (model, tokenizer)
+        self._khmer_vits_model_repo = repo
+        self._last_model_activity_at = time.time()
+        return self._khmer_vits_model
+
+    def _generate_khmer_vits(self, job: GenerationJob, model_entry, output_path: Path) -> None:
+        """Meta MMS Khmer VITS through transformers.
+
+        One built-in speaker, no reference clip, no presets. Long text is
+        sectioned by the parent dispatcher (this family is in
+        `_KHMER_VITS_FAMILIES`); this worker renders exactly the text it is
+        given and writes one 16 kHz WAV.
+        """
+        import numpy as np
+        import soundfile as sf
+        import torch
+
+        params = job.params
+        text = (params.get("text") or "").strip()
+        if not text:
+            raise ValueError("text is required")
+        if (params.get("voice_library_id") or "").strip() or str(
+            params.get("_reference_audio_path") or ""
+        ).strip():
+            raise ValueError(
+                "Khmer TTS (MMS VITS) has a single built-in speaker and does not "
+                "use a reference voice."
+            )
+
+        seed = params.get("seed")
+        if seed is not None and int(seed) >= 0:
+            torch.manual_seed(int(seed))
+            job.resolved_seed = int(seed)
+
+        model, tokenizer = self._khmer_vits_get_model(model_entry.repo)
+        inputs = tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            waveform = model(**inputs).waveform.squeeze().cpu().numpy()
+        waveform = np.asarray(waveform, dtype="float32").reshape(-1)
+        sample_rate = int(getattr(model.config, "sampling_rate", 16000) or 16000)
+        sf.write(str(output_path), waveform, sample_rate, format="WAV", subtype="PCM_16")
+        print(
+            f"[gen] khmer-tts-mms saved WAV at {sample_rate} Hz, "
+            f"{len(waveform)/sample_rate:.2f}s: {output_path}",
+            flush=True,
+        )
+
+    # ----- Khmer TTS Female (VITS, ONNX Runtime) -----
+
+    def _khmer_onnx_get_model(self, repo: str):
+        """Lazy-load + cache the ONNX Runtime session for the female Khmer voice."""
+        if self._khmer_onnx_model_repo == repo and self._khmer_onnx_model is not None:
+            return self._khmer_onnx_model
+        if self._khmer_onnx_model is not None:
+            print(f"[gen] evicting cached Khmer ONNX model ({self._khmer_onnx_model_repo})", flush=True)
+            self._khmer_onnx_model = None
+            self._khmer_onnx_model_repo = None
+        import json as _json
+
+        import onnxruntime as ort
+
+        snapshot_path = self._mlx_audio_snapshot_path(repo)
+        onnx_path = snapshot_path / "khmer_tts_v3.onnx"
+        meta_path = snapshot_path / "tts_meta.json"
+        if not onnx_path.is_file() or not meta_path.is_file():
+            raise RuntimeError(
+                f"Khmer TTS Female (VITS/ONNX) files missing under {snapshot_path}. "
+                "Re-download the model from the Models tab."
+            )
+        print(f"[gen] loading Khmer VITS (ONNX Runtime) from {onnx_path}", flush=True)
+        meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        session = ort.InferenceSession(
+            str(onnx_path), providers=["CPUExecutionProvider"]
+        )
+        self._khmer_onnx_model = (session, meta)
+        self._khmer_onnx_model_repo = repo
+        self._last_model_activity_at = time.time()
+        return self._khmer_onnx_model
+
+    def _generate_khmer_onnx(self, job: GenerationJob, model_entry, output_path: Path) -> None:
+        """sengtha's Coqui VITS export through ONNX Runtime.
+
+        Grapheme tokenisation per the model card's `tts_meta.json` (blank token
+        interleaved between every character). One built-in female speaker; the
+        parent dispatcher sections long text.
+        """
+        import numpy as np
+        import soundfile as sf
+
+        params = job.params
+        text = (params.get("text") or "").strip()
+        if not text:
+            raise ValueError("text is required")
+        if (params.get("voice_library_id") or "").strip() or str(
+            params.get("_reference_audio_path") or ""
+        ).strip():
+            raise ValueError(
+                "Khmer TTS Female (VITS/ONNX) has a single built-in speaker and "
+                "does not use a reference voice."
+            )
+
+        session, meta = self._khmer_onnx_get_model(model_entry.repo)
+        vocab = list(meta.get("vocab") or [])
+        id_of = {character: index for index, character in enumerate(vocab)}
+        ids = [id_of[character] for character in text if character in id_of]
+        if not ids:
+            raise ValueError(
+                "None of the characters in this text are in the Khmer voice's "
+                "vocabulary. Enter Khmer text."
+            )
+        blank = id_of.get(str(meta.get("blank") or "@"))
+        if meta.get("add_blank", True) and blank is not None:
+            expanded: list[int] = [blank]
+            for token in ids:
+                expanded.extend((token, blank))
+            ids = expanded
+        x = np.asarray([ids], dtype=np.int64)
+        x_lengths = np.asarray([len(ids)], dtype=np.int64)
+        outputs = session.run(None, {"x": x, "x_lengths": x_lengths})
+        waveform = np.asarray(outputs[0], dtype="float32").reshape(-1)
+        sample_rate = int(meta.get("sample_rate") or 22050)
+        sf.write(str(output_path), waveform, sample_rate, format="WAV", subtype="PCM_16")
+        print(
+            f"[gen] khmer-tts-onnx saved WAV at {sample_rate} Hz, "
+            f"{len(waveform)/sample_rate:.2f}s: {output_path}",
+            flush=True,
+        )
+
     # ----- persistence -----
 
     def _persist(self, *, strict: bool = False) -> bool:
@@ -4575,6 +4790,10 @@ def _native_dispatch_payload(payload: dict, cancel_requested) -> dict:
         runtime._mlx_audio_model_repo = None
         runtime._f5_tts_model = None
         runtime._f5_tts_model_repo = None
+        runtime._khmer_vits_model = None
+        runtime._khmer_vits_model_repo = None
+        runtime._khmer_onnx_model = None
+        runtime._khmer_onnx_model_repo = None
         runtime._last_model_activity_at = None
         _NATIVE_CHILD_MANAGER = runtime
     runtime = _NATIVE_CHILD_MANAGER

@@ -11,6 +11,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -48,6 +49,13 @@ CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "whisper-turbo", "model_id": "mlx-community/whisper-large-v3-turbo", "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb", "engine": "subtitle-mlx", "processor": ("openai/whisper-large-v3-turbo", "41f01f3fe87f28c78e2fbf8b568835947dd65ed9")},
     {"package_id": "whisper-small", "model_id": "mlx-community/whisper-small-mlx", "revision": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e", "engine": "subtitle-mlx", "processor": ("openai/whisper-small", "973afd24965f72e36ca33b3055d56a652f456b4d")},
     {"package_id": "whisper-base", "model_id": "mlx-community/whisper-base-mlx", "revision": "1e3e249fb8d01c655324bd6841b1deadffd6d04c", "engine": "subtitle-mlx", "processor": ("openai/whisper-base", "e37978b90ca9030d5170a5c07aadb050351a65bb")},
+    # ── Khmer VITS families (ST-12, owner request 2026-09-24) ──
+    # Two non-MLX, single-speaker Khmer engines under the `voice-vits` packaging
+    # engine. Both are payload-trimmed: the MMS release's benchmark/training
+    # folders and the ONNX repo's training checkpoint + alternate exports are not
+    # needed for inference and would multiply the kit size for no benefit.
+    {"package_id": "khmer-tts-mms", "model_id": "khmerttsopensource/khmer-tts", "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5", "engine": "voice-vits", "exclude": ("eval/*", "training/*", "UPLOAD.md")},
+    {"package_id": "khmer-tts-female-onnx", "model_id": "sengtha/khmer-tts-female-v2", "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2", "engine": "voice-vits", "exclude": ("*.pth", "khmer_tts.onnx", "khmer_tts_ls100.onnx", "khmer_tts_ls115.onnx", "config.json")},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -66,6 +74,8 @@ DETAILS: dict[str, dict[str, Any]] = {
     "whisper-turbo": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; this is the only standalone subtitle model exercised end-to-end.")},
     "whisper-small": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
     "whisper-base": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
+    "khmer-tts-mms": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "An 83M-parameter VITS on torch; the Voice catalogue publishes an 8 GB floor and local inference measured a sub-1 GB footprint.")},
+    "khmer-tts-female-onnx": {"defaults": {"parameters_source": "model/tts_meta.json"}, "memory": (8, 16, "A ~115 MB VITS ONNX graph on CPU; the Voice catalogue publishes an 8 GB floor.")},
 }
 
 
@@ -74,7 +84,12 @@ def api_url(repo: str, revision: str) -> str:
 
 
 def tree_url(repo: str, revision: str) -> str:
-    return f"{API_ROOT}{quote(repo, safe='/')}/tree/{revision}?recursive=true&expand=true"
+    # The Hub paginates /tree at 50 entries by default, and refuses a page
+    # larger than 100 when `expand=true`. A repo with benchmark audio or many
+    # alternate checkpoints silently lost everything past the first page, so the
+    # manifest looked complete while omitting the weights. `snapshot` follows the
+    # Link header to walk every page; the capture is still metadata-only.
+    return f"{API_ROOT}{quote(repo, safe='/')}/tree/{revision}?recursive=true&expand=true&limit=100"
 
 
 def resolve_url(repo: str, revision: str, path: str) -> str:
@@ -97,22 +112,54 @@ def request_json(url: str) -> Any:
     return json.loads(request(url))
 
 
+def request_json_with_link(url: str) -> tuple[Any, str]:
+    """Return one JSON page and its ``Link`` response header."""
+    with urlopen(Request(url, headers={"User-Agent": "StudioHub-ST01-metadata/1.0"}), timeout=30) as response:
+        body = response.read(MAX_METADATA_BYTES + 1)
+        link = response.headers.get("Link", "") if response.headers else ""
+    if len(body) > MAX_METADATA_BYTES:
+        raise ValueError(f"response exceeds {MAX_METADATA_BYTES} byte limit: {url}")
+    return json.loads(body), link
+
+
+def next_page_url(link_header: str) -> str | None:
+    """Extract the ``rel="next"`` target from a Link header, if any."""
+    for part in (link_header or "").split(","):
+        segments = part.split(";")
+        if len(segments) < 2:
+            continue
+        target = segments[0].strip().strip("<>")
+        if any('rel="next"' in segment for segment in segments[1:]):
+            return target or None
+    return None
+
+
 def snapshot(repo: str, revision: str) -> dict[str, dict[str, Any]]:
     metadata = request_json(api_url(repo, revision))
     if metadata.get("sha") != revision:
         raise ValueError(f"{repo}: expected revision {revision}, got {metadata.get('sha')}")
-    entries = request_json(tree_url(repo, revision))
+    entries: list[dict[str, Any]] = []
+    url: str | None = tree_url(repo, revision)
+    pages = 0
+    while url:
+        page, link = request_json_with_link(url)
+        entries.extend(page)
+        pages += 1
+        if pages > 64:
+            raise ValueError(f"{repo}@{revision}: tree pagination exceeded the page bound")
+        url = next_page_url(link)
     files = {entry["path"]: entry for entry in entries if entry.get("type") == "file"}
     if not files:
         raise ValueError(f"{repo}@{revision}: tree has no files")
     return files
 
 
-def required_primary_paths(files: dict[str, dict[str, Any]]) -> list[str]:
+def required_primary_paths(files: dict[str, dict[str, Any]], exclude: tuple[str, ...] = ()) -> list[str]:
     ignored = {".gitattributes", "README.md", "LICENSE", "LICENSE.md"}
     return sorted(path for path in files
                   if path.rsplit("/", 1)[-1] not in ignored
-                  and not path.rsplit("/", 1)[-1].startswith("test_"))
+                  and not path.rsplit("/", 1)[-1].startswith("test_")
+                  and not any(fnmatch(path, pattern) for pattern in exclude))
 
 
 def file_digest(repo: str, revision: str, path: str, entry: dict[str, Any]) -> str:
@@ -159,7 +206,7 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
     model_id, revision = choice["model_id"], choice["revision"]
     primary = snapshot(model_id, revision)
     selected = [captured_file(model_id, revision, path, f"model/{path}", primary)
-                for path in required_primary_paths(primary)]
+                for path in required_primary_paths(primary, tuple(choice.get("exclude") or ()))]
     sources = [{"role": "model", "repo": model_id, "revision": revision,
                 "snapshot_api_url": api_url(model_id, revision), "tree_api_url": tree_url(model_id, revision)}]
     layout: dict[str, Any] = {"model": {"destination": "model", "repo": model_id, "revision": revision}}

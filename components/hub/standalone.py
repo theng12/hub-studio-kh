@@ -71,8 +71,8 @@ def _dependency_package_ids(catalog: dict[str, dict[str, Any]]) -> set[str]:
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], monitor: StudioMonitor) -> dict[str, Any]:
     from components import model_packages
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
-    worker_id = {"image-mflux": "image", "voice-mlx": "voice", "subtitle-mlx": "subtitle",
-                 "music-mlx": "music"}[manifest["engine"]]
+    worker_id = {"image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
+                 "subtitle-mlx": "subtitle", "music-mlx": "music"}[manifest["engine"]]
     worker = next((item for item in monitor.registry if item["id"] == worker_id), None)
     # A paused model still reports verified files and a compatible runtime; it is the Hub's own
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
@@ -167,8 +167,8 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     if manifest is None:
         return {"code": "MODEL_NOT_PACKAGED", "detail": "model is not in the packaged catalog"}
     expected_modality = {
-        "image-mflux": "image", "voice-mlx": "voice", "subtitle-mlx": "transcription",
-        "music-mlx": "music",
+        "image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
+        "subtitle-mlx": "transcription", "music-mlx": "music",
     }.get(manifest["engine"])
     if expected_modality != envelope.get("modality"):
         return {"code": "MODEL_MODALITY_MISMATCH", "detail": "model is not available for this job modality"}
