@@ -3,7 +3,43 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.57 (fleet pool visibility, 2026-09-24).
+Last updated: 0.6.59 (Z-Image-Turbo, 2026-09-24).
+
+**0.6.59 — a second Image model, and the engine it needed.** Z-Image-Turbo is selectable beside
+FLUX.2 Klein and renders text FLUX gets wrong: asked for "THE GOLDEN LIGHT OF DREAMS", FLUX writes
+"THE GOLEN LIGHT OF DREAMS" at 4 steps and worsens at 9, while Z-Image gets all five words. The
+engine moved for it — mflux 0.17.5 → **0.20.0**, mlx 0.31.2 → **0.32.2**, re-locked 75 → 63
+packages with nothing unrelated moved. FLUX was re-qualified rather than assumed: its pixels do
+change (94.2 % differ, SSIM 0.972) but the distance sits on glyph edges and flat interiors are
+near zero, and on the typography scene the title is identical including the pre-existing typo.
+
+The Image worker had run exactly one model — repo, revision, class import and defaults were module
+constants. It is now a registry, and the catalog advertises both models with their own steps,
+limits, memory policy and qualification. Z-Image's memory mode is chosen from the Mac's actual
+memory and applied through the CLI's own `CallbackManager._register_memory_saver` mapping, because
+`low_ram` is not a constructor parameter. It does **not** claim the default fails on 16 GB — that
+figure is cache-inflated from a 32 GB host. **The 8 GB tier is unclaimed** pending the owner's run.
+
+**0.6.59 is staged and verified but NOT installed, and the drives are untouched.** Staged at
+`.build/StudioHub-0659`, verified as an artefact: version 0.6.59, the registry in the bundled
+worker, the shipped runtime reporting mflux 0.20.0 / mlx 0.32.2, both manifests, and the release
+manifest recording the new runtime digest `c3acf766…` (replacing 0.17.5's `c9cd56a6…`). Steps 4-6
+of the release loop are deliberately held so the release lands as one consistent state with the kit
+stocking below.
+
+**Kit stocking is the open step:** the four drives carry Z-Image in `optional-models/`, outside
+`model-library/`, because the app had no adapter when they were built. It needs moving to
+`model-library/z-image-turbo-mflux-4bit/b3a8f311…/model/` **and registering in the kit's install
+receipt** — the second part is the easy one to miss, since `verify-kit.sh` checks every file the
+receipt records. Without it the kit advertises 21 and carries 20; `verify-kit.sh` reports that as a
+note rather than a failure, but a Mac would then download 5.9 GB that the drive exists to supply.
+
+**0.6.58 (hotfix) — 0.6.57 shipped a broken build.** The Chat manifest reached the release catalog
+but `chat-mlx` was missing from the Hub's engine→worker map, so `/api/hub/model-packages` raised
+`KeyError` and answered **HTTP 500** on every Mac. The native `refresh()` reads that route with a
+hard `try`, so it did not degrade one list — it threw the whole refresh, set the Hub unreachable
+and **left every model picker empty**. Fixed, verified in the installed bundle, and guarded by a
+test that walks the real catalog. **Do not install 0.6.57.**
 
 **0.6.57 — a node and its controller can both see the group.** The owner connected nodes and
 neither end showed the pool. Two faults, one cause: the group was not a fact either end held.
@@ -185,11 +221,10 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
 
 ## In flight / open
 
-- **0.6.55 is local only.** Staged at `.build/StudioHub-0655`, installed, DMG at
-  `dist/StudioHub-0.6.55-3ab8984.dmg`, four kits refreshed, `VERSION`/`CHANGELOG`/`release-notes`
-  written, and the implementation committed locally at `3ab8984`. **Not pushed.** The owner runs
-  the two pushes (step 8) and updates `main`. The Khmer adoption is written up in
-  `research/khmer-tts-adoption-2026-09-24.md` and tracked by `docs/tasks/ST-12.md`.
+- **0.6.55, 0.6.56, 0.6.57 and 0.6.58 are all pushed** — `main` and `implementation/voice-runtime`
+  were brought up to date at `34014d5` after sitting at 0.6.54, and every commit since is on both.
+  The Khmer adoption is written up in `research/khmer-tts-adoption-2026-09-24.md` and tracked by
+  `docs/tasks/ST-12.md`.
 - **ST-13 TTS menu pruning — source, tests and catalog are green; the drives need one final
   re-stage.** The owner cut the Voice menu after a full listening review
   (`research/tts-archive-walkthrough-2026-09-24.md`, `research/tts-offer-review-2026-09-24.md`).

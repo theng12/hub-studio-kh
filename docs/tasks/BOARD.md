@@ -150,7 +150,42 @@ FLUX.2 Klein is 2.3-3.7x faster and misspells; Z-Image-Turbo is slower and corre
 lighter on the machine (compressor delta 0.2-0.8 GB against FLUX's 10.7-11.9 GB, with FLUX
 driving a 32 GB Mac from ~2.1 GB to ~4.8-5.3 GB of swap while Z-Image's swap fell).
 
-### ST-16 — Z-Image-Turbo into the app (the mflux 0.17.5 → 0.20.0 bump) — 2026-09-24
+### ST-16 — Z-Image-Turbo: LANDED in 0.6.59 (staged, not yet installed) — 2026-09-24
+
+**Done and verified.** Z-Image-Turbo is selectable beside FLUX.2 Klein; the worker's live catalog
+advertises both:
+
+```
+FLUX.2 Klein   steps 4  guidance_ignored False  total=16.0  free=None  ready cached
+Z-Image-Turbo  steps 9  guidance_ignored True   total=16.0  free=8.0   ready cached
+```
+
+Coordinator-verified evidence, not relayed:
+
+- Z-Image through the worker's own path renders **"THE GOLDEN LIGHT OF DREAMS"** correctly — the
+  whole reason the model was chosen, since FLUX writes "THE GOLEN LIGHT OF DREAMS".
+- **FLUX is pixel-identical across the refactor.** Run through both the legacy path and the new
+  registry, all three outputs hash to `16a5535f…` — also the value the 0.20.0 re-qualification
+  recorded, so the refactor changed nothing and independently reproduces another job's number.
+- The memory plan cross-validates against the CLI: low-RAM peaked at **6,262,527,774 bytes**, the
+  same 6.26 GB standalone `--low-ram` measured. `memory_mode` is recorded per job.
+- 34 image tests, native boundary/API/lifecycle, 62 Hub tests — all pass.
+
+The engine bump (mflux 0.20.0 / mlx 0.32.2) and the FLUX re-qualification are committed at
+`3fa8b53`; the adapter at `86d06ff`; the release is cut at `5182ece`.
+
+**Still owed:**
+1. **Install + DMG + the four kits.** Staged and verified at `.build/StudioHub-0659` but
+   deliberately not installed, so the release lands as one consistent state.
+2. **Kit stocking** — Z-Image must move from `optional-models/` to
+   `model-library/z-image-turbo-mflux-4bit/b3a8f311…/model/` **and be registered in the kit's
+   install receipt**. In flight.
+3. **The 8 GB tier** — unclaimed pending the owner's run. It moves one of two named constants
+   (`Z_IMAGE_LOW_RAM_BELOW_BYTES`, `low_ram_vae_tile_size`), left as single knobs so a measurement
+   settles it rather than a guess.
+4. **The adapter's own report** was not needed: the code was inspected, the evidence reproduced
+   and the work committed independently of it.
+
 
 Owner asked for this to start. The bump is the gate: Z-Image cannot be selected until the
 `image-mflux` engine runs 0.20.0, and FLUX.2 Klein must be re-qualified on it first.
