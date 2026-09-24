@@ -27,6 +27,15 @@ manifest recording the new runtime digest `c3acf766…` (replacing 0.17.5's `c9c
 of the release loop are deliberately held so the release lands as one consistent state with the kit
 stocking below.
 
+**This refresh should also close ST-13's drive debt.** The handoff has recorded since the TTS
+prune that the drives' installed app predated the reduced Voice catalog, so a re-stage was owed.
+Checked against the installed 0.6.59 bundle and the restocked ATLAS library: the app advertises
+**21** packages and the library carries **21**, with **zero** drift in either direction — nothing
+advertised that the kit lacks, nothing in the kit that the app does not offer, and no pruned voice
+model still on the menu (voice-mlx 11, voice-vits 2, image-mflux 2, subtitle-mlx 3, music-mlx 2,
+chat-mlx 1). So swapping the drive app to 0.6.59 re-stages the reduced Voice menu as a side effect
+of the Z-Image release. Confirm per drive with `verify-kit.sh` rather than assuming it.
+
 **Kit stocking is the open step:** the four drives carry Z-Image in `optional-models/`, outside
 `model-library/`, because the app had no adapter when they were built. It needs moving to
 `model-library/z-image-turbo-mflux-4bit/b3a8f311…/model/` **and registering in the kit's install
