@@ -25,6 +25,69 @@ class PackageError(ValueError):
     pass
 
 
+# One relationship, two spellings — and both were shipped. `requires_packages` is what this
+# module validates and resolves (preflight, verify, download, capture); `dependencies` was the
+# first spelling, used by `chatterbox-{4,8}bit`. Reading only one of them meant a declared
+# companion was silently ignored: the package that needed it verified as `files_verified` with
+# the companion absent, and the engine fetched the missing tokenizer at generation time -
+# exactly the offline failure the relationship exists to prevent. Both spellings are read
+# through `required_packages` below, and `validate_manifest` now refuses the legacy one so the
+# migrated catalog cannot drift back into two shapes.
+COMPANION_FIELD = 'requires_packages'
+LEGACY_COMPANION_FIELD = 'dependencies'
+
+
+def _companion_list(manifest, field):
+    value = manifest.get(field)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PackageError(f'Invalid companion package requirements in {field!r}')
+    return value
+
+
+def required_packages(manifest) -> list[str]:
+    """The companion package ids this manifest declares, under either spelling it ships.
+
+    The single reader of the companion relationship. Manifest order is preserved and duplicates
+    across the two fields collapse, so a manifest mid-migration cannot declare one companion
+    twice.
+
+    This stays tolerant of the legacy spelling on purpose. `validate_manifest` refuses a
+    manifest that still declares companions in `dependencies`, so nothing this project ships
+    can carry one; but this function also reads rows that arrived from elsewhere - an older
+    kit, a hand-written manifest - and a package whose declared companion was dropped because
+    of the field it was written in is exactly the offline failure the relationship prevents.
+    """
+    if not isinstance(manifest, dict):
+        raise PackageError('A manifest is required to read companion packages')
+    ids: list[str] = []
+    for field in (COMPANION_FIELD, LEGACY_COMPANION_FIELD):
+        for dependency in _companion_list(manifest, field):
+            if dependency not in ids:
+                ids.append(dependency)
+    return ids
+
+
+def _reject_legacy_companions(manifest) -> None:
+    """Refuse a manifest that declares its companions under the legacy spelling.
+
+    Both spellings were read for one release while the catalog was migrated. Tolerating both
+    forever is how a second spelling survives: the field no validator rejects stays writable,
+    and the next model's author has two shapes to choose from and no way to know which one the
+    readers use. The shipped catalog is migrated - `chatterbox-{4,8}bit`'s `s3tokenizerv2` was
+    the last - so this is now an error naming the field to move, not a warning.
+    """
+    legacy = _companion_list(manifest, LEGACY_COMPANION_FIELD)
+    if not legacy:
+        return
+    raise PackageError(
+        f"Manifest {manifest.get('package_id')!r} declares its companion packages "
+        f"{legacy!r} in {LEGACY_COMPANION_FIELD!r}; the one companion field is "
+        f"{COMPANION_FIELD!r}. Move the list to {COMPANION_FIELD!r} in the manifest so every "
+        f"reader resolves the same relationship.")
+
+
 def _relative(value):
     if (not isinstance(value, str) or not value or '\\' in value or '\0' in value
             or any(p in ('', '.', '..', '.studiohub') for p in value.split('/'))
@@ -46,6 +109,125 @@ def _url(value):
     return value
 
 
+# Every engine a manifest may declare. The Hub keeps the matching worker/modality map in
+# `_ENGINE_ROUTE` (`components/hub/standalone.py`); the two are one vocabulary in two files, so
+# they are named here and cross-checked by a test rather than left to drift. When this tuple and
+# that mapping disagreed, `chat-mlx` reached a manifest with no worker: `/api/hub/model-packages`
+# raised `KeyError` and returned 500, the native refresh read that as "Hub unreachable", and every
+# model picker on every Mac went blank.
+ENGINES = ('image-mflux', 'voice-mlx', 'voice-vits', 'subtitle-mlx', 'music-mlx', 'chat-mlx')
+ENGINE_HELP = ("add it to _ENGINE_ROUTE in components/hub/standalone.py and to the engine "
+               "allowlist in components/model_packages.py")
+
+# The `subtitle` capabilities block (`components/subtitle/**`) — one manifest contract, validated
+# here so a subtitle package cannot be published with capabilities nobody declared.
+SUBTITLE_BLOCK = 'subtitle'
+SUBTITLE_FAMILY_FIELD = 'family'
+SUBTITLE_LANGUAGES_FIELD = 'languages'
+SUBTITLE_FLAG_FIELDS = ('segment_timestamps', 'word_timestamps', 'long_form')
+SUBTITLE_FIELDS = (SUBTITLE_FAMILY_FIELD, SUBTITLE_LANGUAGES_FIELD, *SUBTITLE_FLAG_FIELDS)
+SUBTITLE_RUNTIME_FIELD = 'runtime_seconds'
+
+
+def _runtime_seconds_problem(value):
+    """Why a `subtitle.runtime_seconds` block is not publishable, or None when it is.
+
+    The lane contract publishes what one item of this lane costs, and only where it has been
+    measured (`docs/lane-execution-contract.md`). A guessed number is how a scheduler sets a
+    deadline that fails on use, so the block must carry the measurement and say so; there is no
+    shape here for an estimate.
+
+    `measured` is always a list of rows — one per configuration that was run — so a lane whose
+    cost depends on a request parameter publishes the same shape as one whose cost does not. Each
+    row carries `seconds` and whatever names the configuration that produced it, so a scheduler
+    can pick the row matching the request it is about to send.
+    """
+    if not isinstance(value, dict):
+        return f'it is {value!r}, not an object'
+    if value.get('evidence') != 'measured':
+        return ("'evidence' must be 'measured' — a runtime that was not measured is not published "
+                "at all, so there is no shape for an estimate here")
+    rows = value.get('measured')
+    if not isinstance(rows, list) or not rows:
+        return f"'measured' is {rows!r}, not a non-empty list of measured rows"
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            return f"'measured[{index}]' is {row!r}, not an object"
+        seconds = row.get('seconds')
+        if type(seconds) not in (int, float) or isinstance(seconds, bool) or seconds <= 0:
+            return (f"'measured[{index}].seconds' is {seconds!r}, not a positive number of "
+                    f"seconds")
+        if len(row) < 2:
+            return (f"'measured[{index}]' names no configuration: beside 'seconds' it must carry "
+                    f"what produced the number (the input, the settings, the model load), so a "
+                    f"scheduler can pick the row that matches the request it is about to send")
+    if not isinstance(value.get('measured_on'), str) or not value['measured_on'].strip():
+        return ("'measured_on' must name the host, engine and quantization the rows were measured "
+                "on, so the number is attributable")
+    if 'source' in value and (not isinstance(value['source'], str) or not value['source'].strip()):
+        return "'source' is present but names nothing; name where the measurement is recorded"
+    return None
+
+
+def validate_subtitle_capabilities(manifest):
+    """The block a `subtitle-mlx` manifest must carry, validated in one place.
+
+    The Subtitle worker used to publish `family: 'whisper'`, `languages: 'Multilingual'` and three
+    `True` flags for every package it loaded, because no shipped manifest declared any of them.
+    Nothing was reading the truth, so nothing could be wrong: a non-Whisper subtitle engine was
+    labelled Whisper, and a model that cannot produce word timestamps was advertised as able to.
+    The block below is the one place a subtitle package states what it can do, and the reader
+    publishes exactly it.
+
+    Only a subtitle manifest is required to carry it; a manifest for any other engine is not
+    forced to, and a subtitle block on another engine's manifest is not read.
+    """
+    package_id = manifest.get('package_id')
+    where = f'Manifest {package_id!r}'
+    block = manifest.get(SUBTITLE_BLOCK)
+    if not isinstance(block, dict):
+        raise PackageError(
+            f"{where} declares engine 'subtitle-mlx' but carries no {SUBTITLE_BLOCK!r} block. "
+            f"Add \"{SUBTITLE_BLOCK}\": {{{', '.join(repr(field) for field in SUBTITLE_FIELDS)}}} "
+            f"to its manifest (model-manifests/{package_id}.json) with what the model's own config "
+            f"and the engine's decode path actually do; the Subtitle worker publishes only what "
+            f"this block says and must never fall back to a family or a capability of its own.")
+    missing = [field for field in SUBTITLE_FIELDS if field not in block]
+    if missing:
+        raise PackageError(
+            f"{where} has an incomplete {SUBTITLE_BLOCK!r} block: missing "
+            f"{', '.join(repr(field) for field in missing)}. Every field is published, so an "
+            f"absent one would be published as something nobody declared. Complete the block in "
+            f"model-manifests/{package_id}.json.")
+    family = block[SUBTITLE_FAMILY_FIELD]
+    if not isinstance(family, str) or not family.strip():
+        raise PackageError(
+            f"{where} has an invalid {SUBTITLE_BLOCK}.{SUBTITLE_FAMILY_FIELD}: "
+            f"{family!r}. It names the model family this package belongs to "
+            f"(model-manifests/{package_id}.json).")
+    languages = block[SUBTITLE_LANGUAGES_FIELD]
+    if (not isinstance(languages, list) or not languages
+            or any(not isinstance(item, str) or not item.strip() for item in languages)):
+        raise PackageError(
+            f"{where} has an invalid {SUBTITLE_BLOCK}.{SUBTITLE_LANGUAGES_FIELD}: "
+            f"{languages!r}. It is a non-empty list of language names or tags, and it is published "
+            f"verbatim (model-manifests/{package_id}.json).")
+    for field in SUBTITLE_FLAG_FIELDS:
+        if type(block[field]) is not bool:
+            raise PackageError(
+                f"{where} has an invalid {SUBTITLE_BLOCK}.{field}: {block[field]!r}. It is a "
+                f"boolean that is published as-is; a consumer must not have to guess whether a "
+                f"missing or non-boolean value means True (model-manifests/{package_id}.json).")
+    runtime = block.get(SUBTITLE_RUNTIME_FIELD)
+    if runtime is not None:
+        problem = _runtime_seconds_problem(runtime)
+        if problem is not None:
+            raise PackageError(
+                f"{where} has an invalid {SUBTITLE_BLOCK}.{SUBTITLE_RUNTIME_FIELD}: {problem} "
+                f"(model-manifests/{package_id}.json).")
+    return block
+
+
 def validate_manifest(manifest):
     if not isinstance(manifest, dict) or manifest.get('schema_version') != 1:
         raise PackageError('Unsupported model manifest schema')
@@ -53,9 +235,21 @@ def validate_manifest(manifest):
         raise PackageError('Invalid package_id')
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('revision', ''))):
         raise PackageError('A full immutable model revision is required')
-    if manifest.get('engine') not in ('image-mflux', 'voice-mlx', 'voice-vits',
-                                      'subtitle-mlx', 'music-mlx', 'chat-mlx'):
-        raise PackageError('Unsupported model engine')
+    # Name the engine that has no worker, and both files that carry the vocabulary. A bare
+    # 'Unsupported model engine' left an operator (and the 0.6.57 incident) with nothing to act
+    # on: the message arrived as a `PackageError` inside the packages route, and the whole
+    # catalog is only as useful as the one manifest it cannot describe.
+    if manifest.get('engine') not in ENGINES:
+        raise PackageError(
+            f"Manifest {manifest.get('package_id')!r} declares engine "
+            f"{manifest.get('engine')!r}, which this build does not know; {ENGINE_HELP}")
+    if manifest.get('engine') == 'subtitle-mlx':
+        validate_subtitle_capabilities(manifest)
+    if manifest.get('engine') == 'subtitle-mlx' and 'default' in manifest and type(manifest['default']) is not bool:
+        raise PackageError(
+            f"Manifest {manifest.get('package_id')!r} has a non-boolean 'default': "
+            f"{manifest['default']!r}. A manifest declares the default subtitle model with "
+            f"\"default\": true, or says nothing (model-manifests/{manifest.get('package_id')}.json).")
     if not isinstance(manifest.get('model_id'), str) or not manifest['model_id']:
         raise PackageError('Missing model_id')
     if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', str(manifest.get('minimum_macos', ''))):
@@ -91,6 +285,9 @@ def validate_manifest(manifest):
             not isinstance(dep, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,99}', dep)
             or dep == manifest['package_id'] for dep in dependencies):
         raise PackageError('Invalid companion package requirements')
+    # The legacy spelling is refused outright, so a manifest cannot hide a malformed or a
+    # forgotten companion list in a field no reader resolves.
+    _reject_legacy_companions(manifest)
     return manifest
 
 
@@ -98,7 +295,12 @@ def manifest_digest(manifest):
     validate_manifest(manifest)
     identity = {k: manifest[k] for k in ('schema_version', 'package_id', 'model_id',
                                         'revision', 'engine', 'minimum_macos')}
-    identity['requires_packages'] = sorted(manifest.get('requires_packages', []))
+    # The canonical field, which `validate_manifest` above has just guaranteed is the only
+    # spelling this manifest carries. Migrating `chatterbox-{4,8}bit` off the legacy field
+    # therefore changes that package's digest, and its receipt is re-verified once - correct,
+    # because the receipt being replaced was written by code that ignored the companion
+    # relationship altogether.
+    identity['requires_packages'] = sorted(manifest.get(COMPANION_FIELD, []))
     identity['files'] = sorted([{k: entry[k] for k in ('path', 'size', 'sha256', 'source_path')
                                  if k in entry} for entry in manifest['files']], key=lambda e: e['path'])
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -303,6 +505,367 @@ def _check_stream(stream, entry, destination=None):
         raise PackageError(f'Incomplete or invalid model file: {entry["path"]}')
 
 
+# ── Companion packages must also reach the engine the way the engine reads them ────────────
+#
+# A companion's bytes reach the library at `<library>/<package_id>/<revision>/...`, but several
+# engines never look there. They call `hf_hub_download` / `snapshot_download`, which resolve
+# through the Hugging Face cache layout under the hub's own cache root - `packaging/voice_worker.py`
+# launches every Voice worker with `HF_HUB_CACHE=<library>/hub`, and the Subtitle worker does the
+# same. Measured on the Pocket TTS 4-bit path (`mlx-community/pocket-tts-4bit`): the model's own
+# `config.json` names its sentencepiece tokenizer as
+# `hf://kyutai/pocket-tts-without-voice-cloning/tokenizer.model@d4fdd22a...`, and mlx-audio's
+# `pocket_tts/utils.py:download_if_necessary` hands that straight to `hf_hub_download`. On a Mac
+# whose cache was populated by a download that works; on a kit node that only received the copied
+# package directories the lookup finds nothing and the failure surfaces at generation time - the
+# exact offline failure the companion relationship was introduced to prevent.
+#
+# So an installed companion is mirrored into that layout, derived entirely from manifest data:
+# `source.layout` names each publisher repo, revision and destination; `files[].source_path` (or
+# the file's path below its destination) names its path inside that repository; `files[].path`
+# names the installed file the bytes come from. No repository, family or file name is listed here,
+# so a new companion package works with no code change.
+#
+# `refs/<default>` is written too, and only when it is absent. huggingface_hub 1.31.0 (the version
+# the workers ship) resolves a 40-hex revision straight to `snapshots/<revision>/<file>` with no
+# ref and no network; but an engine that names no revision resolves through `refs/main` first -
+# chatterbox asks `snapshot_download(repo_id="mlx-community/S3TokenizerV2")`, and without that ref
+# the offline lookup raises. The ref *name* is huggingface_hub's default revision, not a manifest
+# field: every revision in this catalog is pinned from that cache's `refs/main`
+# (`qualification/generate_manifests_from_cache.py:86-92`), so pointing `main` at the manifest's
+# verified commit is what the manifest already records.
+HF_HUB_DIRNAME = 'hub'
+HF_DEFAULT_REF = 'main'
+HF_REPO_FOLDER_PREFIX = 'models--'
+COMPANION_CACHE_STATE = 'companion_cache_missing'
+
+
+def _hf_repo_folder(repo):
+    return HF_REPO_FOLDER_PREFIX + repo.replace('/', '--')
+
+
+def _hf_cache_relative(repo, revision, publish_path):
+    return '/'.join((HF_HUB_DIRNAME, _hf_repo_folder(repo), 'snapshots', revision, publish_path))
+
+
+def layout_locations(manifest):
+    """Every publisher root the manifest's own ``source.layout`` records.
+
+    `model` is the model tree; `companions[]` are the extra trees a package copies in beside it
+    (the Whisper processor repositories, for instance). Each carries the destination it was
+    installed to, the repository it came from and that repository's revision.
+    """
+    source = manifest.get('source')
+    layout = source.get('layout') if isinstance(source, dict) else None
+    if not isinstance(layout, dict):
+        return []
+    locations = []
+    if isinstance(layout.get('model'), dict):
+        locations.append(layout['model'])
+    if isinstance(layout.get('companions'), list):
+        locations.extend(item for item in layout['companions'] if isinstance(item, dict))
+    return locations
+
+
+def publisher_location(manifest, entry):
+    """Where one installed file of a manifest lives in its publisher's repository.
+
+    Returns ``(repo, revision, path inside that repository)``. Raises :class:`PackageError`
+    naming the manifest, the file and the field that does not say: a file this cannot place is a
+    file the engine will fetch over the network, so it is reported rather than skipped.
+    """
+    package_id = manifest.get('package_id')
+    installed = entry.get('path')
+    matches = []
+    for location in layout_locations(manifest):
+        destination = location.get('destination')
+        if not isinstance(destination, str) or not destination.strip():
+            continue
+        destination = destination.strip('/')
+        if installed == destination:
+            remainder = ''
+        elif destination and installed.startswith(destination + '/'):
+            remainder = installed[len(destination) + 1:]
+        else:
+            continue
+        matches.append((len(destination), location, remainder))
+    if not matches:
+        raise PackageError(
+            f"Manifest {package_id!r} does not say where its file {installed!r} lives in a "
+            f"publisher repository: 'source.layout' has no destination containing that path. "
+            f"Add the missing destination/repo/revision to 'source.layout' in "
+            f"model-manifests/{package_id}.json so the file can be placed where the engine reads it.")
+    _, location, remainder = max(matches, key=lambda match: match[0])
+    repo = location.get('repo')
+    revision = location.get('revision')
+    if not isinstance(repo, str) or not repo.strip() or '/' not in repo.strip():
+        raise PackageError(
+            f"Manifest {package_id!r} has no publisher repository for {installed!r}: "
+            f"'source.layout' names {repo!r}. It is the Hugging Face repository id the file came "
+            f"from; set 'source.layout[...].repo' in model-manifests/{package_id}.json.")
+    if not re.fullmatch(r'[0-9a-f]{40}', str(revision or '')):
+        raise PackageError(
+            f"Manifest {package_id!r} has no immutable publisher revision for {installed!r}: "
+            f"'source.layout' names {revision!r}. Set 'source.layout[...].revision' in "
+            f"model-manifests/{package_id}.json.")
+    publish_path = entry.get('source_path') or remainder
+    if not isinstance(publish_path, str) or not publish_path.strip():
+        raise PackageError(
+            f"Manifest {package_id!r} does not say where {installed!r} lives inside "
+            f"{repo}@{revision}: neither 'source_path' nor its path below the layout destination "
+            f"names one. Set 'source_path' in model-manifests/{package_id}.json.")
+    return repo.strip(), str(revision), _relative(publish_path.strip('/'))
+
+
+def _companion_plan(root, manifest, catalog):
+    """What every installed companion file should become, derived from the manifests alone.
+
+    Returns ``(plan, problems)``: ``plan`` maps a library-relative cache path to the record needed
+    to write it, and ``problems`` names everything that could not be placed. Shared by the cheap
+    status check and the writer, so what is checked is exactly what is written.
+    """
+    plan: dict[str, dict] = {}
+    problems: list[str] = []
+    catalog = catalog or {}
+    try:
+        index = _index(root)
+    except PackageError as error:
+        return plan, [str(error)]
+    for dependency in required_packages(manifest):
+        companion = catalog.get(dependency)
+        if not isinstance(companion, dict) or companion.get('package_id') != dependency:
+            problems.append(
+                f'companion package {dependency!r} has no manifest in the catalog this command '
+                f'was given, so the publisher path of its files cannot be read; its files will '
+                f'not be reachable by the engine until the package is verified with the catalog')
+            continue
+        record = index.get(dependency)
+        if not isinstance(record, dict):
+            problems.append(
+                f'companion package {dependency!r} is not installed in this library, so there is '
+                f'nothing to place in the engine cache')
+            continue
+        try:
+            folder = _relative(record.get('folder') or '')
+        except PackageError:
+            problems.append(
+                f'companion package {dependency!r} has no usable installed folder in the receipt')
+            continue
+        saved_files = record.get('files') if isinstance(record.get('files'), dict) else {}
+        for entry in companion.get('files') or []:
+            if not isinstance(entry, dict) or not isinstance(entry.get('path'), str):
+                problems.append(f'companion package {dependency!r} has an unusable file entry')
+                continue
+            saved = saved_files.get(entry['path']) or {}
+            installed = saved.get('relative') or entry['path']
+            try:
+                source = _relative(installed)
+                repo, revision, publish_path = publisher_location(companion, entry)
+            except PackageError as error:
+                problems.append(str(error))
+                continue
+            target = _hf_cache_relative(repo, revision, publish_path)
+            plan[target] = {'package_id': dependency, 'source': folder + '/' + source,
+                            'entry': entry, 'repo': repo, 'revision': revision}
+    return plan, problems
+
+
+def _target_matches(root, target, entry):
+    """Whether an existing cache entry already holds exactly this file's bytes."""
+    path = root / target
+    try:
+        info = path.stat()  # follows a real Hugging Face snapshot symlink into blobs/
+        if not stat.S_ISREG(info.st_mode) or info.st_size != entry['size']:
+            return False
+        digest = hashlib.sha256()
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+        return digest.hexdigest() == entry['sha256']
+    except OSError:
+        return False
+
+
+def companion_cache_status(manifest, library, *, catalog=None):
+    """Whether every installed companion is where the engine's lookup will find it.
+
+    Stat-only on purpose: this is the cheap half of :func:`materialize_companions`, shared with
+    `preflight`, so a package can be described without reading bytes. A file that is present at
+    the right size counts; byte identity is the writer's job.
+    """
+    root = _library(library)
+    if not required_packages(manifest):
+        return {'state': 'not_required', 'reason': None, 'packages': {}, 'files': {}}
+    plan, problems = _companion_plan(root, manifest, catalog)
+    files = {}
+    missing = []
+    for target in sorted(plan):
+        entry = plan[target]['entry']
+        try:
+            info = (root / target).stat()
+            present = stat.S_ISREG(info.st_mode) and info.st_size == entry['size']
+        except OSError:
+            present = False
+        files[target] = 'present' if present else 'missing'
+        if not present:
+            missing.append(target)
+            problems.append(
+                f"companion file {plan[target]['entry']['path']} of "
+                f"{plan[target]['package_id']!r} is not in this library's Hugging Face cache at "
+                f"<library>/{target}, so the engine would have to fetch it at generation time")
+    if problems:
+        return {'state': 'missing', 'reason': '; '.join(problems), 'files': files,
+                'missing': missing}
+    return {'state': 'ready', 'reason': None, 'files': files, 'missing': []}
+
+
+def _write_cache_file(root, target, plan_entry):
+    """Place one file at one cache path: hard link, else copy. Never overwrites what is right."""
+    entry = plan_entry['entry']
+    if os.path.lexists(root / target) and _target_matches(root, target, entry):
+        return 'present'
+    parent, _, name = target.rpartition('/')
+    source = plan_entry['source']
+    with _directory(root, parent, create=True) as parent_fd:
+        temporary = '.studiohub-hf-' + uuid.uuid4().hex
+        try:
+            try:
+                # A hard link is the whole point: the engine's cache entry and the verified
+                # library file are one inode, so the mirror costs no bytes and cannot drift.
+                os.link(root / source, temporary, dst_dir_fd=parent_fd, follow_symlinks=True)
+                outcome = 'linked'
+            except OSError:
+                # A different volume (the cache root is a mount), a link limit, or a filesystem
+                # without hard links: copy instead, and verify the copy against the manifest.
+                outcome = 'copied'
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o600, dir_fd=parent_fd)
+                with os.fdopen(descriptor, 'wb') as destination, \
+                        _open_regular(root, source) as stream:
+                    _check_stream(stream, entry, destination)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+            os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+    if not _target_matches(root, target, entry):
+        raise PackageError(f'the cache entry written for {entry["path"]} does not match its manifest')
+    return outcome
+
+
+def _write_default_ref(root, repo, revision):
+    """Point ``refs/<default>`` at the verified revision, and never replace an existing ref.
+
+    Written with no trailing newline, because that is what huggingface_hub reads: its writer is
+    ``_cache_commit_hash_for_specific_revision`` (``file_download.py:716-732`` in 1.31.0, the
+    version the workers ship) which does ``write_text(commit_hash)``, and its reader does
+    ``commit_hash = f.read()`` with no strip - so a newline here becomes part of the commit hash
+    and the snapshot stops resolving. Verified against the installed version, not assumed.
+    """
+    target = '/'.join((HF_HUB_DIRNAME, _hf_repo_folder(repo), 'refs', HF_DEFAULT_REF))
+    parent, _, name = target.rpartition('/')
+    if os.path.lexists(root / target):
+        return 'present'
+    with _directory(root, parent, create=True) as parent_fd:
+        temporary = '.studiohub-ref-' + uuid.uuid4().hex
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent_fd)
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(revision)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                # Link, not rename: a ref that appeared while this one was being written - a real
+                # download's own ref, say - must win. Rename would clobber it.
+                os.link(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                outcome = 'written'
+            except FileExistsError:
+                outcome = 'present'
+            os.fsync(parent_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+    return outcome
+
+
+def materialize_companions(manifest, library, *, catalog=None):
+    """Mirror every installed companion package into the Hugging Face cache the engines read.
+
+    Idempotent: a file already present with the manifest's bytes is left alone, a second run
+    rewrites nothing, and the hard link makes the mirror free while the library is on one volume
+    (a copy is the fallback). The result is a report, never an exception for a library that
+    cannot be written: an install whose companion could not be placed says so, by name, instead
+    of reporting a success whose failure would appear at generation time.
+
+    Returns ``{'state', 'reason', 'files', 'packages'}`` where ``state`` is ``ready``,
+    ``degraded`` or ``not_required``.
+    """
+    root = _library(library)
+    report = {'state': 'not_required', 'reason': None, 'files': {}, 'packages': {}}
+    if not required_packages(manifest):
+        return report
+    plan, problems = _companion_plan(root, manifest, catalog)
+    outcomes = {'linked': 0, 'copied': 0, 'present': 0}
+    refs = set()
+    for target in sorted(plan):
+        item = plan[target]
+        try:
+            outcome = _write_cache_file(root, target, item)
+        except (OSError, PackageError) as error:
+            problems.append(
+                f"could not place companion file {item['entry']['path']} of "
+                f"{item['package_id']!r} into the engine cache at <library>/{target}: "
+                f"{error.__class__.__name__}: {error}")
+            continue
+        outcomes[outcome] += 1
+        report['files'][target] = outcome
+        counted = report['packages'].setdefault(
+            item['package_id'], {'files': 0, 'linked': 0, 'copied': 0, 'present': 0})
+        counted['files'] += 1
+        counted[outcome] += 1
+        refs.add((item['repo'], item['revision']))
+    for repo, revision in sorted(refs):
+        try:
+            _write_default_ref(root, repo, revision)
+        except (OSError, PackageError) as error:
+            problems.append(
+                f'could not write the {HF_DEFAULT_REF!r} ref for {repo} at '
+                f'<library>/{HF_HUB_DIRNAME}/{_hf_repo_folder(repo)}/refs/{HF_DEFAULT_REF}: '
+                f'{error.__class__.__name__}: {error}')
+    if problems:
+        return {**report, 'state': 'degraded', 'reason': '; '.join(problems), 'written': outcomes}
+    return {**report, 'state': 'ready', 'written': outcomes}
+
+
+# One repair attempt per package per library per process, like `_repaired` above: a receipt
+# copied from another Mac (or written before this build) records verified packages whose
+# companions never reached the engine's cache. Reporting that forever would leave the offline
+# failure one button press away; the first look at the package repairs it instead, and a library
+# that cannot be written is reported by name rather than raised at a read-only caller.
+#
+# Keyed by library as well as package: the Hub can be pointed at a different model library while
+# it runs, and a package repaired in one of them says nothing about the other.
+_companion_repaired: set[tuple[str, str]] = set()
+
+
+def _repair_companion_cache(manifest, root, catalog) -> bool:
+    key = (str(root), manifest['package_id'])
+    if key in _companion_repaired:
+        return False
+    _companion_repaired.add(key)
+    try:
+        report = materialize_companions(manifest, root, catalog=catalog)
+    except (OSError, KeyError, TypeError, PackageError):
+        return False
+    return report['state'] == 'ready'
+
+
 def verify_package(manifest, folder, *, library_root=None, allow_state=False):
     validate_manifest(manifest)
     folder = Path(folder).absolute()
@@ -425,16 +988,27 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
         if manifest['package_id'] in seen:
             raise PackageError('Companion dependency cycle')
         seen.add(manifest['package_id'])
-        for dependency in manifest.get('requires_packages', []):
+        for dependency in required_packages(manifest):
             companion = (catalog or {}).get(dependency)
             if (not companion or companion.get('package_id') != dependency
                     or preflight(companion, root, catalog=catalog, _seen=seen)['state'] != 'files_verified'):
                 return {**base, 'state': 'dependency_missing', 'dependency': dependency}
+        # The companion's bytes must also be where its engine's own lookup finds them, not only
+        # in the library. A receipt copied from another Mac - or written before this build - has
+        # verified packages whose companions never reached the cache; repair that once here (the
+        # same self-healing `_repair_if_stale` above performs for a receipt in an older shape),
+        # and when it still is not true say so by name instead of letting generation discover it.
+        cache = companion_cache_status(manifest, root, catalog=catalog)
+        if cache['state'] != 'ready' and _repair_companion_cache(manifest, root, catalog):
+            cache = companion_cache_status(manifest, root, catalog=catalog)
+        if cache['state'] not in ('ready', 'not_required'):
+            return {**base, 'state': COMPANION_CACHE_STATE, 'reason': cache['reason'],
+                    'companion_cache': cache}
     except (OSError, KeyError, TypeError, PackageError) as error:
         return {**base, 'state': 'invalid', 'reason': str(error)}
     return {**base, 'state': 'files_verified', 'folder': str(folder),
             'engine': manifest['engine'], 'minimum_macos': manifest['minimum_macos'],
-            'verification': 'cached_receipt'}
+            'verification': 'cached_receipt', 'companion_cache': cache}
 
 
 def verify_installed(manifest, library, *, catalog=None):
@@ -457,13 +1031,27 @@ def verify_installed(manifest, library, *, catalog=None):
                   'engine': manifest['engine'], 'minimum_macos': manifest['minimum_macos'],
                   'verification': 'full_rehash'}
         seen = {manifest['package_id']}
-        for dependency in manifest.get('requires_packages', []):
+        for dependency in required_packages(manifest):
             companion = (catalog or {}).get(dependency)
             if not companion or companion.get('package_id') != dependency:
                 return {**result, 'state': 'dependency_missing', 'dependency': dependency}
             if preflight(companion, root, catalog=catalog, _seen=seen)['state'] != 'files_verified':
                 return {**result, 'state': 'dependency_missing', 'dependency': dependency}
-        return result
+        # An explicit verify is where the operator asks for the whole thing to be true, so this
+        # is where a companion's bytes are placed in the cache the engine reads. A failure is
+        # reported with its reason rather than swallowed: the package's own files are verified,
+        # but the offline generation the companion exists for would still fail.
+        try:
+            cache = materialize_companions(manifest, root, catalog=catalog)
+        except (OSError, PackageError) as error:
+            # The package's own bytes are verified; only the engine's access to its companion
+            # failed, so this is a named degradation rather than an invalid package.
+            cache = {'state': 'degraded', 'reason': f'{error.__class__.__name__}: {error}',
+                     'files': {}}
+        if cache['state'] == 'degraded':
+            return {**result, 'state': COMPANION_CACHE_STATE, 'reason': cache['reason'],
+                    'companion_cache': cache}
+        return {**result, 'companion_cache': cache}
     except (OSError, KeyError, TypeError, PackageError) as error:
         return {**base, 'state': 'invalid', 'reason': str(error),
                 'verification': 'full_rehash'}
@@ -493,7 +1081,15 @@ def _publish(manifest, staged, root):
     return _register(manifest, destination, root)
 
 
-def import_folder(manifest, source, library):
+def import_folder(manifest, source, library, *, catalog=None):
+    """Install one package folder, then place its companions where their engines read them.
+
+    ``catalog`` is the manifest set the companion relationships are resolved against. An import
+    can be performed without it (the caller may only have this manifest), in which case a package
+    with companions records a verified install whose companion cache is not yet written; the next
+    catalog-bearing verify or scan writes it, and until then the package reports
+    :data:`COMPANION_CACHE_STATE` naming the companion rather than claiming to be ready.
+    """
     validate_manifest(manifest)
     root = _library(library)
     source = Path(source).expanduser().absolute()
@@ -510,28 +1106,31 @@ def import_folder(manifest, source, library):
     with _lock(root):
         if source.is_relative_to(root):
             _relative(source.relative_to(root).as_posix())
-            return _register(manifest, source, root)
-        staged = _stage(manifest, root)
-        for entry in manifest['files']:
-            target = staged / entry['path']
-            relative = target.parent.relative_to(root).as_posix()
-            with _directory(root, relative, create=True) as parent_fd:
-                temporary = '.copy-' + uuid.uuid4().hex
-                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600, dir_fd=parent_fd)
-                try:
-                    with os.fdopen(fd, 'wb') as out, _source_stream(source, entry) as stream:
-                        _check_stream(stream, entry, out)
-                        out.flush()
-                        os.fsync(out.fileno())
-                    os.replace(temporary, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-                    os.fsync(parent_fd)
-                finally:
+            installed = _register(manifest, source, root)
+        else:
+            staged = _stage(manifest, root)
+            for entry in manifest['files']:
+                target = staged / entry['path']
+                relative = target.parent.relative_to(root).as_posix()
+                with _directory(root, relative, create=True) as parent_fd:
+                    temporary = '.copy-' + uuid.uuid4().hex
+                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent_fd)
                     try:
-                        os.unlink(temporary, dir_fd=parent_fd)
-                    except FileNotFoundError:
-                        pass
-        return _publish(manifest, staged, root)
+                        with os.fdopen(fd, 'wb') as out, _source_stream(source, entry) as stream:
+                            _check_stream(stream, entry, out)
+                            out.flush()
+                            os.fsync(out.fileno())
+                        os.replace(temporary, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                    finally:
+                        try:
+                            os.unlink(temporary, dir_fd=parent_fd)
+                        except FileNotFoundError:
+                            pass
+            installed = _publish(manifest, staged, root)
+    materialize_companions(manifest, root, catalog=catalog)
+    return installed
 
 
 class _SecureRedirect(urllib.request.HTTPRedirectHandler):
@@ -645,7 +1244,7 @@ def download_package(manifest, library, *, sources=None, catalog=None):
             raise PackageError('Companion dependency cycle')
         if identity in visited:
             return
-        for dependency in current.get('requires_packages', []):
+        for dependency in required_packages(current):
             companion = (catalog or {}).get(dependency)
             if not companion or companion.get('package_id') != dependency:
                 raise PackageError(f'Trusted companion manifest required: {dependency}')
@@ -656,6 +1255,10 @@ def download_package(manifest, library, *, sources=None, catalog=None):
     collect(manifest, set())
     for current in ordered:
         result = _download_one(current, root, sources if current is manifest else None)
+    # Every package this download installed, companions included, is mirrored into the engine
+    # cache: a downloaded kit is exactly the case where the network is about to go away.
+    for current in ordered:
+        materialize_companions(current, root, catalog=catalog)
     return result
 
 
@@ -680,10 +1283,15 @@ def scan_library(manifests, library, *, catalog=None):
                 verify_package(manifest, folder)
             except (OSError, PackageError):
                 continue
-            import_folder(manifest, folder, root)
+            import_folder(manifest, folder, root, catalog=catalog)
             report = preflight(manifest, root, catalog=catalog)
             break
         results.append(report)
+    # A library copied onto this Mac carries receipts, not the engine cache those receipts were
+    # written against: place every companion before reporting, so a scan is what makes a kit node
+    # able to generate with the network off.
+    for manifest in manifests:
+        materialize_companions(manifest, root, catalog=catalog)
     # A later scanned package may satisfy an earlier package's dependency.
     return [preflight(manifest, root, catalog=catalog) for manifest in manifests]
 
@@ -710,10 +1318,16 @@ def main():
             if args.action == 'import':
                 if args.source is None:
                     raise PackageError('--source is required for import')
-                result = {'folder': str(import_folder(manifest, args.source, args.library))}
+                folder = import_folder(manifest, args.source, args.library, catalog=catalog)
+                result = {'folder': str(folder),
+                          'companion_cache': companion_cache_status(manifest, args.library,
+                                                                    catalog=catalog)}
             elif args.action == 'download':
                 sources = json.loads(args.sources.read_text()) if args.sources else None
-                result = {'folder': str(download_package(manifest, args.library, sources=sources, catalog=catalog))}
+                folder = download_package(manifest, args.library, sources=sources, catalog=catalog)
+                result = {'folder': str(folder),
+                          'companion_cache': companion_cache_status(manifest, args.library,
+                                                                    catalog=catalog)}
             else:
                 result = verify_installed(manifest, args.library, catalog=catalog)
         print(json.dumps(result, indent=2))

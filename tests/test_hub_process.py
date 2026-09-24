@@ -94,7 +94,12 @@ class HubProcessTests(unittest.TestCase):
                     "upstream_commit": "b" * 40,
                     "upstream_version": "fixture-hub",
                     "source_sha256": "c" * 64,
-                }
+                },
+                # The fixture stages a real Voice runtime and backend just below, so its release
+                # record has to say so. `worker_specs` spawns exactly the components the manifest
+                # lists, and the Hub refuses a manifest that does not identify Voice rather than
+                # starting with no worker for the studio it always owns.
+                "voice": {"runtime_sha256": RUNTIME_ID},
             },
             "runtime_sha256": RUNTIME_ID,
         }

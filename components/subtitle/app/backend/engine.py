@@ -68,6 +68,89 @@ _DEFAULT_LABELS = {
 }
 _MEMORY_CACHE: dict[str, int | None] = {}
 
+# ── The lane contract this worker publishes on every catalog row ───────────
+#
+# `docs/lane-execution-contract.md`: a scheduler learns what to send, what comes back and what a
+# cancel means from the worker that owns the API, instead of guessing from an engine table. The
+# vocabulary below is quoted verbatim from that document; the parameters are this worker's own
+# `POST /api/transcribe` surface, and nothing is listed that the route does not honour.
+LANE_SCHEMA = 'studiohub.lane-contract.v1'
+LANE_OPERATION = 'audio.transcription'
+LANE_STATES = {
+    'accepted': ['queued'],
+    'active': ['running', 'cancel_requested'],
+    'terminal': ['done', 'error', 'cancelled'],
+    'uncertain': 'uncertain',
+    'uncertain_is_terminal': False,
+    'discard_supported': True,
+}
+LANE_CANCEL = {
+    'supported': True,
+    'request': 'DELETE /api/hub/jobs/{batch_id}',
+    'semantics': ('asks every studio holding an item of this batch to stop; an item already in '
+                  'flight may still land an artifact, so a cancelled item is not evidence that '
+                  'nothing was written'),
+}
+LANE_ARTIFACT = {'modality': 'transcription', 'media_type': 'application/json',
+                 'extension': 'json', 'per_item': 1}
+
+
+def subtitle_capabilities(manifest: dict) -> dict:
+    """The capabilities this package declared, or a refusal naming what is missing.
+
+    Read from the manifest and nowhere else. A subtitle package that says nothing about its
+    family or its timestamps is not published as Whisper-with-everything — which is what the
+    worker used to do for every package it loaded — because a capability nobody declared is a
+    capability nobody can be wrong about.
+    """
+    package_id = manifest.get('package_id')
+    block = manifest.get('subtitle')
+    if not isinstance(block, dict):
+        raise ModelPackageError(
+            f"Subtitle manifest {package_id!r} publishes no 'subtitle' capabilities block, so "
+            f"there is nothing to publish about it. Add \"subtitle\" to "
+            f"model-manifests/{package_id}.json with its family, languages, "
+            f"segment_timestamps, word_timestamps and long_form; the worker publishes only what "
+            f"the manifest says and never falls back to a family or a capability of its own.")
+    missing = [field for field in
+               ('family', 'languages', 'segment_timestamps', 'word_timestamps', 'long_form')
+               if field not in block]
+    if missing:
+        raise ModelPackageError(
+            f"Subtitle manifest {package_id!r} has an incomplete 'subtitle' block: missing "
+            f"{', '.join(missing)} (model-manifests/{package_id}.json)")
+    return {
+        'family': block['family'],
+        'languages': list(block['languages']),
+        'supports_segment_timestamps': block['segment_timestamps'],
+        'supports_word_timestamps': block['word_timestamps'],
+        'supports_long_form': block['long_form'],
+        'runtime_seconds': block.get('runtime_seconds'),
+    }
+
+
+def lane_contract(capabilities: dict, parameters: list[dict]) -> dict:
+    """The published lane contract: what to send, what comes back, and what a cancel means.
+
+    `deadline_seconds` is deliberately absent: the Hub owns the only dispatch deadline
+    (`standalone.py`'s peer-proxy timeout) and adds it when it echoes this contract, so a worker
+    restating it would be another copy of a number it does not enforce. `runtime_seconds` is
+    published only where a manifest records a measurement, with its evidence.
+    """
+    contract = {
+        'schema': LANE_SCHEMA,
+        'modality': 'transcription',
+        'operation': LANE_OPERATION,
+        'parameters': parameters,
+        'artifact': dict(LANE_ARTIFACT),
+        'states': {key: (list(value) if isinstance(value, list) else value)
+                   for key, value in LANE_STATES.items()},
+        'cancel': dict(LANE_CANCEL),
+    }
+    if isinstance(capabilities.get('runtime_seconds'), dict):
+        contract['runtime_seconds'] = capabilities['runtime_seconds']
+    return contract
+
 
 def unified_memory_bytes() -> Optional[int]:
     """Total unified memory, or None when it cannot be measured."""
@@ -265,6 +348,13 @@ class SubtitleEngine:
         # export module import and its sibling media/telemetry helpers.
         os.environ['STUDIOHUB_VOICE_APP_DIR'] = str(self.voice_app_dir)
         self.manifests = {manifest['package_id']: manifest for manifest in manifests}
+        # Read every package's capabilities once, at construction: a manifest that cannot say
+        # what its model does must stop the worker from starting rather than be published with a
+        # default. `load_subtitle_manifests` has already refused a malformed block by file name,
+        # so this only fires for a caller that built a manifest in code.
+        self.capabilities = {package_id: subtitle_capabilities(manifest)
+                             for package_id, manifest in self.manifests.items()}
+        self._default_package, self.default_rule = self._select_default()
         self.offline = bool(offline)
         self._model = None
         self._model_package: Optional[str] = None
@@ -405,6 +495,7 @@ class SubtitleEngine:
         entries = []
         for package_id in sorted(self.manifests):
             manifest = self.manifests[package_id]
+            capabilities = self.capabilities[package_id]
             state = self.readiness(package_id)
             files = state['files']
             label = manifest.get('label') or _DEFAULT_LABELS.get(
@@ -415,7 +506,7 @@ class SubtitleEngine:
                 'model_id': manifest['model_id'],
                 'label': label,
                 'name': label,
-                'family': manifest.get('family') or 'whisper',
+                'family': capabilities['family'],
                 'modality': 'transcription',
                 'engine': manifest['engine'],
                 'capabilities': ['transcribe', 'subtitles'],
@@ -425,31 +516,104 @@ class SubtitleEngine:
                 'qualified_revision_match': True,
                 'runtime_revision': self.runtime_sha256,
                 'runtime_compatible': True,
-                'recommended': package_id == self.default_package(),
-                'default': package_id == self.default_package(),
+                'recommended': package_id == self._default_package,
+                'default': package_id == self._default_package,
+                'default_rule': self.default_rule,
                 'cache': {'state': 'cached' if files['state'] == 'files_verified'
                           else files['state'], 'snapshot_revision': manifest['revision']},
                 'readiness': {'ready': state['ready'], 'reason': state['reason'],
                               'files': files, 'host': state['host']},
                 'execution_ready': state['ready'],
                 'available': state['ready'],
-                'languages': 'Multilingual',
-                'supports_segment_timestamps': True,
-                'supports_word_timestamps': True,
-                'supports_long_form': True,
+                # Published from the manifest, never asserted here: this worker used to claim
+                # Multilingual, segment and word timestamps and long form for every package it
+                # loaded, because no manifest declared any of them and nothing could be wrong.
+                'languages': capabilities['languages'],
+                'supports_segment_timestamps': capabilities['supports_segment_timestamps'],
+                'supports_word_timestamps': capabilities['supports_word_timestamps'],
+                'supports_long_form': capabilities['supports_long_form'],
+                # What a scheduler sends and gets back for this lane, from the worker that owns
+                # the API (`docs/lane-execution-contract.md`).
+                'lane_contract': lane_contract(capabilities, self.lane_parameters()),
                 'min_total_memory_gb': 8,
                 'qualification': manifest.get('qualification') or {},
             })
         return entries
 
-    def default_package(self) -> str:
-        """Turbo is the recommended editable initial default."""
-        for package_id, manifest in self.manifests.items():
-            if manifest.get('default') is True:
-                return package_id
-        if 'whisper-turbo' in self.manifests:
-            return 'whisper-turbo'
-        return sorted(self.manifests)[0]
+    def lane_parameters(self) -> list[dict]:
+        """The asked-for surface of ``POST /api/transcribe``, with the bounds it enforces.
+
+        Built from the same constants the route and the request validator use, so a parameter
+        that is accepted and dropped cannot appear here, and the model list is the catalog's own
+        manifests - a package added to the catalog appears without editing this.
+        """
+        # Deferred: the upload bounds live with the manager that enforces them, and the manager
+        # imports this module.
+        from .manager import ALLOWED_EXTENSIONS, MAX_INPUT_BYTES
+        return [
+            {'name': 'file', 'type': 'string', 'required': True, 'max_bytes': MAX_INPUT_BYTES,
+             'enum': sorted(ALLOWED_EXTENSIONS),
+             'note': ('multipart upload; the filename extension must be one of the listed values '
+                      'and the body must be no larger than max_bytes, or the request is refused '
+                      'before anything is read')},
+            {'name': 'model', 'type': 'string', 'required': False,
+             'enum': sorted({spelling for package_id, manifest in self.manifests.items()
+                             for spelling in (package_id, manifest['model_id'])}),
+             'default': self._default_package,
+             'note': 'either a package id or the model repository it was published under'},
+            {'name': 'language', 'type': 'string', 'required': False,
+             'note': ('a language hint shaped like a BCP-47 tag; omitted or empty means the '
+                      'engine detects the spoken language')},
+            {'name': 'word_timestamps', 'type': 'boolean', 'required': False, 'default': False,
+             'note': 'per-word timings in the returned segments; false returns segment timings'},
+            {'name': 'activity_id', 'type': 'string', 'required': False, 'max_characters': 32,
+             'note': ('the Hub activity this item belongs to; a longer value is truncated to 32 '
+                      'characters, not refused')},
+        ]
+
+    def default_selection(self) -> dict:
+        """Which package is the default, and by which rule — the rule is published, not silent.
+
+        ``package_id`` is ``None`` only when the engine was built with no manifest at all, which
+        the packaged worker refuses before it starts.
+        """
+        return {'package_id': self._default_package, 'rule': self.default_rule}
+
+    def _select_default(self) -> tuple[Optional[str], str]:
+        """The default model, read from the data; the fallback rule names itself.
+
+        `"default": true` is a declaration in one manifest, and exactly one manifest may carry
+        it. With none, the worker still has to pick something, so it picks the first package id
+        in sort order and says that is what it did - a silent alphabetical fallback is how
+        retiring the model a hardcoded name pointed at changed the default without anyone
+        choosing.
+        """
+        if not self.manifests:
+            # A worker with no subtitle manifest has nothing to pick a default *from*. That is a
+            # state the packaged worker refuses before it starts (`load_subtitle_manifests` names
+            # the manifest directory and the engine it looked for), so it is not made fatal here:
+            # a caller that builds an engine for something else - the cancellation and credential
+            # tests do - must not be stopped by a catalog it never asked about.
+            print('[subtitle] no subtitle manifest is loaded; there is no default model',
+                  flush=True)
+            return None, 'no-catalog'
+        declared = sorted(package_id for package_id, manifest in self.manifests.items()
+                          if manifest.get('default') is True)
+        if len(declared) > 1:
+            raise ModelPackageError(
+                f'{len(declared)} subtitle manifests declare "default": true '
+                f'({", ".join(declared)}); at most one package in the catalog may be the default. '
+                f'Remove the flag from all but one manifest in model-manifests/.')
+        if declared:
+            return declared[0], 'declared'
+        fallback = sorted(self.manifests)[0]
+        print(f'[subtitle] no manifest declares "default": true; using {fallback!r}, '
+              f'the first package id in sort order', flush=True)
+        return fallback, 'first-package-id'
+
+    def default_package(self) -> Optional[str]:
+        """The default package id, or None when this engine was built with no manifest."""
+        return self._default_package
 
     # ── loading / decoding ─────────────────────────────────────────────────
 

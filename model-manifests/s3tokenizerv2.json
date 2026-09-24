@@ -51,6 +51,5 @@
         "https://huggingface.co/mlx-community/S3TokenizerV2/resolve/e0c9886f0e1c35ae85b1f27277416fb19fc72bec/model.safetensors"
       ]
     }
-  ],
-  "dependencies": null
+  ]
 }

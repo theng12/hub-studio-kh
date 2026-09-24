@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import long_form_policy, model_audits, qwen_quality
+from . import lane_contract, long_form_policy, model_audits, qwen_quality
 
 
 @dataclass(frozen=True)
@@ -37,13 +37,92 @@ class TextGuidance:
     note: str
 
 
+# ───────────── family engines ─────────────
+#
+# The engine is the producer's own fact about a family, and it is the single
+# source of truth every consumer reads:
+#
+#   * `serialize_model` labels the family "Apple MLX" vs "PyTorch / MPS" and the
+#     frontend's "🍎 MLX only" filter keeps or drops it from the same value;
+#   * `generation.py` derives `MLX_AUDIO_FAMILIES`, `_ENGINE_REQUIREMENTS` and
+#     `_WIRED_FAMILIES` from it, so the dispatch table and the UI cannot
+#     disagree about a family;
+#   * the diagnostics panel reports the packages the engine needs.
+#
+# A previous version of this file kept a hand-written `_MLX_AUDIO_FAMILIES`
+# tuple here and a second list in generation.py, with a comment asking the next
+# author to keep them in sync. They drifted: `kittentts`, `vibevoice` and
+# `omnivoice` were published as "PyTorch / MPS" and hidden by the MLX-only
+# filter (CHANGELOG, 2026-09-24). There is no second list any more.
+ENGINE_MLX_AUDIO = "mlx-audio"                    # mlx_audio.generate_audio
+ENGINE_TRANSFORMERS_VITS = "transformers-vits"    # transformers VitsModel on torch
+ENGINE_ONNX_VITS = "onnx-vits"                    # onnxruntime InferenceSession
+# Engines whose models run on Apple's MLX framework. "Apple MLX" is what the
+# Models tab calls them and what the MLX-only filter selects on.
+APPLE_OPTIMIZED_ENGINES = frozenset({ENGINE_MLX_AUDIO})
+ALL_ENGINES = frozenset({
+    ENGINE_MLX_AUDIO, ENGINE_TRANSFORMERS_VITS, ENGINE_ONNX_VITS,
+})
+
+
+@dataclass(frozen=True)
+class SectioningRefinement:
+    """A checkpoint inside one family whose measured sectioning differs from the default.
+
+    ``marker`` is matched against the repository's own name ("1.7b-base",
+    "customvoice"). The refinement is declared with the family instead of being a
+    repo-name branch in `long_form_policy`, so the number, the checkpoint it
+    belongs to and the reason sit together - and a refinement for a model nobody
+    ships reads as a fact about that checkpoint rather than an unreachable `if`.
+    """
+    marker: str
+    section_max_characters: Optional[int] = None
+    join_pause_seconds: Optional[float] = None
+    note: str = ""
+
+
 @dataclass(frozen=True)
 class Family:
     id: str
     label: str
+    # Required, deliberately without a default: a new family must state which
+    # engine runs it, and a missing statement is an import-time TypeError in
+    # this file rather than a family that is silently published as non-MLX.
+    engine: str
+    # Packages this family's shipped engine imports. Published by
+    # `generation.diagnostics()` and checked one-by-one by the health panel.
+    requirements: tuple[str, ...]
     summary: str
     how_to_use: str
     text_guidance: TextGuidance
+    # Required for the same reason as `engine`: a new family must state how its
+    # long scripts are split, or say out loud that it takes the conservative
+    # default. A family that omits it used to fall through to "the other
+    # behaviour" with nobody able to see which one it got.
+    section_max_characters: int
+    join_pause_seconds: float = 0.12
+    section_note: str = ""
+    # "family_policy" (measured or engine-derived) or "conservative_default".
+    section_origin: str = "family_policy"
+    # The engine's own input limit where it has one: past this the engine stops
+    # working rather than degrading, so no audit or caller may raise the budget.
+    section_hard_cap_characters: Optional[int] = None
+    section_refinements: tuple[SectioningRefinement, ...] = ()
+    # The extra request fields this family's engine resolver actually reads
+    # (beyond `text` and `speed`, which every family honours). Published by the
+    # lane contract, so a scheduler never sends a key the lane silently drops.
+    lane_parameters: tuple[str, ...] = ()
+    # Behaviour flags that used to be per-family sets in consumers. They are
+    # facts about the engine, so they live with the rest of the family's facts.
+    #
+    # The engine does no number normalisation of its own, so raw digits reach
+    # the tokenizer and are mispronounced (OmniVoice: measured 2026-08-07).
+    numbers_need_expansion: bool = False
+    # The engine scales its own predicted durations from a speed factor, so the
+    # public speed control goes in as part of synthesis. Every other engine
+    # applies no multiplier and gets one pitch-preserving tempo pass on the
+    # finished artifact instead (long_form_policy.speed_policy_for).
+    native_speed: bool = False
 
 
 # The exact tag set mlx-audio's OmniVoice treats as atomic non-verbal tokens
@@ -63,6 +142,14 @@ FAMILIES: dict[str, Family] = {
     "voxcpm-mlx": Family(
         id="voxcpm-mlx",
         label="VoxCPM2 (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.VOXCPM_SECTION_MAX_CHARACTERS,
+        section_note=(
+            "Keeps each synthesis pass inside the practical voice-fidelity window "
+            "while preserving the selected clone controls."
+        ),
+        lane_parameters=("voice_design_prompt", "instruct", "ref_transcript"),
         summary=(
             "OpenBMB's VoxCPM2 ported to MLX for native Apple Silicon inference "
             "(via Prince Canuma's mlx-audio). 2B parameters, 30 languages, 48 kHz "
@@ -92,6 +179,47 @@ FAMILIES: dict[str, Family] = {
     "qwen3-tts": Family(
         id="qwen3-tts",
         label="Qwen3-TTS (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.QWEN_CLONE_SECTION_MAX_CHARACTERS,
+        join_pause_seconds=long_form_policy.QWEN_CLONE_JOIN_PAUSE_SECONDS,
+        section_note=(
+            "Clone continuity setting. Every section reuses the same reference voice "
+            "and transcript evidence, with a fixed 180 ms join."
+        ),
+        lane_parameters=("ref_transcript",),
+        section_refinements=(
+            # The production candidate the fleet measured: 300 ms sentence joins
+            # (the audit records 300/600/180 ms for it), same section budget.
+            SectioningRefinement(
+                marker="1.7b-base",
+                join_pause_seconds=long_form_policy.OMNIVOICE_JOIN_PAUSE_SECONDS,
+                note=(
+                    "The 1.7B production candidate runtime uses 300 ms sentence, "
+                    "600 ms paragraph and 180 ms soft joins."
+                ),
+            ),
+            # Preset and voice-design tiers never use reference-audio cloning, so
+            # they keep the wider preset budget and the shared 120 ms join.
+            SectioningRefinement(
+                marker="customvoice",
+                section_max_characters=long_form_policy.QWEN_PRESET_SECTION_MAX_CHARACTERS,
+                join_pause_seconds=long_form_policy.DEFAULT_JOIN_PAUSE_SECONDS,
+                note=(
+                    "Preset and voice-design delivery setting; these paths do not use "
+                    "reference-audio cloning."
+                ),
+            ),
+            SectioningRefinement(
+                marker="voicedesign",
+                section_max_characters=long_form_policy.QWEN_PRESET_SECTION_MAX_CHARACTERS,
+                join_pause_seconds=long_form_policy.DEFAULT_JOIN_PAUSE_SECONDS,
+                note=(
+                    "Preset and voice-design delivery setting; these paths do not use "
+                    "reference-audio cloning."
+                ),
+            ),
+        ),
         summary=(
             "Alibaba's Qwen3-TTS, quantized to 8-bit and ported to MLX for native "
             "Apple Silicon inference (via mlx-audio). Base models clone a reference "
@@ -118,6 +246,14 @@ FAMILIES: dict[str, Family] = {
     "chatterbox-mlx": Family(
         id="chatterbox-mlx",
         label="Chatterbox (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.CHATTERBOX_STANDARD_SECTION_MAX_CHARACTERS,
+        section_note=(
+            "Standard Chatterbox delivery setting. The same reference voice and "
+            "expression controls are reused for every section."
+        ),
+        lane_parameters=("cfg_value",),
         summary=(
             "Resemble AI's Chatterbox ported to MLX for native Apple Silicon "
             "inference (via mlx-audio). Same MIT-licensed voice-cloning + "
@@ -142,6 +278,24 @@ FAMILIES: dict[str, Family] = {
     "omnivoice": Family(
         id="omnivoice",
         label="OmniVoice (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        # v0.4.6 OmniVoice is MLX + Transformers; no separate omnivoice package
+        # is required by the tracked generation environment.
+        requirements=("mlx", "mlx_audio", "transformers", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.OMNIVOICE_SECTION_MAX_CHARACTERS,
+        join_pause_seconds=long_form_policy.OMNIVOICE_JOIN_PAUSE_SECONDS,
+        section_note=(
+            "Conservative cloning setting using the same reference for every section, "
+            "with 300 ms sentence joins, 600 ms paragraph joins, and 180 ms soft joins. "
+            "Fleet measurement puts OmniVoice's memory ceiling near 1286 characters even "
+            "on 8 GB; this budget is retained until the long-section quality gate has run."
+        ),
+        lane_parameters=("voice_design_prompt", "normalize_text"),
+        # Measured on OmniVoice 2026-08-07: "1,200" -> "one two hundred",
+        # "12,500" -> "one million two hundred thousand five hundred",
+        # "$1,450.75" -> nonsense. 5 of 8 digit forms were wrong, while every
+        # fully spelled-out form was correct: the engine has no normaliser.
+        numbers_need_expansion=True,
         summary=(
             "k2-fsa's OmniVoice — a 0.6B-parameter diffusion language-model TTS "
             "supporting 600+ languages with voice design (gender / accent / age "
@@ -171,6 +325,14 @@ FAMILIES: dict[str, Family] = {
     "fish-audio-mlx": Family(
         id="fish-audio-mlx",
         label="Fish Audio S2 Pro (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        requirements=("mlx", "mlx_lm", "mlx_audio", "transformers", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.FISH_AUDIO_SECTION_MAX_CHARACTERS,
+        section_note=(
+            "Voice Studio owns the outer delivery boundary so clone and style controls "
+            "remain identical across the final joined artifact."
+        ),
+        lane_parameters=("instruct",),
         summary=(
             "Fish Audio's S2 Pro 5B multilingual TTS running through the MLX-Audio "
             "v0.4.6 backend. It supports zero-shot voice cloning from a reference "
@@ -180,9 +342,7 @@ FAMILIES: dict[str, Family] = {
             "Choose a Fish S2 Pro checkpoint, optionally select a reference voice, "
             "and describe the delivery in the style field. Voice Studio privately "
             "splits long scripts at safe boundaries, joins the sections, and applies "
-            "the requested final speed once. Check Fish Audio's license before "
-            "commercial use: the public model license is research/non-commercial "
-            "unless you have a separate commercial grant."
+            "the requested final speed once."
         ),
         text_guidance=TextGuidance(
             soft_max_chars=None,
@@ -193,6 +353,17 @@ FAMILIES: dict[str, Family] = {
     "khmer-tts-mms": Family(
         id="khmer-tts-mms",
         label="Khmer TTS (MMS VITS)",
+        engine=ENGINE_TRANSFORMERS_VITS,
+        requirements=("torch", "transformers", "soundfile", "numpy"),
+        # No section-size measurement of its own yet: the conservative default,
+        # which is the smallest budget any measured family uses.
+        section_max_characters=long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+        section_origin="conservative_default",
+        section_note=(
+            "This family has no section-size measurement of its own yet, so Voice Studio "
+            "renders conservative 280-character sections instead of sending a whole script "
+            "to an engine whose input limit is unknown."
+        ),
         summary=(
             "A Khmer text-to-speech model fine-tuned from Meta's Massively "
             "Multilingual Speech (MMS) Khmer VITS checkpoint, running offline on "
@@ -214,6 +385,15 @@ FAMILIES: dict[str, Family] = {
     "khmer-tts-onnx": Family(
         id="khmer-tts-onnx",
         label="Khmer TTS Female (VITS/ONNX)",
+        engine=ENGINE_ONNX_VITS,
+        requirements=("onnxruntime", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+        section_origin="conservative_default",
+        section_note=(
+            "This family has no section-size measurement of its own yet, so Voice Studio "
+            "renders conservative 280-character sections instead of sending a whole script "
+            "to an engine whose input limit is unknown."
+        ),
         summary=(
             "A single-speaker female Khmer VITS voice trained on the "
             "DDD-Cambodia read-speech corpus and exported to ONNX. Runs fully "
@@ -228,6 +408,46 @@ FAMILIES: dict[str, Family] = {
             soft_max_chars=None,
             chunking="auto-split",
             note="Long scripts are split privately into conservative sentence-safe sections and joined into one final file. One built-in female speaker; no reference clip is used.",
+        ),
+    ),
+    "pocket-tts": Family(
+        id="pocket-tts",
+        label="Pocket TTS (MLX)",
+        engine=ENGINE_MLX_AUDIO,
+        # mlx-audio is the only inference dependency; the sentencepiece
+        # tokenizer and preset voice prompts ship as packaged companions
+        # (catalog.FAMILY_COMPANIONS), not Python packages.
+        requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
+        lane_parameters=("voice",),
+        section_max_characters=long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
+        section_origin="conservative_default",
+        section_note=(
+            "This family has no section-size measurement of its own yet, so Voice Studio "
+            "renders conservative 280-character sections instead of sending a whole script "
+            "to an engine whose input limit is unknown."
+        ),
+        summary=(
+            "Kyutai's Pocket TTS — a compact 117M-parameter English text-to-speech "
+            "model ported to MLX for native Apple Silicon inference (via mlx-audio) "
+            "and quantized to 4-bit. It clones a voice from a short reference clip, "
+            "or speaks with one of eight built-in preset voices when no reference is "
+            "given. 24 kHz output. English only."
+        ),
+        how_to_use=(
+            "Pick a reference voice from your Voices library and Pocket TTS clones "
+            "it; a private reference clip works the same way. Leave the voice and "
+            "reference fields empty and it uses its built-in preset voice instead. "
+            "Long scripts are split privately into sentence-safe sections, rendered "
+            "with the same reference or preset, and joined into one final file."
+        ),
+        # Pocket TTS is an autoregressive flow-LM over mimi latents. Its own
+        # wrapper does not split long text, so Voice Studio owns the section
+        # boundary; every section reuses the same reference prompt so the voice
+        # cannot drift between sections.
+        text_guidance=TextGuidance(
+            soft_max_chars=None,
+            chunking="auto-split",
+            note="Long scripts are split privately into conservative sentence-safe sections, rendered with the same reference or preset voice, and joined into one final file.",
         ),
     ),
 }
@@ -299,6 +519,11 @@ class ModelEntry:
     # None means the model is intentionally listed without a claimed memory
     # floor while controlled qualification is still in progress.
     min_unified_memory_gb: Optional[int] = 8
+    # The live-free-memory floor the Hub enforces before dispatching this model, where the owner
+    # has approved one. `None` keeps the Hub's own default. The tier above is a *qualification*
+    # tier and is deliberately never enforced; this is the one that stops a job starting into a
+    # nearly-full Mac, so it is a different fact and is published under its own name.
+    min_free_memory_gb: Optional[float] = None
     recommended_hardware: str = ""
     capabilities: tuple[str, ...] = ("tts",)
     best_for: str = ""
@@ -315,6 +540,11 @@ class ModelEntry:
     # bullets so users can set realistic expectations BEFORE submitting.
     use_cases: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     section_size_control: SectionSizeControl | None = None
+    # One recorded fact about the model's license, stated once and never as
+    # advice. Empty means "not established in this file", which is the honest
+    # value: an invented license name is worse than an absent one.
+    license_name: str = ""
+    license_source: str = ""
 
 
 CATALOG: tuple[ModelEntry, ...] = (
@@ -340,6 +570,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=16,
         recommended_hardware="24 GB unified memory. Measured at 3.95x realtime on 16 GB; an 8 GB Mac swaps and drops to 47x realtime.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for="The recommended VoxCPM2 pick for most users. 4-bit quantized — fastest and smallest, with minimal quality loss vs bf16. 48 kHz studio-quality output, 30 languages, voice cloning + voice design in one model.",
         sample_rate_hz=48000,
         languages=VOXCPM2_LANGUAGE_CODES,
@@ -366,6 +598,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=16,
         recommended_hardware="16 GB unified memory or more.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for="Middle tier: richer than 4-bit with less quantization loss, lighter and faster than bf16. 48 kHz studio-quality output, 30 languages, voice cloning + voice design in one model.",
         sample_rate_hz=48000,
         languages=VOXCPM2_LANGUAGE_CODES,
@@ -394,6 +628,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=16,
         recommended_hardware="M1 Pro / M2 16 GB recommended for headroom.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for="Full bf16 precision — slower (RTF ~0.5×) but the reference quality. Pick when you're doing final renders and quality matters more than speed.",
         sample_rate_hz=48000,
         languages=VOXCPM2_LANGUAGE_CODES,
@@ -422,6 +658,13 @@ CATALOG: tuple[ModelEntry, ...] = (
         size_gb=1.9,
         gated=False,
         min_unified_memory_gb=8,
+        # Owner-approved production floor for the 8 GB voice-cloning tier: this model reserves
+        # 3.2 GB of live free memory. Measured cold requirement is 3.15 GB, so 3.2 is the
+        # rounded-up guard the owner accepted. It used to live in the Hub
+        # (`workload_policy._HUB_PRODUCTION_FREE_GB`, keyed by this exact repo id) because this
+        # row published no floor; a model-keyed table in a consumer is the defect this release
+        # removes, so the fact lives with the model that has it.
+        min_free_memory_gb=3.2,
         recommended_hardware=(
             "Apple Silicon with 8 GB unified memory minimum; 16 GB preferred "
             "for normal memory pressure and faster generation."
@@ -429,6 +672,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         # Base model handles voice CLONING from a reference audio clip — pair
         # with a voice from the Voices library. Not a "plain TTS" model.
         capabilities=("tts", "voice-cloning", "multilingual"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for="Fast, memory-friendly voice cloning. Pair it with a reference clip from the Voices library; use the 1.7B Base model when likeness and prosody matter more than speed.",
         sample_rate_hz=24000,
         languages=("en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"),
@@ -455,6 +700,8 @@ CATALOG: tuple[ModelEntry, ...] = (
             "roughly the weight size of the small 8-bit build."
         ),
         capabilities=("tts", "voice-cloning", "multilingual"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for=(
             "The larger Base checkpoint's speaker likeness and phrasing with the "
             "memory footprint of the smaller 8-bit model — the middle rung between "
@@ -482,6 +729,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=8,
         recommended_hardware="Any Apple Silicon Mac with 8 GB.",
         capabilities=("tts", "voice-cloning", "expressive", "multilingual"),
+        license_name="MIT",
+        license_source="components/voice/app/backend/catalog.py family note: 'MIT-licensed'",
         best_for="Compact 4-bit MLX conversion of ResembleAI/chatterbox (~600 MB on disk), reporting 23-language support. The recommended Chatterbox pick.",
         sample_rate_hz=24000,
         languages=CHATTERBOX_LANGUAGE_CODES,
@@ -507,6 +756,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=8,
         recommended_hardware="Any Apple Silicon Mac with 8 GB.",
         capabilities=("tts", "voice-cloning", "expressive", "multilingual"),
+        license_name="MIT",
+        license_source="components/voice/app/backend/catalog.py family note: 'MIT-licensed'",
         best_for="Higher-precision newer Chatterbox. Pick if 4-bit shows artifacts on your reference voice.",
         sample_rate_hz=24000,
         languages=CHATTERBOX_LANGUAGE_CODES,
@@ -535,6 +786,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=8,
         recommended_hardware="M1 Pro / M2 16 GB recommended.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
         best_for="The reliable OmniVoice MLX option for multilingual cloning and voice design. It preserves the reference checkpoint precision without the redundant fp32 download.",
         sample_rate_hz=24000,
         languages=(),
@@ -555,7 +808,7 @@ CATALOG: tuple[ModelEntry, ...] = (
     # ──────────── Fish Audio S2 Pro (MLX) ────────────
     # v0.4.6 is the first pinned mlx-audio release in this app with the Fish
     # S2 Pro engine. The model repo bundles its codec.safetensors, so it needs
-    # no companion download. The public Fish model license is not commercial.
+    # no companion download.
     ModelEntry(
         repo="mlx-community/fish-audio-s2-pro-8bit",
         label="Fish Audio S2 Pro 5B 8-bit (MLX) — fleet candidate",
@@ -582,7 +835,7 @@ CATALOG: tuple[ModelEntry, ...] = (
             "memory-pressure warning; on 24 GB it stays in normal pressure."
         ),
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
-        best_for="The practical Fish S2 Pro MLX tier. It bundles the model and codec in about 6.73 GB, claims 80+ language coverage and supports reference-voice cloning, but the public Fish Audio research license is not a commercial-use grant.",
+        best_for="The practical Fish S2 Pro MLX tier. It bundles the model and codec in about 6.73 GB, claims 80+ language coverage and supports reference-voice cloning.",
         sample_rate_hz=44100,
         languages=(),
         language_support=LanguageSupport(
@@ -593,7 +846,7 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("good",  "High-quality multilingual voice cloning with natural-language style control"),
             ("good",  "Single download includes the S2 Pro model and bundled codec"),
             ("weak",  "No unified-memory floor is claimed until controlled 16 GB and 24 GB qualification completes"),
-            ("avoid", "Commercial customer work unless you have Fish Audio's separate commercial license"),
+            ("avoid", "8/16 GB Macs — measured at 13.3 GB peak, so a 16 GB Mac reaches memory-pressure warning"),
         ),
     ),
     ModelEntry(
@@ -605,7 +858,7 @@ CATALOG: tuple[ModelEntry, ...] = (
         min_unified_memory_gb=32,
         recommended_hardware="Apple Silicon with 32 GB or more; not suitable for the 8/16 GB fleet tier.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
-        best_for="Full-precision Fish S2 Pro for reference-quality cloning and qualification work on high-memory Apple Silicon Macs. The public model license is research/non-commercial unless separately licensed.",
+        best_for="Full-precision Fish S2 Pro for reference-quality cloning and qualification work on high-memory Apple Silicon Macs.",
         sample_rate_hz=44100,
         languages=(),
         language_support=LanguageSupport(
@@ -616,7 +869,7 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("good",  "Full-precision reference tier for 32 GB+ Apple Silicon"),
             ("good",  "Same cloning and style controls as the 8-bit build"),
             ("weak",  "About 11.01 GB on disk before runtime memory and cache overhead"),
-            ("avoid", "8/16 GB Macs and commercial use without a separate Fish license"),
+            ("avoid", "8/16 GB Macs — the 32 GB tier is the stated floor"),
         ),
     ),
 
@@ -701,6 +954,67 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("avoid", "Voice cloning or multi-language narration"),
         ),
     ),
+
+    # ──────────── Pocket TTS (MLX) ────────────
+    # Kyutai's English Pocket TTS through mlx-audio's `pocket_tts` engine. The whole
+    # executable model is 89 MB of 4-bit weights (117,332,322 parameters per its own
+    # index) plus the mimi codec in the same safetensors file. It carries no tokenizer
+    # and no voice prompts: its config.json names both by `hf://` URL against a SECOND
+    # repository, kyutai/pocket-tts-without-voice-cloning, which the engine resolves
+    # through the Hugging Face cache at generation time. Both are packaged as
+    # companions (see FAMILY_COMPANIONS) so a node with no network can still run it.
+    ModelEntry(
+        repo="mlx-community/pocket-tts-4bit",
+        # The quantization belongs in the label (owner rule, 2026-09-24): this is one
+        # specific 4-bit conversion, not "Pocket TTS" in general, and it is the build
+        # the owner listened to.
+        label="Pocket TTS 4-bit (MLX) — English clone or preset",
+        family="pocket-tts",
+        # 89,282,784 B weights + 28,637 B weight index + 2,203 B config.
+        size_gb=0.09,
+        gated=False,
+        # The owner's listening review (2026-09-24) measured a 1.9 GB peak and placed
+        # this among the two engines with a credible 8 GB path, so 8 GB is the floor
+        # this catalogue claims.
+        min_unified_memory_gb=8,
+        recommended_hardware=(
+            "Any Apple Silicon Mac with 8 GB. Measured at 1.9 GB peak in the owner's "
+            "2026-09-24 review; 16 GB leaves comfortable headroom."
+        ),
+        # "voice-cloning" is load-bearing beyond the UI wording. The native app derives a
+        # model's form from `reference_audio.declared`, which catalog.serialize_model
+        # computes as exactly `bool("voice-cloning" in capabilities)`. Dropping it would
+        # silently re-file this model as a preset-only engine and hide the reference-voice
+        # field that is its main use. Pocket TTS genuinely does both: its own
+        # `generate(text, voice=None, ref_audio=None, …)` takes a preset voice name OR a
+        # reference clip, and the reference wins when both are present.
+        capabilities=("tts", "voice-cloning"),
+        best_for=(
+            "The best-sounding English cloning model on the owner's 2026-09-24 listening "
+            "review, and the lightest clone-capable package in the catalogue: 4-bit "
+            "weights, about 89 MB on disk and 1.9 GB peak, 24 kHz output. Clone a short "
+            "reference clip, or fall back to one of its eight built-in preset voices."
+        ),
+        sample_rate_hz=24000,
+        languages=("en",),
+        language_support=LanguageSupport(
+            input_selection="none",
+            enumeration_status="exact",
+            codes=("en",),
+            runtime_enforced=True,
+        ),
+        ignore_patterns=("README.md", ".gitattributes"),
+        use_cases=(
+            ("good", "English voice cloning from a short reference clip — a private upload works too"),
+            ("good", "The lightest clone-capable package here: 89 MB of 4-bit weights, ~1.9 GB peak"),
+            ("good", "Preset voices when no reference is supplied (eight built-in prompts), so it still works with an empty voice field"),
+            ("good", "Fast on Apple Silicon — no separate codec or vocoder download; the mimi codec is inside the same file"),
+            ("weak", "English only — it cannot speak Khmer or any other language"),
+            ("weak", "24 kHz output is narrower than the 44.1–48 kHz families"),
+            ("weak", "4-bit quantization: expect slightly less fidelity than Kyutai's unquantized checkpoint"),
+            ("avoid", "Khmer or other non-English narration — use the Khmer VITS families instead"),
+        ),
+    ),
 )
 
 
@@ -718,13 +1032,22 @@ class SectionSizeControlError(ValueError):
 
 
 def _audited_long_form_policy(family: str, repo: str) -> dict | None:
-    if repo == long_form_policy.QWEN_17B_BASE_REPO:
-        limits = model_audits.qwen_17b_production_v2_limits(repo)
+    """The effective long-form policy: the measured production pin, then any model audit.
+
+    `model_audits.qwen_17b_production_v2_limits` answers for exactly the models
+    whose own audit record is the measured production audit (or explicitly
+    derives from it) and returns ``{}`` for every other model, so this file asks
+    one question in one order. It used to compare ``repo`` against a hardcoded
+    8-bit repo id first; when that tier was pruned, the shipped tier fell through
+    to the family default and the audited Auto section size went inert.
+    """
+    pinned = model_audits.qwen_17b_production_v2_limits(repo)
+    if pinned:
         return long_form_policy.policy_for(
             family,
             repo,
-            audited_section_max_characters=limits.get("private_section_max_characters"),
-            audited_default_section_max_characters=limits.get(
+            audited_section_max_characters=pinned.get("private_section_max_characters"),
+            audited_default_section_max_characters=pinned.get(
                 "default_private_section_max_characters"
             ),
         )
@@ -799,7 +1122,11 @@ def resolve_section_budget(
             f"Model {repo} has no section-size control.",
         )
     if requested is None:
-        if repo == long_form_policy.QWEN_17B_BASE_REPO and control is None:
+        # A model whose own audit anchors the measured production section policy
+        # must publish a derivable control: refusing here is better than
+        # silently falling back to the family budget for a model the audit has
+        # an exact number for.
+        if control is None and model_audits.qwen_17b_production_v2_limits(repo):
             raise SectionSizeControlError(
                 "SECTION_MAX_CHARACTERS_UNSUPPORTED",
                 f"Model {repo} has no section-size control.",
@@ -866,6 +1193,14 @@ def ignore_patterns_for(repo: str) -> tuple[str, ...]:
 #
 # VERIFIED against the installed mlx-audio engine source:
 #   - chatterbox-mlx    → chatterbox.py loads mlx-community/S3TokenizerV2
+#   - pocket-tts        → pocket_tts/conditioners.py loads the sentencepiece model and
+#                         pocket_tts/utils.py loads the preset voice prompts, both from
+#                         kyutai/pocket-tts-without-voice-cloning @ d4fdd22a, by `hf://`
+#                         URL through `hf_hub_download`. Unlike every other companion
+#                         here these are not optional extras: the tokenizer is loaded on
+#                         EVERY generation, so without it the engine cannot encode text
+#                         at all, and the preset prompts cover the zero-shot default
+#                         (`DEFAULT_AUDIO_PROMPT = "alba"`) when no reference is supplied.
 # OmniVoice / Fish S2 Pro load their codecs from inside their own repo (no
 # companion). The marvis / orpheus / moss-tts-nano / echo-tts / longcat / bark
 # entries were removed with their families on 2026-09-24 (ST-13.B).
@@ -875,6 +1210,13 @@ FAMILY_COMPANIONS: dict[str, tuple[dict, ...]] = {
             "repo": "mlx-community/S3TokenizerV2",
             "allow_patterns": None,
             "label": "S3 speech tokenizer",
+        },
+    ),
+    "pocket-tts": (
+        {
+            "repo": "kyutai/pocket-tts-without-voice-cloning",
+            "allow_patterns": ("tokenizer.model", "embeddings/*.safetensors"),
+            "label": "Pocket TTS tokenizer and preset voices",
         },
     ),
 }
@@ -890,6 +1232,63 @@ def companions_for(repo: str) -> tuple[dict, ...]:
     return FAMILY_COMPANIONS.get(m.family, ())
 
 
+class RegistryError(ValueError):
+    """A catalog row or family registry entry that cannot be resolved.
+
+    Raised with the repo, the family id and the file to edit, never as a bare
+    ``KeyError`` from inside a route: `/api/catalog` serializes every row in one
+    loop, so an unexplained exception hides the whole model list, not one row.
+    """
+
+
+def family_for(model: ModelEntry) -> Family:
+    """The family entry a catalog row names, or a named failure.
+
+    ``FAMILIES[m.family]`` used to be an unchecked index, so a row with a typo'd
+    or removed family id raised ``KeyError: 'khmer-tts-ms'`` while serializing
+    the catalog and the picker showed nothing.
+    """
+    family = FAMILIES.get(model.family)
+    if family is None:
+        raise RegistryError(
+            f"catalog model {model.repo!r} names family {model.family!r}, which is not in "
+            "FAMILIES; add the Family entry (or fix the id) in "
+            "components/voice/app/backend/catalog.py"
+        )
+    return family
+
+
+def _validate_registry() -> None:
+    """Refuse to import a catalog whose rows and families disagree.
+
+    Two invariants, both of which used to be silent until a request arrived:
+    every row's family exists, and every family has at least one row. An
+    engine this file does not know is refused here too, because the MLX label,
+    the dispatch table and the diagnostics panel all read ``Family.engine``.
+    """
+    for model in CATALOG:
+        family_for(model)
+    used = {model.family for model in CATALOG}
+    for family_id, family in FAMILIES.items():
+        if family_id != family.id:
+            raise RegistryError(
+                f"FAMILIES[{family_id!r}] carries id={family.id!r}; fix the key or the id in "
+                "components/voice/app/backend/catalog.py"
+            )
+        if family.engine not in ALL_ENGINES:
+            raise RegistryError(
+                f"family {family_id!r} names engine {family.engine!r}, which is not one of "
+                f"{sorted(ALL_ENGINES)}; add the engine in "
+                "components/voice/app/backend/catalog.py and a worker for it in "
+                "components/voice/app/backend/generation.py"
+            )
+        if family_id not in used:
+            raise RegistryError(
+                f"family {family_id!r} is in FAMILIES but no CATALOG row uses it; remove the "
+                "entry or add the model in components/voice/app/backend/catalog.py"
+            )
+
+
 def serialize_model(m: ModelEntry) -> dict:
     # Per-model hardware-fit verdict against the running Mac's detected RAM.
     # Lazy import dodges any potential cycle at module-load time.
@@ -898,17 +1297,14 @@ def serialize_model(m: ModelEntry) -> dict:
         fit = system_info.fit_for(m.min_unified_memory_gb)
     except Exception:
         fit = None
+    family = family_for(m)
     # Naming-compat with the sibling Studio frontends: "apple_optimized"
     # identifies MLX-native families for runtime labels and the opt-in filter.
-    # Keep this set in sync with generation.MLX_AUDIO_FAMILIES
-    # (catalog.py can't import generation.py without a circular import, hence
-    # the explicit enumeration). The "-mlx" suffix catches voxcpm-mlx and
-    # chatterbox-mlx; the rest are named. Pruned 2026-09-24 (ST-13.B) to the
-    # families that remain in the catalog.
-    _MLX_AUDIO_FAMILIES = (
-        "qwen3-tts", "omnivoice", "fish-audio-mlx",
-    )
-    apple_optimized = m.family.endswith("-mlx") or m.family in _MLX_AUDIO_FAMILIES
+    # It is the family's own engine fact, so a new MLX family is labelled and
+    # filtered correctly the moment it declares `engine=ENGINE_MLX_AUDIO`; no
+    # second list exists to fall out of sync (the 2026-09-24 regression, when
+    # kittentts/vibevoice/omnivoice shipped hidden, was exactly that).
+    apple_optimized = family.engine in APPLE_OPTIMIZED_ENGINES
     try:
         audited_input_limits = model_audits.input_limits(m.repo)
     except Exception:
@@ -916,7 +1312,7 @@ def serialize_model(m: ModelEntry) -> dict:
     reference_profile = audited_input_limits.get("reference_audio")
     if not isinstance(reference_profile, dict):
         reference_profile = {}
-    family_guidance = FAMILIES[m.family].text_guidance
+    family_guidance = family.text_guidance
     audited_text_max = audited_input_limits.get("text_max_characters")
     try:
         audited_text_max = int(audited_text_max) if audited_text_max is not None else None
@@ -937,7 +1333,7 @@ def serialize_model(m: ModelEntry) -> dict:
             "output_transcript_validation": True,
             "max_local_quality_retries": 1,
             "retry_section_max_characters": qwen_quality.RETRY_SECTION_MAX_CHARACTERS,
-            "required_local_models": [qwen_quality.WHISPER_REPO],
+            "required_local_models": qwen_quality.validator_models(m.repo),
         }
         if qwen_quality.is_qwen_base_clone(m.repo)
         else None
@@ -946,10 +1342,15 @@ def serialize_model(m: ModelEntry) -> dict:
         "repo": m.repo,
         "label": m.label,
         "family": m.family,
-        "family_label": FAMILIES[m.family].label,
+        "family_label": family.label,
         "size_gb": m.size_gb,
         "gated": m.gated,
         "min_unified_memory_gb": m.min_unified_memory_gb,
+        # The enforced floor, published under the name the Hub's governor reads
+        # (`workload_policy.required_free_memory_gb`). Absent means "no floor of this model's
+        # own", which is a different statement from zero.
+        **({"min_free_memory_gb": float(m.min_free_memory_gb)}
+           if m.min_free_memory_gb is not None else {}),
         "recommended_hardware": m.recommended_hardware,
         "capabilities": list(m.capabilities),
         "best_for": m.best_for,
@@ -966,6 +1367,10 @@ def serialize_model(m: ModelEntry) -> dict:
             "claimed_lower_bound": language_support.claimed_lower_bound,
             "runtime_enforced": language_support.runtime_enforced,
         },
+        # The dispatch contract a scheduler reads (docs/lane-execution-contract.md).
+        # Kept beside, not inside, `execution_contract`: that one is TTS
+        # presentation for the native Voice page, this one is how to ask for work.
+        "lane_contract": lane_contract.for_model(m),
         "execution_contract": {
             # Public limits are qualification results, not optimistic guesses
             # from family guidance. An unaudited model remains available for
@@ -997,6 +1402,7 @@ def serialize_model(m: ModelEntry) -> dict:
             **reference_profile,
         },
         "apple_optimized": apple_optimized,
+        "license": {"name": m.license_name, "source": m.license_source},
         "quantization": None,
         "aliases": [],
         "ignore_patterns": list(m.ignore_patterns),
@@ -1010,6 +1416,9 @@ def serialize_family(f: Family) -> dict:
     return {
         "id": f.id,
         "label": f.label,
+        # The engine travels with the family, so the UI (and any sibling
+        # consumer) can tell an MLX family from a PyTorch one without a list.
+        "engine": f.engine,
         "summary": f.summary,
         "how_to_use": f.how_to_use,
         "text_guidance": {
@@ -1018,3 +1427,10 @@ def serialize_family(f: Family) -> dict:
             "note": f.text_guidance.note,
         },
     }
+
+
+# Refuse to import a registry whose rows and families disagree (see
+# `_validate_registry`). This runs after both registries exist and turns a
+# typo'd family id into an immediate, named import failure instead of a
+# `KeyError` on the first `/api/catalog` request.
+_validate_registry()

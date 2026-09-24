@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import hashlib
 import json
 import os
@@ -167,6 +168,146 @@ def stage_music_assets(engine_source: Path, overlay: Path, resources: Path,
     }
 
 
+def _stage_voice(context: dict) -> dict:
+    """The Voice Studio. Always present; every other worker reuses its staged runtime."""
+    resources = context['resources']
+    source = ROOT / 'components/voice'
+    voice = resources / 'voice'
+    # Explicit source allowlist; never copy live state, caches, tests or tools.
+    copy_tracked_tree(source / 'app/backend', voice / 'app/backend', suffix='.py')
+    for directory in ('app/frontend', 'model-audits'):
+        copy_tracked_tree(source / directory, voice / directory)
+    for name in ('VERSION', 'CHANGELOG.md'):
+        shutil.copyfile(ROOT / name, voice / name)
+    provenance = context['provenance']
+    return {
+        'upstream_commit': provenance['commit'],
+        'upstream_version': provenance['version'],
+        'source_sha256': tree_digest(voice),
+    }
+
+
+def shared_components_modules(components: Path) -> list[Path]:
+    """The top-level modules under ``components/`` that any worker may import.
+
+    `model_packages` (the package library) and `app_version` (the release identity) are imported by
+    workers that do not otherwise share a tree. Discovered by glob rather than listed by name: a
+    hand-written list is silently wrong the day someone adds a module to it, and the symptom is a
+    worker failing at import in a shipped bundle rather than a build failure here.
+    """
+    return sorted(path for path in components.glob('*.py') if path.is_file())
+
+
+def _stage_hub(context: dict) -> dict | None:
+    if not context['include_hub']:
+        return None
+    resources = context['resources']
+    hub = resources / 'components/hub'
+    copy_tracked_tree(ROOT / 'components/hub', hub)
+    (resources / 'components').mkdir(parents=True, exist_ok=True)
+    for module in shared_components_modules(ROOT / 'components'):
+        shutil.copyfile(module, resources / 'components' / module.name)
+    copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
+    shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
+    provenance = context['hub_provenance']
+    return {
+        'upstream_commit': provenance['commit'],
+        'upstream_version': provenance['version'],
+        'source_sha256': tree_digest(hub), 'runtime': 'voice',
+    }
+
+
+def _stage_subtitle(context: dict) -> dict | None:
+    """Independent Subtitle worker: its own process and state root, but it reuses the shared
+    (already staged) Voice runtime bytes and imports Voice's transcription module from
+    Resources/voice/app instead of carrying a second copy."""
+    if not context['include_hub']:
+        return None
+    resources = context['resources']
+    subtitle_source = resources / 'components/subtitle'
+    copy_tracked_tree(ROOT / 'components/subtitle', subtitle_source)
+    shutil.copyfile(ROOT / 'packaging/subtitle_worker.py', resources / 'subtitle_worker.py')
+    return {
+        'source_sha256': tree_digest(subtitle_source), 'runtime': 'voice',
+        'runtime_sha256': context['runtime_hash'],
+    }
+
+
+def _stage_chat(context: dict) -> dict | None:
+    """ST-14: the local Chat Studio. Its own process and state root, reusing the shared
+    (already staged) Voice runtime bytes, which carry mlx-lm."""
+    if not context['include_hub']:
+        return None
+    resources = context['resources']
+    chat_source = resources / 'components/chat'
+    copy_tracked_tree(ROOT / 'components/chat', chat_source)
+    shutil.copyfile(ROOT / 'packaging/chat_worker.py', resources / 'chat_worker.py')
+    return {
+        'source_sha256': tree_digest(chat_source), 'runtime': 'voice',
+        'runtime_sha256': context['runtime_hash'],
+    }
+
+
+def _stage_music(context: dict) -> dict | None:
+    if not (context['include_hub'] and context['music_runtime'] is not None):
+        return None
+    resources = context['resources']
+    music_source = resources / 'components/music'
+    copy_tracked_tree(ROOT / 'components/music', music_source)
+    shutil.copyfile(ROOT / 'packaging/music_worker.py', resources / 'music_worker.py')
+    return {
+        'source_sha256': tree_digest(music_source),
+        **stage_music_assets(context['music_engine'], context['music_runtime'],
+                             resources, context['runtime_hash']),
+    }
+
+
+def _stage_image(context: dict) -> dict | None:
+    if context['image_runtime'] is None:
+        return None
+    resources = context['resources']
+    image_source = resources / 'components/image'
+    copy_tracked_tree(ROOT / 'components/image', image_source)
+    shutil.copytree(context['image_runtime'], resources / 'runtimes/image', symlinks=True)
+    shutil.copyfile(ROOT / 'packaging/image_worker.py', resources / 'image_worker.py')
+    provenance = context['image_provenance']
+    return {
+        'upstream_commit': provenance['commit'],
+        'upstream_version': provenance['version'],
+        'source_sha256': tree_digest(image_source), 'runtime': 'image',
+        'runtime_sha256': tree_digest(resources / 'runtimes/image'),
+    }
+
+
+# One entry per studio that can ship, in the order components appear in the staged bundle and
+# in the release manifest. A stager copies that studio's tracked source and returns its release
+# record, or None when this build does not include it (a Voice-only proof build has no Hub).
+#
+# This table is the only place a studio is added to a release. `stage()` refuses a
+# `components/<studio>/app/backend/main.py` tree with no entry here, so a new studio cannot
+# ship nothing while the build succeeds; `tests/test_chat_packaging.py` checks this table
+# against the Hub's `COMPONENT_WORKERS` table, so a studio cannot be staged without a worker
+# (or spawned without being staged).
+COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
+    'voice': _stage_voice,
+    'hub': _stage_hub,
+    'subtitle': _stage_subtitle,
+    'chat': _stage_chat,
+    'music': _stage_music,
+    'image': _stage_image,
+}
+
+
+def unregistered_components(root: Path) -> list[str]:
+    """Studio source trees under components/ that this build would silently not ship."""
+    components = root / 'components'
+    if not components.is_dir():
+        return []
+    return sorted(
+        path.name for path in components.iterdir()
+        if (path / 'app/backend/main.py').is_file() and path.name not in COMPONENT_STAGERS)
+
+
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
@@ -189,7 +330,6 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         native_shell = native_shell.expanduser().resolve()
         validate_native_shell(native_shell)
         include_hub = True
-    source = ROOT / 'components/voice'
     provenance = json.loads((ROOT / 'research/voice-adoption.json').read_text())
     hub_provenance = None
     if include_hub:
@@ -210,16 +350,18 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = bool(subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip())
     version = (ROOT / 'VERSION').read_text().strip()
+    # A studio whose source tree exists but has no stager would be left out of the bundle and
+    # out of the release manifest while the build still succeeded. Refuse it by name instead.
+    unregistered = unregistered_components(ROOT)
+    if unregistered:
+        raise ValueError(
+            'these component source trees are not staged by this build: ' + ', '.join(unregistered)
+            + '. Add each one to COMPONENT_STAGERS in packaging/stage_voice.py and to '
+              'COMPONENT_WORKERS in packaging/hub_worker.py so a new studio cannot ship nothing '
+              'while the build succeeds.')
     contents = output / 'Contents'
     resources = contents / 'Resources'
     resources.mkdir(parents=True)
-    voice = resources / 'voice'
-    # Explicit source allowlist; never copy live state, caches, tests or tools.
-    copy_tracked_tree(source / 'app/backend', voice / 'app/backend', suffix='.py')
-    for directory in ('app/frontend', 'model-audits'):
-        copy_tracked_tree(source / directory, voice / directory)
-    for name in ('VERSION', 'CHANGELOG.md'):
-        shutil.copyfile(ROOT / name, voice / name)
     # The app's icon. Generated by `packaging/make_app_icon.py` and committed, so a build cannot
     # quietly ship the blank page macOS shows for a bundle with no icon. Copied for every build,
     # including the Hub-less Voice proof, because the plist names it unconditionally.
@@ -234,67 +376,30 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # cannot describe a build it is not part of.
     shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
+    # The shared private-worker lifecycle every wrapper imports; not a component of its own.
     shutil.copyfile(ROOT / 'packaging/voice_worker.py', resources / 'voice_worker.py')
     runtime_hash = tree_digest(resources / 'runtimes/voice')
+    context = {
+        'resources': resources, 'runtime_hash': runtime_hash, 'include_hub': include_hub,
+        'image_runtime': image_runtime, 'music_runtime': music_runtime,
+        'music_engine': music_engine, 'provenance': provenance,
+        'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
+    }
+    # `release['components']` is the data every consumer reads - the Hub spawns exactly these
+    # keys and the kit describes exactly these keys - so it is assembled by iterating the
+    # component table rather than by an if-ladder here.
+    components = {}
+    for name, stage_component in COMPONENT_STAGERS.items():
+        record = stage_component(context)
+        if record is not None:
+            components[name] = record
     release = {
         'schema': 'studiohub.standalone-release', 'schema_version': 1,
         'version': version, 'implementation_commit': commit,
         'development_build': dirty, 'qualification': 'unqualified-local-proof',
-        'components': {'voice': {'upstream_commit': provenance['commit'],
-                               'upstream_version': provenance['version'],
-                               'source_sha256': tree_digest(voice)}},
+        'components': components,
         'runtime_sha256': runtime_hash,
     }
-    if include_hub:
-        hub = resources / 'components/hub'
-        copy_tracked_tree(ROOT / 'components/hub', hub)
-        shutil.copyfile(ROOT / 'components/model_packages.py', resources / 'components/model_packages.py')
-        copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
-        shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
-        release['components']['hub'] = {
-            'upstream_commit': hub_provenance['commit'],
-            'upstream_version': hub_provenance['version'],
-            'source_sha256': tree_digest(hub), 'runtime': 'voice',
-        }
-        # Independent Subtitle worker: its own process and state root, but it reuses the shared
-        # (already staged) Voice runtime bytes and imports Voice's transcription module from
-        # Resources/voice/app instead of carrying a second copy.
-        subtitle_source = resources / 'components/subtitle'
-        copy_tracked_tree(ROOT / 'components/subtitle', subtitle_source)
-        shutil.copyfile(ROOT / 'packaging/subtitle_worker.py', resources / 'subtitle_worker.py')
-        release['components']['subtitle'] = {
-            'source_sha256': tree_digest(subtitle_source), 'runtime': 'voice',
-            'runtime_sha256': release['runtime_sha256'],
-        }
-        # ST-14: the local Chat Studio. Its own process and state root, reusing the shared
-        # (already staged) Voice runtime bytes, which carry mlx-lm.
-        chat_source = resources / 'components/chat'
-        copy_tracked_tree(ROOT / 'components/chat', chat_source)
-        shutil.copyfile(ROOT / 'packaging/chat_worker.py', resources / 'chat_worker.py')
-        release['components']['chat'] = {
-            'source_sha256': tree_digest(chat_source), 'runtime': 'voice',
-            'runtime_sha256': release['runtime_sha256'],
-        }
-        if music_runtime is not None:
-            music_source = resources / 'components/music'
-            copy_tracked_tree(ROOT / 'components/music', music_source)
-            shutil.copyfile(ROOT / 'packaging/music_worker.py', resources / 'music_worker.py')
-            release['components']['music'] = {
-                'source_sha256': tree_digest(music_source),
-                **stage_music_assets(
-                    music_engine, music_runtime, resources, release['runtime_sha256']),
-            }
-    if image_runtime is not None:
-        image_source = resources / 'components/image'
-        copy_tracked_tree(ROOT / 'components/image', image_source)
-        shutil.copytree(image_runtime, resources / 'runtimes/image', symlinks=True)
-        shutil.copyfile(ROOT / 'packaging/image_worker.py', resources / 'image_worker.py')
-        release['components']['image'] = {
-            'upstream_commit': image_provenance['commit'],
-            'upstream_version': image_provenance['version'],
-            'source_sha256': tree_digest(image_source), 'runtime': 'image',
-            'runtime_sha256': tree_digest(resources / 'runtimes/image'),
-        }
     service_name = 'StudioHubService' if include_hub else 'StudioHubVoice'
     entry_point = 'hub_worker.py' if include_hub else 'voice_worker.py'
     executable = contents / f'MacOS/{service_name}'

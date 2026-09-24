@@ -504,6 +504,58 @@ def fleet_path_allowed(method: str, path: str) -> bool:
                for allowed, pattern in _FLEET_ALLOWED)
 
 
+def _this_machine_name() -> str:
+    """This Mac's own identity, for a refusal a person has to act on."""
+    try:
+        from .fleet_nodes import this_machine
+        machine = this_machine()
+        return f"{machine.get('name') or 'this Mac'} ({machine.get('id') or 'local'})"
+    except Exception:  # noqa: BLE001 - a refusal must never fail while describing itself
+        return "this Mac"
+
+
+def credential_refusal_detail(request: Request, token: str) -> str:
+    """Why this request was refused, and which two credentials have to agree.
+
+    Deliberately names *which* credential was presented and *which* one the route wanted,
+    without ever echoing a value. A bare 401 across a fleet is unattributable: measured
+    2026-09-25, a controller read `/studio/voice/api/transcribe/availability` on a node and
+    could not tell whether it had presented the node's Hub token, a Fleet token the node no
+    longer holds, or nothing at all. The likely causes are the two Macs holding different Fleet
+    tokens or this Mac having none - which is a re-join, and the message says so.
+    """
+    from . import peers
+
+    offered = presented_token(request)
+    # `current_fleet_token` and not `fleet_token`: describing a refusal must not mint a
+    # credential as a side effect of an unauthenticated request.
+    fleet = peers.current_fleet_token()
+    if not offered:
+        presented = "no credential was presented"
+    elif secrets.compare_digest(offered, token):
+        presented = "this Mac's Hub token, which is not what this route checks here"
+    elif not fleet:
+        presented = ("a credential that is not this Mac's Hub token, and this Mac holds no "
+                     "Fleet token at all (it has never adopted one)")
+    else:
+        presented = ("a credential that is neither this Mac's Hub token nor the Fleet token "
+                     "this Mac holds")
+    route_allows_fleet = fleet_path_allowed(request.method, request.url.path)
+    required = (
+        "this Mac's Hub token, or a Fleet token matching the one this Mac holds"
+        if route_allows_fleet else
+        "this Mac's Hub token; this route is deliberately outside the Fleet credential's scope"
+    )
+    hint = (
+        " If the caller presented a Fleet token, the two Macs hold different Fleet tokens: "
+        "re-join this Mac from its controller with the current Fleet Token."
+        if route_allows_fleet and fleet else
+        " Copy this Mac's Hub token from its dashboard, or join it to a controller first."
+    )
+    return (f"{request.method} {request.url.path} was refused by {_this_machine_name()}: "
+            f"{presented}. The route requires {required}.{hint}")
+
+
 def make_middleware(token: str):
     from . import peers
 
@@ -554,9 +606,10 @@ def make_middleware(token: str):
             if fleet and secrets.compare_digest(offered, fleet):
                 if not fleet_path_allowed(request.method, request.url.path):
                     return JSONResponse(
-                        {"detail": "The fleet credential may send work to this Mac and read "
-                                   "its results, but it cannot change this Mac's settings or "
-                                   "delete its output."},
+                        {"detail": f"{request.method} {request.url.path} was refused by "
+                                   f"{_this_machine_name()}: the fleet credential may send "
+                                   f"work to this Mac and read its results, but it cannot "
+                                   f"change this Mac's settings or delete its output."},
                         status_code=403,
                     )
                 response = await call_next(request)
@@ -566,8 +619,7 @@ def make_middleware(token: str):
                                     samesite="strict")
                 return response
         return JSONResponse(
-            {"detail": "Hub token required for remote access. "
-                       "Open the dashboard on the Hub machine to see the token."},
+            {"detail": credential_refusal_detail(request, token)},
             status_code=401,
         )
     return middleware

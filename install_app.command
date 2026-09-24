@@ -8,10 +8,9 @@ set -u
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 KIT="$(dirname -- "$HERE")"
 # This launcher sits either in the kit root or in its Technical folder; the app is beside one of
-# them.
+# them. The bundle's name carries no version, so there is no version-pinned name to look for.
 APP=""
-for spot in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app" \
-            "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app"; do
+for spot in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app"; do
   [ -d "$spot" ] && { APP="$spot"; break; }
 done
 APP="${APP:-$HERE/Studio Hub.app}"

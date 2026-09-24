@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .vocabulary import NODE_MODALITIES
+
 # Launcher root = two levels up from this file (app/backend/registry.py)
 LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
 
@@ -201,10 +203,14 @@ def prune_machine_metadata(known_machines: set[str]) -> None:
     _labels_cache = labels
     _flags_cache = flags
 
-# Studio Hub intentionally tracks only the production worker products. The
-# packaged Hub gets its complete local registry from its owner-only worker
-# manifest, so it never guesses a Pinokio checkout or fixed service port.
-TRACKED_MODALITIES = ("image", "voice", "transcription", "music")
+# The modalities a legacy (non-packaged) `studios.json` entry may register. Derived from the
+# Hub's one routing vocabulary instead of a fourth copy of it: `chat` was missing from the copy
+# that used to live here, so a user's `studios.json` entry for the shipped Chat worker was
+# silently skipped by `load_registry` (`if modality not in TRACKED_MODALITIES: continue`) - a
+# studio that vanished with no message anywhere. The packaged Hub gets its complete local
+# registry from its owner-only worker manifest; this set is only the legacy registry's own
+# admission rule, and a modality the Hub routes is a modality it may hold.
+TRACKED_MODALITIES = frozenset(NODE_MODALITIES)
 
 # The tracked sibling studios and their fixed family ports. `app` is the Pinokio
 # launcher folder name under PINOKIO_HOME/api — used by lifecycle control
@@ -378,32 +384,6 @@ def repair_machine_snapshot(
         resolved_address=origin.address,
         endpoint_ids=tuple(sorted(endpoint_ids)),
     )
-
-
-# Family port convention — used by discovery to infer tracked modalities.
-FAMILY_PORTS = {47868: "image", 47870: "voice"}
-MODALITY_PORT = {v: k for k, v in FAMILY_PORTS.items()}
-MODALITY_EMOJI = {"image": "🎨", "voice": "🎙️"}
-
-
-def build_machine_entries(host: str, machine: str, modalities: list[str]) -> list[dict]:
-    """Construct studios.json entries for a machine WITHOUT probing it — so a
-    currently-offline machine can be pre-registered and will simply light up
-    when it comes online."""
-    entries = []
-    for mod in modalities:
-        if mod not in TRACKED_MODALITIES:
-            continue
-        port = MODALITY_PORT.get(mod)
-        if port is None:
-            continue
-        entries.append({
-            "id": f"{mod}@{machine}",
-            "title": f"{mod.capitalize()} Studio KH ({machine})",
-            "modality": mod, "host": host, "port": port,
-            "machine": machine, "emoji": MODALITY_EMOJI[mod],
-        })
-    return entries
 
 
 def remove_machine(machine: str) -> int:

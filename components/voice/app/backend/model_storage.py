@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from . import cache, catalog
-from .transcription import TRANSCRIPTION_MODELS, WHISPER_MODELS, _PROCESSOR_BASE
+from .transcription import TRANSCRIPTION_MODELS, WHISPER_MODELS, whisper_processor_repo
 
 
 NOTICE_NAME = "README-VOICE-STUDIO-CACHE.md"
@@ -109,7 +109,9 @@ def _dependency_map() -> dict[str, dict]:
             )
             item["used_by"].append(model.repo)
     for model in WHISPER_MODELS:
-        processor = _PROCESSOR_BASE.get(model.repo)
+        # The processor companion is what the model's own manifest declares; a row
+        # whose manifest names none has no companion to account for.
+        processor = whisper_processor_repo(model.repo)
         if not processor:
             continue
         item = result.setdefault(

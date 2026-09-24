@@ -116,8 +116,17 @@ class MusicBundleTests(unittest.TestCase):
             self.assertIn("--offline", command)
 
     def test_hub_peer_router_maps_music_to_the_owned_music_worker(self):
-        source = (ROOT / "components/hub/standalone.py").read_text()
-        self.assertIn('"music": "music"', source)
+        """The Hub's peer routing table must map music to the Music worker.
+
+        The table no longer has to live inline in `standalone.py` - it moved to
+        `components/hub/backend/vocabulary.py` so the peer surface, the fleet join and the
+        packaged worker table read one vocabulary. Read both, so this asserts the mapping
+        rather than the file that happens to hold it today.
+        """
+        sources = (ROOT / "components/hub/standalone.py",
+                   ROOT / "components/hub/backend/vocabulary.py")
+        text = "\n".join(path.read_text() for path in sources if path.is_file())
+        self.assertIn('"music": "music"', text)
 
     def test_real_bundle_music_worker_starts_privately_without_models(self):
         overlay = Path(os.environ.get("STUDIOHUB_TEST_MUSIC_OVERLAY", ""))

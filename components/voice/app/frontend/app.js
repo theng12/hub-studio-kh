@@ -1229,13 +1229,24 @@ function studio() {
       return window.location.origin;
     },
 
+    /** The repo an API example shows: the selected model, else the first the
+     *  packaged catalog offers. Never a literal: a repo that is not in the
+     *  catalog makes the example answer `Unknown repo: …` on paste, and the
+     *  catalog is the only list of what this build can actually run. */
+    get exampleRepo() {
+      const selected = (this.gen.repo || "").trim();
+      if (selected) return selected;
+      const models = this.models || [];
+      const first = models.find(m => m.recommended) || models[0];
+      return first?.repo || "select-a-model-in-the-catalog";
+    },
+
     get curlExample() {
       const base = this.apiBase;
-      const repo = this.gen.repo || "mlx-community/Kokoro-82M-bf16";
+      const repo = this.exampleRepo;
       const body = JSON.stringify({
         repo,
         text: "Welcome to Voice Studio.",
-        voice: "af_bella",
         speed: 1.0,
       });
       return [
@@ -1255,7 +1266,7 @@ function studio() {
 
     get jsExample() {
       const base = this.apiBase;
-      const repo = this.gen.repo || "mlx-community/Kokoro-82M-bf16";
+      const repo = this.exampleRepo;
       const lines = [
         "const SERVER = " + JSON.stringify(base) + ";",
         "",
@@ -1266,7 +1277,7 @@ function studio() {
         "  body: JSON.stringify({",
         "    repo: " + JSON.stringify(repo) + ",",
         "    text: 'Welcome to Voice Studio.',",
-        "    voice: 'af_bella', speed: 1.0,",
+        "    // omit `voice` for the model's default; add a saved voice id to clone",
         "  }),",
         "}).then(r => r.json());",
         "",
@@ -1324,7 +1335,7 @@ function studio() {
 
     get pythonExample() {
       const base = this.apiBase;
-      const repo = this.gen.repo || "mlx-community/Kokoro-82M-bf16";
+      const repo = this.exampleRepo;
       const lines = [
         "import time, requests",
         "",
@@ -1334,7 +1345,7 @@ function studio() {
         "r = requests.post(f'{SERVER}/api/generate/txt2speech', json={",
         "    'repo': " + JSON.stringify(repo) + ",",
         "    'text': 'Welcome to Voice Studio.',",
-        "    'voice': 'af_bella', 'speed': 1.0,",
+        "    'speed': 1.0,   # omit for 1.0x; add 'voice_library_id' to clone",
         "})",
         "r.raise_for_status()",
         "job_id = r.json()['job']['id']",
@@ -2763,16 +2774,16 @@ function studio() {
         try { textarea.setSelectionRange(newPos, newPos); } catch {}
       });
     },
-    /** Any MLX-audio-backed family. Single point of truth — keep in sync with
-     *  the backend's MLX_AUDIO_FAMILIES table. */
+    /** Whether the selected model runs on Apple's MLX framework.
+     *
+     *  Read from the catalog row the backend publishes (`apple_optimized`, which
+     *  is the family's own engine fact). This used to be a hand-written OR of
+     *  fifteen per-family predicates with a "keep in sync with the backend's
+     *  MLX_AUDIO_FAMILIES table" comment - nine of them for families that had
+     *  already been cut - and nothing called it. */
     isMlxAudio(repo) {
-      return this.isQwen3(repo) || this.isVoxCPMMlx(repo) || this.isKokoroMlx(repo)
-          || this.isChatterboxMlx(repo) || this.isSparkTtsMlx(repo) || this.isOrpheus(repo)
-          || this.isKittenTts(repo) || this.isVibeVoice(repo)
-          || this.isVoxtral(repo) || this.isMarvis(repo) || this.isOmniVoice(repo)
-          || this.isFishAudio(repo) || this.isAudio8(repo) || this.isMossTtsNano(repo)
-          || this.isEchoTts(repo)
-          || this.isBark(repo);
+      const m = (this.models || []).find(x => x.repo === repo);
+      return !!m?.apple_optimized;
     },
     setVoxcpmEmotionExample(text) {
       this.gen.voice_design_prompt = text;

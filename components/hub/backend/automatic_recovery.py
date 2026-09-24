@@ -16,9 +16,23 @@ from pathlib import Path
 
 
 MAX_STALL_S = 6 * 60 * 60.0
+# The measured stall budget for each worker this Hub watches continuously. Only Image and Voice
+# have one: the observer's progress signature (`_signature`) reads Image's step counters and
+# Voice's chunk counters, and nothing else publishes them.
 DEFAULT_STALL_S = {"image": 60 * 60.0, "voice": 2 * 60 * 60.0}
+# The modalities this recovery covers, derived from the measured budgets above. A modality that
+# is not here is *not* silently given the 6-hour ceiling: it is not recovered at all, and
+# `stall_threshold_s` returns None so the caller cannot mistake "no budget" for "a very long
+# one". Transcription, Music and Chat each own their queue and have no bounded stall policy yet;
+# adding one means measuring its progress signature here, not inheriting Image's.
+SUPPORTED_MODALITIES = frozenset(DEFAULT_STALL_S)
 MAX_OBSERVATION_GAP_S = 5 * 60.0
 IN_PROGRESS_PHASES = {"cancel_requested"}
+
+
+def stall_threshold_s(modality: object) -> float | None:
+    """The measured stall budget for a modality, or ``None`` when recovery does not cover it."""
+    return DEFAULT_STALL_S.get(str(modality or ""))
 
 
 def _number(value: object) -> float | None:
@@ -95,7 +109,7 @@ class AutomaticRecoveryState:
         job_id = str(job.get("id") or "")
         model = str(job.get("model") or (job.get("params") or {}).get("repo") or "")[:500]
         signature = _signature(modality, job)
-        threshold = DEFAULT_STALL_S.get(modality, MAX_STALL_S)
+        threshold = stall_threshold_s(modality)
         stage_field, total_field = (
             ("current_step", "total_steps") if modality == "image"
             else ("chunk_index", "chunk_total")
@@ -121,7 +135,7 @@ class AutomaticRecoveryState:
             elapsed = now - started_at if started_at is not None else 0.0
             no_progress = now - meaningful_at
             eligible = bool(
-                job_id and modality in DEFAULT_STALL_S and job.get("state") == "running"
+                job_id and threshold is not None and job.get("state") == "running"
                 and self._state["state_healthy"] and stage_evidence
                 and elapsed >= threshold and no_progress >= threshold
             )
@@ -203,8 +217,14 @@ class AutomaticRecoveryState:
                 "reason": reason,
                 "state_healthy": healthy,
                 "policy": {
-                    "image_stall_s": DEFAULT_STALL_S["image"],
-                    "voice_stall_s": DEFAULT_STALL_S["voice"],
+                    # Named per modality from the measured budgets, plus the covered set and the
+                    # reason an uncovered modality is not recovered at all.
+                    **{f"{name}_stall_s": seconds
+                       for name, seconds in DEFAULT_STALL_S.items()},
+                    "recovered_modalities": sorted(SUPPORTED_MODALITIES),
+                    "uncovered_modalities_note": (
+                        "a modality with no measured stall budget is not recovered by this "
+                        "observer; it is not given a longer default"),
                     "max_observation_gap_s": MAX_OBSERVATION_GAP_S,
                     "service_restart": "manual",
                 },

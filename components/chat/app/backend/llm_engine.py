@@ -80,10 +80,26 @@ def _read_json(path: Path) -> dict:
 class ChatEngine:
     def __init__(self, *, model_dir: Path, model_id: str, revision: str,
                  max_output_tokens: int | None = None,
-                 context_window_tokens: int | None = None) -> None:
+                 context_window_tokens: int | None = None,
+                 manifest: dict | None = None,
+                 manifest_path: Path | None = None,
+                 minimum_unified_memory_gb: float | None = None) -> None:
         self.model_dir = Path(model_dir)
         self.model_id = model_id
         self.revision = revision
+        # The model manifest this worker was pointed at, and where it came from. Both are the
+        # model's own facts: the catalog row's label, its family and its memory tier are read
+        # from here rather than written into this worker, so re-pointing the worker at another
+        # manifest cannot publish the previous model's name.
+        self.manifest = dict(manifest or {})
+        self.manifest_path = Path(manifest_path) if manifest_path else None
+        # The tier the model's own manifest qualifies it at, under either spelling. `None` when
+        # the manifest publishes none: the worker must not invent a memory tier.
+        self.minimum_unified_memory_gb = (
+            minimum_unified_memory_gb
+            if minimum_unified_memory_gb is not None
+            else self._manifest_memory_tier()
+        )
         self._lock = threading.RLock()
         self._model = None
         self._tokenizer = None
@@ -95,7 +111,9 @@ class ChatEngine:
         self._last_activity_at: float | None = None
 
         config = _read_json(self.model_dir / "config.json")
-        generation = _read_json(self.model_dir / "generation_config.json")
+        generation_path = self.model_dir / "generation_config.json"
+        generation = _read_json(generation_path)
+        self._config = config
         # Qwen3.5-style checkpoints nest the language model under ``text_config``; a
         # top-level field is also accepted for simpler repos.
         nested = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
@@ -103,17 +121,112 @@ class ChatEngine:
                              or nested.get("max_position_embeddings") or nested.get("context_length"))
         if context_window_tokens is not None:
             self.context_window_tokens = int(context_window_tokens)
+            self.context_window_source = (
+                "the model manifest's qualification.context_window_tokens")
         elif isinstance(published_context, int) and published_context > 0:
             self.context_window_tokens = published_context
+            # Say which file and key the number came from, so a reader never has to guess and
+            # never inherits it as a fact without provenance.
+            if config.get("max_position_embeddings") == published_context:
+                self.context_window_source = "model/config.json max_position_embeddings"
+            elif config.get("context_length") == published_context:
+                self.context_window_source = "model/config.json context_length"
+            elif nested.get("max_position_embeddings") == published_context:
+                self.context_window_source = (
+                    "model/config.json text_config.max_position_embeddings")
+            else:
+                self.context_window_source = "model/config.json text_config.context_length"
         else:
             self.context_window_tokens = None
+            self.context_window_source = (
+                "nothing states a context window: model/config.json has no "
+                "max_position_embeddings or context_length")
         published_output = generation.get("max_new_tokens") or generation.get("max_tokens")
         if max_output_tokens is not None:
             self.max_output_tokens = int(max_output_tokens)
+            self.max_output_tokens_source = "the model manifest's max_output_tokens"
         elif isinstance(published_output, int) and published_output > 0:
             self.max_output_tokens = published_output
+            self.max_output_tokens_source = (
+                "model/generation_config.json max_new_tokens"
+                if generation.get("max_new_tokens") == published_output
+                else "model/generation_config.json max_tokens")
         else:
+            # A worker default must say it is a worker default: this is not a number the
+            # checkpoint stated, and a reader must not inherit it as one. The reason names the
+            # exact state of the checkpoint, because "no generation_config.json" and "a
+            # generation_config.json with no token bound" are different facts.
             self.max_output_tokens = FALLBACK_MAX_OUTPUT_TOKENS
+            self.max_output_tokens_source = (
+                "worker default: the checkpoint ships no generation_config.json"
+                if not generation_path.is_file() else
+                "worker default: model/generation_config.json states no max_new_tokens")
+        self.label = self._label(config)
+        self.family = self._family(config)
+
+    def _manifest_memory_tier(self) -> float | None:
+        """The qualified memory tier the manifest publishes, or ``None``.
+
+        The manifest is the model's own metadata, so it is read here rather than in the API
+        layer: one derivation, and a worker pointed at a different manifest follows it.
+        """
+        qualification = self.manifest.get("qualification")
+        if not isinstance(qualification, dict):
+            return None
+        value = qualification.get("minimum_unified_memory_gb")
+        if value is None:
+            value = qualification.get("recommended_unified_memory_gb")
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            tier = float(value)
+        except (TypeError, ValueError):
+            # A malformed tier is not a tier: report none rather than inventing one.
+            return None
+        return tier if tier > 0 else None
+
+    def _label(self, config: dict) -> str:
+        """This model's own label - never a literal in this worker.
+
+        The manifest may name one (a field a later manifest schema can carry); otherwise the
+        label is the repo's own name, which already carries the quantization. A second chat
+        model can therefore never be published under this worker's first model's name.
+        """
+        declared = self.manifest.get("label") or self.manifest.get("name")
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()
+        return str(self.model_id).rsplit("/", 1)[-1] or str(self.model_id)
+
+    def _family(self, config: dict) -> str | None:
+        """The model family the checkpoint itself reports, or ``None``.
+
+        ``model_type`` is the checkpoint's own word for its architecture. Nothing here guesses a
+        family from a name: the Hub and the app already fall back to the lane's own label when a
+        model does not state one.
+        """
+        declared = self.manifest.get("family")
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()
+        model_type = config.get("model_type")
+        return model_type.strip() if isinstance(model_type, str) and model_type.strip() else None
+
+    def model_limits(self) -> dict:
+        """Every limit this model states, each with the source that states it.
+
+        ``value`` is ``None`` when nothing states the limit, and ``source`` is then the reason -
+        never a curated substitute. A reader labels its own fallback rather than inheriting this
+        worker's number as the model's fact.
+        """
+        return {
+            "context_window_tokens": {
+                "value": self.context_window_tokens,
+                "source": self.context_window_source,
+            },
+            "max_output_tokens": {
+                "value": self.max_output_tokens,
+                "source": self.max_output_tokens_source,
+            },
+        }
 
     # ---- readiness -------------------------------------------------------
     def files_present(self) -> bool:
@@ -348,7 +461,8 @@ def engine_from_environment() -> ChatEngine:
     manifest_path = os.environ.get("STUDIOHUB_CHAT_MANIFEST")
     if not models_dir or not manifest_path:
         raise ChatModelUnavailable("STUDIOHUB_MODELS_DIR and STUDIOHUB_CHAT_MANIFEST are required")
-    manifest = json.loads(Path(manifest_path).read_text())
+    path = Path(manifest_path)
+    manifest = json.loads(path.read_text())
     package_id = manifest["package_id"]
     revision = manifest["revision"]
     model_dir = resolve_model_dir(Path(models_dir), package_id, revision)
@@ -359,4 +473,6 @@ def engine_from_environment() -> ChatEngine:
         revision=revision,
         max_output_tokens=manifest.get("max_output_tokens"),
         context_window_tokens=qualification.get("context_window_tokens"),
+        manifest=manifest,
+        manifest_path=path,
     )

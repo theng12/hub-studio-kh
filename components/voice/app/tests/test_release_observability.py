@@ -158,12 +158,17 @@ def test_model_retained_now_sees_a_resident_mlx_model() -> None:
     assert getattr(manager, "_loaded_model", None) is None
 
 
-def test_model_retained_also_sees_the_f5_engine_and_an_evicted_cache() -> None:
+def test_model_retained_also_sees_a_non_mlx_engine_and_an_evicted_cache() -> None:
+    """Retargeted 2026-09-24 (ST-13.A cleanup): the F5-TTS engine left the catalog in ST-13.B.
+
+    The invariant is unchanged - `has_loaded_model()` must see EVERY engine that parks a model,
+    not only the MLX slot, and the release path must then answer False.
+    """
     manager = _bare_generation_manager()
     assert manager.has_loaded_model() is False
 
-    manager._f5_tts_model = object()
-    manager._f5_tts_model_repo = "SWivid/F5-TTS"
+    manager._khmer_vits_model = object()
+    manager._khmer_vits_model_repo = "khmerttsopensource/khmer-tts"
     assert manager.has_loaded_model() is True
 
     manager._evict_loaded_models("test-eviction")

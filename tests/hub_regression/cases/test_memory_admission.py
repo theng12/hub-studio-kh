@@ -2,7 +2,7 @@
 
 import json
 
-from components.hub.backend import broker, memory_admission
+from components.hub.backend import broker, memory_admission, workload_policy
 
 
 FLUX_REPO = "AITRADER/FLUX2-klein-4B-mlx-4bit"
@@ -91,17 +91,54 @@ def test_operator_override_persists_and_reset_restores_default(reset):
 
 
 def test_qwen_base_uses_owner_approved_8gb_floor_with_live_headroom_guard(reset):
+    """The owner-approved floor survives — now published by the model, not kept by the Hub.
+
+    This case used to pass against a Hub-side table keyed by the exact repo id
+    (`workload_policy._HUB_PRODUCTION_FREE_GB`), which meant the policy existed only for the one
+    model somebody had remembered to add. The floor now lives on the model's own row in
+    `components/voice/app/backend/catalog.py` and arrives through its catalog row, so the entry
+    below carries what that row actually publishes and
+    `test_the_owner_approved_floor_has_a_producer_home` proves the producer really says it.
+    """
     repo = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
-    entry = {"repo": repo, "min_unified_memory_gb": 8}
+    entry = {"repo": repo, "min_unified_memory_gb": 8, "min_free_memory_gb": 3.2}
 
     policy = memory_admission.describe(repo, entry)
 
     assert policy["catalog_min_total_memory_gb"] == 8
     assert policy["effective_min_total_memory_gb"] == 0.0
     assert policy["effective_min_free_memory_gb"] == 3.2
-    assert policy["source"] == "fleet_default"
-    assert policy["default_reason"] == "Hub production qualification"
+    # `catalog`, not `fleet_default`: the floor is the model's own published number now. The
+    # compatibility string `fleet_default` used to mean "the Hub applied a production floor",
+    # which is precisely the shape this release removed.
+    assert policy["source"] == "catalog"
+    assert policy["default_reason"] == (
+        "No fleet measurement names this model; its worker publishes a 3.20 GB live-free floor "
+        "and that is what is enforced")
     requirements = broker._admission_requirements(repo, entry)
     assert requirements == {"min_total": 0.0, "min_free": 3.2}
     assert broker._memory_gate(requirements, {"total_gb": 8, "available_gb": 4})[0] == "run"
     assert broker._memory_gate(requirements, {"total_gb": 8, "available_gb": 2.5})[0] == "wait"
+
+
+def test_the_owner_approved_floor_has_a_producer_home(reset):
+    """The 3.2 GB floor must come from the worker's own row, so a new model needs no Hub edit.
+
+    Deleting the Hub's model-keyed table is only safe while this holds: the shipped Voice row for
+    the 8 GB production voice-cloning tier publishes the owner-approved live-free floor, and its
+    tier is published too. A prune that drops the row, or a field rename that stops publishing it,
+    would silently put the Hub back on its 2.0 GB default for the fleet's 8 GB machines.
+    """
+    from components.voice.app.backend import catalog as voice_catalog
+
+    row = next((m for m in voice_catalog.CATALOG
+                if m.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"), None)
+    assert row is not None, "the 8 GB production voice-cloning tier left the voice catalog"
+    published = voice_catalog.serialize_model(row)
+    assert published["min_free_memory_gb"] == 3.2, (
+        "the Voice worker no longer publishes the owner-approved 3.2 GB live-free floor for "
+        f"{row.repo}; the Hub now has no source for it and would fall back to 2.0 GB")
+    assert published["min_unified_memory_gb"] == 8
+    # And the Hub reads exactly that, with no table of its own.
+    assert not hasattr(workload_policy, "_HUB_PRODUCTION_FREE_GB")
+    assert not hasattr(workload_policy, "_HUB_PRODUCTION_TOTAL_GB")

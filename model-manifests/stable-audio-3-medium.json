@@ -83,7 +83,5 @@
         "https://huggingface.co/stabilityai/stable-audio-3-optimized/resolve/da6edc54ddba10bfd79a077102ded687f80e882b/MLX/t5gemma_f16.npz"
       ]
     }
-  ],
-  "dependencies": [],
-  "requires_packages": []
+  ]
 }

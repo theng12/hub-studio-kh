@@ -10,19 +10,20 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .backend.vocabulary import REQUIRED_WORKERS as _REQUIRED_WORKERS
+from .backend.vocabulary import WORKER_FOR_MODALITY as _WORKER_FOR_MODALITY
+
 
 DEFAULT_MAX_BYTES = 50_000_000_000
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_CLEANUP_ENABLED = True
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
 DEFAULT_MINIMUM_FREE_BYTES = 1_000_000_000
-_REQUIRED_WORKERS = {
-    "image": "image",
-    "voice": "voice",
-    "subtitle": "transcription",
-    "music": "music",
-    "chat": "chat",
-}
+# `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
+# derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
+# because it is the inverse table, but `_worker()` no longer looks a descriptor's id up in it:
+# the descriptor declares its own modality and the vocabulary validates that, so a worker id the
+# Hub does not route fails with the modality named and the file to edit (see `_worker`).
 _SETTINGS_FILE = "device_settings.json"
 
 
@@ -61,15 +62,41 @@ def _read_json(path: Path) -> Any:
 
 
 def _worker(value: object) -> dict[str, Any]:
+    """Validate one owner-supplied worker descriptor, against the Hub's one vocabulary.
+
+    The descriptor is the producer's statement: a packaged worker says which *modality* it
+    serves, and the Hub routes by that modality. The old check instead looked the worker's id up
+    in a copy of `WORKER_FOR_MODALITY` and answered a bare "unsupported id", so registering a new
+    worker meant a startup abort with nothing said about the modality it declares or where to add
+    it. The vocabulary still decides whether the Hub routes the modality at all (it must, or the
+    peer surface and the fleet join would not know it either), and the failure names both the
+    modality and the file.
+    """
     if not isinstance(value, dict):
         raise ValueError("worker descriptor must be an object")
     worker = dict(value)
     worker_id = str(worker.get("id") or "").strip()
-    expected_modality = _REQUIRED_WORKERS.get(worker_id)
-    if expected_modality is None:
-        raise ValueError("worker descriptor has an unsupported id")
-    if worker.get("modality") != expected_modality:
-        raise ValueError(f"worker {worker_id} has an invalid modality")
+    modality = str(worker.get("modality") or "").strip().lower()
+    if not worker_id:
+        raise ValueError("worker descriptor has no id")
+    if not modality:
+        raise ValueError(
+            f"worker {worker_id!r} declares no modality; a packaged worker describes itself in "
+            f"STUDIOHUB_WORKERS_FILE and the Hub routes its work by that modality")
+    expected_worker = _WORKER_FOR_MODALITY.get(modality)
+    if expected_worker is None:
+        raise ValueError(
+            f"worker {worker_id!r} declares the modality {modality!r}, which this Hub does not "
+            f"route; add \"{modality}\": \"{worker_id}\" to WORKER_FOR_MODALITY in "
+            f"components/hub/backend/vocabulary.py, then add the worker to the packaged release "
+            f"manifest so it is staged and started")
+    if expected_worker != worker_id:
+        raise ValueError(
+            f"worker {worker_id!r} declares the modality {modality!r}, which "
+            f"components/hub/backend/vocabulary.py routes to the worker {expected_worker!r}; "
+            f"rename the descriptor's id to {expected_worker!r} in STUDIOHUB_WORKERS_FILE, or "
+            f"change WORKER_FOR_MODALITY to \"{modality}\": \"{worker_id}\" if this is a "
+            f"deliberate replacement for that worker")
     if worker.get("host") not in {"127.0.0.1", "::1"}:
         raise ValueError(f"worker {worker_id} must bind to loopback")
     if worker.get("local") is not True:

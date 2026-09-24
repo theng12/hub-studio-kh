@@ -3,7 +3,74 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.59 (Z-Image-Turbo, 2026-09-24).
+Last updated: 0.6.61 (no model needs a code change, 2026-09-25).
+
+**0.6.61 — the hardcoding audit, closed. New models are now data.** The owner's rule from
+2026-09-24 (*"my rule is never hardcoded — everything must be dynamic for all generators and
+models"*) is implemented rather than aspirational. `research/hardcoded-model-lists-audit.md` is the
+inventory: 73 findings, **18 Tier A and 40 Tier B all fixed**, 15 Tier C kept as contracts with the
+two named caveats inside them fixed too. The audit doc carries a `Fix status` section; the rows
+themselves are the snapshot and their `file:line` citations are deliberately not rewritten.
+
+**Start here for anything model-related:**
+
+- `AGENTS.md` has three new standing rules from this release: **never publish a number the model did
+  not state** (provenance beside every value, or publish nothing), **a version field must carry a
+  version**, and **one lane, one published contract**.
+- `docs/lane-execution-contract.md` is the shape every lane publishes; `docs/tasks/ST-20.md` is that
+  workstream (Gateway Studio's seven asks, with where each is answered).
+- `tests/test_catalog_visibility.py` is the standing *"does every model show"* sweep the owner asked
+  for. It is the test to run first when a model is reported missing.
+- `tests/test_document_inventory.py` recomputes the counts stated in `model-manifests/README.md` and
+  `docs/runtime-contract.md`, so a stale number in a document fails a test instead of misleading the
+  next reader.
+
+**Verification for this release** (all on the frozen tree before the commit): `tests/` **935
+passed, 11 skipped**; `tests/hub_regression/cases` **172 passed** — that suite is excluded from root
+collection by its own `collect_ignore`, so **run it explicitly**; `bash native/build.sh` and
+`tests/native/pool-probe.sh` green.
+
+**Three things this release changes about the owner's Macs, all of them one-time:**
+
+1. `chatterbox-4bit` (MLX 4-bit) and `chatterbox-8bit` (MLX 8-bit) re-verify once, because the
+   manifest's companion list moved from the legacy `dependencies` field to `requires_packages` and
+   that changes the receipt digest. Everything else is unchanged — measured, not assumed.
+2. The five companion-bearing voice packages (chatterbox 4-bit/8-bit, pocket-tts-4bit MLX 4-bit,
+   qwen3-tts-12hz-0-6b-base-8bit MLX 8-bit, qwen3-tts-12hz-1-7b-base-4bit MLX 4-bit) report
+   `companion_cache_missing` until the Hub's first catalog refresh writes the cache mirror. It is a
+   hard link, so it costs no disk.
+3. A read-only library keeps them named-not-ready with the reason shown in the app instead of
+   failing at generation time.
+
+**Open, with the exact fix rather than a guess:**
+
+- **Pocket TTS 4-bit (MLX 4-bit) cannot reach its eight preset voices.** It ships them (the
+  `pocket-tts-preset-voices` package: `alba`, `azelma`, `cosette`, `eponine`, `fantine`, `javert`,
+  `jean`, `marius`) and also declares cloning, and a model that offers both is reachable in one tab
+  only. Closing it needs two producer fields — a per-model `preset_speakers` roster derived from
+  that package's own file names, and a published `modes` list — plus the app offering the model in
+  each mode it publishes. This is the one shipped feature known to be unreachable.
+- **Audited reference-audio profiles exist only for the Qwen families.** Private-upload reference
+  preparation now refuses **by name** for VoxCPM2 (4-bit/8-bit/bf16), Chatterbox 8-bit, Fish S2 Pro
+  (8-bit/bf16) and Pocket TTS 4-bit instead of using a guessed 24 kHz/no-max copy. The Voices-library
+  path is unaffected. Closing it needs measured profile records, which must not be fabricated.
+- **The voice smoke pilot is stale by construction.** `qualification/model-inputs.json` records
+  `Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit`, cut from the catalog in ST-13.B, so `packaging/smoke_voice.py`
+  now reports the TTS role as unexercised with reasons rather than passing. It needs a shipped
+  model's smoke parameters recorded.
+- **Two model-keyed *measurement* tables remain on purpose**, and the audit's `Fix status` names
+  both: `memory_admission._FLEET_DEFAULTS` (FLUX.2 Klein 4B MLX 4-bit's measured 7.5 GB total floor,
+  which is *lower* than its published 16 GB tier and so cannot be expressed through the published
+  fields without being masked by `max()`) and `lane_contract._MEASURED_RUNTIME` (voice runtimes that
+  exist only as prose today). Neither is a gate: the total floor is not enforced, and the runtime
+  table is pinned to shipped repos by a test. The pattern to follow for anything similar is the one
+  the owner-approved Qwen3-TTS 12Hz 0.6B Base 8-bit floor now follows — **it moved onto the model's
+  own catalog row** (`min_free_memory_gb: 3.2`) once the producer published it, and the Hub's
+  model-keyed table was deleted.
+- **`capture_model_manifests.py --write` still withholds two packages** (`ace-step-1-5-turbo`, whose
+  planner and two files come from other sources, and `stable-audio-3-medium`, whose publisher path
+  differs in case). It refuses and exits 3 rather than overwriting; extending the capture to
+  multi-source and publisher-path mapping is the follow-up.
 
 **0.6.59 — a second Image model, and the engine it needed.** Z-Image-Turbo is selectable beside
 FLUX.2 Klein and renders text FLUX gets wrong: asked for "THE GOLDEN LIGHT OF DREAMS", FLUX writes

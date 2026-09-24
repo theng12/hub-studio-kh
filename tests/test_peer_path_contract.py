@@ -17,6 +17,7 @@ Hub, which is the only thing that can tell a routed path from an unrouted one wi
 """
 import json
 import re
+import sys
 import subprocess
 import time
 import unittest
@@ -32,11 +33,17 @@ FIXTURE = ROOT / "tests" / "native" / "api_main.swift"
 
 
 def hub_modalities() -> set[str]:
-    """The modalities the Hub's peer surface routes, read from its own source."""
-    text = HUB.read_text()
-    block = re.search(r"WORKER_FOR_MODALITY\s*=\s*\{(.*?)\}", text, re.S)
-    assert block, "WORKER_FOR_MODALITY not found in the Hub"
-    return set(re.findall(r'"([a-z_]+)"\s*:', block.group(1)))
+    """The modalities the Hub's peer surface routes, read from the Hub's own vocabulary.
+
+    The table used to be a literal inside `standalone.py` and this parsed it out of the source
+    text. It now lives in `backend/vocabulary.py`, so the peer surface, the fleet join and the
+    packaged worker descriptors read one table instead of three copies that drifted in turn.
+    """
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from components.hub.backend.vocabulary import WORKER_FOR_MODALITY
+    assert WORKER_FOR_MODALITY, "WORKER_FOR_MODALITY is empty"
+    return set(WORKER_FOR_MODALITY)
 
 
 def studio_paths(text: str) -> set[str]:
@@ -145,7 +152,16 @@ class LiveRouterTests(unittest.TestCase):
         # An installed bundle can predate the very fix this probes for. Reported as a skip rather
         # than a failure: the point of this test is the tree under test, and the tree under test is
         # checked by the source-level tests above.
-        if not re.search(r'"transcription": "subtitle"', hub_source.read_text()):
+        #
+        # Detect the *capability* — the installed Hub has a modality routing table it serves from —
+        # not a literal. This check used to look for the inline `"transcription": "subtitle"` dict
+        # in `standalone.py`, so the moment the table was consolidated into
+        # `backend/vocabulary.py` it began skipping **every** run: a skip where there had been real
+        # coverage, and it read as "this Mac has no bundle to probe" rather than "this check is
+        # stale". The table may live in the Hub source or in the shared vocabulary module.
+        routed = ((hub_source.parent / "backend" / "vocabulary.py").is_file()
+                  or "WORKER_FOR_MODALITY" in hub_source.read_text())
+        if not routed:
             self.skipTest("the installed bundle predates the modality router; rebuild it to probe")
         paths = set()
         for source in sorted(NATIVE.glob("*.swift")):
@@ -364,8 +380,27 @@ class AudioBlockageTests(unittest.TestCase):
         body = body[:body.index("private var voiceLibraryLoadKey")]
         for covered in ("Start the local services", "Write the script", "Choose a model",
                         "Download", "runtime is unavailable", "saved voice", "Prepare Voice",
-                        "Describe the voice", "ready-made voices"):
+                        "Describe the voice"):
             self.assertIn(covered, body, f"the reason list does not cover: {covered}")
+        # The preset branch reports the one thing a roster model can be waiting for: it has not
+        # published its voices yet. The page says that in two places - the picker and the button's
+        # reason, both in this one file - so pin that the two agree rather than pinning today's
+        # wording. A rename in either copy alone leaves the button explaining something the tab
+        # beside it does not say.
+        preset = body[body.index("case .preset:"):]
+        self.assertIn("publishesPresetRoster", preset,
+                      "the preset branch must ask the model whether it publishes a roster, not "
+                      "assume every preset model has one")
+        reason = re.search(r'return "([^"]*)"', preset)
+        self.assertIsNotNone(reason, "the preset branch no longer names what it waits for")
+        roster = re.search(r"([A-Za-z-]+ voices)", reason.group(1))
+        self.assertIsNotNone(roster,
+                             f"the preset reason must name the roster: {reason.group(1)!r}")
+        tab = self.VIEWS[self.VIEWS.index("} else if workspace.audioMode == .preset {"):]
+        tab = tab[:tab.index("} else {")]
+        self.assertIn(roster.group(1), tab,
+                      "the preset tab and the blocked reason must call the model's roster the "
+                      "same thing")
 
     def test_the_audio_page_loads_the_voice_library_itself(self):
         """Loading it only on the Voices page left the picker empty on a fresh launch."""

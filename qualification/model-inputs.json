@@ -3,6 +3,12 @@
   "models": [
     {
       "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",
+      "role": "tts",
+      "smoke_params": {
+        "preset_speaker": "Ryan",
+        "language": "en",
+        "seed": 42
+      },
       "revision": "049ef77fe8816b536193c0c25f9a214d17921282",
       "files": [
         {
@@ -79,6 +85,7 @@
     },
     {
       "repo": "mlx-community/whisper-large-v3-turbo",
+      "role": "asr",
       "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
       "files": [
         {
@@ -105,6 +112,7 @@
     },
     {
       "repo": "openai/whisper-large-v3-turbo",
+      "role": "companion",
       "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
       "purpose": "Whisper tokenizer companion only; referenced by existing _attach_processor adapter, no OpenAI model weights required",
       "files": [

@@ -38,15 +38,46 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertIn("generationSeconds: item?.runtimeS", mapping)
         self.assertIn("runningSeconds: item?.elapsedS", mapping)
 
+    # The four row styles, by their exact signatures. `jobRow(_:for:)` is deliberately not one of
+    # them: it is the dispatcher that routes a job to the style its function uses, so asserting a
+    # suffix inside it would be asserting that a `switch` renders text.
+    ROW_STYLES = (
+        "private func imageJobRow(_ job: NativeJob) -> some View",
+        "private func jobRow(_ job: NativeJob, compact: Bool) -> some View",
+        "private func musicJobRow(_ job: NativeJob) -> some View",
+        "private func subtitleJobRow(_ job: NativeJob) -> some View",
+    )
+
     def test_every_job_row_shows_it(self) -> None:
         """One suffix, four row styles, both pages: the generator and Jobs cannot disagree."""
-        self.assertEqual(VIEWS.count("job.generationSuffix"), 4,
-                         "imageJobRow, jobRow, musicJobRow and subtitleJobRow must each show it")
-        for row in ("private func imageJobRow", "private func jobRow",
-                    "private func musicJobRow", "private func subtitleJobRow"):
-            body = VIEWS[VIEWS.index(row):]
-            body = body[:body.index("\n    private func", 10)]
-            self.assertIn("generationSuffix", body, f"{row} must show the generation time")
+        self.assertEqual(
+            VIEWS.count("job.generationSuffix"), len(self.ROW_STYLES),
+            f"each of the {len(self.ROW_STYLES)} row styles must show the generation time once")
+        for row in self.ROW_STYLES:
+            with self.subTest(row=row):
+                self.assertIn(row, VIEWS, f"{row} is gone; update this test with the new styles")
+                body = VIEWS[VIEWS.index(row):]
+                body = body[:body.index("\n    private func", 10)]
+                self.assertIn("generationSuffix", body, f"{row} must show the generation time")
+
+    def test_the_dispatcher_routes_every_function_with_a_job_history_to_a_row(self) -> None:
+        """`jobRow(_:for:)` is the router; a function it drops loses its history silently.
+
+        B29 made this switch exhaustive by function, and the Jobs page iterates
+        `workspace.jobHistories` - which is built from `hasBatchHistory`. So every function with a
+        history has to land on a real row here, and the ones without must be an explicit, commented
+        `EmptyView()` rather than a missing case.
+        """
+        dispatcher = VIEWS[VIEWS.index("private func jobRow(_ job: NativeJob, for function"):
+                            ]
+        dispatcher = dispatcher[:dispatcher.index("\n    private func", 10)]
+        for style in ("imageJobRow(job)", "musicJobRow(job)", "subtitleJobRow(job)"):
+            with self.subTest(style=style):
+                self.assertIn(style, dispatcher, f"the dispatcher no longer routes to {style}")
+        self.assertIn("jobRow(job, compact:", dispatcher,
+                      "the audio row is the compact style and must be routed to")
+        self.assertIn("EmptyView()", dispatcher,
+                      "a function with no batch history must say so explicitly")
 
     def test_a_clip_length_is_never_mistaken_for_the_generation_time(self) -> None:
         """They are different numbers and both are useful: 4.6 s of audio, 52 s to make it."""

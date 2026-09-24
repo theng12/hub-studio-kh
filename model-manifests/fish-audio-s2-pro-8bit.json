@@ -96,6 +96,5 @@
         "https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit/resolve/c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff/tokenizer_config.json"
       ]
     }
-  ],
-  "dependencies": null
+  ]
 }

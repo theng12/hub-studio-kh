@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -158,6 +159,33 @@ def is_cached(model: dict) -> bool:
     return bool(cache)  # tolerate a studio that ever uses a bool/string
 
 
+# A version an operator can trust: one or more dotted numbers, optionally with a pre-release or
+# build suffix. Deliberately anchored, so "standalone" or a stray sentence is not a version.
+_VERSION_SHAPED = re.compile(r"\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?")
+
+
+def reported_app_version(health: dict) -> str | None:
+    """The build a worker says it is running, without republishing a non-version as one.
+
+    ``studio_version`` is the one field an operator reads to answer "which build is that Mac
+    running?", so a value that cannot be a version must not travel as data. Measured by Gateway
+    Studio on 2026-09-25: four workers answered the literal ``"standalone"`` there, which is
+    indistinguishable from a version that failed to load and makes every Mac look like one build.
+    A worker that reports no version at all stays ``None``; a version-shaped answer is taken at
+    its word; anything else is republished as a value that says so. Each worker is fixed at its
+    source to report the release it was staged from.
+    """
+    if not isinstance(health, dict):
+        return None
+    raw = health.get("app_version")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    value = str(raw).strip()
+    if _VERSION_SHAPED.fullmatch(value):
+        return value
+    return f"unreported: the worker answered {value!r}"
+
+
 # 'render' is a local FFmpeg episode-assembly step. Render studios historically
 # flag its catalog entry is_cloud=true only to bypass broker download/memory
 # gates, so cloud filtering must exempt it.
@@ -168,12 +196,84 @@ LOCAL_ONLY_MODALITIES = {"render"}
 # folded into the aggregate catalog: when only "voice" was refreshed, the packaged dispatcher's
 # cache-only view of the Subtitle worker was permanently empty and every Subtitle job sat
 # queued forever with no explanation.
-TRANSCRIPTION_MODALITIES = {"voice", "transcription"}
+#
+# Which studios own an STT surface is a *capability the producer advertises*, not a modality
+# name. The Subtitle worker's health carries a `transcription` block, and any studio row may
+# list `capabilities`. The old `{"voice", "transcription"}` set meant a later modality that
+# reports transcription availability was silently neither refreshed nor folded in - the exact
+# shape that left every Subtitle job queued forever - so the modality name is not the gate any
+# more. Read: the registry row's own `capabilities`, then the studio's own health.
+TRANSCRIPTION_CAPABILITIES = frozenset({
+    "transcribe", "transcription", "speech-to-text", "subtitles", "asr", "stt",
+})
+# The Voice worker serves Whisper from the same process but predates the capability contract:
+# its health has no `transcription` block and its registry row names no capability. That one
+# historical surface keeps working through a compatibility default, and the default is
+# *derived*, not a second literal: the modality whose canonical operation is
+# `audio.transcription` owns this surface by definition, plus the legacy Voice worker.
+#
+# This is where the first attempt went wrong, and it is worth naming: the replacement for the
+# old `{"voice", "transcription"}` set kept only the literal "voice", so the shipped Subtitle
+# worker - registered as modality `transcription`, publishing no `capabilities` on its registry
+# row, with no health payload yet at registry-load time - returned False and the Hub neither
+# refreshed nor folded in its transcription availability. That is the "every Subtitle job sat
+# queued for ever" incident arriving a second time by a different road.
+_TRANSCRIPTION_OPERATION = "audio.transcription"
+_LEGACY_TRANSCRIPTION_MODALITY = "voice"
+_transcription_fallback_cache: frozenset[str] | None = None
 
 
-def reports_transcription(studio: dict) -> bool:
-    """Whether this studio contributes Whisper/transcription availability."""
-    return studio.get("modality") in TRANSCRIPTION_MODALITIES
+def _transcription_fallback_modalities() -> frozenset[str]:
+    """The modalities that own transcription availability when nothing advertises it."""
+    global _transcription_fallback_cache
+    if _transcription_fallback_cache is None:
+        # Imported lazily: `broker` imports this module, and `capabilities` imports `broker`,
+        # so a module-level import here would be a cycle.
+        from .capabilities import OPERATION_BY_MODALITY
+        owners = {
+            str(modality) for modality, operation in OPERATION_BY_MODALITY.items()
+            if operation == _TRANSCRIPTION_OPERATION
+        }
+        owners.add(_LEGACY_TRANSCRIPTION_MODALITY)
+        _transcription_fallback_cache = frozenset(owners)
+    return _transcription_fallback_cache
+
+
+def reports_transcription(studio: dict, health: dict | None = None) -> bool:
+    """Whether this studio contributes Whisper/transcription availability.
+
+    The producer's own advertisement decides. ``health`` is the studio's last health payload
+    when the caller has it; a studio whose health publishes a ``transcription`` block owns an
+    STT surface whatever its modality is called. Only a studio that advertises nothing at all
+    falls back to the derived owner set above - which is every shipped studio at registry-load
+    time, before the first health poll.
+    """
+    declared = studio.get("capabilities")
+    if isinstance(declared, (list, tuple, set, frozenset)):
+        tokens = {str(token).strip().lower() for token in declared}
+        if tokens & TRANSCRIPTION_CAPABILITIES:
+            return True
+    if isinstance(health, dict) and isinstance(health.get("transcription"), dict):
+        return True
+    return str(studio.get("modality") or "").strip().lower() in _transcription_fallback_modalities()
+
+
+def _health_for(status: dict | None, studio_id: object) -> dict:
+    """The studio's last health payload from a status map, or an empty dict."""
+    health = (status or {}).get(studio_id, {}).get("health")
+    return health if isinstance(health, dict) else {}
+
+
+def transcription_studios(registry: list[dict], status: dict | None = None) -> list[dict]:
+    """Every registered studio whose own advertisement includes an STT surface.
+
+    The one place the aggregate catalog, the refresh pass and the poll loop ask the question, so
+    they cannot disagree about which studios own Whisper/STT. Takes the registry and status map
+    rather than a monitor instance because the aggregate assembler is also exercised with a
+    minimal stand-in.
+    """
+    return [studio for studio in registry
+            if reports_transcription(studio, _health_for(status, studio.get("id")))]
 
 
 class StudioMonitor:
@@ -445,7 +545,7 @@ class StudioMonitor:
             if meta.get("catalog_last_error"):
                 return {"studio_id": sid, "refreshed": False,
                         "reason": meta["catalog_last_error"]}
-            if reports_transcription(studio):
+            if reports_transcription(studio, self._health(sid)):
                 source = "transcription"
                 transcription = await self.get_transcription(studio, force=force)
                 if transcription is None:
@@ -454,7 +554,7 @@ class StudioMonitor:
                     return {"studio_id": sid, "refreshed": False,
                             "reason": meta["transcription_last_error"]}
             errors = [meta.get("catalog_last_error")]
-            if reports_transcription(studio):
+            if reports_transcription(studio, self._health(sid)):
                 errors.append(meta.get("transcription_last_error"))
             if any(errors):
                 return {"studio_id": sid, "refreshed": False,
@@ -482,16 +582,11 @@ class StudioMonitor:
         # Activity is an optional extension of an already successful health
         # probe. Persisting its compact transitions here keeps Stats entirely
         # local and never lets a slow/old reporter affect worker health.
-        from . import activity, broker, transcription_jobs
+        from . import activity
         try:
-            activity_batches = dict(broker.batches)
-            activity_batches.update({
-                f"transcription:{batch_id}": {
-                    "model": batch.get("model"), "operation": "transcription",
-                    "items": batch.get("items") or [],
-                }
-                for batch_id, batch in transcription_jobs.batches.items()
-            })
+            # One producer-side source for "which queues contribute live activity"; this used to
+            # be restated here and in the statistics route, and both copies omitted Chat.
+            activity_batches = activity.live_batches()
             registry, statuses, batches = _activity_poll_inputs(
                 self.registry, self.status, activity_batches,
             )
@@ -608,7 +703,9 @@ class StudioMonitor:
             self.status[sid] = {
                 "status": effective_status,
                 "latency_ms": latency_ms,
-                "app_version": health.get("app_version"),
+                # The version an operator reads; a worker that answers a non-version is reported
+                # as such rather than republished as one (see `reported_app_version`).
+                "app_version": reported_app_version(health),
                 "health": health,  # verbatim — includes chat's loaded_model etc.
                 "last_seen": now,
                 "last_checked": now,
@@ -638,7 +735,8 @@ class StudioMonitor:
                 # scheduler cannot see anything it offers. Waiting for the next periodic
                 # refresh leaves a blind spot a minute wide on every join and every restart.
                 asyncio.create_task(self._refresh_studio_catalog(studio, force=True))
-            if effective_status == "up" and reports_transcription(studio) and (
+            if effective_status == "up" and reports_transcription(
+                    studio, self._health(sid)) and (
                     sid not in self._transcribe_cache) and (
                     not meta.get("transcription_last_success_at")):
                 # Whisper lives outside the TTS catalog, and the transcription dispatcher reads
@@ -772,6 +870,15 @@ class StudioMonitor:
             return cached[1] if cached else None
         return await self.get_catalog(studio, force=force)
 
+    def _health(self, studio_id: str) -> dict:
+        """The studio's last health payload, or an empty dict when it has none."""
+        health = self.status.get(studio_id, {}).get("health")
+        return health if isinstance(health, dict) else {}
+
+    def transcription_studios(self) -> list[dict]:
+        """Every registered studio whose own advertisement includes an STT surface."""
+        return transcription_studios(self.registry, self.status)
+
     async def get_transcription(self, studio: dict, force: bool = False) -> dict | None:
         """Voice Studio's Whisper inventory lives outside its TTS catalog."""
         sid = studio["id"]
@@ -898,8 +1005,11 @@ class StudioMonitor:
         # Whisper/STT is a separate Voice Studio subsystem and therefore is not
         # present in /api/catalog. Fold it into the fleet catalog as its own
         # modality so clients never need direct Voice Studio URLs for discovery.
-        transcription_studios = [s for s in self.registry if reports_transcription(s)]
-        for studio, availability in zip(transcription_studios, transcription):
+        # The module-level reader runs against the registry/status this assembler was given, so
+        # a minimal stand-in monitor is not required to implement the query.
+        stt_studios = transcription_studios(
+            self.registry, getattr(self, "status", None))
+        for studio, availability in zip(stt_studios, transcription):
             if not availability:
                 continue
             sid = studio["id"]
@@ -938,9 +1048,7 @@ class StudioMonitor:
             self._catalog_cache.get(studio["id"], (0.0, None))[1]
             for studio in self.registry
         ]
-        transcription_studios = [
-            studio for studio in self.registry if reports_transcription(studio)
-        ]
+        transcription_studios = self.transcription_studios()
         transcription = [
             self._transcribe_cache.get(studio["id"], (0.0, None))[1]
             for studio in transcription_studios
@@ -999,7 +1107,7 @@ class StudioMonitor:
         results = await asyncio.gather(
             *(self._catalog_for_aggregate(s, force) for s in self.registry)
         )
-        transcription_studios = [s for s in self.registry if reports_transcription(s)]
+        transcription_studios = self.transcription_studios()
         transcription = await asyncio.gather(
             *(self.get_transcription(s, force=force) for s in transcription_studios)
         )

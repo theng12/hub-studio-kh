@@ -56,8 +56,13 @@ def _bundle(root: Path, *, library: Path) -> tuple[Path, Path, Path]:
         shutil.copyfile(ROOT / 'packaging' / name, resources / name)
     shutil.copytree(ROOT / 'components/subtitle', resources / 'components/subtitle',
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    shutil.copyfile(ROOT / 'components/model_packages.py',
-                    resources / 'components/model_packages.py')
+    # Every shared `components/*.py` module, by discovery - the same rule
+    # `packaging/stage_voice.py`'s `shared_components_modules` uses. A hand-kept list here is
+    # silently wrong the day a module is added: this fixture named only `model_packages.py`, and
+    # the worker then imported `components/app_version.py`, which the fixture bundle did not
+    # carry, so the process died at import before it could serve anything.
+    for module in sorted((ROOT / 'components').glob('*.py')):
+        shutil.copyfile(module, resources / 'components' / module.name)
     # The shared immutable Voice source: Subtitle imports its export behavior
     # from here rather than shipping a copy of the formatters.
     (resources / 'voice' / 'app').mkdir(parents=True)
@@ -72,7 +77,9 @@ def _bundle(root: Path, *, library: Path) -> tuple[Path, Path, Path]:
     (resources / 'runtimes/voice').symlink_to(BUILD_PYTHON.parent.parent)
     (resources / 'release-manifest.json').write_text(json.dumps({
         'schema': 'studiohub.standalone-release', 'schema_version': 1,
-        'version': 'fixture',
+        # A version, not a word: the worker reports this through components/app_version.py, and
+        # `fixture` would be refused as a non-version and reported as `unknown` instead.
+        'version': '0.0.0', 'development_build': False, 'implementation_commit': 'd' * 40,
         'components': {'subtitle': {'runtime_sha256': 'e' * 64}},
     }))
     data = root / 'External State'

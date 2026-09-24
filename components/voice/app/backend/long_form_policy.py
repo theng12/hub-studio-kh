@@ -16,14 +16,14 @@ QWEN_CLONE_JOIN_PAUSE_SECONDS = 0.18
 OMNIVOICE_JOIN_PAUSE_SECONDS = 0.30
 OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS = 0.60
 OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS = 0.18
+# The measured section budgets. Each number is named here with the evidence that
+# produced it, and *assigned* to the family it belongs to on that family's entry
+# in `catalog.FAMILIES` - the registry is where a consumer reads it, so adding a
+# family or changing a budget does not mean editing a second branch chain.
 QWEN_CLONE_SECTION_MAX_CHARACTERS = 288
-QWEN_17B_BASE_REPO = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
 QWEN_PRESET_SECTION_MAX_CHARACTERS = 360
 CHATTERBOX_STANDARD_SECTION_MAX_CHARACTERS = 500
-CHATTERBOX_TURBO_SECTION_MAX_CHARACTERS = 400
 VOXCPM_SECTION_MAX_CHARACTERS = 400
-KOKORO_SECTION_MAX_CHARACTERS = 3000
-VIBEVOICE_SECTION_MAX_CHARACTERS = 3000
 # OmniVoice is flow-matching, not autoregressive: it has NO internal splitting
 # and NO length cap, and commits its whole latent block up front from
 # target_len = ceil(duration_s * 25) (or the RuleDurationEstimator when duration
@@ -71,75 +71,31 @@ VIBEVOICE_SECTION_MAX_CHARACTERS = 3000
 # sets 288, and raising it past 288 measurably loses words.
 OMNIVOICE_SECTION_MAX_CHARACTERS = 288
 FISH_AUDIO_SECTION_MAX_CHARACTERS = 300
-# Audio8's native cap is 512 frames (~2048 samples/frame @ 44.1 kHz ≈ 23.8 sec)
-# per call, no internal chunking. 280 chars leaves headroom under that budget
-# at typical narration pacing (~15 chars/sec).
-AUDIO8_SECTION_MAX_CHARACTERS = 280
-# The sustained 16 GB qualification rendered complete sentence-safe sections
-# at this measured budget. Keep LongCat's diffusion calls bounded while owner
-# listening establishes whether a larger section is equally reliable.
-LONGCAT_SECTION_MAX_CHARACTERS = 280
-LONGCAT_JOIN_PAUSE_SECONDS = 0.18
-# MOSS-TTS-Nano already auto-splits internally (~75 text-tokens/chunk) inside
-# one generate() call, but Voice Studio still owns the outer boundary for
-# progress reporting and mid-script cancellation. 300 chars keeps each owned
-# section close to the model's own internal chunk size.
-MOSS_TTS_NANO_SECTION_MAX_CHARACTERS = 300
-# Echo's config caps one call at sequence_length=640 latents ×
-# audio_downsample_factor=2048 @ 44.1 kHz ≈ 29.7 s of audio (and max_text_length
-# is 768 characters). 300 sits comfortably inside both, and a 287-character
-# section was verified end-to-end as semantically complete via transcribe-back.
-ECHO_TTS_SECTION_MAX_CHARACTERS = 300
-# Voxtral, measured 2026-09-20 through the app's own Hub (`qualification/measure_section_budget.py`).
-#
-# The per-budget comparison could not run: the private override never reached the engine, so every
-# budget produced byte-identical audio (one call). What the measurement did establish is the
-# one-call behaviour, by varying the script instead (same voice, same seed):
-#
-#   1162 chars / 215 words -> 51.92 s audio, 100.0% coverage, 0 words lost
-#   1685 chars / 314 words -> 73.60 s audio,  96.8% coverage, 10 words lost
-#   2463 chars / 466 words -> 96.00 s audio,  80.3% coverage, 92 words lost
-#   3205 chars / 604 words -> 96.00 s audio,  64.1% coverage, 217 words lost
-#
-# Two facts come out of that. Word loss begins somewhere between 1162 and 1685 characters, well
-# before any limit, so one-call rendering was already losing words on a normal paragraph. And the
-# 2463- and 3205-character renders are both exactly 96.0000 s - the app does not pass `max_tokens`
-# for this family, so mlx-audio's wrapper default of 1200 audio frames applies instead of the
-# model's own 4096, and everything past that is silently dropped.
-#
-# 800 is chosen as the largest candidate budget that is unambiguously safe on both counts: below the
-# largest verified-perfect single call (1162), well below the onset of word loss (~1685), and about
-# 36 s of speech per section against the 96 s truncation. It is a measured choice, not the shared
-# default, and it is deliberately not raised to the truncation limit: the evidence stops at 1162.
-VOXTRAL_SECTION_MAX_CHARACTERS = 800
 # ── families with no measurement of their own ────────────────────────────────
 # A family without a policy used to fall out of `_runtime_default` as None, and the caller read
 # "None" as "send the whole script in one call". That is how the gateway came to see an engine
-# cliff - orpheus stops at ~170 characters - instead of a section budget: seven families
-# (orpheus, bark, voxtral-tts, marvis, kittentts, spark-tts-mlx, f5-tts) had no sectioning at all,
-# so a 2,000-character script was one request to an engine that cannot take it.
+# cliff instead of a section budget: families with no sectioning at all sent a 2,000-character
+# script as one request to an engine that cannot take it.
 #
 # 280 is therefore the floor, not a guess at the best value: it is the smallest of the established
-# family budgets (Audio8 and LongCat, both measured), so no family is sectioned more coarsely than
-# a family we have actually measured. A family with its own evidence keeps its own number.
+# family budgets, so no family is sectioned more coarsely than a family we have actually measured.
+# A family with its own evidence keeps its own number, declared on its `catalog.FAMILIES` entry.
 CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS = 280
-# Two engines refuse input past their own hard limit rather than degrading. These are not quality
-# budgets and must never be raised by an audit or a caller: they are the point at which the engine
-# stops working. Orpheus truncates and Bark fails past these inputs.
-ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS = 170
-BARK_ENGINE_INPUT_LIMIT_CHARACTERS = 150
 # The public speed control, one range for every family.
 SPEED_MINIMUM = 0.5
 SPEED_MAXIMUM = 2.0
-# Kokoro and KittenTTS predict their own durations from a speed factor
+# Kokoro and KittenTTS predicted their own durations from a speed factor
 # (`duration = sigmoid(duration).sum() / speed`), which is the model's own idea of pace and beats a
-# resampled one. Every other engine either ignores the argument outright (Chatterbox documents
-# "Ignored", LongCat and OmniVoice never read it), reads it as a discrete level rather than a
-# multiplier (Spark-TTS indexes SPEED_MAP[float] and would raise KeyError on any other value), or
-# applies it per section in a way that would fight the joined-WAV pass (Fish). Those families get
-# one pitch-preserving tempo pass on the finished artifact instead - applied exactly once, from the
-# parent, where cancellation custody already lives.
-NATIVE_SPEED_FAMILIES = frozenset({"kokoro-mlx", "kittentts"})
+# resampled one. Neither family ships any more, so every shipped family takes the tempo path - but
+# the fact is a property of the engine, and it now lives on the family entry in `catalog.FAMILIES`
+# (`native_speed`) instead of in a set here: a family that predicts its own durations declares it
+# where the rest of its engine facts live, and cannot be silently handed a second processing pass.
+# Every other engine either ignores the argument outright (Chatterbox documents "Ignored", LongCat
+# and OmniVoice never read it), reads it as a discrete level rather than a multiplier (Spark-TTS
+# indexes SPEED_MAP[float] and would raise KeyError on any other value), or applies it per section
+# in a way that would fight the joined-WAV pass (Fish). Those families get one pitch-preserving
+# tempo pass on the finished artifact instead - applied exactly once, from the parent, where
+# cancellation custody already lives.
 
 
 @dataclass(frozen=True)
@@ -168,9 +124,38 @@ SPEED_TEMPO = SpeedPolicy(
 )
 
 
+def _family_registry():
+    """Import the family registry whichever way this module was loaded.
+
+    The app imports this file as part of the `backend` package; the standalone
+    audit validator (`components/voice/audit_contract_runtime.py`) loads it from
+    its path with `app.backend` on `sys.path`, so the relative import is not
+    available there. Both are real callers. This is a function rather than a
+    module-level import because `catalog` imports this module: a module-level
+    import would be a cycle, while this runs only while serving a request.
+    """
+    try:
+        from . import catalog
+    except ImportError:  # loaded standalone (audit validator, release checks)
+        from app.backend import catalog
+    return catalog
+
+
 def speed_policy_for(family: str, repo: str = "") -> SpeedPolicy:
-    """The speed contract for one family. Never None: every family has a way to honour speed."""
-    return SPEED_NATIVE if family in NATIVE_SPEED_FAMILIES else SPEED_TEMPO
+    """The speed contract for one family. Never None: every family has a way to honour speed.
+
+    The delivery comes from the family's own catalog entry (`native_speed`), so a
+    new family states its engine's behaviour in the registry instead of being
+    silently omitted from a set in this file. A family that is not in the
+    registry at all - `policy_for` answers for those too, with the conservative
+    default section budget, so that a newly adopted family is sectioned from day
+    one - takes the tempo path. That is the safe answer for an unknown engine:
+    one pitch-preserving pass on the finished artifact is audible and correct,
+    while claiming the engine applies the multiplier itself would silently drop
+    the caller's speed control.
+    """
+    entry = _family_registry().FAMILIES.get(family)
+    return SPEED_NATIVE if entry is not None and entry.native_speed else SPEED_TEMPO
 
 
 @dataclass(frozen=True)
@@ -224,184 +209,49 @@ def qwen_17b_assembly_invariants(repo: str) -> Optional[dict[str, object]]:
     }
 
 
-def _qwen_mode(repo: str) -> str:
-    name = repo.rsplit("/", 1)[-1].lower()
-    if "base" in name:
-        return "clone"
-    if "voicedesign" in name:
-        return "design"
-    return "preset"
+def _runtime_default(family: str, repo: str) -> "LongFormPolicy":
+    """This family's own sectioning, read from the family registry.
 
+    Every shipped family states its budget, its join pause, where the number came
+    from and any checkpoint-specific refinement on its `catalog.FAMILIES` entry.
+    This used to be a chain of `if family == ...` branches in this file, nine of
+    which named families cut in ST-13.B: unreachable, but a hazard the moment one
+    of those families were re-adopted, because it would silently take a policy
+    nobody had measured since it was cut.
 
-def _runtime_default(family: str, repo: str) -> Optional[LongFormPolicy]:
+    A family the registry does not know still gets the conservative default.
+    That is deliberate: `policy_for` answers for a newly adopted family so its
+    script is sectioned from day one, and the published 280 is the smallest
+    budget any measured family uses.
+    """
+    entry = _family_registry().FAMILIES.get(family)
+    if entry is None or not entry.section_max_characters:
+        return _conservative_default()
+    policy = LongFormPolicy(
+        section_max_characters=entry.section_max_characters,
+        join_pause_seconds=entry.join_pause_seconds,
+        note=entry.section_note,
+        hard_cap_characters=entry.section_hard_cap_characters,
+        origin=entry.section_origin,
+    )
     name = repo.rsplit("/", 1)[-1].lower()
-    if family == "qwen3-tts":
-        if _qwen_mode(repo) == "clone":
-            production_candidate = "1.7b-base" in name
+    for refinement in entry.section_refinements:
+        if refinement.marker and refinement.marker in name:
             return LongFormPolicy(
-                section_max_characters=QWEN_CLONE_SECTION_MAX_CHARACTERS,
+                section_max_characters=(
+                    refinement.section_max_characters or policy.section_max_characters
+                ),
                 join_pause_seconds=(
-                    OMNIVOICE_JOIN_PAUSE_SECONDS
-                    if production_candidate
-                    else QWEN_CLONE_JOIN_PAUSE_SECONDS
+                    refinement.join_pause_seconds or policy.join_pause_seconds
                 ),
-                note=(
-                    "Clone continuity setting. Every section reuses the same "
-                    "reference voice and transcript evidence. "
-                    + (
-                        "The unqualified 1.7B candidate runtime uses 300 ms "
-                        "sentence, 600 ms paragraph, and 180 ms soft joins."
-                        if production_candidate
-                        else "The fallback clone path uses a fixed 180 ms join."
-                    )
-                ),
+                note=refinement.note or policy.note,
+                hard_cap_characters=policy.hard_cap_characters,
+                origin=policy.origin,
             )
-        return LongFormPolicy(
-            section_max_characters=QWEN_PRESET_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Preset and voice-design delivery setting; these paths do not "
-                "use reference-audio cloning."
-            ),
-        )
-    if family == "chatterbox-mlx":
-        turbo = "turbo" in name
-        return LongFormPolicy(
-            section_max_characters=(
-                CHATTERBOX_TURBO_SECTION_MAX_CHARACTERS
-                if turbo
-                else CHATTERBOX_STANDARD_SECTION_MAX_CHARACTERS
-            ),
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Conservative Turbo delivery setting. The same reference voice "
-                "and expression controls are reused for every section."
-                if turbo
-                else "Standard Chatterbox delivery setting. The same reference "
-                "voice and expression controls are reused for every section."
-            ),
-        )
-    if family == "voxcpm-mlx":
-        return LongFormPolicy(
-            section_max_characters=VOXCPM_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Keeps each synthesis pass inside the practical voice-fidelity "
-                "window while preserving the selected clone controls."
-            ),
-        )
-    if family == "kokoro-mlx":
-        return LongFormPolicy(
-            section_max_characters=KOKORO_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Voice Studio sections provide progress and cancellation; "
-                "Kokoro still applies its own phoneme-safe splitting inside them."
-            ),
-        )
-    if family == "vibevoice":
-        return LongFormPolicy(
-            section_max_characters=VIBEVOICE_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Keeps narration comfortably below the model's long acoustic "
-                "window before final validation and joining."
-            ),
-        )
-    if family == "omnivoice":
-        return LongFormPolicy(
-            section_max_characters=OMNIVOICE_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=OMNIVOICE_JOIN_PAUSE_SECONDS,
-            note=(
-                "Conservative cloning setting using the same reference for every "
-                "section, with 300 ms sentence joins, 600 ms paragraph joins, and "
-                "180 ms soft joins. Fleet measurement puts OmniVoice's memory "
-                "ceiling near 1286 characters even on 8 GB; this budget is retained "
-                "until the long-section quality gate has run."
-            ),
-        )
-    if family == "fish-audio-mlx":
-        return LongFormPolicy(
-            section_max_characters=FISH_AUDIO_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Voice Studio owns the outer delivery boundary so clone and style "
-                "controls remain identical across the final joined artifact."
-            ),
-        )
-    if family == "arktts":
-        return LongFormPolicy(
-            section_max_characters=AUDIO8_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Keeps each synthesis pass safely under Audio8's ~24-second-per-call "
-                "budget while preserving the selected clone or zero-shot setting."
-            ),
-        )
-    if family == "longcat-audiodit":
-        return LongFormPolicy(
-            section_max_characters=LONGCAT_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=LONGCAT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Measured internal-candidate setting. Every section reuses the "
-                "same reference voice and exact transcript with APG guidance."
-            ),
-        )
-    if family == "moss-tts-nano":
-        return LongFormPolicy(
-            section_max_characters=MOSS_TTS_NANO_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Voice Studio owns the outer delivery boundary for progress and "
-                "cancellation, on top of the model's own internal sentence splitting."
-            ),
-        )
-    if family == "echo-tts":
-        return LongFormPolicy(
-            section_max_characters=ECHO_TTS_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            note=(
-                "Keeps each diffusion pass inside Echo's ~30-second acoustic window "
-                "while reusing the same reference clip for every section."
-            ),
-        )
-    if family == "orpheus":
-        return LongFormPolicy(
-            section_max_characters=ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            hard_cap_characters=ORPHEUS_ENGINE_INPUT_LIMIT_CHARACTERS,
-            origin="engine_input_limit",
-            note=(
-                "Orpheus does not degrade past its input limit, it stops: the engine drops the "
-                "rest of the text, which is why the gateway measured a ~170-character ceiling "
-                "while Voice Studio was still sending whole scripts. Sections are held at the "
-                "engine's own limit and can never be raised."
-            ),
-        )
-    if family == "bark":
-        return LongFormPolicy(
-            section_max_characters=BARK_ENGINE_INPUT_LIMIT_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            hard_cap_characters=BARK_ENGINE_INPUT_LIMIT_CHARACTERS,
-            origin="engine_input_limit",
-            note=(
-                "Bark's own pipeline budget is shorter than any other family's, and it fails "
-                "rather than truncating past it. Held at the engine limit, never raised."
-            ),
-        )
-    if family == "voxtral-tts":
-        return LongFormPolicy(
-            section_max_characters=VOXTRAL_SECTION_MAX_CHARACTERS,
-            join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
-            origin="measured",
-            note=(
-                "Measured on this fleet: a single call still reproduced every word at 1162 "
-                "characters and began losing words by 1685, so sections are held at 800 - about 36 "
-                "seconds of speech, clear of both the loss onset and the 96-second point where the "
-                "engine silently drops the rest of the text. Voxtral also cannot apply a speed "
-                "multiplier, so pacing is a tempo pass on the finished audio."
-            ),
-        )
+    return policy
+
+
+def _conservative_default() -> "LongFormPolicy":
     return LongFormPolicy(
         section_max_characters=CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS,
         join_pause_seconds=DEFAULT_JOIN_PAUSE_SECONDS,
@@ -434,23 +284,27 @@ def policy_for(
               "measured": "measured_fleet",
               "engine_input_limit": "engine_input_limit"}.get(policy.origin, "runtime_default")
 
-    if repo == QWEN_17B_BASE_REPO:
-        if (
-            type(audited_section_max_characters) is int
-            and audited_section_max_characters == 400
-            and type(audited_default_section_max_characters) is int
-            and audited_default_section_max_characters == 280
-            and 230 <= audited_default_section_max_characters
-            <= audited_section_max_characters
-        ):
-            policy = LongFormPolicy(
-                section_max_characters=audited_default_section_max_characters,
-                join_pause_seconds=policy.join_pause_seconds,
-                hard_cap_characters=policy.hard_cap_characters,
-                origin=policy.origin,
-                note="The exact production-v2 audit sets the Auto section size. " + policy.note,
-            )
-            return _published_policy(policy, family, source="model_audit")
+    # An audit that publishes BOTH a bounded maximum and a smaller whole-number Auto default is
+    # stating the runtime section size separately from the ceiling: the Auto default is what a
+    # script is split at, and the maximum is the largest override a caller may ask for. Whether a
+    # given record is allowed to make that statement is a provenance question, and it is answered
+    # before these numbers arrive (`model_audits.qwen_17b_production_v2_limits`). Gating this on a
+    # repo id here is what made the measured Qwen 1.7B policy inert for the tier the app ships:
+    # the id named a retired 8-bit checkpoint, so the shipped 4-bit build silently fell through to
+    # the family default.
+    if (
+        type(audited_section_max_characters) is int
+        and type(audited_default_section_max_characters) is int
+        and 230 <= audited_default_section_max_characters <= audited_section_max_characters
+    ):
+        policy = LongFormPolicy(
+            section_max_characters=audited_default_section_max_characters,
+            join_pause_seconds=policy.join_pause_seconds,
+            hard_cap_characters=policy.hard_cap_characters,
+            origin=policy.origin,
+            note="The model's audited Auto section size applies. " + policy.note,
+        )
+        return _published_policy(policy, family, source="model_audit")
 
     try:
         audited_limit = int(audited_section_max_characters)

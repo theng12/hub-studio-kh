@@ -1116,6 +1116,21 @@ def restore_batches() -> int:
     return restored
 
 
+def activity_batches() -> dict[str, dict]:
+    """This queue's batches in the shape the live activity view consumes.
+
+    Each Hub-owned queue publishes its own view rather than being restated by the callers that
+    merge them; that restatement is how Chat was missed by both of them.
+    """
+    return {
+        f"transcription:{batch_id}": {
+            "model": batch.get("model"), "operation": "transcription",
+            "items": batch.get("items") or [],
+        }
+        for batch_id, batch in list(batches.items())
+    }
+
+
 def start_dispatcher(monitor) -> None:
     global _dispatcher_task, _cleanup_task, _shutting_down
     _shutting_down = False

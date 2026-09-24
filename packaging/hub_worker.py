@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ from urllib.parse import urlsplit
 
 RESOURCES = Path(__file__).resolve().parent
 sys.path.insert(0, str(RESOURCES))
-from voice_worker import read_private_token, run_server
+from voice_worker import read_private_token, run_server, single_engine_manifest
 
 
 def write_workers(path, workers):
@@ -98,61 +99,107 @@ def _runtime_id(value) -> bool:
             and all(ch in '0123456789abcdef' for ch in value))
 
 
-def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> list[dict]:
-    specs = [{
+def _voice_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    return {
         'id': 'voice', 'modality': 'voice', 'python': runtime / 'bin/python3',
         'runtime_id': release['runtime_sha256'], 'outputs': data / 'voice/output',
         'extra_args': [],
-    }]
-    if 'image' in release.get('components', {}):
-        image_runtime = resources / 'runtimes/image'
-        image_id = release['components']['image'].get('runtime_sha256')
-        if (not (image_runtime / 'bin/python3').is_file()
-                or not (resources / 'image_worker.py').is_file()
-                or not _runtime_id(image_id)):
-            raise ValueError('Incomplete Image runtime or release identity')
-        specs.append({
-            'id': 'image', 'modality': 'image', 'python': image_runtime / 'bin/python3',
-            'runtime_id': image_id, 'outputs': data / 'image/outputs', 'extra_args': [],
-        })
-    if 'subtitle' in release.get('components', {}):
-        subtitle_id = release['components']['subtitle'].get('runtime_sha256')
-        if (not (resources / 'subtitle_worker.py').is_file()
-                or not (resources / 'components/subtitle/app/backend/main.py').is_file()
-                or not _runtime_id(subtitle_id)):
-            raise ValueError('Incomplete Subtitle worker or release identity')
-        specs.append({
-            'id': 'subtitle', 'modality': 'transcription',
-            'python': runtime / 'bin/python3', 'runtime_id': subtitle_id,
-            'outputs': data / 'subtitle', 'extra_args': [],
-        })
-    if 'music' in release.get('components', {}):
-        music_id = release['components']['music'].get('runtime_sha256')
-        engine = resources / 'engines/ace-step-1-5'
-        if (not (resources / 'music_worker.py').is_file()
-                or not (resources / 'components/music/app/backend/main.py').is_file()
-                or not (resources / 'runtimes/music/manifest/music-runtime.json').is_file()
-                or not (engine / 'studiohub-engine.json').is_file()
-                or not _runtime_id(music_id)):
-            raise ValueError('Incomplete Music worker or release identity')
-        specs.append({
-            'id': 'music', 'modality': 'music', 'python': runtime / 'bin/python3',
-            'runtime_id': music_id, 'outputs': data / 'music/outputs',
-            'extra_args': ['--engine-root', str(engine)],
-        })
-    if 'chat' in release.get('components', {}):
-        # The chat worker reuses the base runtime (mlx-lm lives there), so its staged identity
-        # is expected to equal the base runtime digest unless a dedicated runtimes/chat is added.
-        chat_id = release['components']['chat'].get('runtime_sha256')
-        if (not (resources / 'chat_worker.py').is_file()
-                or not (resources / 'components/chat/app/backend/main.py').is_file()
-                or not (resources / 'model-manifests/qwen3-5-9b-4bit.json').is_file()
-                or not _runtime_id(chat_id)):
-            raise ValueError('Incomplete Chat worker or release identity')
-        specs.append({
-            'id': 'chat', 'modality': 'chat', 'python': runtime / 'bin/python3',
-            'runtime_id': chat_id, 'outputs': data / 'chat/outputs', 'extra_args': [],
-        })
+    }
+
+
+def _image_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    image_runtime = resources / 'runtimes/image'
+    image_id = release['components']['image'].get('runtime_sha256')
+    if (not (image_runtime / 'bin/python3').is_file()
+            or not (resources / 'image_worker.py').is_file()
+            or not _runtime_id(image_id)):
+        raise ValueError('Incomplete Image runtime or release identity')
+    return {
+        'id': 'image', 'modality': 'image', 'python': image_runtime / 'bin/python3',
+        'runtime_id': image_id, 'outputs': data / 'image/outputs', 'extra_args': [],
+    }
+
+
+def _subtitle_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    subtitle_id = release['components']['subtitle'].get('runtime_sha256')
+    if (not (resources / 'subtitle_worker.py').is_file()
+            or not (resources / 'components/subtitle/app/backend/main.py').is_file()
+            or not _runtime_id(subtitle_id)):
+        raise ValueError('Incomplete Subtitle worker or release identity')
+    return {
+        'id': 'subtitle', 'modality': 'transcription',
+        'python': runtime / 'bin/python3', 'runtime_id': subtitle_id,
+        'outputs': data / 'subtitle', 'extra_args': [],
+    }
+
+
+def _music_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    music_id = release['components']['music'].get('runtime_sha256')
+    engine = resources / 'engines/ace-step-1-5'
+    if (not (resources / 'music_worker.py').is_file()
+            or not (resources / 'components/music/app/backend/main.py').is_file()
+            or not (resources / 'runtimes/music/manifest/music-runtime.json').is_file()
+            or not (engine / 'studiohub-engine.json').is_file()
+            or not _runtime_id(music_id)):
+        raise ValueError('Incomplete Music worker or release identity')
+    return {
+        'id': 'music', 'modality': 'music', 'python': runtime / 'bin/python3',
+        'runtime_id': music_id, 'outputs': data / 'music/outputs',
+        'extra_args': ['--engine-root', str(engine)],
+    }
+
+
+def _chat_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    # The chat worker reuses the base runtime (mlx-lm lives there), so its staged identity
+    # is expected to equal the base runtime digest unless a dedicated runtimes/chat is added.
+    chat_id = release['components']['chat'].get('runtime_sha256')
+    if (not (resources / 'chat_worker.py').is_file()
+            or not (resources / 'components/chat/app/backend/main.py').is_file()
+            or not _runtime_id(chat_id)):
+        raise ValueError('Incomplete Chat worker or release identity')
+    # The packaged Chat worker serves exactly one model. Check the shipped catalog here, the
+    # same way the worker itself does at startup, so an ambiguous bundle stops the Hub before
+    # it publishes a chat model that no worker can serve.
+    single_engine_manifest(resources / 'model-manifests', 'chat-mlx', component='Chat')
+    return {
+        'id': 'chat', 'modality': 'chat', 'python': runtime / 'bin/python3',
+        'runtime_id': chat_id, 'outputs': data / 'chat/outputs', 'extra_args': [],
+    }
+
+
+# One entry per key the release manifest's `components` map may carry, and the only place a
+# studio is registered with the Hub. The Hub spawns exactly what the manifest lists, in the
+# order the manifest lists it; a component with no private child process of its own (the Hub
+# is this process) maps to None. A new studio is an entry here *and* an entry in
+# `COMPONENT_STAGERS` in packaging/stage_voice.py - a key this table does not know is refused
+# by name rather than spawning nothing and routing jobs to a worker that does not exist.
+COMPONENT_WORKERS: dict[str, Callable[[dict, Path, Path, Path], dict] | None] = {
+    'hub': None,
+    'voice': _voice_spec,
+    'image': _image_spec,
+    'subtitle': _subtitle_spec,
+    'music': _music_spec,
+    'chat': _chat_spec,
+}
+
+
+def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> list[dict]:
+    specs = []
+    for component in release.get('components', {}):
+        if component not in COMPONENT_WORKERS:
+            raise ValueError(
+                f"Release manifest lists component {component!r}, which this Hub has no private "
+                f"worker for. Add '{component}' to COMPONENT_WORKERS in packaging/hub_worker.py "
+                f"and to COMPONENT_STAGERS in packaging/stage_voice.py before shipping it.")
+        factory = COMPONENT_WORKERS[component]
+        if factory is None:
+            continue
+        spec = factory(release, data, runtime, resources)
+        if spec['id'] != component:
+            raise ValueError(
+                f"Component {component!r} produced a spec for {spec['id']!r}; fix "
+                f"COMPONENT_WORKERS in packaging/hub_worker.py")
+        specs.append(spec)
     return specs
 
 
@@ -201,9 +248,13 @@ def main():
     if not (source / 'standalone.py').is_file() or not release_file.is_file() or not (runtime / 'bin/python3').is_file():
         parser.error('Incomplete Hub application bundle')
     release = json.loads(release_file.read_text())
+    components = release.get('components', {})
+    # `worker_specs` spawns exactly the components the manifest lists, so the two every Hub
+    # release is built on must be present: the Hub itself and the Voice runtime it shares.
     if (release.get('schema') != 'studiohub.standalone-release'
-            or release.get('schema_version') != 1 or 'hub' not in release.get('components', {})):
-        parser.error('Release manifest does not identify the bundled Hub')
+            or release.get('schema_version') != 1
+            or 'hub' not in components or 'voice' not in components):
+        parser.error('Release manifest does not identify the bundled Hub and Voice components')
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     hub_data = data / 'hub'
     if hub_data.is_symlink():

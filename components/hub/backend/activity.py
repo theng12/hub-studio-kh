@@ -12,7 +12,7 @@ import statistics
 import time
 from collections import defaultdict
 
-from . import control_plane, ledger
+from . import control_plane, ledger, vocabulary
 
 SCHEMA = "kh-studio.activity.v1"
 VALID_STATES = frozenset({"queued", "running", "cancel_requested", "uncertain", "done", "error", "cancelled"})
@@ -30,18 +30,31 @@ VALID_ORIGINS = frozenset({"hub", "local_ui", "api", "unknown"})
 # A worker names itself with the modality the Hub registers it under, so the
 # Subtitle worker reports "transcription" (its registry modality) and Music
 # reports "music".  ``expected_studio`` in validate_snapshot is that modality.
-VALID_STUDIOS = frozenset({"image", "voice", "transcription", "music", "chat"})
-VALID_OPERATIONS = frozenset({"image", "speech", "transcription", "music"})
+# Derived from the Hub's one modality table: this was a second literal copy of it, and a
+# modality registered in `vocabulary.WORKER_FOR_MODALITY` but not here would have its whole
+# activity snapshot rejected — invisible in the ledger and in `fleet_activity`, exactly the
+# silent-omission shape the table exists to prevent.
+VALID_STUDIOS = frozenset(vocabulary.WORKER_FOR_MODALITY)
+# The operation vocabulary is the ledger's, not a second copy: the two used to disagree about
+# the same job - `music` was in this list and not in the ledger's - so a Music row read as
+# Music live and as "speech" once stored.
+VALID_OPERATIONS = vocabulary.VALID_OPERATIONS
+# studio -> the operations it may report. A worker that claims another studio's operation is
+# refused, which is a boundary rather than a model list. A studio nobody has classified may
+# report its own operation instead of a KeyError: `_job` falls back to
+# `vocabulary.operation_for(studio, None)`, which is the studio's own name. That is what makes
+# a chat snapshot with no explicit `operation` valid — `chat` is in VALID_STUDIOS and in
+# neither map, and the old `_DEFAULT_OPERATION[studio]` raised `KeyError: 'chat'` for it.
 _ALLOWED_OPERATIONS = {
     "image": frozenset({"image"}),
     "voice": frozenset({"speech", "transcription"}),
     "transcription": frozenset({"transcription"}),
     "music": frozenset({"music"}),
 }
-_DEFAULT_OPERATION = {
-    "image": "image", "voice": "speech",
-    "transcription": "transcription", "music": "music",
-}
+# studio -> the operation it files under when it does not report one. A studio that is not
+# listed here files under its own name (see `vocabulary.operation_for`) rather than raising or
+# under Voice's "speech", which is how Music's history was mislabelled.
+_DEFAULT_OPERATION = dict(vocabulary.STUDIO_OPERATION)
 _MAX_ORIGIN_DEVICE = 160
 
 # The closed vocabulary for ``fleet_activity.machines[].limitation_code``.
@@ -125,8 +138,11 @@ def _job(value: object, *, studio: str) -> dict | None:
         if runtime > finished - started + 1:
             return None
     error_code = _text(value.get("error_code"), _MAX_ERROR_CODE)
-    operation = value.get("operation", _DEFAULT_OPERATION[studio])
-    if operation not in _ALLOWED_OPERATIONS[studio]:
+    # One shared rule for the default (`vocabulary.operation_for`), and a studio nobody has
+    # classified may report its own operation rather than raising `KeyError` here.
+    operation = vocabulary.operation_for(studio, value.get("operation"))
+    if operation not in _ALLOWED_OPERATIONS.get(
+            studio, frozenset({vocabulary.operation_for(studio, None)})):
         return None
     # Reporters may publish a safe generic error message; the Hub never
     # persists arbitrary error text from the worker.
@@ -196,8 +212,11 @@ def _broker_jobs(registry: list[dict], batches: dict,
             state = item.get("state")
             if not job_id or studio is None or state not in VALID_STATES:
                 continue
-            default_operation = "image" if studio.get("modality") == "image" else "speech"
-            operation = batch.get("operation", default_operation)
+            # The same rule the ledger files under: the batch's own operation when it names
+            # one, otherwise the studio's. "image or else speech" filed every Hub-owned Music
+            # batch under Voice.
+            operation = vocabulary.operation_for(
+                studio.get("modality"), batch.get("operation"))
             if operation not in VALID_OPERATIONS:
                 continue
             result[job_id].append({
@@ -373,11 +392,34 @@ def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
     return result
 
 
+def live_batches() -> dict[str, dict]:
+    """Every Hub-owned queue that contributes live activity, from the queues themselves.
+
+    One producer-side function, because this set used to be restated in `monitor.poll_all` and
+    in `statistics.register_routes` - and both copies named the broker and transcription queues
+    only. A Chat job therefore appeared in no activity view anywhere: not in the polled activity
+    ledger, not in `/api/hub/stats` `fleet_activity`. Each queue owns how its own batch becomes
+    an activity item, so adding a queue is a change in that queue's module plus one line here,
+    and `tests/test_activity_operations.py` fails if a queue module is left out.
+    """
+    from . import broker, chat_jobs, transcription_jobs
+    batches: dict[str, dict] = {}
+    for module in (broker, transcription_jobs, chat_jobs):
+        batches.update(module.activity_batches())
+    return batches
+
+
 def _machine_groups(registry: list[dict]) -> dict[str, list[dict]]:
+    """Every registered machine, with the studios it runs.
+
+    This was `modality in {"image", "voice"}`, so a Mac that runs only Music, Subtitle or Chat
+    was absent from `fleet_activity` and from the machine transitions the poll cycle records -
+    invisible for a reason that had nothing to do with whether it was working. The registry is
+    the authority on which machines exist.
+    """
     grouped: dict[str, list[dict]] = defaultdict(list)
     for studio in registry:
-        if studio.get("modality") in {"image", "voice"}:
-            grouped[studio.get("machine", "local")].append(studio)
+        grouped[studio.get("machine", "local")].append(studio)
     return grouped
 
 

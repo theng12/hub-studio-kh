@@ -35,7 +35,8 @@ class AdmissionRequiresAStudioTests(unittest.TestCase):
     def _readiness(self, monitor):
         with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
              mock.patch.object(standalone, "_model_state",
-                               lambda manifest, catalog, mon: {"dispatch_state": "eligible"}):
+                               lambda manifest, catalog, mon, lane_contracts=None:
+                               {"dispatch_state": "eligible"}):
             return standalone._submission_readiness(ENVELOPE, monitor)
 
     def test_no_studio_for_this_modality_is_refused_by_name(self):

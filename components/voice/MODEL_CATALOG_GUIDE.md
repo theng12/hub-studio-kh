@@ -6,11 +6,13 @@ family, such as 4-bit, 8-bit, full precision, Base, CustomVoice, or VoiceDesign.
 
 ## Taxonomy
 
-- `family`: Stable engine/product identity, for example `qwen3-tts` or `kokoro-mlx`.
+- `family`: Stable engine/product identity, for example `qwen3-tts` or `pocket-tts`.
 - `capabilities`: User outcomes. Use existing values where possible: `tts`,
   `voice-cloning`, `multilingual`, `expressive`, and `streaming`.
-- `apple_optimized`: Derived in `serialize_model()`. Keep `_MLX_AUDIO_FAMILIES`
-  synchronized with the generation worker registry.
+- `apple_optimized`: Derived in `serialize_model()` from the family's own
+  `engine` (`catalog.ENGINE_MLX_AUDIO`). There is no second MLX list to keep in
+  sync: a family that declares the MLX engine is labelled "Apple MLX" and
+  survives the "🍎 MLX only" filter automatically.
 - `min_unified_memory_gb`: Realistic runtime floor, not just model file size.
 - `size_gb`: Decimal download size after `ignore_patterns` are applied.
 - `label`: Family name plus a concise option name. Include precision when it
@@ -18,13 +20,23 @@ family, such as 4-bit, 8-bit, full precision, Base, CustomVoice, or VoiceDesign.
 
 ## Add A New Family
 
-1. Add one `Family` to `app/backend/catalog.py` with a stable id, plain-language
-   summary, usage guidance, and accurate `TextGuidance`.
+1. Add one `Family` to `app/backend/catalog.py` with a stable id, its `engine`
+   and `requirements` (both required — the import refuses a family that omits
+   them), its sectioning facts (`section_max_characters`, `join_pause_seconds`,
+   any `section_refinements`), the request fields its resolver honours
+   (`lane_parameters`), a plain-language summary, usage guidance and accurate
+   `TextGuidance`.
 2. Add one or more `ModelEntry` rows using that family id.
-3. Wire the family in `app/backend/generation.py` and its diagnostics registry.
-4. If it uses mlx-audio, add the id to `_MLX_AUDIO_FAMILIES` in
-   `serialize_model()` and the matching generation registry.
-5. Add dependency requirements to `app/requirements-generation.txt` when needed.
+3. If the engine is new, add it to `_WORKER_BY_ENGINE`,
+   `_RUNTIME_PROBE_BY_ENGINE` and `_ENGINE_RUNTIME_LABEL` in
+   `app/backend/generation.py`, plus the dispatch branch.
+4. If it uses an existing engine, nothing else in `generation.py` changes. For
+   `mlx-audio` specifically, add its per-family config row to
+   `MLX_AUDIO_FAMILIES` — both files validate the two sets against each other at
+   import and refuse to load, by name, when they disagree.
+5. Add dependency requirements to the family entry, not to a second list.
+6. `GET /api/catalog` publishes the family's `lane_contract` automatically
+   (see `app/backend/lane_contract.py` and `docs/lane-execution-contract.md`).
 
 ## Add An Option To A Family
 
@@ -46,8 +58,21 @@ Keep `best_for` short and decisive. Put concrete strengths and limitations in
    Download works, cached models show Use model, and Details explains tradeoffs.
 5. Test at desktop and mobile widths and run `git diff --check`.
 
-Never add a frontend-only model list. `app/backend/catalog.py` is the single
-source of truth.
+Never add a frontend-only model list, and never add a second family/engine list
+in a consumer. `app/backend/catalog.py` is the single source of truth; a
+consumer reads `Family.engine`, `Family.requirements`, the family's sectioning
+fields or the manifest, and refuses by name when a value it needs is missing.
+
+## The lane contract
+
+Every `/api/catalog` row carries `lane_contract` beside `execution_contract`.
+`execution_contract` is TTS presentation for the native Voice page;
+`lane_contract` is the dispatch contract a scheduler reads (operation, honoured
+parameters with their enforced bounds, artifact, terminal states, cancel
+semantics, and a measured `runtime_seconds` where one exists). It is built from
+the model's own limits, so a model that cannot clone never advertises a
+reference parameter. `deadline_seconds` is the Hub's number, never repeated
+here. `docs/lane-execution-contract.md` is the shape.
 
 ## Add A Transcription Model
 

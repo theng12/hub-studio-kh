@@ -1,0 +1,49 @@
+{
+  "defaults": {
+    "parameters_source": "model/tokenizer.model"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/tokenizer.model",
+      "sha256": "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6",
+      "size": 59339,
+      "source_path": "tokenizer.model",
+      "urls": [
+        "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3/tokenizer.model"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "kyutai/pocket-tts-without-voice-cloning",
+  "package_id": "pocket-tts-tokenizer",
+  "qualification": {
+    "memory_evidence": "A 58 KB sentencepiece model with no memory floor of its own; it is carried wherever pocket-tts-4bit is, because every generation loads it.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "kyutai/pocket-tts-without-voice-cloning",
+        "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "kyutai/pocket-tts-without-voice-cloning",
+        "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/kyutai/pocket-tts-without-voice-cloning/revision/d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3",
+        "tree_api_url": "https://huggingface.co/api/models/kyutai/pocket-tts-without-voice-cloning/tree/d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

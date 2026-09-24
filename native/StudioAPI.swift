@@ -3,12 +3,20 @@ import AVFoundation
 import Foundation
 import CryptoKit
 
+/// One image model's generation controls, exactly the ones it publishes.
+///
+/// A modality can be served by more than one engine, and a second engine does not have to
+/// publish this one's exact control set. Every control except the size is therefore optional:
+/// one the model never names is left out of the request, and the worker fills its own default
+/// (`validate_request` in `components/image/app/backend/generation.py` reads
+/// `raw.get('steps', model.defaults['steps'])`). Requiring the shipped engine's five keys is
+/// what silently filtered a differently-shaped second engine out of the picker.
 struct NativeImageSettings: Codable, Equatable {
     var width: Int
     var height: Int
-    var steps: Int
-    var guidance: Double
-    var seed: Int64
+    var steps: Int?
+    var guidance: Double?
+    var seed: Int64?
 }
 struct NativeImageSize: Decodable, Identifiable, Equatable {
     let id: String
@@ -16,13 +24,62 @@ struct NativeImageSize: Decodable, Identifiable, Equatable {
     let width: Int
     let height: Int
 }
+/// The bounds a model publishes for its own image controls. A bound it does not publish is not
+/// enforced here: the worker checks the request against its own manifest and answers with its
+/// own reason, which is the only place that knows the engine's real limits.
 struct NativeImageLimits: Decodable, Equatable {
-    let minSteps: Int
-    let maxSteps: Int
-    let minGuidance: Double
-    let maxGuidance: Double
-    let minSeed: Int64
-    let maxSeed: Int64
+    let minSteps: Int?
+    let maxSteps: Int?
+    let minGuidance: Double?
+    let maxGuidance: Double?
+    let minSeed: Int64?
+    let maxSeed: Int64?
+
+    init(minSteps: Int? = nil, maxSteps: Int? = nil, minGuidance: Double? = nil,
+         maxGuidance: Double? = nil, minSeed: Int64? = nil, maxSeed: Int64? = nil) {
+        self.minSteps = minSteps
+        self.maxSteps = maxSteps
+        self.minGuidance = minGuidance
+        self.maxGuidance = maxGuidance
+        self.minSeed = minSeed
+        self.maxSeed = maxSeed
+    }
+
+    func accepts(_ value: NativeImageSettings) -> Bool {
+        if let steps = value.steps {
+            if let minSteps, steps < minSteps { return false }
+            if let maxSteps, steps > maxSteps { return false }
+        }
+        if let guidance = value.guidance {
+            guard guidance.isFinite else { return false }
+            if let minGuidance, guidance < minGuidance { return false }
+            if let maxGuidance, guidance > maxGuidance { return false }
+        }
+        if let seed = value.seed {
+            if let minSeed, seed < minSeed { return false }
+            if let maxSeed, seed > maxSeed { return false }
+        }
+        return true
+    }
+
+    /// A value the model's own bounds accept, so a default published outside its own limits is
+    /// brought to the nearest bound instead of the whole row being hidden.
+    func clamped(_ value: NativeImageSettings) -> NativeImageSettings {
+        var result = value
+        if let steps = result.steps {
+            if let minSteps = minSteps, steps < minSteps { result.steps = minSteps }
+            if let maxSteps = maxSteps, steps > maxSteps { result.steps = maxSteps }
+        }
+        if let guidance = result.guidance {
+            if let minGuidance = minGuidance, guidance < minGuidance { result.guidance = minGuidance }
+            if let maxGuidance = maxGuidance, guidance > maxGuidance { result.guidance = maxGuidance }
+        }
+        if let seed = result.seed {
+            if let minSeed = minSeed, seed < minSeed { result.seed = minSeed }
+            if let maxSeed = maxSeed, seed > maxSeed { result.seed = maxSeed }
+        }
+        return result
+    }
 }
 struct NativeImageConfiguration: Equatable {
     let defaults: NativeImageSettings
@@ -30,55 +87,155 @@ struct NativeImageConfiguration: Equatable {
     let limits: NativeImageLimits
     func accepts(_ value: NativeImageSettings) -> Bool {
         sizes.contains { $0.width == value.width && $0.height == value.height }
-            && value.steps >= limits.minSteps && value.steps <= limits.maxSteps
-            && value.guidance.isFinite && value.guidance >= limits.minGuidance && value.guidance <= limits.maxGuidance
-            && value.seed >= limits.minSeed && value.seed <= limits.maxSeed
+            && limits.accepts(value)
+    }
+    /// What to show for a control the operator has not chosen: the model's own published default,
+    /// or the bound it publishes. Nil means the model publishes neither, so the control is not
+    /// shown and the request omits it — never an invented value.
+    var stepsField: Int? { defaults.steps ?? limits.minSteps }
+    var guidanceField: Double? { defaults.guidance ?? limits.minGuidance }
+    var seedField: Int64? { defaults.seed ?? limits.minSeed }
+    var stepsRange: ClosedRange<Int>? {
+        guard let value = stepsField else { return nil }
+        let low = limits.minSteps ?? value
+        let high = limits.maxSteps ?? value
+        return low...max(low, high)
+    }
+    var guidanceRange: ClosedRange<Double>? {
+        guard let value = guidanceField else { return nil }
+        let low = limits.minGuidance ?? value
+        let high = limits.maxGuidance ?? value
+        return low...max(low, high)
     }
 }
 
-/// The controls ACE-Step 1.5 actually accepts, as the Music worker publishes them.
+/// The controls a Music model actually accepts, as the Music worker publishes them.
 ///
 /// The Hub catalogue carries `generation_defaults` and `generation_limits` per model, and the
 /// worker's own `validate_request` (components/music/app/backend/generation.py) is the contract
-/// behind them: duration 1-600 s, 1-50 steps, guidance 0-30, shift 0-20, seed -1 or a 32-bit
-/// unsigned value, and a fixed WAV output shape. Only fields the Hub publishes are modelled, so
-/// the form cannot invent a knob the engine does not have.
+/// behind them: it validates the request with *that model's* validator and fills anything the
+/// request omits from the model's own entry. Only fields the Hub publishes are modelled, and
+/// each control is optional, so a second engine of the same modality that publishes a different
+/// control set is offered rather than silently dropped.
 struct NativeMusicSettings: Codable, Equatable {
     var durationSeconds: Double
-    var steps: Int
-    var guidanceScale: Double
-    var shift: Double
-    var seed: Int64
-    var instrumental: Bool
-    var lyrics: String
-    var vocalLanguage: String
+    var steps: Int?
+    var guidanceScale: Double?
+    var shift: Double?
+    var seed: Int64?
+    var instrumental: Bool?
+    var lyrics: String?
+    var vocalLanguage: String?
 }
+/// The bounds a model publishes for its own Music controls; a bound it does not publish is left
+/// to the worker's own validator rather than invented here.
 struct NativeMusicLimits: Equatable {
-    let minDurationSeconds: Double
-    let maxDurationSeconds: Double
-    let minSteps: Int
-    let maxSteps: Int
-    let minGuidance: Double
-    let maxGuidance: Double
-    /// The Hub does not publish shift bounds today. The worker's own validation is 0-20, so a
-    /// missing bound falls back to that contract rather than to a guess.
-    let minShift: Double
-    let maxShift: Double
-    let minSeed: Int64
-    let maxSeed: Int64
+    let minDurationSeconds: Double?
+    let maxDurationSeconds: Double?
+    let minSteps: Int?
+    let maxSteps: Int?
+    let minGuidance: Double?
+    let maxGuidance: Double?
+    let minShift: Double?
+    let maxShift: Double?
+    let minSeed: Int64?
+    let maxSeed: Int64?
+
+    init(minDurationSeconds: Double? = nil, maxDurationSeconds: Double? = nil,
+         minSteps: Int? = nil, maxSteps: Int? = nil,
+         minGuidance: Double? = nil, maxGuidance: Double? = nil,
+         minShift: Double? = nil, maxShift: Double? = nil,
+         minSeed: Int64? = nil, maxSeed: Int64? = nil) {
+        self.minDurationSeconds = minDurationSeconds
+        self.maxDurationSeconds = maxDurationSeconds
+        self.minSteps = minSteps
+        self.maxSteps = maxSteps
+        self.minGuidance = minGuidance
+        self.maxGuidance = maxGuidance
+        self.minShift = minShift
+        self.maxShift = maxShift
+        self.minSeed = minSeed
+        self.maxSeed = maxSeed
+    }
+
+    func accepts(_ value: NativeMusicSettings) -> Bool {
+        guard value.durationSeconds.isFinite else { return false }
+        if let minDurationSeconds, value.durationSeconds < minDurationSeconds { return false }
+        if let maxDurationSeconds, value.durationSeconds > maxDurationSeconds { return false }
+        if let steps = value.steps {
+            if let minSteps, steps < minSteps { return false }
+            if let maxSteps, steps > maxSteps { return false }
+        }
+        if let guidance = value.guidanceScale {
+            guard guidance.isFinite else { return false }
+            if let minGuidance, guidance < minGuidance { return false }
+            if let maxGuidance, guidance > maxGuidance { return false }
+        }
+        if let shift = value.shift {
+            guard shift.isFinite else { return false }
+            if let minShift, shift < minShift { return false }
+            if let maxShift, shift > maxShift { return false }
+        }
+        if let seed = value.seed {
+            if let minSeed, seed < minSeed { return false }
+            if let maxSeed, seed > maxSeed { return false }
+        }
+        if let lyrics = value.lyrics, lyrics.count > 8000 { return false }
+        if let language = value.vocalLanguage, language.count > 32 { return false }
+        return true
+    }
+
+    /// Bring a value the model itself published inside the bounds it published, rather than
+    /// hiding the model because its own two rows disagree.
+    func clamped(_ value: NativeMusicSettings) -> NativeMusicSettings {
+        var result = value
+        if let minDurationSeconds, result.durationSeconds < minDurationSeconds {
+            result.durationSeconds = minDurationSeconds
+        }
+        if let maxDurationSeconds, result.durationSeconds > maxDurationSeconds {
+            result.durationSeconds = maxDurationSeconds
+        }
+        if let steps = result.steps {
+            if let minSteps, steps < minSteps { result.steps = minSteps }
+            if let maxSteps, steps > maxSteps { result.steps = maxSteps }
+        }
+        if let guidance = result.guidanceScale {
+            if let minGuidance, guidance < minGuidance { result.guidanceScale = minGuidance }
+            if let maxGuidance, guidance > maxGuidance { result.guidanceScale = maxGuidance }
+        }
+        if let shift = result.shift {
+            if let minShift, shift < minShift { result.shift = minShift }
+            if let maxShift, shift > maxShift { result.shift = maxShift }
+        }
+        if let seed = result.seed {
+            if let minSeed, seed < minSeed { result.seed = minSeed }
+            if let maxSeed, seed > maxSeed { result.seed = maxSeed }
+        }
+        return result
+    }
 }
 struct NativeMusicConfiguration: Equatable {
     let defaults: NativeMusicSettings
     let limits: NativeMusicLimits
-    func accepts(_ value: NativeMusicSettings) -> Bool {
-        value.durationSeconds.isFinite
-            && value.durationSeconds >= limits.minDurationSeconds && value.durationSeconds <= limits.maxDurationSeconds
-            && value.steps >= limits.minSteps && value.steps <= limits.maxSteps
-            && value.guidanceScale.isFinite
-            && value.guidanceScale >= limits.minGuidance && value.guidanceScale <= limits.maxGuidance
-            && value.shift.isFinite && value.shift >= limits.minShift && value.shift <= limits.maxShift
-            && value.seed >= limits.minSeed && value.seed <= limits.maxSeed
-            && value.lyrics.count <= 8000 && value.vocalLanguage.count <= 32
+    func accepts(_ value: NativeMusicSettings) -> Bool { limits.accepts(value) }
+    /// What to show for a control the operator has not chosen, or nil when the model publishes
+    /// neither a default nor a bound for it — then the control is not shown and the request
+    /// omits it, so the worker uses its own default.
+    var stepsField: Int? { defaults.steps ?? limits.minSteps }
+    var guidanceField: Double? { defaults.guidanceScale ?? limits.minGuidance }
+    var shiftField: Double? { defaults.shift ?? limits.minShift }
+    var seedField: Int64? { defaults.seed ?? limits.minSeed }
+    var durationRange: ClosedRange<Double>? {
+        let low = limits.minDurationSeconds ?? defaults.durationSeconds
+        let high = limits.maxDurationSeconds ?? defaults.durationSeconds
+        guard low.isFinite, high.isFinite else { return nil }
+        return low...max(low, high)
+    }
+    var stepsRange: ClosedRange<Int>? {
+        guard let value = stepsField else { return nil }
+        let low = limits.minSteps ?? value
+        let high = limits.maxSteps ?? value
+        return low...max(low, high)
     }
 }
 
@@ -96,7 +253,14 @@ struct NativeModel: Identifiable, Equatable {
     let languages: [String]
     let runtimeReady: Bool
     let supportsWordTimestamps: Bool
-    let speakers: [String]
+    /// The preset voices this model's own runtime published. Empty for every model that does not
+    /// publish a choosable roster — a single-speaker model has one built-in voice and nothing to
+    /// pick — so a view never lends one family's names to another family's model.
+    var speakers: [String] = []
+    /// Whether this model's family publishes a choosable preset roster at all. False means the
+    /// model does not offer a list to choose from (a single built-in voice), not that the list has
+    /// not arrived yet; a view needs the difference to say something true in both cases.
+    var publishesPresetRoster: Bool = false
     /// Qwen3-TTS *Base* models clone from a reference clip instead of using preset speakers.
     var requiresReference: Bool = false
     /// Which of the three ways of choosing a voice this model uses. The Audio page is organised by
@@ -186,15 +350,16 @@ enum VoiceMode: String, CaseIterable, Identifiable {
             return "Describe a voice in words — 'deep, slow, warm' — and the model creates it."
         }
     }
-    /// What to say when no installed model offers this.
+    /// What to say when no installed model offers this. It names no family: the catalog decides
+    /// which models exist, and a copy that lists them goes stale the moment a family is added.
     var emptyReason: String {
         switch self {
         case .cloning:
-            return "No voice-cloning model is installed. Clone models are the Qwen3-TTS Base tiers, OmniVoice and VoxCPM2."
+            return "No voice-cloning model is installed on this Mac yet."
         case .preset:
-            return "This Mac has no model with ready-made voices installed. Qwen3-TTS CustomVoice is the model for this tab."
+            return "No model with built-in voices is installed on this Mac yet."
         case .design:
-            return "This Mac has no voice-design model installed. Qwen3-TTS VoiceDesign is the model for this tab."
+            return "No voice-design model is installed on this Mac yet."
         }
     }
 }
@@ -648,17 +813,55 @@ struct NativeVoice: Decodable, Equatable, Identifiable {
             ? String(format: "%.1f min", durationSeconds / 60)
             : String(format: "%.1f s", durationSeconds)
     }
-    var genderLabel: String {
-        switch gender { case "m": return "Male"; case "f": return "Female"; default: return "Neutral" }
+    /// What the worker published for this voice's gender, in the operator's words.
+    ///
+    /// The worker owns the vocabulary and returns `gender` verbatim, so anything it publishes is
+    /// rendered rather than replaced by "Neutral": an out-of-vocabulary value used to read as
+    /// blank or wrong. The two codes the worker itself writes are spelled out; a value it did not
+    /// supply is shown as "Not stated" instead of being given a meaning it never claimed.
+    var genderLabel: String { Self.genderLabel(for: gender) }
+    static func genderLabel(for gender: String) -> String {
+        let value = gender.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return "Not stated" }
+        switch value.lowercased() {
+        case "m", "male": return "Male"
+        case "f", "female": return "Female"
+        case "n", "neutral": return "Neutral"
+        default: return value.prefix(1).uppercased() + value.dropFirst()
+        }
     }
-    /// The library's licence vocabulary, spelled the way the operator reads it.
+    /// The licence vocabulary, spelled the way the operator reads it. This is the *fallback* for a
+    /// new voice, where the worker has supplied nothing: a voice that already carries a licence
+    /// shows the worker's own value, in-vocabulary or not.
     static let licenseOptions: [(id: String, label: String)] = [
         ("self-owned", "Owned by me"),
         ("public-domain", "Public domain"),
         ("permission", "Used with permission"),
         ("unknown", "Unknown"),
     ]
+    /// The same for language: a convenience list for a new voice, never a closed set. The worker
+    /// owns the store, so a Khmer voice tagged `km` is stored and shown as `km`.
     static let languageOptions = ["en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"]
+
+    /// The licence choices to offer, including this voice's own value when the worker published
+    /// one this build's short list does not name — otherwise the picker would silently show
+    /// nothing selected for a perfectly valid stored value.
+    static func licenseChoices(current: String) -> [(id: String, label: String)] {
+        let value = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !licenseOptions.contains(where: { $0.id == value }) else { return licenseOptions }
+        return licenseOptions + [(id: value, label: value)]
+    }
+
+    /// The language choices to offer: the languages this library already holds, then the fallback
+    /// list. Empty when the library names none, so the caller can fall back to free text.
+    static func languageChoices(published: [String]) -> [String] {
+        let known = published.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let unique = known.reduce(into: [String]()) { result, value in
+            if !result.contains(value) { result.append(value) }
+        }
+        return unique.isEmpty ? languageOptions : unique.sorted()
+    }
 }
 
 struct NativeTranscript: Codable, Equatable {
@@ -1006,22 +1209,10 @@ final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
 @MainActor
 final class NativeWorkspaceStore: ObservableObject {
-    static let qwenCustomVoice = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
-    /// Requested Qwen3-TTS Base (voice-cloning) models. These clone from a reference clip and
-    /// its exact transcript instead of using preset speakers.
-    /// The model the Audio page opens on. A packaged Base tier, because the owner's requirement
-    /// is clone-first and because the preset-speaker default was not in the shipped library at
-    /// all - the page opened on a model that could not generate.
-    static let qwenBase = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
-    static let qwenBaseRepos: Set<String> = [
-        "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
-        "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
-        // The 4-bit pair is the same cloning contract at roughly half the weight bytes, so it
-        // takes the same reference clip and transcript rather than being treated as unproven.
-        "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
-        "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
-    ]
-    static let whisperTurbo = "mlx-community/whisper-large-v3-turbo"
+    /// Which model a Studio opens on is not written down here. The worker publishes its own
+    /// `default_model` for transcription, and every other Studio opens on the first model the Hub
+    /// offers for it — the same rule Image and Music already used. A repo constant here is what
+    /// opened the Audio page on a model that was not in its own picker.
 
     @Published private(set) var models: [NativeModel] = []
     @Published private(set) var audioJobs: [NativeJob] = []
@@ -1031,14 +1222,27 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var subtitleJobs: [NativeJob] = []
     @Published private(set) var imageConfigurations: [String: NativeImageConfiguration] = [:]
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
-    @Published var imageModel = "" { didSet { if imageModel != oldValue { imageSettings = nil }; scheduleSave() } }
+    /// Changing the model changes the controls, so the new model's own published defaults are
+    /// loaded at once: leaving them nil disabled Generate until the next poll, which read as the
+    /// model being unusable.
+    @Published var imageModel = "" {
+        didSet {
+            if imageModel != oldValue { imageSettings = imageConfigurations[imageModel]?.defaults }
+            scheduleSave()
+        }
+    }
     @Published var imageSettings: NativeImageSettings? { didSet { scheduleSave() } }
     /// Per-studio Music history and the last Music draft, mirroring Image. It is the same Hub job
     /// queue, filtered to `modality == "music"`, so no second job subsystem is introduced.
     @Published private(set) var musicJobs: [NativeJob] = []
     @Published private(set) var musicConfigurations: [String: NativeMusicConfiguration] = [:]
     @Published var musicPrompt = "" { didSet { scheduleSave() } }
-    @Published var musicModel = "" { didSet { if musicModel != oldValue { musicSettings = nil }; scheduleSave() } }
+    @Published var musicModel = "" {
+        didSet {
+            if musicModel != oldValue { musicSettings = musicConfigurations[musicModel]?.defaults }
+            scheduleSave()
+        }
+    }
     @Published var musicSettings: NativeMusicSettings? { didSet { scheduleSave() } }
     /// A Music-only note, shown beside the Music form. A failure still goes to `error`, which is
     /// the banner every workspace shares.
@@ -1061,7 +1265,6 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var submittingChat = false
 
     @Published private(set) var downloads: [NativeDownload] = []
-    @Published private(set) var audioSpeakers: [String] = []
     /// The saved voices on this Mac, read from the Voice worker's library.
     @Published private(set) var voices: [NativeVoice] = []
     /// Set while a voice is being added, edited or removed, so a button can show it is working
@@ -1072,7 +1275,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// A voice action that failed, shown where the action was taken.
     @Published var voiceError: String?
     @Published var audioText = "" { didSet { scheduleSave() } }
-    @Published var audioModel = qwenBase { didSet { scheduleSave() } }
+    /// Empty until the Hub answers: the first supported model of this Studio is selected by
+    /// `reconcileSelections` from what the Hub actually offers.
+    @Published var audioModel = "" { didSet { syncAudioToModel(); scheduleSave() } }
     /// Which of the three voice tabs the operator is on. Kept so reopening the app returns them to
     /// the job they were doing rather than to whichever model happens to sort first.
     @Published var audioMode: VoiceMode = .cloning { didSet { scheduleSave() } }
@@ -1095,7 +1300,12 @@ final class NativeWorkspaceStore: ObservableObject {
     private var audioReferenceSegments: [[String: Any]] = []
     @Published private(set) var audioReferenceStatus: String?
     @Published private(set) var stagingReference = false
-    @Published var transcriptionModel = whisperTurbo { didSet { scheduleSave() } }
+    /// Empty until the Hub answers; the worker's own `default_model` names the transcription
+    /// model to open on (`reconcileSelections(defaultTranscription:)`).
+    @Published var transcriptionModel = "" { didSet { scheduleSave() } }
+    /// The transcription model the worker itself names as its default. Read from the worker's
+    /// availability route; the app never writes a repo down as the default.
+    @Published private(set) var transcriptionDefaultModel: String?
     @Published var transcriptionFile: URL? { didSet { scheduleSave() } }
     @Published var transcriptionLanguage = "" { didSet { scheduleSave() } }
     @Published var wordTimestamps = false { didSet { scheduleSave() } }
@@ -1247,6 +1457,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// A note about a file the app had to set aside at startup, or a part of a refresh that could
     /// not be read. Shown with the other messages rather than failing silently.
     @Published private(set) var startupNote: String?
+    /// A local file the app could not read and set aside. Kept apart from `startupNote` so a Hub
+    /// refresh cannot erase it, and composed with the refresh's own notes when the banner is built.
+    private var recoveryNote: String?
     @Published private(set) var joiningFleet = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
@@ -1396,12 +1609,14 @@ final class NativeWorkspaceStore: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         do {
-            // The catalog and the package list are the Hub itself: if they fail, the Hub is not
-            // answering. Everything else is a studio or a list, and one of those failing used to
-            // abort the whole refresh and mark the Hub unreachable - so a dead Subtitle worker
-            // blanked the models, the jobs and the connections with no explanation.
+            // The catalog is the Hub itself: if it fails, the Hub is not answering. The package
+            // list is a second read of the same Hub, and it must not be fatal: the Hub builds it
+            // from every manifest in one pass, so a single malformed manifest answers 503 for the
+            // whole route. Read with a hard `try`, that one row threw the refresh, marked the Hub
+            // unreachable and blanked every model picker on every Mac - the chat-mlx failure. Losing
+            // the package rows costs install state, not the catalog.
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
-            async let packages: HubModelPackagesResponse = get(["api", "hub", "model-packages"])
+            async let packages: HubModelPackagesResponse? = try? get(["api", "hub", "model-packages"])
             async let transcription: TranscriptionAvailability? = try? get(["studio", "transcription", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability? = try? get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse? = try? get(["api", "hub", "jobs"])
@@ -1410,28 +1625,46 @@ final class NativeWorkspaceStore: ObservableObject {
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
                 try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
-            if transcriptionValue == nil || generationValue == nil {
-                startupNote = "A studio did not answer; the rest of this page is up to date."
+            // A degraded read is still a read the operator has to know about: without the package
+            // rows every model reads as unsupported, and that looks like the models are broken
+            // unless the reason is on screen.
+            var startupNotes: [String] = []
+            if packagesValue == nil {
+                startupNotes.append("The Hub's model package list could not be read; models are listed without their install state until it answers again.")
             }
+            if transcriptionValue == nil || generationValue == nil {
+                startupNotes.append("A studio did not answer; the rest of this page is up to date.")
+            }
+            var refreshNotes = startupNotes
+            if let recoveryNote { refreshNotes.insert(recoveryNote, at: 0) }
             guard connectionID == requestConnection else { return }
             // Built by merging, not uniqueKeysWithValues: a repeated id in a Hub payload would
             // trap the app on every refresh and on the two-second poll. Last one wins instead.
-            modelPackages = packagesValue.models.reduce(into: [:]) { $0[$1.modelId] = $1 }
-            audioSpeakers = (generationValue?.qwen3PresetSpeakers ?? []).map(\.id)
-            if audioSpeaker.isEmpty || (!audioSpeakers.isEmpty && !audioSpeakers.contains(audioSpeaker)) {
-                audioSpeaker = audioSpeakers.first ?? "Ryan"
-            }
+            // An unreadable list is no rows, which the model builders already treat as "nothing
+            // can be installed or dispatched" rather than as a reason to give up on the page.
+            modelPackages = packagesValue?.models.reduce(into: [:]) { $0[$1.modelId] = $1 } ?? [:]
+            // Every preset roster the Voice runtime publishes, under the key the runtime itself
+            // names it (`qwen3_preset_speakers` today, `<family>_preset_speakers` for the next
+            // family). Decoding one fixed key was what left a second preset family with an empty
+            // roster; each model is then lent only the roster its own family published.
+            let rosters = generationValue?.rosters ?? [:]
+            // One row per repo, richest kept: the Hub's aggregate carries a model once per studio
+            // that lists it, so the same repo can arrive with `family`/`capabilities` on one row and
+            // without them on another. Deduplicating here also keeps a bare row from overwriting a
+            // rich model's published generation settings in the two maps below.
+            let catalogModels = Self.oneEntryPerRepo(
+                catalogValue.models, repo: { $0.repo }, richness: Self.catalogRichness)
             models = Self.combineModels(
-                catalogValue.models,
+                catalogModels,
                 transcriptionValue?.models ?? [],
                 transcriptionAvailable: transcriptionValue?.available ?? false,
-                speakers: audioSpeakers,
+                rosters: rosters,
                 packages: modelPackages
             )
-            imageConfigurations = catalogValue.models.reduce(into: [:]) { result, model in
+            imageConfigurations = catalogModels.reduce(into: [:]) { result, model in
                 if let configuration = model.imageConfiguration { result[model.repo] = configuration }
             }
-            musicConfigurations = catalogValue.models.reduce(into: [:]) { result, model in
+            musicConfigurations = catalogModels.reduce(into: [:]) { result, model in
                 if let configuration = model.musicConfiguration { result[model.repo] = configuration }
             }
             if imageConfigurations[imageModel] == nil,
@@ -1440,17 +1673,37 @@ final class NativeWorkspaceStore: ObservableObject {
                let first = models.first(where: { $0.function == .music && $0.supported }) { musicModel = first.repo }
             if imageSettings == nil { imageSettings = imageConfiguration?.defaults }
             if musicSettings == nil { musicSettings = musicConfiguration?.defaults }
+            // The speaker follows the selected model's own published roster, never a global list:
+            // a global outlives the model it was read for, which is how a Khmer model would have
+            // been offered another family's voice names.
+            if let selected = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
+               !selected.speakers.contains(audioSpeaker) {
+                audioSpeaker = selected.speakers.first ?? ""
+            }
             var history: [NativeJob] = []
             var images: [NativeJob] = []
             var musics: [NativeJob] = []
+            var subtitlesFromHub: [NativeJob] = []
             var unreadable = 0
+            // The batch's own `modality` decides where it goes, not a list here that skips
+            // anything it has not heard of before the loop: a skipped batch was not shown, not
+            // counted and not reported. A modality this build cannot place is collected and named
+            // in the startup note instead of disappearing.
+            var unplaceable: [String: Int] = [:]
             var finished: [String: NativeJob] = [:]
-            for batch in (jobsValue?.batches ?? []) where ["voice", "image", "music"].contains(batch.modality) {
+            for batch in (jobsValue?.batches ?? []) {
+                // A modality this build cannot place, or one that maps to a Studio with no batch
+                // history (Chat answers a prompt directly; Video has no engine), is named rather
+                // than skipped: the loop must not fetch a detail it has nowhere to show.
+                guard let function = Self.function(forModality: batch.modality),
+                      function.hasBatchHistory else {
+                    unplaceable[batch.modality, default: 0] += 1
+                    continue
+                }
                 if let known = finishedJobCache[batch.id] {
                     finished[batch.id] = known
-                    if batch.modality == "image" { images.append(known) }
-                    else if batch.modality == "music" { musics.append(known) }
-                    else { history.append(known) }
+                    Self.file(known, for: function, images: &images, musics: &musics,
+                              history: &history, subtitles: &subtitlesFromHub)
                     continue
                 }
                 do {
@@ -1458,9 +1711,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     guard connectionID == requestConnection else { return }
                     let job = Self.mapHubJob(detail)
                     if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
-                    if batch.modality == "image" { images.append(job) }
-                    else if batch.modality == "music" { musics.append(job) }
-                    else { history.append(job) }
+                    Self.file(job, for: function, images: &images, musics: &musics,
+                              history: &history, subtitles: &subtitlesFromHub)
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
                     // is a convenience over the Hub's history, and losing it should not read as the
@@ -1468,16 +1720,27 @@ final class NativeWorkspaceStore: ObservableObject {
                     unreadable += 1
                 }
             }
+            var jobNotes: [String] = []
             if unreadable > 0 {
-                startupNote = "\(unreadable) finished job(s) could not be read; the rest are shown."
+                jobNotes.append("\(unreadable) finished job(s) could not be read; the rest are shown.")
             }
+            if !unplaceable.isEmpty {
+                let named = unplaceable.sorted { $0.key < $1.key }
+                    .map { "\($0.value) for \($0.key.isEmpty ? "a batch with no modality" : $0.key)" }
+                    .joined(separator: ", ")
+                jobNotes.append("The Hub listed job(s) this build has no Studio history for: \(named). Add the modality to `function(forModality:)` in native/StudioAPI.swift.")
+            }
+            // Appended, not assigned: a degraded read and an unplaceable batch are different
+            // facts, and the second must not erase the first.
+            refreshNotes.append(contentsOf: jobNotes)
+            if !refreshNotes.isEmpty { startupNote = refreshNotes.joined(separator: " ") }
             // Only what the Hub still lists is remembered; anything it forgets leaves with it.
             finishedJobCache = finished
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             musicJobs = musics.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
-            var subtitles: [NativeJob] = []
-            for batch in (subtitleValue?.batches ?? []) {
+            var subtitles: [NativeJob] = subtitlesFromHub
+            for batch in (subtitleValue?.batches ?? []) where !subtitles.contains(where: { $0.id == batch.id }) {
                 let batchState = batch.status ?? "unknown"
                 subtitles.append(NativeJob(
                     id: batch.id,
@@ -1513,6 +1776,7 @@ final class NativeWorkspaceStore: ObservableObject {
                                         runsHere: group.memory?.runsHere)
                 }
             }
+            transcriptionDefaultModel = transcriptionValue?.defaultModel
             reconcileSelections(defaultTranscription: transcriptionValue?.defaultModel)
             await reconcileTranscription()
             isReachable = true
@@ -1641,7 +1905,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             throw NativeAPIError.message("Choose a saved voice, or a reference clip to clone from.")
                         }
                         guard !model.requiresTranscript || !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                            throw NativeAPIError.message("This Qwen Base voice needs the exact words spoken in the reference clip.")
+                            throw NativeAPIError.message("This voice model needs the exact words spoken in the reference clip.")
                         }
                         guard let assetID = audioReferenceAssetId else {
                             throw NativeAPIError.message("Prepare the reference voice before generating.")
@@ -1654,14 +1918,18 @@ final class NativeWorkspaceStore: ObservableObject {
                             voiceReferenceAssetId: assetID, voiceLibraryId: nil, routing: routingPin)
                     }
                 } else {
-                    guard audioSpeakers.isEmpty || audioSpeakers.contains(audioSpeaker) else {
-                        throw NativeAPIError.message("Choose a speaker reported by the local Qwen runtime.")
+                    // Only a speaker the model's own runtime published may be sent. A preset model
+                    // that published no roster — Khmer VITS has a single built-in voice — is asked
+                    // for nothing rather than being handed another family's speaker names.
+                    guard model.speakers.isEmpty || model.speakers.contains(audioSpeaker) else {
+                        throw NativeAPIError.message("Choose a speaker reported by this model's local runtime.")
                     }
                     body = HubAudioRequest(
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: audioSpeaker, language: language, speed: audioSpeed))],
+                            presetSpeaker: model.speakers.isEmpty ? "" : audioSpeaker,
+                            language: language, speed: audioSpeed))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 }
             }
@@ -2186,7 +2454,14 @@ final class NativeWorkspaceStore: ObservableObject {
         // Timestamps are requested because a long reference needs them to be cloneable: without
         // them the voice engine refuses an oversized reference instead of selecting a window from
         // it. The text is unchanged; only the timing comes along.
-        var fields = ["model": Self.whisperTurbo, "word_timestamps": "true"]
+        //
+        // The model is the worker's own `default_model`, or the one the operator chose on the
+        // Subtitle page. When neither is known the field is left out and the worker uses its own
+        // default, rather than the app naming a repo it has not been told about.
+        var fields = ["word_timestamps": "true"]
+        if let model = transcriptionDefaultModel ?? (transcriptionModel.isEmpty ? nil : transcriptionModel) {
+            fields["model"] = model
+        }
         let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { fields["language"] = trimmed }
         let upload = try await Task.detached(priority: .userInitiated) {
@@ -2912,7 +3187,7 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Change this Hub's role. Standalone creates locally; Controller serves other Macs and
     /// reports their work; Node does local work only and defers customer jobs to a controller.
-    func clearStartupNote() { startupNote = nil }
+    func clearStartupNote() { startupNote = nil; recoveryNote = nil }
 
     /// Run one file load, and never let a damaged file stop the app.
     ///
@@ -2923,7 +3198,10 @@ final class NativeWorkspaceStore: ObservableObject {
             let aside = url.appendingPathExtension("corrupt")
             try? FileManager.default.removeItem(at: aside)
             try? FileManager.default.moveItem(at: url, to: aside)
-            startupNote = "\(name.capitalized) could not be read, so it was set aside as \(aside.lastPathComponent) and the app started without it."
+            // A damaged local file is a different fact from a degraded Hub read, so it is kept
+            // apart and composed with them rather than being erased by the next refresh.
+            recoveryNote = "\(name.capitalized) could not be read, so it was set aside as \(aside.lastPathComponent) and the app started without it."
+            startupNote = recoveryNote
         }
     }
 
@@ -4133,14 +4411,74 @@ final class NativeWorkspaceStore: ObservableObject {
         return model
     }
 
+    /// Which Studio a Hub batch belongs to, read from the batch's own `modality`.
+    ///
+    /// The Hub's routing table names the Voice studio's modality `voice` while this app's page and
+    /// its persisted selection are `Audio`, so that one alias is the whole mapping. Nothing here is
+    /// a list of the modalities that exist: a modality this build cannot place is reported by
+    /// `refresh` instead of being skipped, which is what a `contains(...)` filter did.
+    static func function(forModality modality: String) -> StudioFunction? {
+        let value = modality.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !value.isEmpty else { return nil }
+        if let exact = StudioFunction.allCases.first(where: { $0.rawValue.lowercased() == value }) {
+            return exact
+        }
+        return value == "voice" ? .audio : nil
+    }
+
+    /// File one finished batch under the Studio its modality named.
+    ///
+    /// The switch is exhaustive over `StudioFunction`, so a new Studio cannot be added without
+    /// answering where its jobs go. A Studio with no batch history (Chat, and Video which has no
+    /// engine) has its batches named in the startup note rather than dropped in silence.
+    private static func file(_ job: NativeJob, for function: StudioFunction,
+                             images: inout [NativeJob], musics: inout [NativeJob],
+                             history: inout [NativeJob], subtitles: inout [NativeJob]) {
+        switch function {
+        case .image: images.append(job)
+        case .music: musics.append(job)
+        case .transcription: subtitles.append(job)
+        case .audio: history.append(job)
+        case .chat, .video:
+            // Unreachable: `refresh` files only Studios that publish a batch history. Named here
+            // so adding a Studio case is a compile-time question, not a silent misfiling.
+            break
+        }
+    }
+
+    /// The tab and the chosen speaker both follow the chosen model.
+    ///
+    /// A preset roster belongs to the model that published it, so without this, switching from one
+    /// family's preset model to another's left the previous family's voice name selected and sent
+    /// it to an engine that has never heard of it. The tab follows too, because the picker lists
+    /// only the current tab's models: a model selected from elsewhere (the Models page's "Use in
+    /// Audio") must not leave the page showing a list the selected model is not in.
+    private func syncAudioToModel() {
+        guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio })
+        else { return }
+        if model.voiceMode != audioMode { audioMode = model.voiceMode }
+        if !model.speakers.contains(audioSpeaker) { audioSpeaker = model.speakers.first ?? "" }
+    }
+
     private func reconcileSelections(defaultTranscription: String?) {
+        // The first model the Hub actually offers for the Studio, never a repo written down here.
+        // "Repairing" the Audio selection to a hardcoded repo opened the page on a model that was
+        // not in its own picker on a library without that model, and Generate stayed disabled
+        // until the tab was changed.
         if !models.contains(where: { $0.repo == audioModel && $0.function == .audio && $0.supported }) {
-            audioModel = Self.qwenBase
+            audioModel = models.first { $0.function == .audio && $0.supported }?.repo ?? ""
+            if let selected = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
+               !selected.speakers.contains(audioSpeaker) {
+                audioSpeaker = selected.speakers.first ?? ""
+            }
         }
         if !models.contains(where: { $0.repo == transcriptionModel && $0.function == .transcription && $0.supported }) {
+            // The worker's own `default_model` names the model it would transcribe with; the first
+            // supported one is the fallback, so a library without that exact model still has a
+            // selection that is really in the list.
             transcriptionModel = models.first {
                 $0.repo == defaultTranscription && $0.function == .transcription && $0.supported
-            }?.repo ?? Self.whisperTurbo
+            }?.repo ?? models.first { $0.function == .transcription && $0.supported }?.repo ?? ""
         }
         if let selected = models.first(where: { $0.repo == transcriptionModel && $0.function == .transcription }),
            !selected.supportsWordTimestamps { wordTimestamps = false }
@@ -4156,26 +4494,87 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    /// Which way a model is told what to sound like.
+    /// Which way a model is told what to sound like, read from what the catalog publishes.
     ///
-    /// Qwen3-TTS ships three tiers that are told apart only by their name: Base clones, CustomVoice
-    /// takes preset speakers, VoiceDesign takes a description. VoxCPM2 and OmniVoice clone. The
-    /// runtime's declared capability is trusted where it settles the question, and the name is used
-    /// for the Qwen tiers because the capability list is identical across them.
+    /// The rule is the runtime's own data: a model whose catalog entry declares voice cloning
+    /// clones; one that does not is the preset/single-speaker form, which is what a family with a
+    /// fixed built-in voice publishes. No family needs to be known for that to be right, so a
+    /// family added to the catalog after this build lands in its correct tab.
+    ///
+    /// Qwen3-TTS is the one genuine exception and is kept name-driven: its three tiers — Base,
+    /// CustomVoice and VoiceDesign — publish an identical capability list and differ only by
+    /// name, so the name is the only data that separates them. The check is scoped to that family,
+    /// because a name that happens to contain "base" says nothing about another family's contract.
     /// Not private: the contract test drives it directly, and a rule this easy to get wrong
     /// deserves a test rather than only a UI to exercise it through.
-    static func voiceMode(repo: String, family: String, declaredClone: Bool,
-                          isCloneFamily: Bool) -> VoiceMode {
-        let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
-        if name.contains("voicedesign") { return .design }
-        if name.contains("customvoice") { return .preset }
-        if name.contains("base") { return .cloning }
-        if isCloneFamily || declaredClone { return .cloning }
-        // A Qwen tier with no name hint and no clone capability is the preset form: it is the only
-        // Qwen mode that needs nothing but a speaker name. Anything else keeps the clone form,
-        // which is the stricter of the two.
-        if family == "qwen3-tts" { return .preset }
-        return .cloning
+    static func voiceMode(repo: String, family: String, declaredClone: Bool) -> VoiceMode {
+        if family == "qwen3-tts" {
+            let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
+            if name.contains("voicedesign") { return .design }
+            if name.contains("customvoice") { return .preset }
+            if name.contains("base") { return .cloning }
+        }
+        // Everything else — a shipped family, or one this build has never seen — is decided by the
+        // runtime's declaration: cloning when it can clone, the preset form when it cannot.
+        return declaredClone ? .cloning : .preset
+    }
+
+    /// How much of what this app reads a catalogue entry actually publishes.
+    ///
+    /// The Hub's aggregate catalogue carries one row per studio that lists a repo, and the same
+    /// repo can arrive several times with different amounts of detail: the bare rows carry no
+    /// `family` and no `capabilities`, which are exactly the fields the support and mode rules are
+    /// built on. Keeping the richest row is what stops a bare duplicate from erasing the data the
+    /// app needs; a tie means the rows say the same thing, so the first is kept.
+    private static func catalogRichness(_ model: CatalogModel) -> Int {
+        var score = 0
+        if model.family?.isEmpty == false { score += 4 }
+        if model.capabilities?.isEmpty == false { score += 4 }
+        if model.cache != nil { score += 1 }
+        if model.runtimeReady != nil { score += 1 }
+        if model.referenceAudio != nil { score += 1 }
+        if model.memoryEligible != nil { score += 1 }
+        if model.longFormDelivery != nil { score += 1 }
+        if model.imageConfiguration != nil { score += 2 }
+        if model.musicConfiguration != nil { score += 2 }
+        if model.hubModality?.isEmpty == false { score += 1 }
+        if model.sizeGb != nil { score += 1 }
+        return score
+    }
+
+    /// How much of what the Subtitle form reads a transcription entry actually publishes.
+    private static func transcriptionRichness(_ model: TranscriptionModel) -> Int {
+        var score = 0
+        if model.engine?.isEmpty == false { score += 4 }
+        if model.cached != nil { score += 2 }
+        if model.supportsWordTimestamps != nil { score += 2 }
+        if !model.languageList.isEmpty { score += 1 }
+        if model.sizeGb != nil { score += 1 }
+        return score
+    }
+
+    /// One entry per repo, keeping the richest and the order of first appearance.
+    ///
+    /// Two rows for one repo on one machine are one model, and the consumer is the layer that has
+    /// to present it that way: the Hub's aggregate is a shared contract that passes studio rows
+    /// through verbatim, and a picker repeating a model three times is this app's problem to fix.
+    /// Entries that map to different functions are genuinely different offerings and are deduped
+    /// per function, not merged across them.
+    private static func oneEntryPerRepo<T>(_ items: [T], repo: (T) -> String,
+                                          richness: (T) -> Int) -> [T] {
+        var best: [String: (item: T, score: Int)] = [:]
+        var order: [String] = []
+        for item in items {
+            let key = repo(item)
+            let score = richness(item)
+            if let existing = best[key] {
+                if score > existing.score { best[key] = (item, score) }
+            } else {
+                best[key] = (item, score)
+                order.append(key)
+            }
+        }
+        return order.compactMap { best[$0]?.item }
     }
 
     /// The audio models for one tab, best first: installed and ready, then installed, then the
@@ -4194,59 +4593,121 @@ final class NativeWorkspaceStore: ObservableObject {
             }
     }
 
+    /// The models this app offers for one Studio, filtered exactly as that Studio's picker
+    /// filters them. The sidebar summary and the picker both read this, so the two cannot
+    /// disagree about what is selectable — "Image 1" beside a picker offering eight is what a
+    /// second list produced.
+    func supportedModels(for function: StudioFunction) -> [NativeModel] {
+        function == .audio
+            ? audioModels(for: audioMode).filter { $0.supported }
+            : models.filter { $0.function == function && $0.supported }
+    }
+
+    /// Every Studio's finished-job history, in the Studio list's own order, so the Jobs page and
+    /// its tabs derive from `StudioFunction.allCases` instead of each keeping a copy that a new
+    /// Studio would silently miss. Chat and Video have no Hub batch history
+    /// (`StudioFunction.hasBatchHistory`).
+    var jobHistories: [(function: StudioFunction, jobs: [NativeJob])] {
+        StudioFunction.allCases.filter { $0.hasBatchHistory }.map { ($0, jobs(for: $0)) }
+    }
+
+    /// The finished batches the Hub filed for one Studio.
+    func jobs(for function: StudioFunction) -> [NativeJob] {
+        switch function {
+        case .audio: return audioJobs
+        case .image: return imageJobs
+        case .music: return musicJobs
+        case .transcription: return subtitleJobs
+        case .chat, .video: return []
+        }
+    }
+
+    /// Point the Studio that owns this model at it — the library's "Use in …" action.
+    ///
+    /// The model's own `function` decides which selection is set. The button used to send every
+    /// non-audio model to `transcriptionModel` and open Subtitle, so an Image or Chat model was
+    /// handed to the Subtitle form.
+    func select(_ model: NativeModel) {
+        switch model.function {
+        case .audio: audioModel = model.repo
+        case .image: imageModel = model.repo
+        case .music: musicModel = model.repo
+        case .transcription: transcriptionModel = model.repo
+        case .chat: chatModel = model.repo
+        case .video: break   // No engine in this build, and no page to open.
+        }
+    }
+
     private static func combineModels(
-        _ audio: [CatalogModel],
+        _ catalog: [CatalogModel],
         _ transcription: [TranscriptionModel],
         transcriptionAvailable: Bool,
-        speakers: [String],
+        rosters: [String: [String]],
         packages: [String: HubModelPackage]
     ) -> [NativeModel] {
-        let audioModels = audio.filter { $0.capabilities?.contains("tts") == true }.map { item in
+        // The Hub's aggregate lists a repo once per studio that carries it, so the same model can
+        // arrive three times with different amounts of detail. One row per repo, richest kept: the
+        // bare rows are the ones missing `family` and `capabilities`, and a picker that shows a
+        // model twice is wrong even when both rows agree.
+        let transcriptionRows = Self.oneEntryPerRepo(
+            transcription, repo: { $0.repo }, richness: Self.transcriptionRichness)
+        let audioModels = catalog.filter { $0.capabilities?.contains("tts") == true }.map { item in
             let family = item.family ?? ""
             let isQwen = family == "qwen3-tts"
-            // Voice-cloning families the packaged Voice worker supports. Qwen CustomVoice is the
-            // preset-speaker path; Qwen Base, VoxCPM2 and OmniVoice clone from a reference clip.
-            let isVoxCPM = family.hasPrefix("voxcpm")
-            let isOmniVoice = family == "omnivoice"
-            let isCloneFamily = isVoxCPM || isOmniVoice
-            // Prefer the runtime's own capability claim; fall back to the model name only if the
-            // catalog omits it, so a catalog change cannot silently drift from the UI.
-            let declaredClone = item.referenceAudio?.supported ?? item.referenceAudio?.declared ?? false
-            let isClone = isCloneFamily
-                || (isQwen && (declaredClone || item.repo.localizedCaseInsensitiveContains("Base")))
-            // Qwen Base conditions on the reference transcript; VoxCPM2 and OmniVoice do not.
+            // What a model can do is published by the catalog, and this app reads it instead of
+            // keeping its own list of families. `reference_audio` is the runtime's own answer to
+            // "does this model clone from a clip?", and `capabilities` carries the same claim when
+            // the nested object is absent. A family allowlist here is what made six of thirteen
+            // shipped voice packages invisible — khmer-tts-mms, khmer-tts-onnx, chatterbox-mlx and
+            // fish-audio-mlx were dropped for not being on a list the catalog had never heard of,
+            // while the Hub, the manifests and the kits all offered them.
+            let declaredClone = item.referenceAudio?.supported ?? item.referenceAudio?.declared
+                ?? (item.capabilities?.contains("voice-cloning") ?? false)
+            let mode = Self.voiceMode(repo: item.repo, family: family, declaredClone: declaredClone)
+            // The form follows the mode: cloning is the only form that needs a reference clip, and
+            // its transcript is required only where the catalog's audited profile says so. The
+            // runtime's own declaration is the answer; a family that names its cloning tiers in the
+            // repo name is the one documented exception, handled inside `voiceMode`.
+            let isClone = mode == .cloning
             let transcriptRequired = isClone
                 && (item.referenceAudio?.transcript ?? (isQwen ? "required" : "optional")) == "required"
-            // Which tab this model belongs in. Read from the name and the family, because that is
-            // what decides the engine's mode; `capabilities` cannot distinguish the three Qwen
-            // tiers, which is why the name is consulted at all.
-            let mode = Self.voiceMode(repo: item.repo, family: family,
-                                      declaredClone: declaredClone, isCloneFamily: isCloneFamily)
-            let formCompatible = isQwen || isCloneFamily
             let package = packages[item.repo]
-            let supported = formCompatible && package != nil
+            // Support is a property of the pair (catalog entry, Hub package), not of a family name:
+            // every TTS entry this Hub can dispatch is offered, so nothing shipped can be hidden by
+            // an app-side list. Whether it can run *now* is `ready` below — gating support on the
+            // runtime would hide an installable model on a Mac whose runtime is not set up yet,
+            // which is how a missing map once blanked every picker.
+            let supported = package != nil
             let cached = item.cache?.state == "cached"
             let block = Self.blockReason(memoryWarning: item.memoryWarning,
                                          memoryEligible: item.memoryEligible, package: package)
             let ready = (item.runtimeReady ?? false) && block == nil
                 && package?.dispatchState == "eligible"
-            let qualified = item.repo == qwenCustomVoice || Self.qwenBaseRepos.contains(item.repo)
+            // Whether this exact model's contract is audit-grounded is the runtime's own published
+            // answer (`execution_contract.qualification_source`), not a repo list here: a repo list
+            // silently mislabelled a new quant of an audited family, and would mislabel the next one.
+            let qualified = item.isAuditGrounded
+            // A preset roster is published per family. Each model is lent the roster its own family
+            // published — matched by the key the runtime named — and no other: a single-speaker
+            // model such as Khmer VITS has no list to choose from, and lending it another family's
+            // names would be inventing data. A preset family that publishes no roster at all has
+            // one built-in voice.
+            let roster = mode == .preset ? Self.roster(for: item, rosters: rosters) : nil
+            let publishesPresetRoster = supported && mode == .preset && roster != nil
             let note = supported
                 ? (cached && ready
                     ? (qualified
                         ? (isClone
-                            ? "Requested Qwen Base voice — clones from a reference clip and its exact transcript."
-                            : "Tested local Qwen CustomVoice workflow.")
-                        : "Compatible Qwen contract; this exact model has not completed the native pilot test.")
+                            ? "Audited for this exact model — clones from a reference clip and its exact transcript."
+                            : "Audited for this exact model; its published limits come from a recorded audit.")
+                        : "Published by the local Voice runtime; this exact model has not completed the native pilot test.")
                     : "Native Audio compatible; install the model and ensure its runtime is ready.")
-                : (package == nil
-                    ? "This model is outside the packaged model catalog."
-                    : "This native Audio form does not yet expose the model-specific controls required by this runtime entry.")
+                : "This model is outside the packaged model catalog."
             return NativeModel(
                 id: "audio:\(item.repo)", repo: item.repo, label: item.label, family: item.family ?? "Audio",
                 function: .audio, cached: cached, supported: supported, supportNote: note, sizeGB: item.sizeGb,
                 capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
-                supportsWordTimestamps: false, speakers: (supported && mode == .preset) ? speakers : [],
+                supportsWordTimestamps: false, speakers: roster ?? [], publishesPresetRoster: publishesPresetRoster,
                 requiresReference: isClone,
                 // Without this every model kept the struct's default of `.cloning`, so the preset
                 // and design tabs were empty and a CustomVoice model was sent down the clone path -
@@ -4257,24 +4718,27 @@ final class NativeWorkspaceStore: ObservableObject {
                 pausedStudio: package?.pausedStudio
             )
         }
-        let transcriptionModels = transcription.map { item in
+        let transcriptionModels = transcriptionRows.map { item in
             let package = packages[item.repo]
-            // The standalone Subtitle worker reports engine "subtitle-mlx"; the retained Voice
-            // worker reports "whisper". Accept either, or the Subtitle screen can never select a
-            // model even though the worker reports it ready.
-            let engine = (item.engine ?? "").lowercased()
-            let supported = (engine.contains("whisper") || engine.contains("subtitle")) && package != nil
+            // Being dispatchable is the producer's own answer: the transcription worker lists this
+            // model and the Hub publishes a package for it. The engine's *name* is not a gate — a
+            // hardcoded whisper*/subtitle* test hid every engine the worker reported ready while
+            // calling every other engine a "Whisper contract".
+            let engine = (item.engine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let supported = package != nil
             // The transcription catalog carries no memory tier, so its only gates are the ones
             // the package row reports.
             let block = Self.blockReason(memoryWarning: nil, memoryEligible: nil, package: package)
             let ready = transcriptionAvailable && item.cached == true && block == nil
-            let qualified = item.repo == whisperTurbo
+            // The runtime says which model it would pick; the app does not name one.
+            let qualified = item.recommended == true
             let note = supported
                 ? (ready
-                    ? (qualified ? "Tested local Whisper transcription workflow." : "Compatible Whisper contract; this exact model has not completed the native pilot test.")
+                    ? (qualified
+                        ? "Recommended by the local \(engine.isEmpty ? "transcription" : engine) runtime."
+                        : "\(engine.isEmpty ? "This transcription engine" : "The \(engine) engine") is supported through this Hub; this exact model has not completed the native pilot test.")
                     : "Native Transcription compatible; download this model and ensure the transcription runtime is ready.")
-                : (package == nil ? "This model is outside the packaged model catalog." :
-                    "This native Transcription form has not been qualified for this runtime entry yet.")
+                : "This model is outside the packaged model catalog."
             return NativeModel(
                 id: "transcription:\(item.repo)", repo: item.repo, label: item.label, family: item.engine ?? "Transcription",
                 function: .transcription, cached: item.cached ?? false, supported: supported, supportNote: note,
@@ -4284,24 +4748,36 @@ final class NativeWorkspaceStore: ObservableObject {
                 pausedStudio: package?.pausedStudio
             )
         }
-        let imageModels = audio.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
+        let imageModels = catalog.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
             let package = packages[item.repo]
-            let supported = item.imageConfiguration != nil && package != nil
+            // The form can drive this model when the model itself publishes image controls. What
+            // counts is the model's own data, not the shipped engine's exact key set: a second
+            // engine publishing fewer keys is drivable too, and its unpublished controls are
+            // omitted from the request rather than faked here.
+            let drivable = item.imageConfiguration != nil
+            let supported = drivable && package != nil
             let block = Self.blockReason(memoryWarning: item.memoryWarning,
                                          memoryEligible: item.memoryEligible, package: package)
             let ready = item.runtimeReady == true && block == nil
+            let note = supported
+                ? (ready ? "Ready for local image generation." : "Verify the image model files and runtime in Models.")
+                : (package == nil
+                    ? "This model is outside the packaged model catalog."
+                    : "This model publishes no image size, so this form has nothing to generate at. Publish `image_sizes` (or `width`/`height`) in its catalog entry — see components/image/app/backend/main.py.")
             return NativeModel(id: "image:\(item.repo)", repo: item.repo, label: item.label,
                 family: item.family ?? "Image", function: .image, cached: item.cache?.state == "cached",
-                supported: supported, supportNote: ready && supported ? "Ready for local image generation." : "Verify the image model files and runtime in Models.",
+                supported: supported, supportNote: note,
                 sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
                 pausedStudio: package?.pausedStudio)
         }
-        let chatModels = audio.filter { item in
-            let capabilities = item.capabilities ?? []
-            return capabilities.contains("chat.completion") || capabilities.contains("chat")
-        }.map { item in
+        // A chat form is whatever the catalogue publishes as one. The capability is spelled
+        // several ways across workers (`chat.completion`, `chat`, `text-generation`,
+        // `conversational`), and matching only the first two is what kept a chat model out of the
+        // picker; the family is read as well, because a worker may name its family `chat-mlx`
+        // without repeating the capability token.
+        let chatModels = catalog.filter { Self.isChatForm($0) }.map { item in
             let package = packages[item.repo]
             let block = Self.blockReason(memoryWarning: item.memoryWarning,
                                          memoryEligible: item.memoryEligible, package: package)
@@ -4320,19 +4796,84 @@ final class NativeWorkspaceStore: ObservableObject {
                 pausedStudio: package?.pausedStudio)
         }
         return audioModels + transcriptionModels + imageModels + chatModels
-            + Self.musicModels(audio, packages: packages)
+            + Self.musicModels(catalog, packages: packages)
+    }
+
+    /// Whether a catalogue entry is a chat form, read from the entry's own published data.
+    ///
+    /// Capabilities are tokens, not a fixed sentence: the Hub's workers spell the same claim as
+    /// `chat.completion`, `chat`, `text-generation` or `conversational`, and only the first two
+    /// were matched — so a chat model written the other way never appeared. The family is read too,
+    /// because a worker can name itself a chat family (`chat-mlx`) without repeating the token.
+    fileprivate static func isChatForm(_ item: CatalogModel) -> Bool {
+        // The Hub's own annotation first: a row the chat studio published is a chat model whatever
+        // it calls its capabilities.
+        if item.hubModality?.lowercased() == "chat" { return true }
+        let chatTokens: Set<String> = ["chat", "chat.completion", "conversational",
+                                       "conversation", "text-generation", "textgeneration"]
+        var tokens: Set<String> = []
+        for capability in item.capabilities ?? [] {
+            let lowered = capability.lowercased()
+            tokens.insert(lowered)
+            tokens.formUnion(lowered.split(whereSeparator: { ".-_:".contains($0) }).map(String.init))
+        }
+        if !tokens.isDisjoint(with: chatTokens) { return true }
+        guard let family = item.family?.lowercased(), !family.isEmpty else { return false }
+        let familyTokens = Set(family.split(whereSeparator: { ".-_:".contains($0) }).map(String.init))
+        return !familyTokens.isDisjoint(with: ["chat", "llm"])
+    }
+
+    /// The roster one model publishes, matched by the key its own runtime named it under.
+    ///
+    /// The Voice runtime publishes one roster per family as `<family>_preset_speakers` (the
+    /// shipped one is `qwen3_preset_speakers`), and the model's catalog entry says which family it
+    /// is. Matching by name is the only join key the payload carries today; the field to ask the
+    /// producer for is a per-model `preset_speakers` on the model's own catalog entry, which would
+    /// make this a direct read. Nil means the family publishes no roster — one built-in voice.
+    fileprivate static func roster(for item: CatalogModel, rosters: [String: [String]]) -> [String]? {
+        guard !rosters.isEmpty else { return nil }
+        let family = Self.normalizedIdentity(item.family ?? "")
+        let repo = Self.normalizedIdentity(item.repo)
+        for (key, speakers) in rosters.sorted(by: { $0.key < $1.key }) {
+            let named = Self.rosterFamily(key)
+            guard !named.isEmpty, !speakers.isEmpty else { continue }
+            if family == named || family.hasPrefix(named) || named.hasPrefix(family) { return speakers }
+            if !repo.isEmpty, repo.contains(named) { return speakers }
+        }
+        return nil
+    }
+
+    /// `qwen3_preset_speakers` -> `qwen3`; a key that names no family stays empty and is ignored.
+    ///
+    /// Both spellings are accepted because the app's decoder runs
+    /// `keyDecodingStrategy = .convertFromSnakeCase` before this sees a key, so the runtime's
+    /// `qwen3_preset_speakers` arrives here as `qwen3PresetSpeakers`.
+    private static func rosterFamily(_ key: String) -> String {
+        let lowered = key.lowercased()
+        let suffixes = ["_preset_speakers", "presetspeakers", "_preset_voices", "presetvoices",
+                        "_speakers", "speakers", "_voices", "voices"]
+        for suffix in suffixes where lowered.hasSuffix(suffix) && lowered.count > suffix.count {
+            return Self.normalizedIdentity(String(lowered.dropLast(suffix.count)))
+        }
+        return ""
+    }
+
+    private static func normalizedIdentity(_ value: String) -> String {
+        String(value.lowercased().filter { $0.isLetter || $0.isNumber })
     }
 
     /// The Music models the Hub catalogue exposes.
     ///
-    /// The standalone Music worker publishes ACE-Step 1.5 with `capabilities` led by `music` and the
-    /// `generation_defaults`/`generation_limits` the form needs. A model with no decodable Music
-    /// configuration is not offered, because the app has nothing truthful to put on the form.
+    /// The Music worker publishes each model's own `generation_defaults`/`generation_limits`; a
+    /// model that publishes a duration is offered, and every other control is read from that same
+    /// entry. A model with no duration at all is not offered, because the app has nothing truthful
+    /// to put on the form — and it says so rather than disappearing.
     private static func musicModels(_ catalog: [CatalogModel],
                                     packages: [String: HubModelPackage]) -> [NativeModel] {
         catalog.filter { $0.capabilities?.contains("music") == true }.map { item in
             let package = packages[item.repo]
-            let supported = item.musicConfiguration != nil && package != nil
+            let drivable = item.musicConfiguration != nil
+            let supported = drivable && package != nil
             let block = Self.blockReason(memoryWarning: item.memoryWarning,
                                          memoryEligible: item.memoryEligible, package: package)
             let cached = item.cache?.state == "cached"
@@ -4343,7 +4884,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     : "Native Music compatible; install the model and ensure its runtime is ready.")
                 : (package == nil
                     ? "This model is outside the packaged model catalog."
-                    : "This native Music form has no compatible generation controls for this runtime entry.")
+                    : "This model publishes no generation defaults, so this form has no length to generate. Add `generation_defaults` to its catalog entry — see components/music/app/backend/catalog.py.")
             return NativeModel(
                 id: "music:\(item.repo)", repo: item.repo, label: item.label,
                 family: item.family ?? "Music", function: .music, cached: cached, supported: supported,
@@ -4923,28 +5464,62 @@ private struct CatalogModel: Decodable {
     /// decoded none of it, so "how is a long script chunked for this model?" had no answer in the
     /// app at all.
     let longFormDelivery: HubLongFormDelivery?
+    /// Which Studio the Hub says published this row (`hub_modality`). The Hub's aggregate adds it
+    /// to every model, so it is the producer's own answer to "which form is this?" — independent of
+    /// how that worker happens to spell its capabilities.
+    let hubModality: String?
+    /// The runtime's own claim about this exact model's contract: `"audit"` when the limits below
+    /// are audit-grounded, `"unverified"` otherwise. The app read none of it and instead decided
+    /// which models were "pilot tested" from a repo list, so a new quant of an audited family was
+    /// mislabelled. This is the producer's own answer.
+    let executionContract: CatalogExecutionContract?
+    var isAuditGrounded: Bool { executionContract?.qualificationSource == "audit" }
+
+    /// The controls this model actually publishes, or nil when it publishes no size to generate
+    /// at. Every control key inside is optional: a second engine of the same modality publishing
+    /// a different control set is offered, with the controls it never named left out of the
+    /// request, instead of decoding to nil and being filtered out of the picker.
     var imageConfiguration: NativeImageConfiguration? {
-        guard let defaults = generationDefaults?.imageSettings,
-              let limits = generationLimits?.imageLimits,
-              let sizes = imageSizes, !sizes.isEmpty,
-              limits.minSteps > 0, limits.maxSteps >= limits.minSteps,
-              limits.minGuidance.isFinite, limits.maxGuidance.isFinite, limits.minGuidance <= limits.maxGuidance,
-              limits.minSeed <= limits.maxSeed,
-              sizes.allSatisfy({ $0.width > 0 && $0.height > 0 }), Set(sizes.map(\.id)).count == sizes.count else { return nil }
-        let value = NativeImageConfiguration(defaults: defaults, sizes: sizes, limits: limits)
-        return value.accepts(defaults) ? value : nil
+        let published = (imageSizes ?? []).filter { $0.width > 0 && $0.height > 0 }
+        let deduped = published.reduce(into: [NativeImageSize]()) { result, size in
+            if !result.contains(where: { $0.id == size.id }) { result.append(size) }
+        }
+        guard let size = generationDefaults?.imageSize ?? deduped.first.map({ ($0.width, $0.height) })
+        else { return nil }
+        // The picker needs at least the size the model generates at; a model that publishes no
+        // `image_sizes` gets the one its own defaults name rather than an empty chooser.
+        let sizes = deduped.isEmpty
+            ? [NativeImageSize(id: "\(size.width)x\(size.height)",
+                               label: "\(size.width) × \(size.height)",
+                               width: size.width, height: size.height)]
+            : deduped
+        let limits = generationLimits?.imageLimits ?? NativeImageLimits()
+        let defaults = limits.clamped(NativeImageSettings(
+            width: size.width, height: size.height,
+            steps: generationDefaults?.steps ?? limits.minSteps,
+            guidance: generationDefaults?.guidance ?? limits.minGuidance,
+            seed: generationDefaults?.seed ?? limits.minSeed))
+        return NativeImageConfiguration(defaults: defaults, sizes: sizes, limits: limits)
     }
     var musicConfiguration: NativeMusicConfiguration? {
-        guard let defaults = generationDefaults?.musicSettings,
-              let limits = generationLimits?.musicLimits,
-              limits.minDurationSeconds > 0, limits.maxDurationSeconds >= limits.minDurationSeconds,
-              limits.maxSteps >= limits.minSteps,
-              limits.minGuidance.isFinite, limits.maxGuidance.isFinite, limits.minGuidance <= limits.maxGuidance,
-              limits.minShift.isFinite, limits.maxShift.isFinite, limits.minShift <= limits.maxShift,
-              limits.minSeed <= limits.maxSeed else { return nil }
-        let value = NativeMusicConfiguration(defaults: defaults, limits: limits)
-        return value.accepts(defaults) ? value : nil
+        guard let published = generationDefaults?.musicSettings else { return nil }
+        let limits = generationLimits?.musicLimits ?? NativeMusicLimits()
+        let defaults = limits.clamped(NativeMusicSettings(
+            durationSeconds: published.durationSeconds,
+            steps: published.steps ?? limits.minSteps,
+            guidanceScale: published.guidanceScale ?? limits.minGuidance,
+            shift: published.shift ?? limits.minShift,
+            seed: published.seed ?? limits.minSeed,
+            instrumental: published.instrumental, lyrics: published.lyrics,
+            vocalLanguage: published.vocalLanguage))
+        return NativeMusicConfiguration(defaults: defaults, limits: limits)
     }
+}
+
+/// The runtime's own per-model execution contract. Only the fields the app reads are declared.
+private struct CatalogExecutionContract: Decodable {
+    /// `"audit"` when this exact model's published limits come from an audit.
+    let qualificationSource: String?
 }
 
 /// The catalogue's `generation_defaults` object, decoded field by field.
@@ -4965,20 +5540,23 @@ private struct HubGenerationDefaults: Decodable {
     let instrumental: Bool?
     let lyrics: String?
     let vocalLanguage: String?
-    var imageSettings: NativeImageSettings? {
-        guard let width, let height, let steps, let guidance, let seed else { return nil }
-        return NativeImageSettings(width: width, height: height, steps: steps, guidance: guidance, seed: seed)
+    /// The size this model generates at, when it publishes one.
+    var imageSize: (width: Int, height: Int)? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        return (width, height)
     }
     var musicSettings: NativeMusicSettings? {
-        guard let durationSeconds, let steps, let guidanceScale, let seed else { return nil }
+        guard let durationSeconds else { return nil }
         return NativeMusicSettings(
             durationSeconds: durationSeconds, steps: steps, guidanceScale: guidanceScale,
-            shift: shift ?? 3, seed: seed, instrumental: instrumental ?? true,
-            lyrics: lyrics ?? "[Instrumental]", vocalLanguage: vocalLanguage ?? "unknown")
+            shift: shift, seed: seed, instrumental: instrumental,
+            lyrics: lyrics, vocalLanguage: vocalLanguage)
     }
 }
 
 /// The catalogue's `generation_limits` object, decoded field by field for the same reason.
+/// Every bound is optional: a model that publishes only some of them is still offered, and the
+/// bounds it does not publish are the worker's own validation to enforce.
 private struct HubGenerationLimits: Decodable {
     let minSteps: Int?
     let maxSteps: Int?
@@ -4990,20 +5568,17 @@ private struct HubGenerationLimits: Decodable {
     let maxDurationSeconds: Double?
     let minShift: Double?
     let maxShift: Double?
-    var imageLimits: NativeImageLimits? {
-        guard let minSteps, let maxSteps, let minGuidance, let maxGuidance, let minSeed, let maxSeed else { return nil }
-        return NativeImageLimits(minSteps: minSteps, maxSteps: maxSteps,
-                                 minGuidance: minGuidance, maxGuidance: maxGuidance,
-                                 minSeed: minSeed, maxSeed: maxSeed)
+    var imageLimits: NativeImageLimits {
+        NativeImageLimits(minSteps: minSteps, maxSteps: maxSteps,
+                          minGuidance: minGuidance, maxGuidance: maxGuidance,
+                          minSeed: minSeed, maxSeed: maxSeed)
     }
-    var musicLimits: NativeMusicLimits? {
-        guard let minDurationSeconds, let maxDurationSeconds, let minSteps, let maxSteps,
-              let minGuidance, let maxGuidance, let minSeed, let maxSeed else { return nil }
-        return NativeMusicLimits(minDurationSeconds: minDurationSeconds, maxDurationSeconds: maxDurationSeconds,
-                                 minSteps: minSteps, maxSteps: maxSteps,
-                                 minGuidance: minGuidance, maxGuidance: maxGuidance,
-                                 minShift: minShift ?? 0, maxShift: maxShift ?? 20,
-                                 minSeed: minSeed, maxSeed: maxSeed)
+    var musicLimits: NativeMusicLimits {
+        NativeMusicLimits(minDurationSeconds: minDurationSeconds, maxDurationSeconds: maxDurationSeconds,
+                          minSteps: minSteps, maxSteps: maxSteps,
+                          minGuidance: minGuidance, maxGuidance: maxGuidance,
+                          minShift: minShift, maxShift: maxShift,
+                          minSeed: minSeed, maxSeed: maxSeed)
     }
 }
 /// How one model is sectioned and how its speed control is delivered.
@@ -5086,7 +5661,39 @@ private enum StringOrStrings: Decodable {
     }
     var values: [String] { switch self { case .string(let value): return [value]; case .strings(let values): return values } }
 }
-private struct GenerationAvailability: Decodable { let qwen3PresetSpeakers: [GenerationSpeaker]? }
+/// What the Voice runtime publishes about its own generation contracts.
+///
+/// The preset rosters are decoded as a bag keyed the way the runtime itself names them, rather
+/// than as one fixed key: the shipped runtime publishes `qwen3_preset_speakers`, and a second
+/// preset family publishes `<family>_preset_speakers`. Reading only the Qwen-shaped key left a
+/// second preset family with an empty roster, so its Ready-Made tab read "This model has not
+/// reported its ready-made voices yet." while the runtime had reported them.
+private struct GenerationAvailability: Decodable {
+    let rosters: [String: [String]]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: RosterKey.self)
+        var found: [String: [String]] = [:]
+        for key in container.allKeys {
+            let name = key.stringValue.lowercased()
+            let isRoster = name.hasSuffix("preset_speakers") || name.hasSuffix("presetspeakers")
+                || name.hasSuffix("preset_voices") || name.hasSuffix("presetvoices")
+                || name.hasSuffix("_speakers") || name == "speakers"
+            guard isRoster,
+                  let speakers = try? container.decode([GenerationSpeaker].self, forKey: key)
+            else { continue }
+            found[key.stringValue] = speakers.map(\.id)
+        }
+        rosters = found
+    }
+
+    private struct RosterKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+}
 private struct GenerationSpeaker: Decodable { let id: String }
 private struct JobsResponse: Decodable { let jobs: [JobWire] }
 private struct HubJobsResponse: Decodable { let batches: [HubJobSummary] }
@@ -5146,13 +5753,15 @@ private struct HubJobParams: Decodable {
     let instrumental: Bool?
     let lyrics: String?
     let vocalLanguage: String?
+    /// A finished job's own controls, exactly as the Hub echoed them. A control the model did not
+    /// publish is absent here too, so the row shows what was really asked for.
     var imageSettings: NativeImageSettings? {
-        guard let width, let height, let steps, let guidance, let seed else { return nil }
-        return NativeImageSettings(width: width, height: height, steps: steps, guidance: guidance, seed: seed)
+        guard let width, let height else { return nil }
+        return NativeImageSettings(width: width, height: height, steps: steps,
+                                   guidance: guidance, seed: seed)
     }
     var musicSettings: NativeMusicSettings? {
-        guard let durationSeconds, let steps, let guidanceScale, let shift, let seed,
-              let instrumental, let lyrics, let vocalLanguage else { return nil }
+        guard let durationSeconds else { return nil }
         return NativeMusicSettings(durationSeconds: durationSeconds, steps: steps,
                                    guidanceScale: guidanceScale, shift: shift, seed: seed,
                                    instrumental: instrumental, lyrics: lyrics,

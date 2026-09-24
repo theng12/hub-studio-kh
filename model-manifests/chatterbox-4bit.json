@@ -106,7 +106,7 @@
       ]
     }
   ],
-  "dependencies": [
+  "requires_packages": [
     "s3tokenizerv2"
   ]
 }

@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import media_tools, model_audits, paths
+from . import catalog, media_tools, model_audits, paths
 
 
 ROOT = paths.data_path("reference_cache")
@@ -40,16 +40,32 @@ def _profile(model_id: str) -> dict[str, Any]:
 
 
 def _requires_audited_profile(model_id: str) -> bool:
-    """Voice-cloning models whose reference contract must come from an audit.
+    """Whether this model's reference contract must come from an audited profile.
 
-    Qwen3-TTS Base cannot run without an exact reference transcript and a
-    bounded, speech-aligned window, so silently falling back to generic
-    defaults would produce a wrong execution copy instead of an honest error.
-    Every *-Base-* Qwen3-TTS tier is covered (0.6B and 1.7B), not only the
-    1.7B tier that happened to need the stricter production section policy.
+    The question is answered by the producer, not by the model's name: a model
+    whose published ``capabilities`` declare voice cloning is a cloning model,
+    and a cloning model without an audit-grounded reference profile cannot be
+    prepared honestly. The numbers that matter here - how long the clip may be,
+    at what rate it is resampled, whether the engine conditions on an exact
+    transcript - are exactly what an unverified generic default guesses at, which
+    is why this function's failure mode is a refusal rather than "a wrong
+    execution copy instead of an honest error".
+
+    The previous version was ``"qwen3-tts" in name and "base" in name``. A new
+    cloning family fell outside that substring test and silently received the
+    generic defaults; a new Qwen tier that was not a *-Base-* did too. The
+    capability is what the catalog publishes about cloning, so it is what this
+    reads (``reference_audio.declared`` in `serialize_model` is the same fact).
+
+    A repo that is not in the catalog answers ``False``: the public routes refuse
+    an unknown repo before preparation (`main.py` returns 400 for it, and
+    `GenerationManager.start_txt2speech` raises), so an unregistered id can only
+    arrive from a direct caller, and those kept their existing behaviour.
     """
-    name = (model_id or "").lower()
-    return "qwen3-tts" in name and "base" in name
+    model = catalog.get_model(model_id)
+    if model is None:
+        return False
+    return "voice-cloning" in (model.capabilities or ())
 
 
 def _number(value: object, default: float | None = None) -> float | None:
@@ -244,7 +260,11 @@ def prepare(
     if _requires_audited_profile(model_id) and not profile:
         raise ReferenceAudioError(
             "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE",
-            f"{model_id} reference preparation is unavailable until its audited contract is installed.",
+            f"{model_id} declares voice cloning but has no audited reference-audio profile, so "
+            "Voice Studio cannot derive its execution copy. Add the model's audit record under "
+            "components/voice/model-audits/<date>-<name>/<org>--<repo>.audit.json with "
+            "contract.input_limits.reference_audio (the Qwen3-TTS Base records show the shape), "
+            "or use a saved voice from the Voices library, which is not prepared here.",
         )
     target_rate = int(_number(profile.get("sample_rate_hz"), 24000) or 24000)
     target_rate = max(8000, min(target_rate, 96000))

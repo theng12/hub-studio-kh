@@ -28,7 +28,6 @@ from . import paths
 VALIDATOR_REVISION = "voicestudio.qwen-clone-quality.v1"
 TERMINAL_GATE_REVISION = "voicestudio.qwen-clone-quality.v2"
 TERMINAL_GATE_WINDOW = 24
-WHISPER_REPO = "mlx-community/whisper-large-v3-turbo"
 RETRY_SECTION_MAX_CHARACTERS = 230
 RETRYABLE_OUTPUT_CODES = frozenset({
     "QWEN_OUTPUT_DURATION_EXCEEDED",
@@ -36,6 +35,49 @@ RETRYABLE_OUTPUT_CODES = frozenset({
     "QWEN_OUTPUT_REPETITION_DETECTED",
 })
 _CACHE_DIR = paths.data_path("reference_cache", "qwen_quality")
+
+
+def validator_repo(model_id: str) -> str:
+    """The companion ASR model the clone-quality gate runs, from the model's manifest.
+
+    The relationship is the producer's: a Qwen Base manifest declares the
+    validator package under ``requires_packages`` (``whisper-turbo`` today), and
+    that package's own manifest names the repository. Nothing is restated here,
+    so re-pointing the gate at a different validator is a manifest edit.
+
+    When the relationship is not declared this refuses by name instead of
+    validating against a model the manifest never required: a gate that quietly
+    runs a different ASR is a quality claim nobody can reproduce.
+    """
+    # Local import: `catalog` imports this module at load time, and `cache` is a
+    # small reader that this function only needs while a job runs.
+    from . import cache
+
+    manifest = cache.manifest_for(model_id) or {}
+    by_package = cache.manifests_by_package_id()
+    for package_id in manifest.get("requires_packages") or []:
+        repo = str((by_package.get(str(package_id)) or {}).get("model_id") or "")
+        if repo:
+            return repo
+    raise QwenQualityError(
+        "QWEN_VALIDATOR_MODEL_UNDECLARED",
+        f"{model_id} declares no validator package under `requires_packages` in its manifest, "
+        "so the clone-quality gate has no ASR model to validate with; add the companion "
+        "package id in model-manifests/<package_id>.json (see whisper-turbo.json).",
+        {"validator_revision": VALIDATOR_REVISION, "model_id": model_id},
+    )
+
+
+def validator_models(model_id: str) -> list[str]:
+    """``validator_repo`` as a published list, or ``[]`` when nothing is declared.
+
+    Used where the answer is advisory (the catalogue's ``required_local_models``
+    hint); the gate itself calls ``validator_repo`` and refuses by name.
+    """
+    try:
+        return [validator_repo(model_id)]
+    except QwenQualityError:
+        return []
 
 
 @dataclass
@@ -414,10 +456,17 @@ def _terminal_gate(expected_tokens: list[str], result: dict) -> dict:
 
 def _evidence(kind: str, expected: str, observed: str, result: dict) -> dict:
     metrics = _similarity(expected, observed)
+    # The evidence names the ASR model that produced it, or nothing at all: a
+    # result that does not name its validator cannot be attributed, and writing a
+    # repo name this file happens to remember would make the evidence look
+    # reproducible when it is not. In the app the transcription manager always
+    # sets `model`, and the gate resolved it from the model's own manifest
+    # (`validator_repo`).
+    whisper_model = str(result.get("model") or "") or None
     return {
         "validator_revision": VALIDATOR_REVISION,
         "kind": kind,
-        "whisper_model": result.get("model") or WHISPER_REPO,
+        "whisper_model": whisper_model,
         "expected_sha256": hashlib.sha256(expected.encode("utf-8")).hexdigest(),
         "observed_sha256": hashlib.sha256(observed.encode("utf-8")).hexdigest(),
         "duration_seconds": round(float(result.get("duration") or 0.0), 3),

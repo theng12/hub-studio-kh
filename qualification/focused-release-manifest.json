@@ -1,4 +1,5 @@
 {
+ "_sample": "Historical sample of packaging/release_kit.py output, kept for reference - it is NOT the kit's record. The drive's own focused-release-manifest.json is written at staging time and is what qualification/verify-kit.sh reads. This sample is from the 0.4.0 kit: its model list is that older catalogue (two entries are marked _stale because they are not in model-manifests/ today) and its components map predates the Chat and Music studios.",
  "app": {
   "bytes": 2907512467,
   "name": "Studio Hub 0.4.0.app",
@@ -77,6 +78,7 @@
    "revision": "6119f7072580cc30c3cbdf496269216b03ad9742"
   },
   {
+   "_stale": "not in model-manifests/ as of 2026-09-25; this package was retired from the catalog. Do not treat this sample as an inventory.",
    "digest": {},
    "engine": "voice-mlx",
    "installed": true,
@@ -119,6 +121,7 @@
    "revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c"
   },
   {
+   "_stale": "not in model-manifests/ as of 2026-09-25; this package was retired from the catalog. Do not treat this sample as an inventory.",
    "digest": {},
    "engine": "voice-mlx",
    "installed": true,

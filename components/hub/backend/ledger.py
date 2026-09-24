@@ -20,6 +20,7 @@ import time
 import uuid
 from pathlib import Path
 
+from . import vocabulary
 from .registry import LAUNCHER_ROOT
 
 from .registry import DATA_DIR
@@ -35,7 +36,6 @@ MEDIA_EXT = {
     ".mp4": "video", ".mov": "video", ".webm": "video",
 }
 _VALID_ORIGINS = frozenset({"hub", "local_ui", "api", "unknown"})
-_VALID_OPERATIONS = frozenset({"image", "speech", "transcription"})
 _MAX_ORIGIN_DEVICE = 160
 
 _SCHEMA = """
@@ -201,8 +201,11 @@ def record_activity_event(*, machine: str, studio: str, job_id: str, state: str,
     origin = origin if origin in _VALID_ORIGINS else "unknown"
     origin_device = origin_device.strip()[:_MAX_ORIGIN_DEVICE] if isinstance(origin_device, str) else None
     origin_device = origin_device or None
-    default_operation = "image" if studio.split("@", 1)[0] == "image" else "speech"
-    operation = operation if operation in _VALID_OPERATIONS else default_operation
+    # The operation is filed by one shared rule (`vocabulary.operation_for`), the same one the
+    # live activity view uses. This used to be a second, shorter list of valid operations plus
+    # a "speech" default for everything that is not Image: `music` was missing from the list,
+    # so every Music row was stored as `speech` and Music's history was filed under Voice.
+    operation = vocabulary.operation_for(studio, operation)
     owns_connection = conn is None
     if conn is None:
         conn = _conn()
@@ -286,8 +289,9 @@ def activity_events(*, machine: str | None = None,
     for row in rows:
         item = dict(row)
         item["origin"] = row["origin"] if row["origin"] in _VALID_ORIGINS else "unknown"
-        default_operation = "image" if row["studio"].split("@", 1)[0] == "image" else "speech"
-        item["operation"] = row["operation"] if row["operation"] in _VALID_OPERATIONS else default_operation
+        # Read back through the same rule that filed it, so the durable ledger and the live
+        # activity view can never disagree about the same job.
+        item["operation"] = vocabulary.operation_for(row["studio"], row["operation"])
         result.append(item)
     return result
 
@@ -853,7 +857,13 @@ _OP_SQL = (
     "ELSE COALESCE(modality,'unknown') END"
 )
 
-_CORE_STATS_OPERATIONS = ("image", "voice", "transcription")
+# The operations every per-machine stats row always carries, even at zero, so the operator
+# surface has a stable shape. Derived from the Hub's operation vocabulary rather than a third
+# copy of it: the copy here was ("image", "voice", "transcription"), so Music and Chat were
+# silently absent from the zero-filled core set while their jobs were already filed under their
+# own operations - the same live-view/ledger disagreement `_VALID_OPERATIONS` had, one layer up.
+# `STUDIO_OPERATION.values()` is ordered (a dict), so the published order is stable.
+_CORE_STATS_OPERATIONS = tuple(vocabulary.STUDIO_OPERATION.values())
 _HISTORICAL_CTE = f"""
 WITH historical AS (
   SELECT machine, ({_OP_SQL}) operation, model, source, created_at,

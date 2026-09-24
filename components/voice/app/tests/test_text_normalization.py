@@ -210,23 +210,35 @@ def test_generation_normalises_only_families_that_need_it() -> None:
     able to force it for any family."""
     from backend import generation
 
-    assert "omnivoice" in generation._NUMBER_NORMALISED_FAMILIES
+    from backend import catalog
+
+    # The flag is the family's own published fact, and it is read from there.
+    # Stated as an invariant so a new engine that cannot pronounce digits is
+    # covered by declaring it in the registry, not by editing a set in a consumer.
+    for family_id, family in catalog.FAMILIES.items():
+        assert generation._needs_number_expansion(family_id) == family.numbers_need_expansion
+    assert generation._needs_number_expansion("omnivoice") is True
 
     # Automatic for the family that needs it.
     assert generation._normalized_speech_text(
         "omnivoice", "closer to 1,200 people", {}
     ) == "closer to one thousand two hundred people"
 
-    # Left alone for a family that is not on the allow-list...
+    # Left alone for a shipped family whose engine normalises for itself...
     assert generation._normalized_speech_text(
-        "kokoro-mlx", "closer to 1,200 people", {}
+        "qwen3-tts", "closer to 1,200 people", {}
     ) == "closer to 1,200 people"
 
     # ...unless the caller explicitly asks. This flag used to be accepted and
     # silently ignored.
     assert generation._normalized_speech_text(
-        "kokoro-mlx", "closer to 1,200 people", {"normalize_text": True}
+        "qwen3-tts", "closer to 1,200 people", {"normalize_text": True}
     ) == "closer to one thousand two hundred people"
+
+    # A family the registry does not know is refused by name rather than
+    # silently taking either branch.
+    with pytest.raises(ValueError, match="not in catalog.FAMILIES"):
+        generation._needs_number_expansion("retired-family")
 
 
 def test_normalisation_never_fails_a_job(monkeypatch) -> None:

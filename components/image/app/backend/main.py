@@ -12,7 +12,10 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import memory_policy
 from .generation import (MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES, SIZE_PRESETS,
-                         GenerationManager, final_matches, memory_plan)
+                         GenerationManager, final_matches, lane_contract, memory_plan,
+                         missing_runtime_model_reason)
+
+from components import app_version
 
 
 DEFAULT_MODEL = MODELS[MODEL_ID]
@@ -90,7 +93,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     @app.get('/api/health')
     def health() -> dict:
         active = [job for job in manager.list() if job['state'] in ('queued', 'running')]
-        return {'ok': True, 'app_version': 'standalone', 'generation': {
+        return {'ok': True, **app_version.version_fields(), 'generation': {
             'available': True, 'busy': bool(active), 'queued': sum(j['state']=='queued' for j in active),
             'running': sum(j['state']=='running' for j in active),
             'runtime_revision': manager.runtime_sha256}}
@@ -162,12 +165,55 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'sizes': [{'aspect_ratio': item['id'], 'width': item['width'],
                        'height': item['height'], 'tier': '1K',
                        'default': item['id'] == model.defaults['aspect_ratio']} for item in sizes],
+            # How to ask for this lane's work, per model: operation, accepted parameters and
+            # their enforced bounds, artifact, state vocabulary and cancel semantics. Built from
+            # this model's own limits so it cannot disagree with `validate_request`.
+            'lane_contract': lane_contract(model),
             'qualification': dict(model.qualification),
+        }
+
+    def entry_without_a_runtime_model(manifest: dict) -> dict:
+        """One published row for an Image package this runtime has no model for.
+
+        The reverse of ``model_state``: a manifest the Hub publishes and the kits can install,
+        which this worker cannot run. It is published rather than dropped — a row that says
+        why, with ``execution_ready`` false — because an absent row is invisible everywhere.
+        No generation controls are invented for it: defaults this runtime has never run would
+        be a worse lie than the honest refusal at job time.
+        """
+        host = _host_facts()
+        reason = missing_runtime_model_reason(manifest)
+        return {
+            'label': manifest.get('label') or manifest['package_id'],
+            'name': manifest.get('label') or manifest['package_id'],
+            'repo': manifest['model_id'], 'model_id': manifest['model_id'],
+            'family': manifest.get('family'),
+            'modality': 'image', 'engine': manifest['engine'],
+            'package_id': manifest['package_id'],
+            # The engine's own capability claim, so a reader can tell this is an image package
+            # at all. It carries no `generation_defaults`/`generation_limits`, which is what
+            # the app requires before it offers a model for selection.
+            'capabilities': ['txt2img'],
+            'hub_operation': 'image.text_to_image',
+            'model_revision': manifest['revision'],
+            'memory_eligible': host['eligible'],
+            'cache': {'state': 'no_runtime_model'},
+            'readiness': {'ready': False, 'state': 'no_runtime_model', 'reason': reason,
+                          'files': {'state': 'no_runtime_model', 'reason': reason},
+                          'host': host},
+            'runtime_compatible': False, 'runtime_ready': False,
+            'execution_ready': False, 'available': False,
         }
 
     @app.get('/api/catalog')
     def catalog() -> dict:
-        return {'models': [catalog_entry(model) for model in MODELS.values()]}
+        entries = [catalog_entry(model) for model in MODELS.values()]
+        # The manifests are already read (`load_image_manifests`) and a registered model whose
+        # manifest is missing reports itself per model; this is the other direction, published
+        # instead of absent.
+        entries.extend(entry_without_a_runtime_model(manifest)
+                       for manifest in manager.packages_without_a_runtime_model())
+        return {'models': entries}
 
     @app.post('/api/generate/txt2img')
     def submit(body: dict) -> dict:

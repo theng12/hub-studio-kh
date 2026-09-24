@@ -116,3 +116,53 @@ his own Macs, so a fit that only works on the 32 GB machine is not a fleet answe
 **Qwen3.5-9B** (4-bit), text-only accepted, running on the 16 GB machines; the single
 vision call stays on the cloud. Do not re-open the model choice or re-survey candidates
 unless he asks — see [`research/owner-hardware.md`](research/owner-hardware.md).
+
+## Never publish a number the model did not state — 2026-09-25
+
+A published fact carries **where it came from**, or it is not published. Gateway Studio measured
+the failure from the other side of the API: with nothing stated, it fell back to a curated flat
+`context_window_tokens = 1,000,000` / `max_output_tokens = 128,000` and labelled it *curated* —
+an honest label on a number that is not the model's, which a downstream UI then shows as if it
+were. Meanwhile the shipped chat model's own `config.json` states
+`text_config.max_position_embeddings = 262144`, two orders of magnitude away.
+
+- **Measure the limit from the artefact that states it** — the checkpoint's `config.json`, the
+  manifest, the stored probe file — and name that source beside the value
+  (`{"value": 262144, "source": "model/config.json text_config.max_position_embeddings"}`).
+- **Where nothing states it, publish nothing** (`null` plus the reason). A worker's own fallback is
+  a different fact from the model's limit and must say so: `max_output_tokens: 4096` is
+  `llm_engine.FALLBACK_MAX_OUTPUT_TOKENS`, not a number Qwen3.5-9B 4-bit states.
+- **A dead pointer is worse than no pointer.** `model-manifests/qwen3-5-9b-4bit.json` named
+  `model/generation_config.json` as its defaults source; neither the package nor the publisher
+  ships that file, so the manifest advertised a source that could not be read.
+- **Evidence labels are not decoration**: `[M]` measured, `[V]` vendor claim, `[I]` inference.
+  A runtime a scheduler sets a deadline from must trace to a stored measurement, or be absent.
+
+## A version field must carry a version — 2026-09-25
+
+`GET /api/health`'s `app_version` is republished as `workers[].studio_version`, the one field an
+operator reads to answer *"which build is that Mac running?"*. Four of five workers answered the
+literal string `"standalone"`, which reads as data, is indistinguishable from a version that
+failed to load, and makes every Mac look like the same build.
+
+- A worker reports the **release it was staged from** (`components/app_version.py`), or a value
+  that cannot be mistaken for a version (`unknown`), or a labelled development build. Never a word.
+- `monitor.reported_app_version` refuses to republish a value that cannot be a version, so a new
+  worker cannot reintroduce the defect by omission.
+- `tests/test_worker_version_reporting.py` pins both halves.
+
+## One lane, one published contract — 2026-09-25
+
+A scheduler must be able to ask a lane for work without reading its source and without a release
+on its side. `docs/lane-execution-contract.md` is the shape; `docs/tasks/ST-20.md` is the work.
+
+- Every model publishes a **`lane_contract`**: the canonical `operation`, the parameters it
+  accepts with the bounds that are enforced, the artifact form, the terminal vocabulary with
+  `uncertain` marked *not terminal*, and what a cancel does not promise.
+- Build it **from the model's own limits**, beside the validator that enforces them. A second copy
+  of a bound is free to disagree with the code that rejects the request.
+- **Do not offer what the lane discards.** Stable Audio 3 forces instrumental output, so it must
+  not advertise `instrumental`, `lyrics`, `vocal_language` or `shift`. A parameter a scheduler
+  sends and the lane silently drops is a lie with a schema.
+- `deadline_seconds` belongs to the **Hub** (it is the Hub's own proxy timeout, one constant);
+  `runtime_seconds` belongs to the **worker** and only where measured.

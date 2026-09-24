@@ -15,6 +15,27 @@ enum StudioFunction: String, CaseIterable, Identifiable {
         case .chat: return "bubble.left.and.bubble.right"
         }
     }
+    /// What this Build ships: whether a Studio here has an engine and a page behind it.
+    ///
+    /// The switch is exhaustive on purpose. Adding a Studio to the enum stops this build until
+    /// someone answers the question for the new case, instead of the new Studio quietly landing
+    /// in no sidebar section, no history tab and no status line — the shape that left four
+    /// independent per-modality lists to drift apart.
+    var hasEngine: Bool {
+        switch self {
+        case .audio, .transcription, .image, .music, .chat: return true
+        case .video: return false
+        }
+    }
+    /// Whether the Hub files finished batches for this Studio, which is what the Jobs page and
+    /// its history tabs list. Chat answers a prompt directly and keeps its own transcript, so it
+    /// has no Hub batch history; a new Studio has to answer this before its jobs can be missed.
+    var hasBatchHistory: Bool {
+        switch self {
+        case .audio, .transcription, .image, .music: return true
+        case .video, .chat: return false
+        }
+    }
 }
 
 
@@ -30,11 +51,26 @@ enum StudioPage: String, CaseIterable, Identifiable {
     /// Sidebar sections, in the order the owner asked for. "Create" is where work is made, and
     /// Video sits last and quieter because it has no engine yet. The raw values stay
     /// stable, so moving a page between sections never invalidates saved state.
-    static let create: [Self] = [.image, .audio, .transcription, .music, .chat]
+    ///
+    /// Membership is derived from `StudioFunction.allCases` rather than written out here: the
+    /// four lists this replaces each had to be edited by hand for a new Studio, and anything
+    /// missed was silent — no sidebar row, "Engine not installed" on Overview, no history tab.
+    /// `createOrder` is a *display order* only. A Studio it does not name still lands in a
+    /// section: an engine-less one in "Coming later", an engine-backed one at the end of
+    /// "Create", so a new case can never be invisible.
+    static let createOrder: [StudioFunction] = [.image, .audio, .transcription, .music, .chat]
+    static let create: [Self] = {
+        let available = StudioFunction.allCases.filter { $0.hasEngine }
+        let placed = createOrder.filter { available.contains($0) }
+        let unplaced = available.filter { !createOrder.contains($0) }
+        return (placed + unplaced).compactMap { Self(rawValue: $0.rawValue) }
+    }()
     static let library: [Self] = [.models, .voices, .jobs]
     static let fleet: [Self] = [.connections]
     static let app: [Self] = [.whatsNew, .settings]
-    static let comingLater: [Self] = [.video]
+    static let comingLater: [Self] = StudioFunction.allCases
+        .filter { !$0.hasEngine }
+        .compactMap { Self(rawValue: $0.rawValue) }
     static let sidebarSections: [(title: String, pages: [Self])] = [
         ("Create", create),
         ("Library", library),
@@ -43,6 +79,9 @@ enum StudioPage: String, CaseIterable, Identifiable {
         ("Coming later", comingLater),
     ]
     var function: StudioFunction? { StudioFunction(rawValue: rawValue) }
+    /// The page that shows one Studio, derived from the raw values both enums persist. Nil when
+    /// a Studio has no page, which a caller must say out loud rather than opening a wrong page.
+    static func page(for function: StudioFunction) -> StudioPage? { StudioPage(rawValue: function.rawValue) }
     var symbol: String {
         if let function { return function.symbol }
         switch self {

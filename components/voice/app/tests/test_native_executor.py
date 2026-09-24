@@ -548,10 +548,13 @@ def test_restart_marks_persisted_active_job_uncertain_and_keeps_request_identity
     monkeypatch.setattr(generation, "HISTORY_FILE", history)
     partial = tmp_path / ".active-job.partial.wav"
     partial.write_bytes(b"incomplete")
+    # The fixture repo is a real catalog entry; it was Kokoro 82M until ST-13.B cut that family,
+    # which turned these persistence tests into "Unknown repo" errors that had nothing to do with
+    # what they check.
     active = generation.GenerationJob(
         job_id="active-job", mode="txt2speech",
-        params={"repo": "mlx-community/Kokoro-82M-bf16", "client_request_id": "hub:1:2"},
-        client_request_params={"repo": "mlx-community/Kokoro-82M-bf16", "client_request_id": "hub:1:2"},
+        params={"repo": "mlx-community/OmniVoice-bfloat16", "client_request_id": "hub:1:2"},
+        client_request_params={"repo": "mlx-community/OmniVoice-bfloat16", "client_request_id": "hub:1:2"},
         state="cancel_requested", partial_output_path=str(partial),
     )
     manager = generation.GenerationManager.__new__(generation.GenerationManager)
@@ -581,7 +584,7 @@ def test_failed_queued_acceptance_never_starts_a_worker_or_leaves_dedupe_state(t
 
     with pytest.raises(generation.PersistenceError):
         manager.start_txt2speech({
-            "repo": "mlx-community/Kokoro-82M-bf16", "client_request_id": "durable-accept",
+            "repo": "mlx-community/OmniVoice-bfloat16", "client_request_id": "durable-accept",
         })
 
     assert manager._jobs == {}
@@ -648,7 +651,7 @@ def test_queued_job_is_durable_before_worker_start_and_reloads_as_uncertain(tmp_
     monkeypatch.setattr(generation, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(generation, "HISTORY_FILE", history)
     manager = generation.GenerationManager()
-    params = {"repo": "mlx-community/Kokoro-82M-bf16", "client_request_id": "queued-durable"}
+    params = {"repo": "mlx-community/OmniVoice-bfloat16", "client_request_id": "queued-durable"}
     generation._GEN_LOCK.acquire()
     try:
         job = manager.start_txt2speech(params)

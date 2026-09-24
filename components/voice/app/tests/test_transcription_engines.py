@@ -202,3 +202,67 @@ def test_nemotron_omits_words_when_not_requested(monkeypatch, tmp_path) -> None:
     payload = manager.transcribe(str(audio), model_repo=NEMOTRON_REPO)
 
     assert "words" not in payload["segments"][0]
+
+
+# ─── A10: the tokenizer source comes from the model's own published data ───
+
+def test_every_installed_whisper_row_resolves_its_tokenizer_from_its_own_manifest(
+    monkeypatch,
+) -> None:
+    """A new Whisper repo is never handed another model's vocabulary.
+
+    The manifest a Whisper package installs from declares its processor
+    companion (`source.layout.companions`); this asserts the worker reads that
+    value rather than a per-repo table with a silent default. A repo the
+    registry knows but no manifest declares resolves to None, which
+    `_attach_processor` turns into a named refusal instead of guessing.
+    """
+    manifests = Path(__file__).resolve().parents[4] / "model-manifests"
+    monkeypatch.setenv("STUDIOHUB_MODEL_MANIFESTS", str(manifests))
+
+    declared = [
+        model for model in transcription.TRANSCRIPTION_MODELS
+        if model.engine == "whisper" and transcription.cache.manifest_for(model.repo)
+    ]
+    assert declared, "no Whisper row has a packaged manifest; this test would be vacuous"
+    for model in declared:
+        expected = [
+            companion["repo"]
+            for companion in transcription.cache.manifest_for(model.repo)["source"]["layout"]["companions"]
+        ]
+        resolved = transcription.whisper_processor_repo(model.repo)
+        assert resolved in expected, model.repo
+        assert resolved.startswith("openai/whisper"), model.repo
+
+    # Nothing declares a companion for this id, so nothing is substituted for it.
+    assert transcription.whisper_processor_repo("example/not-a-real-whisper") is None
+
+
+def test_an_unknown_engine_refuses_by_name(monkeypatch, tmp_path: Path) -> None:
+    """A new engine must not fall into the previous engine's call signature."""
+    spec = transcription.TranscriptionModel(
+        repo="example/new-asr",
+        label="New ASR",
+        size_gb=0.1,
+        note="internal",
+        engine="new-engine",
+    )
+    monkeypatch.setitem(transcription._BY_REPO, spec.repo, spec)
+    manager, model, audio = _manager(monkeypatch, tmp_path, SimpleNamespace(text="hi"))
+
+    with pytest.raises(ValueError) as error:
+        manager.transcribe(str(audio), model_repo=spec.repo)
+
+    assert "new-engine" in str(error.value)
+    assert "components/voice/app/backend/transcription.py" in str(error.value)
+    assert model.calls == [], "an unknown engine must refuse before inference"
+
+
+def test_unknown_engine_refusal_names_the_file_for_both_branches() -> None:
+    spec = transcription.TranscriptionModel(
+        repo="example/new-asr", label="New ASR", size_gb=0.1, note="", engine="new-engine",
+    )
+    message = str(transcription._unknown_engine(spec))
+    assert "example/new-asr" in message
+    assert "transcription.py" in message
+    assert "result-shape" in message or "normalisation" in message

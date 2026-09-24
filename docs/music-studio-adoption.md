@@ -28,9 +28,9 @@ two that cannot be engineered around.
 The old app (`~/pinokio/api/musicstudio-mac`) is useful as a *reference*, not as a source:
 
 - Its catalogue is six MusicGen variants plus `stabilityai/stable-audio-open-1.0` and Suno Bark.
-  MusicGen's weights are **CC-BY-NC-4.0 — non-commercial**, and its native length is 30 s with
-  extension only as an 18 s sliding window inside a 30 s receptive field. Stable Audio Open is ~47 s
-  and gated. Neither can serve a commercial studio product or a six-minute brief.
+  MusicGen's weights are **CC-BY-NC-4.0**, and its native length is 30 s with extension only as an
+  18 s sliding window inside a 30 s receptive field. Stable Audio Open is ~47 s and gated. Neither
+  reaches a six-minute brief.
 - **No music weights were ever downloaded on this Mac** (`musicstudio-mac/cache` = 0 B). There is
   nothing to reuse and nothing that has ever run locally.
 

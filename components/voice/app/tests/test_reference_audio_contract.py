@@ -12,7 +12,10 @@ import soundfile as sf
 from backend import generation, reference_audio
 
 
-QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+# The 1.7B Base tier the app ships. The 8-bit checkpoint was pruned on
+# 2026-09-24 (ST-13.B); a test that used it as the cloning model would assert
+# the rule against a repo the app cannot select.
+QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
 
 
 def _wav(seconds: float = 8.0, sample_rate: int = 24_000) -> bytes:
@@ -407,3 +410,44 @@ def test_terminal_long_form_strategy_comes_from_audit_not_chunk_count(monkeypatc
     )
 
     assert job.serialize()["long_form_strategy"] == "adapter_managed_long_form"
+
+
+# ─── A9: the audit requirement is the model's own published capability ─────
+
+def test_every_cloning_model_is_governed_by_its_published_capability(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A new cloning family cannot silently fall back to generic defaults.
+
+    The predicate is read from the model's own `capabilities`, so this covers the
+    next cloning model without an edit. It used to be a name-substring test
+    (`"qwen3-tts" in name and "base" in name`), which a new family - or a new
+    Qwen tier not spelled *-Base-* - would fall outside while still being
+    prepared with guessed duration, rate and transcript rules.
+    """
+    from backend import catalog
+
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    cloning = [entry for entry in catalog.CATALOG if "voice-cloning" in entry.capabilities]
+    assert cloning, "no cloning model is catalogued; this test would be vacuous"
+
+    for entry in catalog.CATALOG:
+        declares = "voice-cloning" in entry.capabilities
+        assert reference_audio._requires_audited_profile(entry.repo) is declares, entry.repo
+        if not declares:
+            continue
+        # With the audited profile withheld, preparation refuses by name and
+        # names the file to add - never a silent generic execution copy.
+        with monkeypatch.context() as patch:
+            patch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
+            with pytest.raises(reference_audio.ReferenceAudioError) as error:
+                reference_audio.prepare(
+                    audio_bytes=_wav(), filename="customer.wav", model_id=entry.repo,
+                )
+        assert error.value.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE", entry.repo
+        assert entry.repo in error.value.detail, entry.repo
+        assert "model-audits" in error.value.detail, entry.repo
+
+    # A model the registry does not know is not a documented cloning model, and
+    # the public routes refuse it before preparation ever runs.
+    assert reference_audio._requires_audited_profile("example/not-in-this-catalog") is False

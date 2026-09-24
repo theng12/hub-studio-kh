@@ -88,8 +88,11 @@ class ImageBundleTests(unittest.TestCase):
                 shutil.copyfile(ROOT / 'packaging' / name, resources / name)
             shutil.copytree(ROOT / 'components/image', resources / 'components/image',
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-            shutil.copyfile(ROOT / 'components/model_packages.py',
-                            resources / 'components/model_packages.py')
+            # Every shared top-level module, discovered the way the stager discovers them, so a
+            # new one cannot be missing here while the real bundle has it - or the reverse.
+            (resources / 'components').mkdir(exist_ok=True)
+            for shared in sorted((ROOT / 'components').glob('*.py')):
+                shutil.copyfile(shared, resources / 'components' / shared.name)
             catalog = resources / 'model-manifests'
             catalog.mkdir()
             shutil.copyfile(ROOT / 'model-manifests/flux2-klein-4b-mlx-4bit.json',
@@ -98,7 +101,9 @@ class ImageBundleTests(unittest.TestCase):
             (resources / 'runtimes/image').symlink_to(IMAGE_RUNTIME)
             (resources / 'release-manifest.json').write_text(json.dumps({
                 'schema': 'studiohub.standalone-release', 'schema_version': 1,
-                'version': 'fixture', 'components': {'image': {'runtime_sha256': 'a'*64}},
+                'version': '0.0.0', 'development_build': True,
+                'implementation_commit': 'a' * 40,
+                'components': {'image': {'runtime_sha256': 'a'*64}},
             }))
             data = root / 'External State'
             models = root / 'External Models'
@@ -131,11 +136,32 @@ class ImageBundleTests(unittest.TestCase):
                         health = client.get(value['url']+'/api/health', headers=headers)
                         self.assertEqual(health.status_code, 200, health.text)
                         self.assertTrue(health.json()['ok'])
+                        # The release the bundle was staged with, read from its own manifest. A
+                        # worker that answers a non-version here makes every Mac look like the
+                        # same build to whoever is reading `workers[].studio_version`.
+                        self.assertEqual(health.json()['app_version'], '0.0.0')
+                        self.assertTrue(health.json()['development_build'])
                         catalog = client.get(value['url']+'/api/catalog', headers=headers)
                         self.assertEqual(catalog.status_code, 200, catalog.text)
                         model = catalog.json()['models'][0]
                         self.assertEqual(model['cache']['state'], 'not_installed')
                         self.assertFalse(model['execution_ready'])
+                        # The lane contract a scheduler reads instead of this worker's source.
+                        contract = model['lane_contract']
+                        self.assertEqual(contract['schema'], 'studiohub.lane-contract.v1')
+                        self.assertEqual(contract['operation'], 'image.text_to_image')
+                        self.assertEqual(contract['artifact']['media_type'], 'image/png')
+                        self.assertFalse(contract['states']['uncertain_is_terminal'])
+                        self.assertTrue(contract['states']['discard_supported'])
+                        parameters = {item['name']: item for item in contract['parameters']}
+                        self.assertEqual(parameters['prompt']['max_characters'],
+                                         model['max_prompt_characters'])
+                        self.assertEqual(parameters['steps']['maximum'],
+                                         model['generation_limits']['max_steps'])
+                        # A parameter the worker refuses must not be offered as a contract.
+                        for refused in ('negative_prompt', 'reference_images', 'lora_names',
+                                        'quantize'):
+                            self.assertNotIn(refused, parameters)
                         refused = client.post(value['url']+'/api/generate/txt2img',
                             json={'repo': model['repo'], 'prompt': 'offline fixture'}, headers=headers)
                         self.assertEqual(refused.status_code, 409)
@@ -152,3 +178,81 @@ class ImageBundleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ImageLaneContractTests(unittest.TestCase):
+    """The contract a scheduler reads instead of this worker's source.
+
+    Shape: `docs/lane-execution-contract.md`. The properties asserted are the ones that make it
+    worth publishing — built from each model's own limits, offering only what the validator
+    accepts, and publishing a runtime only where one was measured.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from components.hub.backend.capabilities import OPERATION_BY_MODALITY
+        from components.image.app.backend import generation
+        cls.generation = generation
+        cls.operation = OPERATION_BY_MODALITY['image']
+
+    def test_every_registered_model_publishes_a_contract_from_its_own_limits(self):
+        models = list(self.generation.MODELS.values())
+        self.assertGreaterEqual(len(models), 2, 'the image registry lost a model')
+        for model in models:
+            with self.subTest(repo=model.repo):
+                contract = self.generation.lane_contract(model)
+                self.assertEqual(contract['schema'], 'studiohub.lane-contract.v1')
+                self.assertEqual(contract['modality'], 'image')
+                self.assertEqual(contract['operation'], self.operation)
+                parameters = {item['name']: item for item in contract['parameters']}
+                self.assertEqual(parameters['prompt']['max_characters'],
+                                 model.limits['max_prompt'])
+                self.assertEqual(parameters['steps']['minimum'], model.limits['min_steps'])
+                self.assertEqual(parameters['steps']['maximum'], model.limits['max_steps'])
+                self.assertEqual(parameters['steps']['default'], model.defaults['steps'])
+                self.assertEqual(parameters['guidance']['minimum'], model.limits['min_guidance'])
+                self.assertEqual(parameters['guidance']['maximum'], model.limits['max_guidance'])
+                self.assertEqual(parameters['aspect_ratio']['default'],
+                                 model.defaults['aspect_ratio'])
+                self.assertEqual(sorted(parameters['aspect_ratio']['enum']),
+                                 sorted(self.generation.SIZE_PRESETS))
+                # The two facts a scheduler gets wrong by default.
+                self.assertNotIn(contract['states']['uncertain'], contract['states']['terminal'])
+                self.assertFalse(contract['states']['uncertain_is_terminal'])
+                self.assertTrue(contract['states']['discard_supported'])
+                self.assertTrue(contract['cancel']['semantics'])
+
+    def test_the_contract_offers_nothing_the_validator_refuses(self):
+        """A parameter the lane rejects must not be advertised as part of its surface."""
+        model = self.generation.FLUX2_KLEIN
+        offered = {item['name'] for item in self.generation.lane_contract(model)['parameters']}
+        for refused in ('reference_images', 'image_path', 'lora_names', 'lora_paths',
+                        'negative_prompt', 'quantize'):
+            with self.subTest(parameter=refused):
+                with self.assertRaises(ValueError):
+                    self.generation.validate_request(
+                        {'repo': model.repo, 'prompt': 'x', refused: ['anything']})
+                self.assertNotIn(refused, offered)
+        # width/height are derived from the aspect ratio and refused unless they match it.
+        self.assertNotIn('width', offered)
+        self.assertNotIn('height', offered)
+
+    def test_a_published_runtime_says_where_it_was_measured(self):
+        for model in self.generation.MODELS.values():
+            with self.subTest(repo=model.repo):
+                runtime = self.generation.lane_contract(model).get('runtime_seconds')
+                if runtime is None:
+                    self.assertIsNone(model.measured_runtime)
+                    continue
+                self.assertEqual(runtime['evidence'], 'measured')
+                self.assertTrue(runtime.get('measured_on'))
+                self.assertIsInstance(runtime['measured'], list)
+                self.assertTrue(runtime['measured'])
+                for row in runtime['measured']:
+                    self.assertGreater(row['seconds'], 0)
+
+    def test_an_ignored_control_is_published_as_ignored(self):
+        """Z-Image-Turbo runs without CFG; the contract must not imply guidance does anything."""
+        note = next(item.get('note') for item
+                    in self.generation.lane_contract(self.generation.Z_IMAGE_TURBO)['parameters']
+                    if item['name'] == 'guidance')
+        self.assertIn('ignored', note)

@@ -28,10 +28,11 @@ for spot in "$HERE/Technical/copy_models_for_this_mac.py" "$HERE/copy_models_for
 done
 
 PY=""
+# The bundle's name deliberately carries no version (`packaging/stage_voice.py` installs it as
+# "Studio Hub.app"), so there is no pinned name to fall back to: a version-pinned candidate could
+# only ever be dead weight, or worse, an older copy left beside a newer one.
 for app in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app" \
-           "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app" \
-           "$HERE/Studio Hub 0.4.0.app" "$KIT/Studio Hub 0.4.0.app" \
-           "/Applications/Studio Hub 0.4.0.app" "$HOME/Applications/Studio Hub 0.4.0.app"; do
+           "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
   if [ -x "$app/Contents/Resources/runtimes/voice/bin/python3" ]; then
     PY="$app/Contents/Resources/runtimes/voice/bin/python3"; break
   fi

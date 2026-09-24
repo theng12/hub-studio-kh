@@ -18,23 +18,43 @@ SHELL = (ROOT / "native" / "ShellCore.swift").read_text()
 
 
 class NativeChatWiringTests(unittest.TestCase):
-    def test_chat_is_in_create_and_no_longer_coming_later(self) -> None:
-        create = re.search(r"static let create: \[Self\] = \[(.*?)\]", SHELL, re.S)
-        self.assertIsNotNone(create)
-        self.assertIn(".chat", create.group(1))
-        later = re.search(r"static let comingLater: \[Self\] = \[(.*?)\]", SHELL, re.S)
+    def test_chat_is_a_derived_create_page_not_a_hand_edited_list(self) -> None:
+        """The sidebar is derived from the function enum, so a new Studio lands without an edit.
+
+        This used to require `.chat` inside a literal ``static let create: [Self] = [...]`` — one
+        of four hand-edited per-Studio lists, and the shape that left Chat in neither the sidebar
+        summary nor the status line. The page set is now derived from `StudioFunction.allCases`
+        and `hasEngine`, so the invariant is that an engine-backed Studio brings its page along.
+        """
+        create = re.search(r"static let create: \[Self\] = \{(.*?)\}\(\)", SHELL, re.S)
+        self.assertIsNotNone(create, "StudioPage.create is no longer derived")
+        self.assertIn("StudioFunction.allCases", create.group(1))
+        self.assertIn("hasEngine", create.group(1))
+        self.assertNotIn(".chat", create.group(1),
+                         "a hand-edited per-Studio page list came back")
+        engine = re.search(r"var hasEngine: Bool \{(.*?)\n    \}", SHELL, re.S)
+        self.assertIsNotNone(engine, "StudioFunction.hasEngine not found")
+        self.assertIn(".chat", engine.group(1),
+                      "Chat is not answered as an engine-backed Studio")
+        later = re.search(r"static let comingLater: \[Self\] = (.*?)\n    static", SHELL, re.S)
         self.assertIsNotNone(later)
-        self.assertNotIn(".chat", later.group(1))
+        self.assertIn("!$0.hasEngine", later.group(1),
+                      "the coming-later section is a hand-edited list again")
 
     def test_the_page_switch_draws_the_chat_workspace(self) -> None:
         self.assertIn("case .chat: chatWorkspace", VIEWS)
         self.assertIn("private var chatWorkspace: some View", VIEWS)
         self.assertIn("workspace.sendChat()", VIEWS)
 
-    def test_the_ready_status_covers_chat(self) -> None:
+    def test_the_ready_status_is_derived_from_the_pages_own_studio(self) -> None:
+        """A page whose Studio has an engine is a workspace; a page-name list is the old trap."""
         status = re.search(r"private func workspaceStatus.*?\n    \}", VIEWS, re.S)
         self.assertIsNotNone(status)
-        self.assertIn(".chat", status.group(0))
+        body = status.group(0)
+        self.assertIn("page.function", body,
+                      "workspaceStatus reads a list of page names again, so a new Studio's "
+                      "page would read 'Engine not installed'")
+        self.assertIn("hasEngine", body)
 
     def test_send_chat_posts_to_the_hub_local_chat_route(self) -> None:
         method = re.search(r"func sendChat\(\) async \{.*?\n    \}", API, re.S)

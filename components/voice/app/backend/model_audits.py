@@ -17,14 +17,125 @@ AUDIT_ROOT = Path(__file__).resolve().parents[2] / "model-audits"
 _IMMUTABLE_REVISION = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _CONTRACT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _AUDIT_STATUSES = {"passed", "conditional", "failed", "revoked"}
-_QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-_QWEN_17B_PRODUCTION_V2_AUDIT_ID = (
-    "voicestudio-20260815-qwen3-tts-1.7b-base-production-v2"
+# ── the Qwen 1.7B production section policy: an audit pin, not a model pin ──
+#
+# THIS IS A CONTRACT, NOT A LIST THAT WANTS DE-CRUFTING. Everything else in this
+# module reads the newest valid `*/*.audit.json` for whatever model it is asked
+# about (`audit_record`, and therefore `input_limits`). This one policy is
+# different on purpose: the 400-character maximum and the 280-character Auto
+# section size are numbers that were *measured once*, on one canary run, and the
+# whole point is that a later, newer record cannot change how every machine
+# splits a script just by existing. So the pin names the audit whose evidence
+# authorises them, and `qwen_17b_production_v2_limits` applies it only to a model
+# whose own record either IS that audit or explicitly derives from it.
+#
+# The anchor is the audit id, never a repo id. The previous version compared
+# `model_id` against `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`; when that
+# tier was pruned from the catalog the policy stayed pinned to a model nobody
+# ships, and the shipped 4-bit tier silently lost its audited Auto section size.
+# `tests/test_voice_bundle.py` asserts the anchor resolves for a shipped model.
+_PRODUCTION_SECTION_ANCHOR_AUDIT_ID = (
+    "voicestudio-20260826-qwen3-tts-1.7b-base-production-v3"
 )
-_QWEN_17B_PRODUCTION_V2_PATH = (
-    "2026-08-15-qwen3-17b-production-v2/"
-    "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json"
-)
+_PRODUCTION_SECTION_MAX_CHARACTERS = 400
+_PRODUCTION_SECTION_AUTO_DEFAULT_CHARACTERS = 280
+_PRODUCTION_SECTION_AUTO_DEFAULT_FLOOR = 230
+_PRODUCTION_SECTION_RECORD_SCHEMA = "studio.model-audit-record"
+_DERIVATION_WALK_LIMIT = 4
+
+
+def _production_section_limits(record: dict[str, Any]) -> dict[str, Any]:
+    """The 400/280 pair one record claims, or ``{}`` when it does not claim it.
+
+    Only the numbers and the record's own envelope are checked here; the
+    provenance (may this record claim them at all?) is `_inherits_anchor`.
+    """
+    limits = (record.get("contract") or {}).get("input_limits")
+    if not isinstance(limits, dict):
+        return {}
+    maximum = limits.get("private_section_max_characters")
+    auto_default = limits.get("default_private_section_max_characters")
+    if (
+        type(maximum) is not int
+        or maximum != _PRODUCTION_SECTION_MAX_CHARACTERS
+        or type(auto_default) is not int
+        or auto_default != _PRODUCTION_SECTION_AUTO_DEFAULT_CHARACTERS
+        or not _PRODUCTION_SECTION_AUTO_DEFAULT_FLOOR <= auto_default <= maximum
+    ):
+        return {}
+    return {
+        "private_section_max_characters": maximum,
+        "default_private_section_max_characters": auto_default,
+    }
+
+
+def _envelope_ok(record: dict[str, Any]) -> bool:
+    """The top-level audit-record envelope, as distinct from the candidate block.
+
+    ``_valid_record`` already checked the candidate mirror; this checks that the
+    document is the record schema and that a passed candidate is what is making
+    the claim, so a copied contract without its promotion envelope cannot
+    authorise the pin.
+    """
+    candidate = record.get("genstudio_candidate") or {}
+    return (
+        record.get("schema") == _PRODUCTION_SECTION_RECORD_SCHEMA
+        and record.get("schema_version") == 1
+        and candidate.get("audit_status") == "passed"
+        and candidate.get("candidate_for_genstudio") is True
+        and candidate.get("audit_id") == record.get("audit_id")
+    )
+
+
+def _records_by_audit_id() -> dict[str, dict[str, Any]]:
+    """Every valid record, keyed by its own audit id."""
+    if not AUDIT_ROOT.exists():
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(AUDIT_ROOT.glob("*/*.audit.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if _valid_record(raw) and isinstance(raw.get("audit_id"), str):
+            found.setdefault(raw["audit_id"], raw)
+    return found
+
+
+def _inherits_anchor(record: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> bool:
+    """Whether this record's claim traces back to the measured production audit.
+
+    A record may make the claim when it IS the anchor, or when it declares a
+    ``derivation`` from the anchor's audit id, names the same upstream model and
+    copies the numbers exactly. Anything else - a neighbouring model's record, a
+    record that derives from a record that derives from nowhere - is refused.
+    """
+    audit_id = str(record.get("audit_id") or "")
+    if audit_id == _PRODUCTION_SECTION_ANCHOR_AUDIT_ID:
+        return True
+    seen: set[str] = set()
+    current = record
+    for _ in range(_DERIVATION_WALK_LIMIT):
+        derivation = current.get("derivation")
+        if not isinstance(derivation, dict):
+            return False
+        parent_id = str(derivation.get("derived_from_audit_id") or "")
+        if not parent_id or parent_id in seen:
+            return False
+        seen.add(parent_id)
+        if parent_id == _PRODUCTION_SECTION_ANCHOR_AUDIT_ID:
+            subject = record.get("subject") or {}
+            return (
+                bool(derivation.get("derived_from_model_id"))
+                and derivation.get("derived_from_model_id")
+                == subject.get("upstream_model_id")
+                and subject.get("model_id") != (by_id.get(parent_id, {}).get("subject") or {}).get("model_id")
+            )
+        parent = by_id.get(parent_id)
+        if parent is None:
+            return False
+        current = parent
+    return False
 
 
 def contract_hash(contract: dict[str, Any]) -> str:
@@ -128,47 +239,23 @@ def input_limits(model_id: str) -> dict[str, Any]:
 
 
 def qwen_17b_production_v2_limits(model_id: str) -> dict[str, Any]:
-    """Return the exact Qwen production-v2 section policy, or nothing.
+    """Return the measured 400/280 Auto section policy for one Qwen 1.7B checkpoint.
 
-    This intentionally does not use ``audit_record()``: the latest valid audit
-    may be historical v1 evidence or an unrelated future record, neither of
-    which is authority for the Auto 280 policy.
+    The record is found the same generic way as every other policy question
+    (`audit_record`, i.e. the newest valid ``*/*.audit.json`` for this exact
+    model), and the pin is the *audit* those numbers were measured in. A model
+    therefore gets the policy when its own record is that audit or explicitly
+    derives from it - not because its repository name happens to be spelled in
+    this file. See the anchor block above for why the pin is deliberate.
     """
-    if model_id != _QWEN_17B_BASE:
+    record = audit_record(model_id)
+    if record is None:
         return {}
-    try:
-        record = json.loads(
-            (AUDIT_ROOT / _QWEN_17B_PRODUCTION_V2_PATH).read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    if not _envelope_ok(record):
         return {}
-    if (
-        not _valid_record(record)
-        or record.get("schema") != "studio.model-audit-record"
-        or type(record.get("schema_version")) is not int
-        or record["schema_version"] != 1
-        or record.get("audit_id") != _QWEN_17B_PRODUCTION_V2_AUDIT_ID
-        or record.get("subject", {}).get("model_id") != _QWEN_17B_BASE
-        or record.get("genstudio_candidate", {}).get("audit_id")
-        != _QWEN_17B_PRODUCTION_V2_AUDIT_ID
-        or record["genstudio_candidate"].get("audit_status") != "passed"
-        or record["genstudio_candidate"].get("candidate_for_genstudio") is not True
-    ):
+    limits = _production_section_limits(record)
+    if not limits:
         return {}
-    limits = record["contract"].get("input_limits")
-    if not isinstance(limits, dict):
+    if not _inherits_anchor(record, _records_by_audit_id()):
         return {}
-    maximum = limits.get("private_section_max_characters")
-    default = limits.get("default_private_section_max_characters")
-    if (
-        type(maximum) is not int
-        or maximum != 400
-        or type(default) is not int
-        or default != 280
-        or not 230 <= default <= maximum
-    ):
-        return {}
-    return {
-        "private_section_max_characters": maximum,
-        "default_private_section_max_characters": default,
-    }
+    return limits

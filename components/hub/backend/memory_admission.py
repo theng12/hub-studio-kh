@@ -29,9 +29,6 @@ from .registry import DATA_DIR
 
 SETTINGS_FILE = DATA_DIR / "memory_admission_overrides.json"
 DEFAULT_MIN_FREE_MEMORY_GB = 2.0
-SUPPORTED_MODALITIES = frozenset({
-    "image", "voice", "transcription", "music", "video",
-})
 
 # These are measured fleet defaults, intentionally allowed to be less
 # conservative than a worker catalog. FLUX.2 Klein 4B MLX 4-bit has completed
@@ -52,9 +49,36 @@ def _normalized(model: str) -> str:
     return str(model or "").strip().lower()
 
 
-def applies_to(modality: str | None) -> bool:
-    """Whether this queue uses the broker's local inference RAM governor."""
-    return str(modality or "") in SUPPORTED_MODALITIES
+def applies_to(modality: str | None = None) -> bool:
+    """Whether this queue uses the broker's local inference RAM governor.
+
+    It uses it for every modality, and the modality argument is accepted only so callers can
+    keep naming what they are asking about.
+
+    This was a closed list of five modalities, and ``chat`` was not in it, so the Hub skipped
+    the 9B text model in its own queue ranking (``broker._batch_memory_constraint_gb``) and
+    published no admission evidence for it in ``monitor`` or the capability contract. The gate
+    that actually means something is the floor the worker publishes for the model it serves -
+    Image, Voice and Music publish ``min_unified_memory_gb``; Chat and Subtitle publish
+    ``min_total_memory_gb``; every worker may publish ``min_free_memory_gb``. A modality list
+    can only ever omit the next modality, so it is not the gate any more.
+    """
+    return True
+
+
+def _published_total_memory_gb(catalog_entry: dict) -> float | None:
+    """The total-memory tier the worker published for this model, in either spelling.
+
+    ``min_unified_memory_gb`` is the Hub's older name for it and what Image, Voice and Music
+    send; Chat and Subtitle send ``min_total_memory_gb``. Reading only one spelling is how the
+    9B text model ended up with no published floor at all.
+    """
+    for key in ("min_unified_memory_gb", "min_total_memory_gb",
+                "qualified_minimum_memory_gb"):
+        value = _number(catalog_entry.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _number(value) -> float | None:
@@ -116,9 +140,17 @@ def describe(model: str, catalog_entry: dict) -> dict:
     The total-memory floor is reported for the operator but is deliberately never
     in force: ``effective_min_total_memory_gb`` is 0 whenever no operator
     override names one, so no dispatch is refused for the size of the machine.
+
+    ``_FLEET_DEFAULTS`` is a per-model *measurement* — the models the owner has proven below
+    their published tier — so it cannot be derived from anything, and a model nobody has
+    measured gets the generic free floor instead. That absence used to be invisible: the row
+    said ``source: "catalog"`` and nothing said whether a measurement existed. Every row now
+    carries ``fleet_default_measured`` plus a ``default_reason`` that names the absence, so the
+    Models screen can show "nobody has measured this one yet" instead of implying the generic
+    floor is a measurement.
     """
     key = _normalized(model or catalog_entry.get("repo"))
-    catalog_total = _number(catalog_entry.get("min_unified_memory_gb"))
+    catalog_total = _published_total_memory_gb(catalog_entry)
     catalog_free = _number(catalog_entry.get("min_free_memory_gb"))
     qualified_total = workload_policy.required_total_memory_gb(model, catalog_entry)
     qualified_free = workload_policy.required_free_memory_gb(model, catalog_entry)
@@ -147,8 +179,31 @@ def describe(model: str, catalog_entry: dict) -> dict:
         override["min_free_memory_gb"] if override else default_free
     )
     source = "operator_override" if override else (
+        # Compatibility with the published contract: a Hub production floor reports as
+        # `fleet_default`, and the measurement question ("has anybody measured this model?") is
+        # answered by `fleet_default_measured` below rather than by reusing this string.
         "fleet_default" if fleet_default or workload_default else "catalog"
     )
+    if fleet_default:
+        default_reason = str(fleet_default.get("reason") or "Fleet-measured override")
+    elif workload_default:
+        default_reason = "Hub production qualification"
+    else:
+        # Two different situations used to share one sentence: a model that published its own
+        # floor, and one that published nothing and therefore gets the generic default. Saying
+        # "the generic 2.0 GB floor applies" about a model enforcing 3.2 GB is simply false, and
+        # it is the sentence an operator reads when asking why a job is waiting.
+        published = catalog_free if catalog_free is not None else qualified_free
+        if published is not None:
+            default_reason = (
+                f"No fleet measurement names this model; its worker publishes a "
+                f"{float(published):.2f} GB live-free floor and that is what is enforced"
+            )
+        else:
+            default_reason = (
+                f"No fleet measurement names this model and its worker publishes no live-free "
+                f"floor; the generic {DEFAULT_MIN_FREE_MEMORY_GB:.1f} GB default applies"
+            )
     return {
         "model": str(model or catalog_entry.get("repo") or ""),
         "catalog_min_total_memory_gb": catalog_total,
@@ -158,11 +213,10 @@ def describe(model: str, catalog_entry: dict) -> dict:
         "effective_min_total_memory_gb": effective_total,
         "effective_min_free_memory_gb": effective_free,
         "source": source,
-        "default_reason": (
-            fleet_default.get("reason") if fleet_default
-            else "Hub production qualification" if workload_default
-            else "Studio catalog requirement"
-        ),
+        # Whether a per-model fleet measurement exists for this model. False is not an error:
+        # it is the honest state of a model nobody has measured yet.
+        "fleet_default_measured": fleet_default is not None,
+        "default_reason": default_reason,
         "overridden": override is not None,
         "updated_at": override.get("updated_at") if override else None,
     }

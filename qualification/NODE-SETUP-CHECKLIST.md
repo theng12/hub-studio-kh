@@ -1,7 +1,8 @@
 # Setting up a Mac mini node — the honest checklist
 
-Version being deployed: **0.6.38, build `b4db781`**, `development_build: false`,
-with 17 model packages (ACE-Step and Stable Audio 3 included).
+Version being deployed: the one this kit's own `focused-release-manifest.json` records (its
+`version` and `implementation_commit` — a version pinned in this sentence went stale every
+build), with **24** model packages (ACE-Step 1.5 Turbo and Stable Audio 3 Medium included).
 
 ## What I have verified
 

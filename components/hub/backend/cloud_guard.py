@@ -12,6 +12,7 @@ downloading keeps waiting exactly as it did.
 from __future__ import annotations
 
 import logging
+import re
 
 from .monitor import LOCAL_ONLY_MODALITIES
 
@@ -37,8 +38,24 @@ CLOUD_ID_NAMESPACES = (
 
 # What a studio reports in ``provider`` for a model it runs itself. Image
 # Studio says "local" on every local entry; the other studios omit the field.
-# Anything else names an external vendor.
 LOCAL_PROVIDER_VALUES = {"", "local", "none", "hub", "on-device", "device"}
+
+# Hosted inference vendors, matched as whole tokens of the reported ``provider`` so that
+# "fal" and "fal-ai" match while "local-mlx" and "on-device" never do.
+#
+# This replaced an allowlist of local spellings, and the direction matters: with an allowlist,
+# a studio or engine that reported a provider the Hub had not been taught - "local-mlx",
+# "apple" - had every row it published classified as cloud and dropped from the aggregate
+# catalog, so that modality's models vanished from every picker with no message anywhere. That
+# is the 0.6.57 symptom arriving by a different road. An unrecognised provider is now local;
+# the vendors below are refused, and an unrecognised value is named in the log rather than
+# guessed about.
+CLOUD_PROVIDER_NAMES = frozenset({
+    "cloud", "cloudflare", "fal", "gemini", "huggingface", "kie", "nebius",
+    "pollinations", "replicate", "together",
+})
+_CLOUD_PROVIDER_TOKEN = re.compile(r"[^a-z0-9]+")
+_reported_unknown_providers: set[str] = set()
 
 # Chat Studio does not set ``is_cloud`` on its catalogue entries; it declares
 # the lane on the job instead. "local" runs on a Mac, "free" and "paid" are
@@ -57,6 +74,12 @@ def _id_cloud_reason(model: str) -> str | None:
     return None
 
 
+def _provider_is_cloud(provider: str) -> bool:
+    """Whether a reported ``provider`` names a hosted inference vendor."""
+    tokens = {token for token in _CLOUD_PROVIDER_TOKEN.split(provider) if token}
+    return bool(tokens & CLOUD_PROVIDER_NAMES)
+
+
 def _entry_cloud_reason(entry: dict) -> str | None:
     """Why one worker catalogue entry describes a cloud model, if it does.
 
@@ -72,11 +95,33 @@ def _entry_cloud_reason(entry: dict) -> str | None:
     state = cache.get("state") if isinstance(cache, dict) else cache
     if str(state or "").strip().lower() == "cloud":
         return "its worker catalogue entry reports cache.state=cloud"
-    provider = str(
-        entry.get("provider") or entry.get("cloud_provider") or ""
-    ).strip().lower()
-    if provider and provider not in LOCAL_PROVIDER_VALUES:
+    # ``cloud_provider`` says what it is by name; a value there is never a local spelling.
+    cloud_provider = str(entry.get("cloud_provider") or "").strip().lower()
+    if cloud_provider:
+        return f"its worker catalogue entry names the cloud provider '{cloud_provider}'"
+    # A row carrying a hosted *model identity* is a cloud row whatever `is_cloud` says: the
+    # Hub's own publish path already strips these two fields as hosted-lane metadata
+    # (`monitor._assemble_aggregate_catalog`), so their presence is the producer saying "hosted".
+    # This is the fail-closed half of B12: a new vendor whose name is not in
+    # `CLOUD_PROVIDER_NAMES` is still refused when it names which hosted model it is.
+    for field in ("cloud_model_id", "provider_model"):
+        value = str(entry.get(field) or "").strip()
+        if value:
+            return f"its worker catalogue entry carries a hosted model identity in '{field}'"
+    provider = str(entry.get("provider") or "").strip().lower()
+    if provider and _provider_is_cloud(provider):
         return f"its worker catalogue entry names the external provider '{provider}'"
+    if provider and provider not in LOCAL_PROVIDER_VALUES:
+        # Loud, once per value, and local: the alternative - treating an unknown spelling as
+        # cloud - silently deletes a whole modality from every picker.
+        if provider not in _reported_unknown_providers:
+            _reported_unknown_providers.add(provider)
+            log.warning(
+                "worker catalogue reports the provider %r, which is not a known cloud "
+                "vendor; treating it as a local runtime. Add it to CLOUD_PROVIDER_NAMES in "
+                "components/hub/backend/cloud_guard.py if it is a hosted service.",
+                provider,
+            )
     return None
 
 

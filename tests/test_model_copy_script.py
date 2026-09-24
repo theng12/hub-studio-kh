@@ -187,7 +187,12 @@ class EndToEndTests(unittest.TestCase):
     """
 
     REVISION = "c" * 40
-    APP = Path("Studio Hub 0.4.0.app")
+    # The unversioned name every kit ships. It used to be `Studio Hub 0.4.0.app`, and once the
+    # launcher stopped looking for a pinned name the fixture's app was no longer found — at which
+    # point the helper fell through to the **owner's real `/Applications/Studio Hub.app`** and read
+    # its (older) `model_packages`. A test that reaches out of its sandbox is a worse bug than the
+    # one it was hiding; the fixture now uses the name the drives actually carry.
+    APP = Path("Studio Hub.app")
 
     def _manifest(self, package_id: str, revision: str, files: dict) -> dict:
         entries = []
@@ -466,14 +471,23 @@ class LauncherTests(unittest.TestCase):
 
     def test_the_copy_launcher_finds_the_app_in_the_root_or_next_to_it(self):
         text = (ROOT / "copy-models.command").read_text()
-        for candidate in ("$HERE/Studio Hub 0.4.0.app", "$KIT/Studio Hub 0.4.0.app",
-                          "/Applications/Studio Hub 0.4.0.app"):
+        for candidate in ("$HERE/Studio Hub.app", "$KIT/Studio Hub.app",
+                          "/Applications/Studio Hub.app"):
             self.assertIn(candidate, text)
+        # The bundle's name carries no version, on purpose (`packaging/stage_voice.py` dropped
+        # it so a new release replaces the old install instead of sitting beside it). A launcher
+        # that looks for a version-pinned name works exactly until the next release.
+        self.assertNotRegex(
+            text, r"Studio Hub \d+\.\d+",
+            "copy-models.command looks for a version-pinned app name; the bundle has none")
 
     def test_the_install_launcher_finds_the_app_from_the_root_too(self):
         text = (ROOT / "install_app.command").read_text()
-        self.assertIn("$HERE/Studio Hub 0.4.0.app", text)
-        self.assertIn("$KIT/Studio Hub 0.4.0.app", text)
+        self.assertIn("$HERE/Studio Hub.app", text)
+        self.assertIn("$KIT/Studio Hub.app", text)
+        self.assertNotRegex(
+            text, r"Studio Hub \d+\.\d+",
+            "install_app.command looks for a version-pinned app name; the bundle has none")
 
     def test_messages_name_the_files_as_they_are_named_on_the_drive(self):
         """The operator sees files with a number and spaces, so the help must say those names."""

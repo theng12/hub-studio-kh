@@ -75,9 +75,14 @@ run_smoke() {
   local runtime="$1" state
   state="$(mktemp -d "$BUILD_ROOT/image-runtime-state.XXXXXX")"
   mkdir -p "$state/home" "$state/tmp"
+  # `--registry` names the Image worker's own model registry, because this file is executed from
+  # a copy inside the runtime and cannot find the repository on its own. The smoke imports every
+  # class that registry lists, so a model the worker can load cannot be missing from the runtime
+  # without failing here.
   (cd /; env -i HOME="$state/home" TMPDIR="$state/tmp" PATH=/usr/bin:/bin \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONDONTWRITEBYTECODE=1 \
-    "$runtime/bin/python3" -I -B "$runtime/manifest/smoke_imports.py")
+    "$runtime/bin/python3" -I -B "$runtime/manifest/smoke_imports.py" \
+    --registry "$PROJECT_ROOT/components/image/app/backend/generation.py")
   "$runtime/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" verify "$runtime"
   rm -rf "$state"
 }

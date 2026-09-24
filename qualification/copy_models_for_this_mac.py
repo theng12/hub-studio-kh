@@ -65,6 +65,24 @@ def required_gb(manifest: dict) -> int:
     return PROVEN_SMALLER.get(manifest["package_id"], floor)
 
 
+def floor_origin(manifest: dict) -> str:
+    """Where this model's memory requirement came from, so a wrong skip can be traced.
+
+    There are exactly two sources: the `PROVEN_SMALLER` table below (the owner has run the model
+    on a smaller Mac than its manifest claims) and the manifest's own
+    `qualification.minimum_unified_memory_gb`. The skip *is* printed, but it printed only the
+    number - so a new model the owner had proven on a small Mac looked like a model that did not
+    fit, and nothing said which of the two places to change. Both are named here.
+    """
+    package_id = manifest["package_id"]
+    if package_id in PROVEN_SMALLER:
+        return (f"floor {PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER in "
+                f"qualification/copy_models_for_this_mac.py")
+    return ("floor from qualification.minimum_unified_memory_gb in its manifest (raise it there, "
+            "or add the model to PROVEN_SMALLER in qualification/copy_models_for_this_mac.py if "
+            "the owner has run it on a smaller Mac)")
+
+
 def size_gb(manifest: dict) -> float:
     return sum(int(f.get("size") or 0) for f in manifest.get("files", [])) / 1e9
 
@@ -241,6 +259,20 @@ def load_verifier(components: Path):
     return model_packages
 
 
+def companion_packages(verifier, manifest: dict) -> list[str]:
+    """The companions this manifest declares, read the app's way.
+
+    `model_packages.required_packages` is the one reader of the relationship, and it honours both
+    spellings a manifest may carry. Falling back to a local read of one field would reintroduce
+    the split this script exists to avoid: the model whose companion is skipped is the model that
+    then fails offline, on a Mac that has no network to fix it with.
+    """
+    if verifier is not None:
+        return list(verifier.required_packages(manifest))
+    declared = manifest.get("requires_packages") or manifest.get("dependencies") or []
+    return [str(dependency) for dependency in declared]
+
+
 def register(verifier, manifest: dict, destination: Path, catalog: dict) -> str:
     """Make sure the app's receipt exists for this model, hashing only if it has to.
 
@@ -277,11 +309,12 @@ def main() -> int:
     kit = here.parent if here.name == "Technical" else here
     library = (kit / "model-library").resolve()
     app_root = None
-    for candidate in (kit / "Studio Hub.app", kit / "Studio Hub 0.4.0.app",
+    # The staged bundle deliberately carries no version in its name (`packaging/stage_voice.py`),
+    # so there is no version to pin: a pinned fallback would only ever be dead weight or, worse,
+    # find an old copy left beside a new one.
+    for candidate in (kit / "Studio Hub.app",
                       Path("/Applications/Studio Hub.app"),
-                      Path("/Applications/Studio Hub 0.4.0.app"),
-                      Path.home() / "Applications/Studio Hub.app",
-                      Path.home() / "Applications/Studio Hub 0.4.0.app"):
+                      Path.home() / "Applications/Studio Hub.app"):
         if (candidate / "Contents/Resources/model-manifests").is_dir():
             app_root = candidate
             break
@@ -297,6 +330,10 @@ def main() -> int:
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))}
     memory = machine_memory_gb()
+    # The app's own companion reader, so a package's relationship is resolved exactly as the app
+    # resolves it - under either spelling a manifest may carry, and not by a second copy of the
+    # rule living here. Loaded before the selection below, which is the first thing that needs it.
+    verifier = load_verifier(resources / "components")
 
     print("=" * 68)
     print("  Studio Hub - putting this Mac's models in place")
@@ -314,7 +351,7 @@ def main() -> int:
     # even when it would not have been picked on its own.
     carried: list[str] = []
     for package_id, _needs, manifest in list(chosen):
-        for dependency in manifest.get("requires_packages", []) or []:
+        for dependency in companion_packages(verifier, manifest):
             if dependency in manifests and all(dependency != c[0] for c in chosen):
                 chosen.append((dependency, required_gb(manifests[dependency]), manifests[dependency]))
                 carried.append(dependency)
@@ -373,8 +410,9 @@ def main() -> int:
     if skipped:
         skip_gb = sum(size_gb(m) for _p, _n, m in skipped)
         print(f"  Leaving behind {len(skipped)} model(s), {skip_gb:.1f} GB - this Mac is too small:")
-        for package_id, needs, _m in skipped:
+        for package_id, needs, manifest in skipped:
             print(f"      {package_id:<32} needs {needs:>2} GB")
+            print(f"      {'':<32} {floor_origin(manifest)}")
         print()
         print("  Not a problem: they are for bigger Macs. The rest works normally.")
         print()
@@ -422,7 +460,6 @@ def main() -> int:
         except ValueError:
             pass
 
-    verifier = load_verifier(resources / "components")
     catalog = {manifest["package_id"]: manifest for _p, _n, manifest in chosen}
     started = time.time()
     copied = updated = failed = 0

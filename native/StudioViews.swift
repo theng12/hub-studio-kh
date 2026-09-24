@@ -10,13 +10,29 @@ struct StudioWindow: View {
 
 /// Tabs for the unified history. Owner requirement (2026-09-15): each generation page keeps its
 /// own history, and the shared history is presented with tabs rather than one flat scroll.
-enum HistoryTab: String, CaseIterable, Identifiable {
-    case all = "All"
-    case image = "Image"
-    case audio = "Audio"
-    case music = "Music"
-    case subtitle = "Subtitle"
-    var id: String { rawValue }
+///
+/// Membership is derived from `StudioFunction.allCases` — the same list the sidebars, the pages
+/// and the model pickers derive from — so a Studio added to the enum cannot arrive without its
+/// history tab. This was a hand-written list of four names, and a Studio it did not name simply
+/// had no tab, with nothing saying a tab was missing.
+enum HistoryTab: Hashable, Identifiable {
+    case all
+    case studio(StudioFunction)
+
+    static let allCases: [HistoryTab] = [.all] + StudioFunction.allCases
+        .filter { $0.hasBatchHistory }
+        .map(HistoryTab.studio)
+
+    var studio: StudioFunction? {
+        if case .studio(let function) = self { return function }
+        return nil
+    }
+    /// The page's owner-facing name, so the tab reads "Subtitle" and not "Transcription".
+    var title: String {
+        guard let studio else { return "All" }
+        return StudioPage.page(for: studio)?.title ?? studio.rawValue
+    }
+    var id: String { title }
 }
 
 /// A slowly turning rainbow ring, drawn only while `active`.
@@ -874,14 +890,12 @@ struct StudioContent: View {
         stats.byMachine.sorted { $0.value.count > $1.value.count }
     }
 
+    /// The glyph for one modality's measured runs. Read from the Studio the modality belongs to,
+    /// so a new Studio gets its own symbol instead of every unknown modality reading "clock".
     private func functionSymbol(_ modality: String?) -> String {
-        switch modality {
-        case "image": return "photo"
-        case "transcription": return "waveform"
-        case "music": return "music.note"
-        case "speech", "voice": return "mic"
-        default: return "clock"
-        }
+        guard let modality,
+              let function = NativeWorkspaceStore.function(forModality: modality) else { return "clock" }
+        return function.symbol
     }
 
     private func seconds(_ value: Double?) -> String {
@@ -889,10 +903,13 @@ struct StudioContent: View {
         return value >= 60 ? String(format: "%.1f min", value / 60) : String(format: "%.1f s", value)
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
-        guard page == .audio || page == .transcription || page == .image || page == .music || page == .chat else { return "Engine not installed" }
+        // Derived from the page's own Studio, not a list of page names: a Studio this build has
+        // no engine for says so, and a function-less page (Overview, Models, …) is not a
+        // workspace at all.
+        guard let function = page.function, function.hasEngine else { return "Engine not installed" }
         guard connected else { return "Services stopped" }
         if workspace.refreshing && workspace.models.isEmpty { return "Checking models…" }
-        return workspace.models.contains { $0.function == page.function && $0.supported && $0.cached && $0.runtimeReady } ? "Ready to create" : "Needs a model"
+        return workspace.models.contains { $0.function == function && $0.supported && $0.cached && $0.runtimeReady } ? "Ready to create" : "Needs a model"
     }
     private func workspaceDescription(_ page: StudioPage) -> String {
         switch page {
@@ -925,6 +942,10 @@ struct StudioContent: View {
                             .font(.body).padding(8).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
                             .accessibilityLabel("Chat message")
+                        // The same picker the other four pages use. The page used to name one model
+                        // in its copy and offer no chooser at all, so a second listed Chat model
+                        // could not be selected.
+                        modelPicker(.chat)
                         HStack {
                             if workspace.submittingChat { ProgressView().controlSize(.small) }
                             Spacer()
@@ -938,8 +959,17 @@ struct StudioContent: View {
                         }
                         if selectedChatModel?.supported != true || selectedChatModel?.cached != true
                             || selectedChatModel?.runtimeReady != true {
-                            Text("No ready Chat model. Install the local Chat model and start its worker; the page sends to Qwen3.5-9B through the Hub.")
+                            // The sentence names the model that is actually selected, or says none
+                            // is; it used to name one model whatever the selection was.
+                            Text(selectedChatModel == nil
+                                 ? "No Chat model is listed by the Hub yet. Install the local Chat model and start its worker."
+                                 : "\(selectedChatModel!.label) is not ready. Install it in Models and start the local Chat worker.")
                                 .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let reason = selectedChatModel?.blockReason {
+                            Label(reason, systemImage: "exclamationmark.triangle")
+                                .font(.callout).foregroundStyle(.orange)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if let warning = selectedChatModel?.memoryWarning {
@@ -1010,8 +1040,8 @@ struct StudioContent: View {
                                 Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        if let configuration = workspace.imageConfiguration, let values = workspace.imageSettings {
-                            imageControls(configuration, values)
+                        if let configuration = workspace.imageConfiguration, workspace.imageSettings != nil {
+                            imageControls(configuration)
                             Button("Restore Generation Defaults") { workspace.restoreImageDefaults() }
                         }
                         Button("Manage Image Models") { modelFilter = "Image"; studio.select(.models) }
@@ -1060,7 +1090,14 @@ struct StudioContent: View {
         }
     }
 
-    private func imageControls(_ configuration: NativeImageConfiguration, _ values: NativeImageSettings) -> some View {
+    /// The controls this model publishes, and only those.
+    ///
+    /// A second engine of the same modality can publish a different control set, so each control
+    /// appears only when the model's own entry names a default or a bound for it. A control that
+    /// is not shown is not sent either, and the engine fills its own default — the alternative was
+    /// to invent a number the model never named.
+    @ViewBuilder
+    private func imageControls(_ configuration: NativeImageConfiguration) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Picker("Image size", selection: Binding(
                 get: { configuration.sizes.first { $0.width == workspace.imageSettings?.width && $0.height == workspace.imageSettings?.height }?.id ?? "" },
@@ -1070,24 +1107,36 @@ struct StudioContent: View {
                 })) {
                     ForEach(configuration.sizes) { size in Text("\(size.label) · \(size.width) × \(size.height)").tag(size.id) }
                 }
-            NumberField(title: "Steps",
-                        value: Binding(get: { workspace.imageSettings?.steps ?? values.steps },
-                                       set: { workspace.imageSettings?.steps = $0 }),
-                        range: configuration.limits.minSteps...configuration.limits.maxSteps)
-            HStack {
-                Text("Guidance")
-                Spacer()
-                TextField("Guidance", value: Binding(get: { workspace.imageSettings?.guidance ?? values.guidance }, set: { workspace.imageSettings?.guidance = $0 }), format: .number)
-                    .textFieldStyle(.roundedBorder).frame(width: 95)
+            if let field = configuration.stepsField, let range = configuration.stepsRange {
+                NumberField(title: "Steps",
+                            value: Binding(get: { workspace.imageSettings?.steps ?? field },
+                                           set: { workspace.imageSettings?.steps = $0 }),
+                            range: range)
             }
-            VStack(alignment: .leading, spacing: 5) {
+            if let field = configuration.guidanceField, let range = configuration.guidanceRange {
                 HStack {
-                    Text("Seed")
+                    Text("Guidance")
                     Spacer()
-                    TextField("Seed", value: Binding(get: { workspace.imageSettings?.seed ?? values.seed }, set: { workspace.imageSettings?.seed = $0 }), format: .number.grouping(.never))
-                        .textFieldStyle(.roundedBorder).frame(width: 145)
+                    TextField("Guidance", value: Binding(get: { workspace.imageSettings?.guidance ?? field },
+                                                         set: { workspace.imageSettings?.guidance = $0 }),
+                              format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 95)
+                    Text("\(range.lowerBound, specifier: "%g")–\(range.upperBound, specifier: "%g")")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
+            }
+            if let field = configuration.seedField {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text("Seed")
+                        Spacer()
+                        TextField("Seed", value: Binding(get: { workspace.imageSettings?.seed ?? field },
+                                                         set: { workspace.imageSettings?.seed = $0 }),
+                                  format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder).frame(width: 145)
+                    }
+                    Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -1295,18 +1344,23 @@ struct StudioContent: View {
     }
 
     /// The Music controls the Hub publishes for this model, and nothing else.
+    ///
+    /// Each control appears only when this model's own entry names a default or a bound for it:
+    /// a second Music engine that publishes fewer controls still gets a usable form, and a control
+    /// this model never named is left out of the request for the worker to default itself.
+    @ViewBuilder
     private func musicControls(_ configuration: NativeMusicConfiguration, _ values: NativeMusicSettings) -> some View {
-        let durationRange = configuration.limits.minDurationSeconds...configuration.limits.maxDurationSeconds
         // One validated binding for both the field and the stepper: the field refuses a value
         // outside the model's published range and falls back to the current value, so a typo can
         // never leave the form in a state the Hub would reject.
         let duration = Binding<Double>(
             get: { workspace.musicSettings?.durationSeconds ?? values.durationSeconds },
             set: { proposed in
-                guard proposed.isFinite, durationRange.contains(proposed) else { return }
+                guard proposed.isFinite,
+                      configuration.durationRange?.contains(proposed) ?? true else { return }
                 workspace.musicSettings?.durationSeconds = proposed
             })
-        return VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
                 Text("Duration")
                 Spacer(minLength: 8)
@@ -1316,52 +1370,72 @@ struct StudioContent: View {
                     .frame(width: 80)
                     .accessibilityLabel("Duration in seconds")
                 Text("s").foregroundStyle(.secondary)
-                Stepper("Duration", value: duration, in: durationRange, step: 5).labelsHidden()
-            }
-            NumberField(title: "Steps",
-                        value: Binding(get: { workspace.musicSettings?.steps ?? values.steps },
-                                       set: { workspace.musicSettings?.steps = $0 }),
-                        range: configuration.limits.minSteps...configuration.limits.maxSteps)
-            HStack {
-                Text("Guidance")
-                Spacer()
-                TextField("Guidance", value: Binding(get: { workspace.musicSettings?.guidanceScale ?? values.guidanceScale }, set: { workspace.musicSettings?.guidanceScale = $0 }), format: .number)
-                    .textFieldStyle(.roundedBorder).frame(width: 95)
-            }
-            HStack {
-                Text("Shift")
-                Spacer()
-                TextField("Shift", value: Binding(get: { workspace.musicSettings?.shift ?? values.shift }, set: { workspace.musicSettings?.shift = $0 }), format: .number)
-                    .textFieldStyle(.roundedBorder).frame(width: 95)
-            }
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text("Seed")
-                    Spacer()
-                    TextField("Seed", value: Binding(get: { workspace.musicSettings?.seed ?? values.seed }, set: { workspace.musicSettings?.seed = $0 }), format: .number.grouping(.never))
-                        .textFieldStyle(.roundedBorder).frame(width: 145)
+                if let range = configuration.durationRange {
+                    Stepper("Duration", value: duration, in: range, step: 5).labelsHidden()
                 }
-                Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
             }
-            // Stable Audio 3 is instrumental only; its catalogue entry omits "lyrics".
-            let supportsVocals = selectedMusicModel?.capabilities.contains("lyrics") ?? true
+            if let field = configuration.stepsField {
+                NumberField(title: "Steps",
+                            value: Binding(get: { workspace.musicSettings?.steps ?? field },
+                                           set: { workspace.musicSettings?.steps = $0 }),
+                            range: configuration.stepsRange ?? field...field)
+            }
+            if let field = configuration.guidanceField {
+                HStack {
+                    Text("Guidance")
+                    Spacer()
+                    TextField("Guidance", value: Binding(get: { workspace.musicSettings?.guidanceScale ?? field },
+                                                         set: { workspace.musicSettings?.guidanceScale = $0 }),
+                              format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 95)
+                }
+            }
+            if let field = configuration.shiftField {
+                HStack {
+                    Text("Shift")
+                    Spacer()
+                    TextField("Shift", value: Binding(get: { workspace.musicSettings?.shift ?? field },
+                                                      set: { workspace.musicSettings?.shift = $0 }),
+                              format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 95)
+                }
+            }
+            if let field = configuration.seedField {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text("Seed")
+                        Spacer()
+                        TextField("Seed", value: Binding(get: { workspace.musicSettings?.seed ?? field },
+                                                         set: { workspace.musicSettings?.seed = $0 }),
+                                  format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder).frame(width: 145)
+                    }
+                    Text("Use −1 for a new random seed.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            // The vocal controls exist only for a model whose entry publishes them. Stable Audio 3
+            // is instrumental only and its catalogue entry omits "lyrics"; a second engine that
+            // publishes no vocal fields must not be offered a toggle that sends nothing.
+            let supportsVocals = configuration.defaults.instrumental != nil
+                || configuration.defaults.lyrics != nil
+                || (selectedMusicModel?.capabilities.contains("lyrics") ?? false)
             if supportsVocals {
                 Toggle("Instrumental", isOn: Binding(
-                    get: { workspace.musicSettings?.instrumental ?? values.instrumental },
+                    get: { workspace.musicSettings?.instrumental ?? configuration.defaults.instrumental ?? true },
                     set: { workspace.musicSettings?.instrumental = $0 }))
                     .toggleStyle(.checkbox)
                 if workspace.musicSettings?.instrumental != true {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Lyrics").font(.callout)
                         TextField("One line per lyric", text: Binding(
-                            get: { workspace.musicSettings?.lyrics ?? values.lyrics },
+                            get: { workspace.musicSettings?.lyrics ?? configuration.defaults.lyrics ?? "" },
                             set: { workspace.musicSettings?.lyrics = $0 }), axis: .vertical)
                             .lineLimit(3...6).textFieldStyle(.roundedBorder)
                     }
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Vocal language").font(.callout)
                         TextField("Language code, e.g. en", text: Binding(
-                            get: { workspace.musicSettings?.vocalLanguage ?? values.vocalLanguage },
+                            get: { workspace.musicSettings?.vocalLanguage ?? configuration.defaults.vocalLanguage ?? "" },
                             set: { workspace.musicSettings?.vocalLanguage = $0 }))
                             .textFieldStyle(.roundedBorder)
                     }
@@ -1538,14 +1612,21 @@ struct StudioContent: View {
                                 }
                             }
                         } else if workspace.audioMode == .preset {
+                            // The roster belongs to the model, not to the page: a preset family that
+                            // publishes no list (Khmer VITS has a single built-in voice) must not be
+                            // shown another family's voice names, and must not be told it has a list
+                            // it has not reported.
+                            let speakers = selectedAudioModel?.speakers ?? []
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Voice").font(.callout)
-                                if workspace.audioSpeakers.isEmpty {
-                                    Text("This model has not reported its ready-made voices yet. Press Generate Audio once the model is installed and the runtime is ready, or choose another model above.")
+                                if speakers.isEmpty {
+                                    Text(selectedAudioModel?.publishesPresetRoster == true
+                                         ? "This model has not reported its built-in voices yet. Press Generate Audio once the model is installed and the runtime is ready, or choose another model above."
+                                         : "This model has one built-in voice. There is nothing to choose or prepare.")
                                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                                 } else {
                                     Picker("Voice", selection: $workspace.audioSpeaker) {
-                                        ForEach(workspace.audioSpeakers, id: \.self) { Text($0).tag($0) }
+                                        ForEach(speakers, id: \.self) { Text($0).tag($0) }
                                     }.labelsHidden()
                                     Text("These voices are built into the model. Nothing to choose or prepare.").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -1679,8 +1760,10 @@ struct StudioContent: View {
                 return "Describe the voice you want."
             }
         case .preset:
-            if workspace.audioSpeakers.isEmpty {
-                return "This model has not reported its ready-made voices yet."
+            // Only a model that publishes a roster can be waiting for one. A single-voice model has
+            // nothing to report, so it must never be held back by an empty list that will stay empty.
+            if model.publishesPresetRoster, model.speakers.isEmpty {
+                return "This model has not reported its built-in voices yet."
             }
         }
         return nil
@@ -1740,6 +1823,19 @@ struct StudioContent: View {
         "a clear, neutral voice for reading instructions",
     ]
 
+    /// What the chosen tab does, in the operator's words.
+    ///
+    /// The preset tab is the one tab whose job depends on the model: a model with a published roster
+    /// asks the operator to pick a voice, and a model with a single built-in voice has nothing to
+    /// pick. The catalog publishes which is which, so the sentence follows the model rather than
+    /// assuming every preset model offers a list.
+    private var audioModeDetail: String {
+        guard workspace.audioMode == .preset, selectedAudioModel?.publishesPresetRoster == false else {
+            return workspace.audioMode.detail
+        }
+        return "This model's voice is built in. Type your script and generate."
+    }
+
     /// The three ways of choosing a voice, as tabs.
     ///
     /// They were previously one form whose controls changed under the operator depending on the
@@ -1770,48 +1866,73 @@ struct StudioContent: View {
                     workspace.audioModel = workspace.audioModels(for: mode).first?.repo ?? ""
                 }
             }
-            Text(workspace.audioMode.detail).font(.caption).foregroundStyle(.secondary)
+            Text(audioModeDetail).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    /// The selection a Studio's picker edits. Exhaustive over `StudioFunction`, so a new Studio
+    /// has to be given a selection here rather than silently editing another Studio's.
+    /// The voice types to offer. The three codes the worker itself writes, plus whatever value the
+    /// voice being edited already carries: a picker that omitted the stored value would show
+    /// nothing selected and quietly rewrite it on save.
+    private var voiceGenderChoices: [(code: String, label: String)] {
+        let standard: [(code: String, label: String)] = [("n", "Neutral"), ("m", "Male"), ("f", "Female")]
+        let current = voiceDraft.gender.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !current.isEmpty, !standard.contains(where: { $0.code == current }) else { return standard }
+        return standard + [(current, NativeVoice.genderLabel(for: current))]
+    }
+
+    private func modelSelection(_ function: StudioFunction) -> Binding<String>? {
+        switch function {
+        case .audio: return $workspace.audioModel
+        case .image: return $workspace.imageModel
+        case .music: return $workspace.musicModel
+        case .transcription: return $workspace.transcriptionModel
+        case .chat: return $workspace.chatModel
+        case .video: return nil   // No engine in this build, so there is nothing to choose.
+        }
+    }
+
+    @ViewBuilder
     private func modelPicker(_ function: StudioFunction) -> some View {
-        let selection = function == .audio ? $workspace.audioModel
-            : function == .image ? $workspace.imageModel
-            : function == .music ? $workspace.musicModel
-            : $workspace.transcriptionModel
-        // On the Audio page the list is the one that belongs to the chosen voice tab, so the model
-        // and the controls under it always describe the same job.
-        let models = function == .audio
-            ? workspace.audioModels(for: workspace.audioMode).filter { $0.supported }
-            : workspace.models.filter { $0.function == function && $0.supported }
-        return VStack(alignment: .leading, spacing: 7) {
-            Text("Model").font(.callout)
-            Picker("Model", selection: selection) {
-                Text("Choose a model").tag("")
-                ForEach(models) { model in
-                    Text(model.pickerName + (model.cached ? "" : " · Not installed") + model.pickerSuffix)
-                        .tag(model.repo)
+        // Every page that generates uses this one picker: the Chat page used to draw its own
+        // model name instead, so even a second listed Chat model could not be chosen.
+        let models = workspace.supportedModels(for: function)
+        if let selection = modelSelection(function) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Model").font(.callout)
+                Picker("Model", selection: selection) {
+                    Text("Choose a model").tag("")
+                    ForEach(models) { model in
+                        Text(model.pickerName + (model.cached ? "" : " · Not installed") + model.pickerSuffix)
+                            .tag(model.repo)
+                    }
+                }.labelsHidden().frame(maxWidth: .infinity)
+                if let model = models.first(where: { $0.repo == selection.wrappedValue }) {
+                    Label(model.cached ? "Installed" : "Download in Models", systemImage: model.cached ? "checkmark.circle" : "arrow.down.circle")
+                        .font(.caption).foregroundStyle(model.cached ? Color.secondary : Color.orange)
+                    // Why this model will not run here, when it will not. The Hub has always checked
+                    // five gates before accepting a job - files, runtime, the macOS floor, the chip and
+                    // the studio process - and the app used to show only that something was unavailable.
+                    if let reason = model.blockReason {
+                        Label(reason, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-            }.labelsHidden().frame(maxWidth: .infinity)
-            if let model = models.first(where: { $0.repo == selection.wrappedValue }) {
-                Label(model.cached ? "Installed" : "Download in Models", systemImage: model.cached ? "checkmark.circle" : "arrow.down.circle")
-                    .font(.caption).foregroundStyle(model.cached ? Color.secondary : Color.orange)
-                // Why this model will not run here, when it will not. The Hub has always checked
-                // five gates before accepting a job - files, runtime, the macOS floor, the chip and
-                // the studio process - and the app used to show only that something was unavailable.
-                if let reason = model.blockReason {
-                    Label(reason, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                if models.isEmpty {
+                    Text(function == .audio
+                         ? (connected ? workspace.audioMode.emptyReason : "Start the services to load available models.")
+                         : (connected ? "No compatible model is available for this workspace yet." : "Start the services to load available models."))
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if models.isEmpty {
-                Text(function == .audio
-                     ? (connected ? workspace.audioMode.emptyReason : "Start the services to load available models.")
-                     : (connected ? "No compatible model is available for this workspace yet." : "Start the services to load available models."))
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
+        } else {
+            // A Studio with no picker is named here with the file to update, rather than quietly
+            // rendering nothing or, worse, another Studio's list.
+            Text("This build has no model picker wired for \(function.rawValue). Add it to `modelSelection(_:)` in native/StudioViews.swift.")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -2043,7 +2164,19 @@ struct StudioContent: View {
                                 }
                             }
                             if model.cached {
-                                if model.supported { Button("Use in \(model.function.rawValue)") { if model.function == .audio { workspace.audioModel = model.repo; studio.select(.audio) } else { workspace.transcriptionModel = model.repo; studio.select(.transcription) } }.buttonStyle(.borderedProminent) }
+                                // The button opens the page that owns this model's own function.
+                                // It used to set the Subtitle selection for every non-audio model,
+                                // so an Image or Chat model opened Subtitle with a foreign repo.
+                                if model.supported, let page = StudioPage.page(for: model.function) {
+                                    Button("Use in \(page.title)") {
+                                        workspace.select(model)
+                                        studio.select(page)
+                                    }.buttonStyle(.borderedProminent)
+                                } else if model.supported {
+                                    Text("This model belongs to \(model.function.rawValue), which this build has no page for. Add it to `StudioPage` in native/ShellCore.swift.")
+                                        .font(.caption).foregroundStyle(.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 HStack {
                                     // Verification is timestamp-sensitive: a library that was
                                     // copied or hard-linked can read as changed even when the
@@ -2099,37 +2232,33 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: 24) {
                 heading("Jobs", "Every local generation in one place, or filtered to a single studio.")
                 Picker("History", selection: $historyTab) {
-                    ForEach(HistoryTab.allCases) { tab in Text(tab.rawValue).tag(tab) }
+                    ForEach(HistoryTab.allCases) { tab in Text(tab.title).tag(tab) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(maxWidth: 420, alignment: .leading)
                 .accessibilityLabel("History filter")
                 if workspace.transcribing { transcriptionActivity }
-                if historyTab == .all || historyTab == .image {
-                    sectionTitle("Image")
-                    if workspace.imageJobs.isEmpty { Text("No image jobs yet.").foregroundStyle(.secondary) }
-                    // Lazy so a thumbnail is only fetched for a row that is actually on screen.
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(workspace.imageJobs) { job in imageJobRow(job); Divider() }
-                    }
-                }
-                if historyTab == .all || historyTab == .audio {
-                    sectionTitle("Audio")
-                    if workspace.audioJobs.isEmpty { Text("No audio jobs yet.").foregroundStyle(.secondary) }
-                    ForEach(workspace.audioJobs) { job in jobRow(job, compact: false); Divider() }
-                }
-                if historyTab == .all || historyTab == .music {
-                    sectionTitle("Music")
-                    if workspace.musicJobs.isEmpty { Text("No music jobs yet.").foregroundStyle(.secondary) }
-                    ForEach(workspace.musicJobs) { job in musicJobRow(job); Divider() }
-                }
-                if historyTab == .all || historyTab == .subtitle {
-                    sectionTitle("Subtitle")
-                    if workspace.subtitleJobs.isEmpty { Text("No subtitle jobs yet.").foregroundStyle(.secondary) }
-                    ForEach(workspace.subtitleJobs) { job in subtitleJobRow(job); Divider() }
-                    if let result = workspace.transcriptionResult {
-                        HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Subtitle") { studio.select(.transcription) } }
+                // One section per Studio that has a history, derived from the Studio list rather
+                // than written out here: a Studio missing from a hand-written section was simply
+                // absent from Jobs with nothing saying so.
+                ForEach(workspace.jobHistories, id: \.function) { history in
+                    if historyTab == .all || historyTab.studio == history.function {
+                        sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
+                        if history.jobs.isEmpty {
+                            Text("No \(history.function.rawValue.lowercased()) jobs yet.").foregroundStyle(.secondary)
+                        }
+                        // Lazy so a row's artifact (an image thumbnail above all) is only fetched
+                        // for a row that is actually on screen.
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(history.jobs) { job in
+                                jobRow(job, for: history.function)
+                                Divider()
+                            }
+                        }
+                        if history.function == .transcription, let result = workspace.transcriptionResult {
+                            HStack { VStack(alignment: .leading, spacing: 5) { Text("Latest transcript").font(.headline); Text(result.text).lineLimit(2).foregroundStyle(.secondary) }; Spacer(); Button("Open Subtitle") { studio.select(.transcription) } }
+                        }
                     }
                 }
                 if historyTab == .all {
@@ -2185,6 +2314,22 @@ struct StudioContent: View {
             if let error = job.error, !error.isEmpty {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
+        }
+    }
+
+    /// One history row, drawn by the Studio that produced it. The switch is exhaustive over
+    /// `StudioFunction`, so a new Studio has to be given a row here rather than quietly showing
+    /// an audio row for something that is not audio.
+    @ViewBuilder
+    private func jobRow(_ job: NativeJob, for function: StudioFunction) -> some View {
+        switch function {
+        case .image: imageJobRow(job)
+        case .audio: jobRow(job, compact: false)
+        case .music: musicJobRow(job)
+        case .transcription: subtitleJobRow(job)
+        case .chat, .video:
+            // No batch history, so `jobHistories` never yields one of these.
+            EmptyView()
         }
     }
 
@@ -2371,14 +2516,31 @@ struct StudioContent: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
                 TextField("Name", text: $voiceDraft.name)
-                Picker("Language", selection: $voiceDraft.language) {
-                    ForEach(NativeVoice.languageOptions, id: \.self) { Text($0).tag($0) }
+                // The worker owns the vocabulary and stores what it is given, so language is free
+                // text with the library's own values offered as suggestions. A fixed picker could
+                // not tag a Khmer voice `km`; the short list is only what a library that has not
+                // reported any language of its own falls back to.
+                LabeledContent("Language") {
+                    HStack(spacing: 8) {
+                        TextField("Language code, e.g. en or km", text: $voiceDraft.language)
+                            .textFieldStyle(.roundedBorder)
+                        Menu("Known") {
+                            ForEach(NativeVoice.languageChoices(published: workspace.voices.map(\.language)), id: \.self) { code in
+                                Button(code) { voiceDraft.language = code }
+                            }
+                        }.frame(width: 90)
+                    }
                 }
+                // The same rule for the voice type: the three codes the worker itself writes are
+                // offered, and a value the worker already published that is not one of them is
+                // added to the list so it is shown rather than silently replaced.
                 Picker("Voice type", selection: $voiceDraft.gender) {
-                    Text("Neutral").tag("n"); Text("Male").tag("m"); Text("Female").tag("f")
+                    ForEach(voiceGenderChoices, id: \.code) { choice in Text(choice.label).tag(choice.code) }
                 }
                 Picker("Rights", selection: $voiceDraft.license) {
-                    ForEach(NativeVoice.licenseOptions, id: \.id) { Text($0.label).tag($0.id) }
+                    ForEach(NativeVoice.licenseChoices(current: voiceDraft.license), id: \.id) { option in
+                        Text(option.label).tag(option.id)
+                    }
                 }
                 TextField("Notes (optional)", text: $voiceDraft.notes)
                 if voiceDraft.voice == nil {
@@ -3442,15 +3604,14 @@ struct StudioContent: View {
     /// "Image 1 · Audio 8 · Subtitle 3 · Music 2" - how many models this Mac can run for each
     /// studio, counted with the same filter the model pickers use, so the sidebar and the picker
     /// always agree. It counts models, not workers: every Mac runs one worker per studio, so a
-    /// worker count said "1" beside a picker offering eight.
+    /// worker count said "1" beside a picker offering eight. The Studios come from
+    /// `StudioFunction.allCases`, so a new one is counted here without a second edit.
     private var generatorSummary: String {
-        let order: [(StudioFunction, String)] = [(.image, "Image"), (.audio, "Audio"),
-                                                 (.transcription, "Subtitle"), (.music, "Music")]
-        let parts = order.compactMap { function, label -> String? in
-            let count = function == .audio
-                ? workspace.audioModels(for: workspace.audioMode).filter { $0.supported }.count
-                : workspace.models.filter { $0.function == function && $0.supported }.count
-            return count > 0 ? "\(label) \(count)" : nil
+        let parts = StudioFunction.allCases.filter { $0.hasEngine }.compactMap { function -> String? in
+            let count = workspace.supportedModels(for: function).count
+            guard count > 0 else { return nil }
+            let label = StudioPage.page(for: function)?.title ?? function.rawValue
+            return "\(label) \(count)"
         }
         return parts.joined(separator: " · ")
     }
@@ -3501,10 +3662,20 @@ struct StudioContent: View {
         return hosts.contains("0.0.0.0") ? "0.0.0.0" : hosts.joined(separator: ",")
     }
     private var unavailableWorkspace: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        // A page whose Studio *does* have an engine but has no workspace wired here is a wiring
+        // hole, and it says so by name with the file to update. Saying "engine not installed" for
+        // it would be a different, false statement.
+        let unwired = studio.selection.function?.hasEngine == true
+        return VStack(alignment: .leading, spacing: 24) {
             heading(studio.selection.rawValue, workspaceDescription(studio.selection))
             Spacer()
-            empty("Engine not installed in this build", "This workspace is part of the standalone app. Its local engine and generation workflow still need to be integrated.", symbol: studio.selection.symbol)
+            if unwired {
+                empty("No workspace is wired for this Studio",
+                      "\(studio.selection.title) has an engine in this build, but no workspace is wired for it. Add it to the `switch studio.selection` in native/StudioViews.swift.",
+                      symbol: studio.selection.symbol)
+            } else {
+                empty("Engine not installed in this build", "This workspace is part of the standalone app. Its local engine and generation workflow still need to be integrated.", symbol: studio.selection.symbol)
+            }
             HStack { Spacer(); Button("View Available Workspaces") { studio.select(.overview) }; Spacer() }
             Spacer()
         }.padding(28)

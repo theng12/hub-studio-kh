@@ -7,15 +7,26 @@ from typing import Any
 
 import httpx
 
-from . import peers
+from . import peers, vocabulary
 from .registry import label_for
 
 
-# Every Studio that publishes the memory-policy contract. `transcription` is the packaged
-# Subtitle worker's modality; leaving it out kept the Subtitle model out of the Hub's
-# machine-wide release pass entirely, so a Whisper model could stay resident across a
-# handoff to another Studio on an 8 GB Mac.
-SUPPORTED_MODALITIES = {"image", "chat", "video", "music", "voice", "render", "transcription"}
+# Every Studio that may hold a model resident and therefore publishes the memory-policy
+# contract. The routed vocabulary is derived from the Hub's own table rather than restated: the
+# copy that used to live here named {"image","chat","video","music","voice","render",
+# "transcription"} and had already fallen behind once (leaving `transcription` out kept the
+# Subtitle model out of the Hub's machine-wide release pass entirely, so a Whisper model could
+# stay resident across a handoff to another Studio on an 8 GB Mac).
+#
+# `render` and `video` are a *deliberate* superset, named explicitly for a documented reason
+# rather than derived: neither is a worker modality in this app - `render` is the Hub's own local
+# FFmpeg step (`monitor.LOCAL_ONLY_MODALITIES`) and no video worker ships - but a registry
+# written by another build, or read from a GenStudio peer, may still list a studio for one of
+# them, and this is the read that stops every Studio holding a model from keeping it across a
+# handoff. Dropping them would silently stop releasing those studios' models. They are inert for
+# a packaged fleet: both admission rules (`registry.TRACKED_MODALITIES`, `fleet_nodes._studios`)
+# refuse either modality, so such a studio cannot appear here today.
+SUPPORTED_MODALITIES = frozenset(vocabulary.WORKER_FOR_MODALITY) | {"render", "video"}
 # Hub validates mode names and renders their labels. Each Studio owns and reports
 # the actual idle threshold, so keeping a second table here would risk drift.
 MODES = {

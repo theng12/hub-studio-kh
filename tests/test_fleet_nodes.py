@@ -141,6 +141,43 @@ class RemoteStudioTests(unittest.TestCase):
         self.assertEqual(url,
                          "http://192.168.1.21:47873/studio/music/api/generate/txt2music")
 
+    def test_every_modality_the_hub_routes_can_join_and_is_dispatchable(self) -> None:
+        """The join vocabulary is the Hub's routing vocabulary, derived rather than copied.
+
+        `NODE_MODALITIES` used to be this file's own copy of it, and `chat` was missing: a node
+        running the shipped Chat worker was refused outright at join time (`raise ValueError`),
+        and an already-joined node's chat studio was silently skipped when the controller built
+        its registry. The comment above that set records the identical Music incident, so this
+        test asserts the rule — every routed modality is accepted and produced — rather than a
+        membership that has to be hand-edited for the next one.
+        """
+        from components.hub.backend import vocabulary
+        modalities = sorted(vocabulary.WORKER_FOR_MODALITY)
+        self.assertTrue(modalities, "the Hub routes no modality at all")
+        self.assertEqual(set(fleet_nodes.NODE_MODALITIES), set(modalities))
+        fleet_nodes.join({
+            "node_id": "mac-mini-2", "name": "Studio 2",
+            "address": "http://192.168.1.21:47873",
+            "studios": [{"id": f"studio-{index}", "modality": modality}
+                        for index, modality in enumerate(modalities)],
+        })
+        entries = fleet_nodes.remote_studios()
+        self.assertEqual(
+            sorted(entry["modality"] for entry in entries), modalities,
+            "a modality the Hub routes could not join a node, or was dropped from the "
+            "controller's registry",
+        )
+
+    def test_an_unknown_modality_is_refused_by_name_and_says_where_to_add_it(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                              "address": "http://192.168.1.21:47873",
+                              "studios": [{"id": "hologram", "modality": "hologram"}]})
+        message = str(caught.exception)
+        self.assertIn("hologram", message)
+        self.assertIn("vocabulary.py", message,
+                      "the refusal must name the file where a modality is registered")
+
 
 class FleetNodeStoreTests(unittest.TestCase):
     def setUp(self) -> None:

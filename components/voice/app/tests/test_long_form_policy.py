@@ -11,7 +11,9 @@ from backend import catalog, generation, long_form_policy, model_audits
     ("family", "repo", "section_chars", "join_ms", "source"),
     [
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 288, 180, "model_audit"),
-        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 400, 300, "model_audit"),
+        # The shipped 1.7B Base tier: its derived record reaches the measured
+            # production audit, so the Auto 280 section size governs and 400 is the ceiling.
+            ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 280, 300, "model_audit"),
         ("chatterbox-mlx", "mlx-community/chatterbox-4bit", 500, 120, "model_audit"),
         ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 500, 120, "runtime_default"),
         ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 400, 120, "runtime_default"),

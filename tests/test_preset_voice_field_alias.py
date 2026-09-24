@@ -1,11 +1,15 @@
-"""Both voice field names must work, whichever family a request is for.
+"""Both voice field names must work for every family that takes a preset voice.
 
 The worker has two names for the same idea: the Qwen families read `preset_speaker`, and the
-mlx-audio picker families (Kokoro, orpheus, VibeVoice, Voxtral) read `voice`. Every client - the
-native app, the gateway, the drive kit's smoke script - sends `preset_speaker`, because that is the
-field the app's audio request has always carried. So a request for one of those families looked like
-a model that could not run at all: it failed with "needs a preset voice" while holding a perfectly
-good one under the other name.
+mlx-audio families read `voice`. Every client - the native app, the gateway, the drive kit's smoke
+script - sends `preset_speaker`, because that is the field the app's audio request has always
+carried. So a request for one of those families looked like a model that could not run at all: it
+failed with "needs a preset voice" while holding a perfectly good one under the other name.
+
+Retargeted 2026-09-24 (ST-13.A cleanup): the family these tests were written against (Kokoro, and
+the Orpheus/VibeVoice pickers) left the catalog in ST-13.B, and `_mlx_kwargs_voice_picker` went with
+it. Pocket TTS is the surviving family whose resolver reads both field names, so the invariant is
+tested there instead of being deleted with its first subject.
 """
 import sys
 import unittest
@@ -19,63 +23,66 @@ from components.voice.app.backend import generation as generation_module  # noqa
 from components.voice.app.backend.generation import GenerationManager  # noqa: E402
 
 MANAGER = GenerationManager.__new__(GenerationManager)
-SOURCE = (Path(__file__).resolve().parents[1]
-          / "components/voice/app/backend/generation.py").read_text()
+POCKET = "mlx-community/pocket-tts-4bit"
 
 
 class VoiceFieldAliasTests(unittest.TestCase):
-    def test_preset_speaker_is_accepted_for_a_picker_family(self):
-        picked = MANAGER._mlx_kwargs_voice_picker("orpheus", {"preset_speaker": "tara"}, {})
-        self.assertIn("tara", str(picked))
+    """`voice` and `preset_speaker` are the same field, and the reference clip beats both."""
+
+    def test_preset_speaker_is_accepted_where_the_family_reads_voice(self):
+        gen_kwargs = {}
+        MANAGER._mlx_kwargs_voice_or_clone({"preset_speaker": "alba"}, gen_kwargs, None)
+        self.assertEqual(gen_kwargs["voice"], "alba")
 
     def test_the_family_native_field_still_wins(self):
-        picked = MANAGER._mlx_kwargs_voice_picker(
-            "orpheus", {"voice": "leah", "preset_speaker": "tara"}, {})
-        self.assertIn("leah", str(picked))
+        gen_kwargs = {}
+        MANAGER._mlx_kwargs_voice_or_clone(
+            {"voice": "marius", "preset_speaker": "alba"}, gen_kwargs, None)
+        self.assertEqual(gen_kwargs["voice"], "marius")
 
-    def test_no_voice_at_all_still_refuses_with_the_actionable_message(self):
-        with self.assertRaises(ValueError) as caught:
-            MANAGER._mlx_kwargs_voice_picker("orpheus", {}, {})
-        self.assertIn("needs a preset voice", str(caught.exception))
+    def test_a_reference_clip_beats_a_preset_name(self):
+        """Pocket TTS does both; when both are supplied the clip is what the engine clones."""
+        gen_kwargs = {}
+        params = {"voice": "alba", "voice_library_id": "some-voice"}
+        with mock.patch.object(GenerationManager, "_inject_voice_clone") as inject:
+            label = MANAGER._mlx_kwargs_voice_or_clone(params, gen_kwargs, None)
+        inject.assert_called_once()
+        self.assertIn("clone", label)
+        self.assertNotIn("voice", gen_kwargs)
 
-    def test_an_unknown_vibevoice_voice_is_still_refused(self):
-        with self.assertRaises(ValueError):
-            MANAGER._mlx_kwargs_voice_picker("vibevoice", {"preset_speaker": "not-a-voice"}, {})
+    def test_no_voice_and_no_reference_is_the_engines_own_preset(self):
+        """Unlike a preset-only picker, this family has a default voice of its own."""
+        gen_kwargs = {}
+        label = MANAGER._mlx_kwargs_voice_or_clone({}, gen_kwargs, None)
+        self.assertEqual(label, "zero-shot")
+        self.assertNotIn("voice", gen_kwargs)
 
 
 class RevisionEvidenceTests(unittest.TestCase):
-    """The evidence fence is a second reader of the same field, and it failed closed.
+    """The evidence fence is a second reader of the same fields, and it failed closed.
 
-    Generation proved the picker resolves both names, but the fence that stamps immutable voice
-    evidence ran first and only read `voice`. A client-submitted Kokoro job therefore ended as a
-    terminal "preset voice evidence is unavailable" three times in five seconds, which paused the
-    model in the Hub before the engine had loaded once.
+    The fence stamps immutable voice evidence for the finished artifact. It reads the reference
+    hash for a cloned voice; for a preset or zero-shot job it stamps the model revision and leaves
+    the voice revision empty rather than inventing one.
     """
 
-    REPO = "mlx-community/Kokoro-82M-bf16"
-
     def _job(self, **params):
-        return SimpleNamespace(params={"repo": self.REPO, **params},
+        return SimpleNamespace(params={"repo": POCKET, **params},
                                model_revision=None, voice_revision=None)
 
-    def test_kokoro_evidence_accepts_the_client_voice_field(self):
-        job = self._job(preset_speaker="af_heart")
+    def test_a_private_reference_is_the_voice_evidence(self):
+        job = self._job(_reference_audio_sha256="deadbeef")
         with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
             GenerationManager._record_local_revision_evidence(job)
-        self.assertEqual(job.voice_revision, "abc123:preset:af_heart")
+        self.assertEqual(job.model_revision, "abc123")
+        self.assertEqual(job.voice_revision, "deadbeef")
 
-    def test_the_family_native_field_still_wins_for_evidence(self):
-        job = self._job(voice="af_bella", preset_speaker="af_heart")
+    def test_a_preset_job_records_the_model_and_no_invented_voice(self):
+        job = self._job(voice="alba")
         with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
             GenerationManager._record_local_revision_evidence(job)
-        self.assertEqual(job.voice_revision, "abc123:preset:af_bella")
-
-    def test_evidence_still_refuses_when_no_voice_is_supplied(self):
-        job = self._job()
-        with mock.patch.object(generation_module.cache, "snapshot_revision", return_value="abc123"):
-            with self.assertRaises(RuntimeError) as caught:
-                GenerationManager._record_local_revision_evidence(job)
-        self.assertIn("Kokoro preset voice evidence", str(caught.exception))
+        self.assertEqual(job.model_revision, "abc123")
+        self.assertIsNone(job.voice_revision)
 
 
 if __name__ == "__main__":

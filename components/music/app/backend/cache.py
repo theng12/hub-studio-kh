@@ -16,7 +16,7 @@ from components import model_packages
 from . import catalog
 
 
-MANIFEST_NAME = "ace-step-1-5-turbo.json"
+MANIFEST_NAME = catalog.manifest_name_for(catalog.MAIN_REPO)
 LIBRARY_ENV = "STUDIOHUB_MUSIC_LIBRARY_DIR"
 MANIFEST_ENV = "STUDIOHUB_MUSIC_MANIFEST"
 ALLOW_DOWNLOAD_ENV = "STUDIOHUB_MUSIC_ALLOW_DOWNLOAD"

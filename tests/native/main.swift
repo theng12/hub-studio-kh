@@ -189,14 +189,33 @@ require(ShellConfiguration.preparedLibrary(
     home: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("absent-\(UUID().uuidString)")) == nil,
         "an empty home must offer no prepared library")
 
-require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
+// The raw values are the persisted contract: a saved selection has to resolve after an update, so
+// the set of names may not change silently. It is asserted as a set, not as an order, because the
+// order is not saved and is not a contract.
+require(Set(StudioFunction.allCases.map(\.rawValue)) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"],
+        "the persisted Studio names: a new case is a deliberate schema change")
+require(StudioFunction.allCases.count == 6,
+        "a new Studio must land with its page, its symbol and this test updated")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 // The sidebar is grouped by what a page is for: work is created, libraries are maintained, the
 // fleet is connected, app pages are settings, and the engine-less Video studio waits at the end.
 require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet", "App", "Coming later"],
         "the sidebar sections are named and ordered as the owner asked")
+// Membership is derived from the Studio list, so a Studio added to the enum cannot be absent from
+// the sidebar. This is the check that a hand-written list used to hide: nothing failed when a
+// modality was missing from all four of them.
+require(Set(StudioPage.create.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { $0.hasEngine }),
+        "Create must hold every Studio with an engine: \(StudioPage.create)")
+require(Set(StudioPage.comingLater.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { !$0.hasEngine }),
+        "Coming later must hold exactly the Studios with no engine: \(StudioPage.comingLater)")
+require(StudioFunction.allCases.allSatisfy { StudioPage.page(for: $0) != nil },
+        "every Studio must have its own page: adding a case without one is a wiring hole")
+require(StudioFunction.allCases.filter { $0.hasEngine }.count == StudioPage.create.count,
+        "every Studio with an engine must appear in Create exactly once")
+// The order inside Create is the owner's own (2026-09-15). A Studio this order does not name still
+// lands in a section — this asserts the display order, not membership.
 require(StudioPage.create == [.image, .audio, .transcription, .music, .chat],
-        "Create holds every workspace that can make something today")
+        "Create's order is the owner's, with any unplaced Studio appended")
 require(StudioPage.library == [.models, .voices, .jobs], "Library holds the things the operator maintains")
 require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
 require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")

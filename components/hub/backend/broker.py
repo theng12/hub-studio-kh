@@ -139,12 +139,57 @@ MODALITY = {
     "render": ("/api/generate/render", "label", "video"),
 }
 
-# These workers acknowledge an asynchronous job before the result exists and
-# do not provide Voice's stable client-request recovery contract. Once a POST
-# may have reached one of them, retain that exact attempt instead of silently
-# replaying it and producing a duplicate artifact.
-DURABLE_ASYNC_MODALITIES = frozenset({"image", "music"})
-RECEIPT_DURABLE_MODALITIES = DURABLE_ASYNC_MODALITIES | {"voice"}
+# How a repeated attempt for one modality is treated, and which lanes share the per-machine
+# fairness turn. This is a genuinely closed behavioural class, so a new modality must be
+# classified *deliberately*: an unclassified modality used to fall through to the non-durable
+# default, where a POST that may have reached the worker is replayed and can produce a duplicate
+# artifact. `retry_class` refuses by name instead, and `_submit_batch_locked` calls it.
+RETRY_CLASS_DURABLE_ASYNC = "durable_async"
+RETRY_CLASS_RECEIPT_DURABLE = "receipt_durable"
+RETRY_CLASS_NON_DURABLE = "non_durable"
+RETRY_CLASS_AUXILIARY_LANE = "auxiliary_lane"
+
+MODALITY_RETRY_CLASS: dict[str, str] = {
+    # These workers acknowledge an asynchronous job before the result exists and do not provide
+    # Voice's stable client-request recovery contract. Once a POST may have reached one of them,
+    # retain that exact attempt instead of silently replaying it.
+    "image": RETRY_CLASS_DURABLE_ASYNC,
+    "music": RETRY_CLASS_DURABLE_ASYNC,
+    # Voice recovers a dropped attempt by its stable client-request id.
+    "voice": RETRY_CLASS_RECEIPT_DURABLE,
+    # Video and Render answer a terminal result for the POST itself, so there is no separate
+    # asynchronous attempt to retain.
+    "video": RETRY_CLASS_NON_DURABLE,
+    "render": RETRY_CLASS_NON_DURABLE,
+    # Chat and transcription never enter this queue: each owns its own job module with its own
+    # lease (`chat_jobs`, `transcription_jobs`). They do share one per-machine fairness turn.
+    "chat": RETRY_CLASS_AUXILIARY_LANE,
+    "transcription": RETRY_CLASS_AUXILIARY_LANE,
+}
+# Derived from the class table, so the three sets cannot disagree with the classification.
+DURABLE_ASYNC_MODALITIES = frozenset(
+    modality for modality, kind in MODALITY_RETRY_CLASS.items()
+    if kind == RETRY_CLASS_DURABLE_ASYNC)
+RECEIPT_DURABLE_MODALITIES = frozenset(
+    modality for modality, kind in MODALITY_RETRY_CLASS.items()
+    if kind in {RETRY_CLASS_DURABLE_ASYNC, RETRY_CLASS_RECEIPT_DURABLE})
+
+
+def retry_class(modality: object) -> str:
+    """The declared retry/idempotency class for one modality, or a named refusal.
+
+    Never a default: the class decides whether a possibly-delivered POST is replayed, and the
+    quiet default is the risky one (a duplicate artifact on retry).
+    """
+    key = str(modality or "")
+    try:
+        return MODALITY_RETRY_CLASS[key]
+    except KeyError as exc:
+        raise ValueError(
+            f"the modality {key!r} has no retry/idempotency class; add it to "
+            f"MODALITY_RETRY_CLASS in components/hub/backend/broker.py "
+            f"(classes: {sorted(set(MODALITY_RETRY_CLASS.values()))}) rather than letting it "
+            f"take the non-durable default, where a retry can duplicate an artifact") from exc
 
 # Every modality whose artifact is sound. Derived from MODALITY so a future
 # audio modality inherits the priority below without a second edit.
@@ -197,7 +242,10 @@ _external_machine_leases: dict[str, str] = {}
 # every newly-free lease while the other lane is waiting. This is advisory
 # process-local fairness only; the durable non-preemptive lease remains the
 # admission authority and a lone lane always stays work-conserving.
-_EXTERNAL_LANES = frozenset({"chat", "transcription"})
+# Derived from the retry-class table above, where those lanes are a deliberate class.
+_EXTERNAL_LANES = frozenset(
+    modality for modality, kind in MODALITY_RETRY_CLASS.items()
+    if kind == RETRY_CLASS_AUXILIARY_LANE)
 _external_lane_turn: dict[str, str] = {}
 # machine -> recent transport failures and an optional circuit-breaker cooldown.
 # This is intentionally process-local: after a Hub restart every worker must
@@ -426,6 +474,65 @@ def _flexible_placement_key(studio: dict) -> tuple[int, float, str]:
     """Smallest capable machine first, for image and subtitle. Unknown telemetry sorts last."""
     memory = _known_memory_gb(studio)
     return (0 if memory is not None else 1, memory or 0.0, studio["id"])
+
+
+# A model whose worker publishes a memory tier at or above this is a large-residency workload
+# for placement purposes.
+LARGE_MODEL_TIER_GB = 16.0
+
+
+def _published_memory_tier_gb(model: str, modality: str) -> float | None:
+    """The strictest total-memory tier the model's workers publish, from cache only.
+
+    Never an admission decision - dispatch still reads the exact per-worker catalog and the live
+    RAM governor - this exists so placement can follow the *model* rather than its modality name.
+    """
+    if not model:
+        return None
+    reader = getattr(_monitor(), "scheduling_catalog_entries", None)
+    if not callable(reader):
+        # A placement preference must never be the reason a dispatch fails.
+        return None
+    tiers: list[float] = []
+    for match in reader(model, modality=modality):
+        try:
+            tier = memory_admission.describe(model, match["entry"]).get(
+                "catalog_min_total_memory_gb")
+        except (TypeError, ValueError):
+            # A malformed published floor is the governor's problem to refuse; placement must not
+            # fail a dispatch over it.
+            continue
+        if isinstance(tier, (int, float)) and not isinstance(tier, bool) and tier > 0:
+            tiers.append(float(tier))
+    return max(tiers) if tiers else None
+
+
+def _placement_key(modality: str, model: str | None = None):
+    """The machine-ordering key function for one queued workload.
+
+    A *preference*, never a filter: the model's own memory floor already excludes a machine that
+    cannot run it, and every healthy capable worker stays in the list.
+
+    Two producer facts decide it, and there is no literal modality set:
+
+    * the artifact class the modality's dispatch contract produces (``MODALITY``) - audio and
+      video belong on the high-memory machines, which is the fleet's standing rule; and
+    * the model's own published memory tier, for an auxiliary lane (chat, transcription) that
+      holds a resident model and has no artifact kind of its own. The 9B Chat model publishes a
+      16 GB tier and used to fall into the flexible branch, which prefers the *smallest* capable
+      Mac, purely because ``chat`` was in neither literal set.
+
+    Everything else keeps the flexible preference: image and subtitle use the small Macs and
+    leave the 16 GB+ machines for audio.
+    """
+    artifact_kind = (MODALITY.get(modality) or (None, None, None))[2]
+    if artifact_kind in {"audio", "video"}:
+        return _audio_placement_key
+    if modality in _EXTERNAL_LANES and model:
+        tier = _published_memory_tier_gb(model, modality)
+        if tier is not None and tier >= LARGE_MODEL_TIER_GB:
+            return _audio_placement_key
+    return _flexible_placement_key
 
 
 def _batch_memory_constraint_gb(batch: dict) -> float:
@@ -1065,6 +1172,12 @@ def _submit_batch_locked(envelope: dict) -> dict:
     modality = envelope.get("modality")
     if modality not in MODALITY:
         return {"error": f"modality must be one of {sorted(MODALITY)}"}
+    try:
+        # Refuse an unclassified modality here, at the door, rather than letting it take the
+        # non-durable retry path silently.
+        retry_class(modality)
+    except ValueError as exc:
+        return {"error": str(exc)}
     items_in = envelope.get("items") or []
     if not items_in:
         return {"error": "items must be a non-empty list"}
@@ -1205,6 +1318,17 @@ def _submit_batch_locked(envelope: dict) -> dict:
 def busy_studios() -> set:
     """Studio ids currently running a batch item (i.e. 'generating')."""
     return set(_busy)
+
+
+def activity_batches() -> dict[str, dict]:
+    """This queue's batches in the shape the live activity view consumes.
+
+    Each Hub-owned queue publishes its own view rather than being restated by the callers that
+    merge them (`monitor.poll_all` and the statistics route); that restatement is how Chat was
+    missed by both of them. Broker batches already carry `model`, `items` and their studio ids,
+    so this is the queue itself.
+    """
+    return dict(batches)
 
 
 def busy_machines() -> set[str]:
@@ -2579,7 +2703,8 @@ def _retain_async_terminal_persistence_uncertainty(
     return True
 
 
-def _eligible_studios(modality: str, routing: str) -> list[dict]:
+def _eligible_studios(modality: str, routing: str,
+                      model: str | None = None) -> list[dict]:
     mon = _monitor()
     out = []
     leased_machines = busy_machines()
@@ -2619,19 +2744,12 @@ def _eligible_studios(modality: str, routing: str) -> list[dict]:
                    .get("render_score", 0)),
             s["id"],
         ))
-    elif modality in {"voice", "music", "video"}:
-        # Audio and video belong on the high-memory machines. This fleet is many 8 GB Macs and
-        # a few 16 GB+ ones: the small Macs render images but cannot hold these models, so the
-        # largest capable machine takes the work and image and subtitle stay off it.
-        #
-        # A preference only, never a filter: the model's own memory floor already excludes a
-        # machine that cannot run it, and every healthy capable worker remains in the list.
-        out.sort(key=_audio_placement_key)
     else:
-        # Image and subtitle prefer the smallest capable machine, which keeps the high-memory
-        # Macs free for audio. Unknown telemetry sorts last rather than first, so an unmeasured
-        # Mac is not preferred by accident. Preference only; the fallback order is intact.
-        out.sort(key=_flexible_placement_key)
+        # Audio and video belong on the high-memory machines: this fleet is many 8 GB Macs and a
+        # few 16 GB+ ones, and image/subtitle stay off the large Macs so they stay free for the
+        # memory-heavy work. Which class a workload is in comes from its artifact kind and the
+        # model's own published memory tier - see `_placement_key` - never from a modality set.
+        out.sort(key=_placement_key(modality, model))
     return out
 
 
@@ -2796,7 +2914,7 @@ async def _dispatch_loop():
                     b["governor_note"] = str(refusal.get("detail") or "model is not ready")
                     ledger.save_batch(b)
                     continue
-                eligible = _eligible_studios(b["modality"], b["routing"])
+                eligible = _eligible_studios(b["modality"], b["routing"], b.get("model"))
                 evidence_eligible = [
                     studio
                     for studio in eligible

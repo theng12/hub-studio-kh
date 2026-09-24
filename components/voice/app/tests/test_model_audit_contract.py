@@ -68,27 +68,6 @@ def test_group_a_records_are_hash_bound_candidates_not_final_approvals() -> None
         assert "approved_for_genstudio" not in json.dumps(record)
 
 
-def test_kokoro_audit_inventory_exactly_matches_the_runtime_roster() -> None:
-    record = model_audits.audit_record("mlx-community/Kokoro-82M-bf16")
-    assert record is not None
-    groups = record["evidence"]["stock_voice_inventory"]
-    audited = {
-        voice_id
-        for group in groups.values()
-        for voice_id in group["voice_ids"]
-    }
-    runtime = {voice["id"] for voice in generation.KOKORO_VOICES}
-    assert audited == runtime
-    assert len(audited) == 54
-    assert set(groups) == set(generation.LANG_NAMES)
-    assert record["contract"]["license"]["spdx"] == "Apache-2.0"
-    limits = record["contract"]["input_limits"]
-    assert limits["text_max_characters"] == 40_000
-    assert limits["long_form_strategy"] == "adapter_managed_long_form"
-    assert limits["supports_chunk_progress"] is True
-    assert limits["supports_cancellation_between_chunks"] is True
-
-
 def test_qwen_base_guardrail_contract_requires_requalification() -> None:
     record = model_audits.audit_record(QWEN_BASE)
     assert record is not None
@@ -577,57 +556,6 @@ def test_rejected_chatterbox_records_grounded_language_and_latency_failures() ->
     assert evidence["long_form_endurance"]["tiers"]["16"][
         "real_time_factor"
     ] == 3.729
-
-
-def test_kokoro_adapter_uses_audited_checkpoint_local_voicepacks(
-    tmp_path: Path,
-) -> None:
-    voices_dir = tmp_path / "voices"
-    voices_dir.mkdir()
-    for voice_id in ("jf_alpha", "jm_kumo"):
-        (voices_dir / f"{voice_id}.safetensors").write_bytes(b"voice")
-
-    manager = object.__new__(generation.GenerationManager)
-    manager._mlx_audio_snapshot_path = lambda _repo: tmp_path
-    kwargs: dict = {}
-
-    manager._mlx_kwargs_voice_picker(
-        "kokoro-mlx",
-        {"voice": "jf_alpha,jm_kumo", "language": "j"},
-        kwargs,
-    )
-
-    assert kwargs["lang_code"] == "j"
-    assert kwargs["voice"].split(",") == [
-        str((voices_dir / "jf_alpha.safetensors").absolute()),
-        str((voices_dir / "jm_kumo.safetensors").absolute()),
-    ]
-
-
-def test_kokoro_adapter_preserves_suffix_for_huggingface_voicepack_symlink(
-    tmp_path: Path,
-) -> None:
-    blobs = tmp_path / "blobs"
-    voices = tmp_path / "snapshot" / "voices"
-    blobs.mkdir()
-    voices.mkdir(parents=True)
-    blob = blobs / ("a" * 64)
-    blob.write_bytes(b"voice")
-    voicepack = voices / "bm_lewis.safetensors"
-    voicepack.symlink_to(blob)
-
-    manager = object.__new__(generation.GenerationManager)
-    manager._mlx_audio_snapshot_path = lambda _repo: tmp_path / "snapshot"
-    kwargs: dict = {}
-
-    manager._mlx_kwargs_voice_picker(
-        "kokoro-mlx",
-        {"voice": "bm_lewis", "language": "b"},
-        kwargs,
-    )
-
-    assert kwargs["voice"] == str(voicepack.absolute())
-    assert kwargs["voice"].endswith(".safetensors")
 
 
 def test_catalog_omits_unqualified_candidate_evidence_in_standalone(

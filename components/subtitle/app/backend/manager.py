@@ -95,18 +95,30 @@ def safe_input_name(value: str) -> str:
     return name
 
 
-def validate_request(raw: dict, *, packages: list[str], default_package: str,
+def validate_request(raw: dict, *, packages: list[str], default_package: str | None,
                      aliases: dict[str, str] | None = None) -> dict:
     if not isinstance(raw, dict):
         raise ValueError('Subtitle request must be an object')
-    model = str(raw.get('model') or default_package).strip()
+    model = str(raw.get('model') or default_package or '').strip()
+    if not model:
+        # Loud and named rather than a request for a model called "None": an empty catalog means
+        # no manifest declaring this engine was loaded, which is fixed in the bundle, not here.
+        raise ValueError(
+            'no packaged subtitle model is available: this worker loaded no manifest declaring '
+            'the "subtitle-mlx" engine. Add one to the bundle\'s model-manifests/ directory and '
+            'restart the Subtitle worker.')
     # The Hub's transcription contract sends the model repository
     # (mlx-community/whisper-large-v3-turbo); this worker's own catalogue keys on the package
     # id (whisper-turbo). Accept either spelling rather than refusing a valid packaged model.
     if aliases and model in aliases:
         model = aliases[model]
     if model not in packages:
-        raise ValueError('choose one of the packaged Whisper models')
+        # Name the requested model and the ones that do exist. The old text said "choose one of
+        # the packaged Whisper models", which named the wrong problem for a non-Whisper package
+        # (and named no entry an operator could act on).
+        raise ValueError(
+            f'no packaged subtitle model {model!r}; choose one of: '
+            + ', '.join(sorted(packages)))
     language = raw.get('language')
     if language is not None and str(language).strip():
         language = str(language).strip()
@@ -244,10 +256,16 @@ class SubtitleManager:
                 'repo': entry['repo'], 'package_id': entry['package_id'],
                 'label': entry['label'], 'engine': entry['engine'],
                 'model_revision': entry['model_revision'],
+                # Published from the manifest through the catalog entry, not restated here: this
+                # payload used to assert Multilingual and all three timestamp/long-form
+                # capabilities for every package a second time, so a model that cannot produce
+                # word timestamps was advertised as able to in two places instead of one.
+                'family': entry['family'],
                 'languages': entry['languages'],
-                'supports_segment_timestamps': True,
-                'supports_word_timestamps': True,
-                'supports_long_form': True,
+                'supports_segment_timestamps': entry['supports_segment_timestamps'],
+                'supports_word_timestamps': entry['supports_word_timestamps'],
+                'supports_long_form': entry['supports_long_form'],
+                'lane_contract': entry['lane_contract'],
                 'recommended': entry['recommended'],
                 'cached': files['state'] == 'files_verified',
                 'ready': entry['readiness']['ready'],
@@ -260,6 +278,7 @@ class SubtitleManager:
         return {'available': any(model['ready'] for model in models),
                 'device': 'metal',
                 'default_model': self.default_package(),
+                'default_rule': self.engine.default_rule,
                 'models': models,
                 'export_source': self.engine.export_source()}
 

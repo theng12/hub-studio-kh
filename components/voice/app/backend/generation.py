@@ -6,26 +6,25 @@ the authoritative list — the audit_truth.py script cross-checks that list
 against the actual dispatch branches on every release.
 
 Currently wired (workers exist):
-- bark            → mlx-audio worker
-- voxcpm-mlx      → mlx-audio worker
-- kokoro-mlx      → mlx-audio worker
+- voxcpm-mlx      → mlx-audio worker (zero-shot / voice design / cloning)
 - qwen3-tts       → mlx-audio worker (custom / design / clone modes by repo)
 - chatterbox-mlx  → mlx-audio worker
-- spark-tts-mlx   → mlx-audio worker
-- orpheus         → mlx-audio worker
-- kittentts       → mlx-audio worker
-- vibevoice       → mlx-audio worker
-- voxtral-tts     → mlx-audio worker (20 preset voices / 9 langs)
-- marvis          → mlx-audio worker (sesame/csm engine; 2 preset voices)
 - omnivoice       → mlx-audio worker (voice design + cloning)
 - fish-audio-mlx  → mlx-audio worker (Fish S2 Pro style + cloning)
-- longcat-audiodit → mlx-audio worker (LongCat AudioDiT transcript-assisted cloning)
-- f5-tts          → f5_tts.api.F5TTS (separate worker)
+- pocket-tts      → mlx-audio worker (preset voice or cloning)
+- khmer-tts-mms   → transformers VitsModel (separate worker)
+- khmer-tts-onnx  → ONNX Runtime (separate worker)
+
+Pruned 2026-09-24 (ST-13.B): the per-family wiring for bark, kokoro-mlx, spark-tts-mlx, orpheus,
+kittentts, vibevoice, voxtral-tts, marvis, longcat-audiodit, arktts, moss-tts-nano, echo-tts and
+f5-tts was carried here after those families left the catalog. It was keyed by family and never
+reached, but "never reached" is not a property anyone can check later — this list and the tables
+below now name exactly the families that ship.
 
 Removed in v1.3.1:
 - chatterbox (PyTorch) — chatterbox-mlx covers it on Apple Silicon
 - spark-tts (PyTorch) — spark-tts-mlx covers it on Apple Silicon
-- xtts (Coqui)         — TTS pip package pins old torch + non-commercial license
+- xtts (Coqui)         — TTS pip package pinned an old torch, so it could not ship here
 
 ═════════════════════════════════════════════════════════════════════════
 WORKER MODEL-LOADING STANDARD (established v1.3.5)
@@ -59,21 +58,18 @@ THE PATTERN:
 WHY THIS EXISTS: different upstream libraries use different cache backends.
 The standard `huggingface_hub` cache lives at
     ${HF_HOME}/hub/models--<org>--<repo>/...
-But some libraries — notably `cached_path` (used by F5-TTS) — have their
-OWN cache layout that doesn't share with HF Hub. When a worker passes a
-repo string and the library internally uses `cached_path`, it looks in
-the wrong directory and silently re-downloads even when the file is
-already cached. This actually happened with F5-TTS in v1.3.0 → v1.3.4
-(1.35 GB re-downloaded into a duplicate location). Passing an absolute
-path bypasses the library's cache lookup entirely.
+Some libraries keep their OWN cache layout that does not share with HF Hub (`cached_path`, for
+example). When a worker passes a repo string and the library internally uses that other cache, it
+looks in the wrong directory and silently re-downloads even when the file is already cached.
+Passing an absolute path bypasses the library's cache lookup entirely.
 
 COMPLIANCE TABLE (keep current when adding workers):
 
 | Worker                | Pattern                                                       | Status |
 |-----------------------|---------------------------------------------------------------|--------|
 | _generate_mlx_audio   | load_model(snapshot_path)  Path not str (v1.2.8)              | OK     |
-| _generate_f5_tts      | F5TTS(ckpt_file=…, vocab_file=…)  (v1.3.4)                    | OK     |
-| Bark via MLX worker   | load_model(snapshot_path) + absolute local voice prompt                   | OK |
+| _generate_khmer_vits  | VitsModel.from_pretrained(local snapshot)                     | OK     |
+| _generate_khmer_onnx  | onnxruntime InferenceSession(local .onnx)                     | OK     |
 
 ═════════════════════════════════════════════════════════════════════════
 
@@ -125,14 +121,17 @@ from .voicestudio_genstudio_integration import final_tts_result
 def ensure_espeak_available() -> bool:
     """Point the phonemizer at espeak's bundled library instead of a command that is not installed.
 
-    Kokoro (and anything else phonemizing through espeak) needs an espeak *command* by default, and
-    this app ships none: what it ships is `espeakng_loader`, carrying `libespeak-ng.dylib` and 400
-    files of `espeak-ng-data`. Without this the pipeline starts and exits with `SystemExit: 1`, which
-    is exactly how Kokoro failed every job while looking like a broken model.
+    Anything phonemizing through espeak needs an espeak *command* by default, and this app ships
+    none: what it ships is `espeakng_loader`, carrying `libespeak-ng.dylib` and 400 files of
+    `espeak-ng-data`. Without this the pipeline starts and exits with `SystemExit: 1`, which is how
+    a G2P-backed family fails every job while looking like a broken model.
 
-    The loader's own `make_library_available()` is the supported way to do this, and the two
-    environment variables are set as well because `phonemizer` reads them. Existing values win, so an
-    operator who has their own espeak is not overridden. Returns whether a library was found.
+    No shipped family needs it today (the twelve kept families plus Pocket TTS are all
+    grapheme/tokenizer driven), so it stays only as the import-time guard for the misaki-style
+    stack that is still installed in the pinned runtime. The loader's own
+    `make_library_available()` is the supported way to do this, and the two environment variables
+    are set as well because `phonemizer` reads them. Existing values win, so an operator who has
+    their own espeak is not overridden. Returns whether a library was found.
     """
     try:
         import espeakng_loader
@@ -178,8 +177,8 @@ ENSURE_ESPEAK_AT_IMPORT = ensure_espeak_available()
 
 # ───────────── module-level state ─────────────
 
-# TTS on MPS can OOM if multiple models are loaded simultaneously. Even
-# Kokoro's 82M model + a second model would fight for unified memory.
+# TTS on MPS can OOM if multiple models are loaded simultaneously — even a
+# compact 82M checkpoint next to a second model fights for unified memory.
 # Serialize all generations.
 _GEN_LOCK = threading.Lock()
 
@@ -237,22 +236,33 @@ _OMNIVOICE_MEASURED_SAFE_FRAMES = ((12, 2250),)   # (unified_memory_gb_below, fr
 # reach the tokenizer and are mispronounced. Measured on OmniVoice 2026-08-07:
 # "1,200" -> "one two hundred", "12,500" -> "one million two hundred thousand
 # five hundred", "$1,450.75" -> nonsense. 5 of 8 digit forms were wrong, while
-# every fully spelled-out form was correct. KittenTTS and Voxtral inside the
-# same mlx-audio package do expand digits; OmniVoice simply never used them.
+# every fully spelled-out form was correct. Other mlx-audio engines expand
+# digits themselves; OmniVoice simply never used them.
 #
-# Deliberately a narrow allow-list, not a global default: families that already
-# normalise upstream must not be normalised twice.
-_NUMBER_NORMALISED_FAMILIES = frozenset({"omnivoice"})
+# Deliberately a per-family flag, not a global default: families that already
+# normalise upstream must not be normalised twice. It lives on the family entry
+# (`catalog.FAMILIES[...].numbers_need_expansion`) beside the rest of that
+# family's engine facts, so a new family states it in the registry instead of
+# being silently omitted from a set in this file.
+def _needs_number_expansion(family: str) -> bool:
+    entry = catalog.FAMILIES.get(family)
+    if entry is None:
+        raise ValueError(
+            f"family {family!r} is not in catalog.FAMILIES; add the Family entry (with its "
+            "engine and requirements) in components/voice/app/backend/catalog.py"
+        )
+    return entry.numbers_need_expansion
 
 
 def _normalized_speech_text(family: str, text: str, params: dict) -> str:
     """Expand digits to words for engines that cannot pronounce them.
 
     ``normalize_text`` was an accepted-but-ignored API field. It now means what
-    it says, and can force normalisation for any family; the allow-list applies
-    it automatically where the engine is known to need it.
+    it says, and can force normalisation for any family; the family's own
+    ``numbers_need_expansion`` flag applies it automatically where the engine is
+    known to need it.
     """
-    if not (family in _NUMBER_NORMALISED_FAMILIES or params.get("normalize_text")):
+    if not (_needs_number_expansion(family) or params.get("normalize_text")):
         return text
     try:
         spoken = text_normalization.normalize_for_speech(text)
@@ -349,195 +359,32 @@ TTS_AVAILABLE = not _TTS_MISSING
 TTS_IMPORT_ERROR: Optional[str] = (
     f"Missing packages: {', '.join(_TTS_MISSING)}" if _TTS_MISSING else None
 )
-# ───────────── Kokoro voice catalog ─────────────
-
-# Kokoro v1.0 ships with named preset voices. Voice naming convention:
-# - First letter: language code
-# - Second letter: gender ('f' = female, 'm' = male)
-# - Rest: voice nickname
-# This roster is verified against the bf16 MLX snapshot's safetensors files.
-KOKORO_VOICES = [
-    # American English — Female
-    {"id": "af_heart",   "label": "Heart (warm)",      "lang": "a", "gender": "f"},
-    {"id": "af_bella",   "label": "Bella (clear)",     "lang": "a", "gender": "f"},
-    {"id": "af_aoede",   "label": "Aoede (musical)",   "lang": "a", "gender": "f"},
-    {"id": "af_kore",    "label": "Kore (neutral)",    "lang": "a", "gender": "f"},
-    {"id": "af_nicole",  "label": "Nicole (soft)",     "lang": "a", "gender": "f"},
-    {"id": "af_nova",    "label": "Nova (bright)",     "lang": "a", "gender": "f"},
-    {"id": "af_sarah",   "label": "Sarah (calm)",      "lang": "a", "gender": "f"},
-    {"id": "af_sky",     "label": "Sky (airy)",        "lang": "a", "gender": "f"},
-    {"id": "af_alloy",   "label": "Alloy (smooth)",    "lang": "a", "gender": "f"},
-    {"id": "af_jessica", "label": "Jessica (friendly)","lang": "a", "gender": "f"},
-    {"id": "af_river",   "label": "River (mellow)",    "lang": "a", "gender": "f"},
-    # American English — Male
-    {"id": "am_michael", "label": "Michael (warm)",    "lang": "a", "gender": "m"},
-    {"id": "am_adam",    "label": "Adam (neutral)",    "lang": "a", "gender": "m"},
-    {"id": "am_echo",    "label": "Echo (resonant)",   "lang": "a", "gender": "m"},
-    {"id": "am_eric",    "label": "Eric (casual)",     "lang": "a", "gender": "m"},
-    {"id": "am_fenrir",  "label": "Fenrir (deep)",     "lang": "a", "gender": "m"},
-    {"id": "am_liam",    "label": "Liam (young)",      "lang": "a", "gender": "m"},
-    {"id": "am_onyx",    "label": "Onyx (rich)",       "lang": "a", "gender": "m"},
-    {"id": "am_puck",    "label": "Puck (playful)",    "lang": "a", "gender": "m"},
-    {"id": "am_santa",   "label": "Santa (jolly)",     "lang": "a", "gender": "m"},
-    # British English — Female
-    {"id": "bf_alice",   "label": "Alice (refined)",   "lang": "b", "gender": "f"},
-    {"id": "bf_emma",    "label": "Emma (gentle)",     "lang": "b", "gender": "f"},
-    {"id": "bf_isabella","label": "Isabella (formal)", "lang": "b", "gender": "f"},
-    {"id": "bf_lily",    "label": "Lily (light)",      "lang": "b", "gender": "f"},
-    # British English — Male
-    {"id": "bm_daniel",  "label": "Daniel (clear)",    "lang": "b", "gender": "m"},
-    {"id": "bm_fable",   "label": "Fable (story)",     "lang": "b", "gender": "m"},
-    {"id": "bm_george",  "label": "George (warm)",     "lang": "b", "gender": "m"},
-    {"id": "bm_lewis",   "label": "Lewis (calm)",      "lang": "b", "gender": "m"},
-    # Spanish
-    {"id": "ef_dora",    "label": "Dora",              "lang": "e", "gender": "f"},
-    {"id": "em_alex",    "label": "Alex",              "lang": "e", "gender": "m"},
-    {"id": "em_santa",   "label": "Santa",             "lang": "e", "gender": "m"},
-    # French
-    {"id": "ff_siwis",   "label": "Siwis",             "lang": "f", "gender": "f"},
-    # Hindi
-    {"id": "hf_alpha",   "label": "Alpha",             "lang": "h", "gender": "f"},
-    {"id": "hf_beta",    "label": "Beta",              "lang": "h", "gender": "f"},
-    {"id": "hm_omega",   "label": "Omega",             "lang": "h", "gender": "m"},
-    {"id": "hm_psi",     "label": "Psi",               "lang": "h", "gender": "m"},
-    # Italian
-    {"id": "if_sara",    "label": "Sara",              "lang": "i", "gender": "f"},
-    {"id": "im_nicola",  "label": "Nicola",            "lang": "i", "gender": "m"},
-    # Japanese
-    {"id": "jf_alpha",   "label": "Alpha",             "lang": "j", "gender": "f"},
-    {"id": "jf_gongitsune", "label": "Gongitsune",     "lang": "j", "gender": "f"},
-    {"id": "jf_nezumi",  "label": "Nezumi",            "lang": "j", "gender": "f"},
-    {"id": "jf_tebukuro", "label": "Tebukuro",         "lang": "j", "gender": "f"},
-    {"id": "jm_kumo",    "label": "Kumo",              "lang": "j", "gender": "m"},
-    # Brazilian Portuguese
-    {"id": "pf_dora",    "label": "Dora",              "lang": "p", "gender": "f"},
-    {"id": "pm_alex",    "label": "Alex",              "lang": "p", "gender": "m"},
-    {"id": "pm_santa",   "label": "Santa",             "lang": "p", "gender": "m"},
-    # Mandarin Chinese
-    {"id": "zf_xiaobei", "label": "Xiaobei",           "lang": "z", "gender": "f"},
-    {"id": "zf_xiaoni",  "label": "Xiaoni",            "lang": "z", "gender": "f"},
-    {"id": "zf_xiaoxiao", "label": "Xiaoxiao",         "lang": "z", "gender": "f"},
-    {"id": "zf_xiaoyi",  "label": "Xiaoyi",            "lang": "z", "gender": "f"},
-    {"id": "zm_yunjian", "label": "Yunjian",           "lang": "z", "gender": "m"},
-    {"id": "zm_yunxi",   "label": "Yunxi",             "lang": "z", "gender": "m"},
-    {"id": "zm_yunxia",  "label": "Yunxia",            "lang": "z", "gender": "m"},
-    {"id": "zm_yunyang", "label": "Yunyang",           "lang": "z", "gender": "m"},
-]
-
-# Lang code → display name
-LANG_NAMES = {
-    "a": "American English",
-    "b": "British English",
-    "e": "Spanish",
-    "f": "French",
-    "h": "Hindi",
-    "i": "Italian",
-    "j": "Japanese",
-    "p": "Brazilian Portuguese",
-    "z": "Mandarin Chinese",
-}
-
-_GENERIC_ENGLISH_ALIASES = {"en", "eng", "english"}
-_AMERICAN_ENGLISH_ALIASES = {"en-us", "american-english"}
-_BRITISH_ENGLISH_ALIASES = {"en-gb", "en-uk", "british-english"}
-
-
-def _normalize_kokoro_language(requested_language: str, voice_language: str) -> str:
-    """Translate public English language names to Kokoro's one-letter codes.
-
-    Generic English follows the selected voice, so ``en`` works for either an
-    American or British preset without silently changing that preset's accent.
-    """
-    normalized = requested_language.strip().lower().replace("_", "-").replace(" ", "-")
-    if not normalized:
-        return voice_language
-    if normalized in _GENERIC_ENGLISH_ALIASES:
-        return voice_language if voice_language in {"a", "b"} else "a"
-    if normalized in _AMERICAN_ENGLISH_ALIASES:
-        return "a"
-    if normalized in _BRITISH_ENGLISH_ALIASES:
-        return "b"
-    return normalized
-
-
-def _backport_kokoro_sinegen_length_alignment(sinegen_class=None, mx_module=None) -> bool:
-    """Backport upstream mlx-audio cc30ce27f6 without advancing 52 commits.
-
-    The pinned mlx-audio can resample a sine tensor a few hundred frames past
-    the matching F0 tensor. Its next multiply then fails with
-    ``broadcast_shapes`` and the caller only sees "didn't produce a wav".
-    Upstream now trims or pads the sine tensor to the F0 length. Wrapping the
-    private sine builder applies the same behavior while retaining the fleet's
-    otherwise verified dependency set.
-    """
-    if sinegen_class is None or mx_module is None:
-        import mlx.core as mx
-        from mlx_audio.tts.models.kokoro.istftnet import SineGen
-
-        sinegen_class = SineGen
-        mx_module = mx
-
-    if hasattr(sinegen_class, "_match_f0_length"):
-        return False
-    if getattr(sinegen_class, "_voicestudio_length_alignment", False):
-        return False
-
-    original_f02sine = sinegen_class._f02sine
-
-    def _aligned_f02sine(instance, f0_values):
-        sine_waves = original_f02sine(instance, f0_values)
-        target_len = f0_values.shape[1]
-        if sine_waves.shape[1] > target_len:
-            return sine_waves[:, :target_len, :]
-        if sine_waves.shape[1] < target_len:
-            return mx_module.pad(
-                sine_waves,
-                ((0, 0), (0, target_len - sine_waves.shape[1]), (0, 0)),
-            )
-        return sine_waves
-
-    sinegen_class._f02sine = _aligned_f02sine
-    sinegen_class._voicestudio_length_alignment = True
-    return True
 
 
 def availability() -> dict:
-    """Per-engine availability + the static config the frontend needs."""
-    qwen3_ok = _have_mlx_audio()
-    bark_ok = qwen3_ok
-    omnivoice_ok = qwen3_ok
-    f5_tts_ok = _have_f5_tts()
-    wired = []
-    if qwen3_ok:
-        # All mlx-audio-backed families share one loader + one worker.
-        # If mlx-audio imports, every entry in MLX_AUDIO_FAMILIES is wired.
-        for fam in MLX_AUDIO_FAMILIES.keys():
-            wired.append(fam)
-    if f5_tts_ok:
-        wired.append("f5-tts")
+    """Per-engine availability + the static config the frontend needs.
+
+    `wired_families` is every shipped family whose engine runtime is present on
+    this machine. It is derived from `catalog.FAMILIES` and the engine's own
+    probe, so a new family (or a missing package) changes this list without an
+    edit here. The bark / voxtral / marvis / orpheus / vibevoice / kokoro
+    rosters went with their families on 2026-09-24 (ST-13.B); the frontend reads
+    each key with `|| []`, so a key that is no longer sent cannot break the
+    picker.
+    """
+    mlx_audio_ok = _have_mlx_audio()
+    wired = [family for family in _WIRED_FAMILIES if runtime_ready_for_family(family)]
     return {
         "available": TTS_AVAILABLE,
-        "kokoro_available": qwen3_ok,
-        "qwen3_available": qwen3_ok,
-        "voxcpm_available": qwen3_ok,
-        "bark_available": bark_ok,
-        "omnivoice_available": omnivoice_ok,
-        "f5_tts_available": f5_tts_ok,
+        "qwen3_available": mlx_audio_ok,
+        "voxcpm_available": mlx_audio_ok,
+        "omnivoice_available": mlx_audio_ok,
         "diffusers_available": _have_diffusers(),
         "error": TTS_IMPORT_ERROR,
         "device": _detect_device() if TTS_AVAILABLE else None,
-        "kokoro_voices": KOKORO_VOICES,
         "qwen3_preset_speakers": QWEN3_PRESET_SPEAKERS,
         "qwen3_voice_design_examples": QWEN3_VOICE_DESIGN_EXAMPLES,
         "voxcpm_emotion_examples": VOXCPM_EMOTION_EXAMPLES,
-        "bark_voice_presets": BARK_VOICE_PRESETS,
-        "bark_tags": BARK_TAGS,
-        # Preset-voice rosters for the clickable voice-button picker (v1.5.1).
-        "voxtral_voices": VOXTRAL_VOICES,
-        "marvis_voices": MARVIS_VOICES,
-        "orpheus_voices": ORPHEUS_VOICES,
-        "vibevoice_voices": VIBEVOICE_PRESET_VOICES,
-        "lang_names": {**LANG_NAMES, **_BARK_LANGUAGES},
         "phase": 2,
         "wired_families": wired,
         "media": media_tools.availability(),
@@ -546,11 +393,6 @@ def availability() -> dict:
 
 def _have_mlx_audio() -> bool:
     return _package_installed("mlx_audio")
-
-
-def _have_f5_tts() -> bool:
-    """Lightweight presence check; diagnostics validates the package and deps."""
-    return _package_installed("f5_tts")
 
 
 def _have_onnxruntime() -> bool:
@@ -580,94 +422,85 @@ def _have_diffusers() -> bool:
     return _package_installed("diffusers")
 
 
+# One presence probe per engine. The diagnostics panel and the picker both ask
+# "is this family usable on this Mac?", and the answer is a property of the
+# engine, not of a per-family branch.
+_RUNTIME_PROBE_BY_ENGINE = {
+    catalog.ENGINE_MLX_AUDIO: _have_mlx_audio,
+    catalog.ENGINE_TRANSFORMERS_VITS: lambda: TTS_AVAILABLE,
+    catalog.ENGINE_ONNX_VITS: _have_onnxruntime,
+}
+
+
 # ───────────── diagnostics ─────────────
 
-# Keep in sync with requirements-generation.txt. The user-visible health check
-# checks these one-by-one and tells the UI which engines are ready.
+# The packages the SHIPPED engines need, checked one-by-one by the user-visible health check so
+# the UI can say which engines are ready. This is deliberately narrower than
+# requirements-generation.txt, which still installs the full pinned runtime: packages that only a
+# retired family used are no longer reported, and a package no shipped family imports cannot make
+# a shipped engine unavailable.
 _PACKAGE_CHECKLIST = [
     ("torch",         "Core ML framework + MPS device support"),
-    ("torchaudio",    "Audio operators required by F5-TTS and its vocoder stack"),
-    ("transformers",  "Tokenizers used by Bark, Spark-TTS, and Whisper"),
-    ("misaki",        "Multilingual grapheme-to-phoneme for Kokoro MLX"),
-    ("fugashi",       "Japanese tokenizer for Kokoro MLX"),
-    ("jieba",         "Mandarin tokenizer for Kokoro MLX"),
+    ("torchaudio",    "Audio operators for the PyTorch speech stack"),
+    ("transformers",  "Tokenizers used by the Khmer VITS and Whisper models"),
     ("diffusers",     "Diffusion utilities used by optional audio pipelines"),
     ("accelerate",    "Multi-device model loading"),
     ("soundfile",     "WAV file writing (libsndfile)"),
     ("numpy",         "Tensor numerics"),
-    ("phonemizer",    "IPA conversion for speech engines"),
-    # MLX-side packages (Qwen3-TTS family). Apple Silicon native, not PyTorch.
-    ("mlx",           "Apple Silicon ML framework (Qwen3-TTS)"),
-    ("mlx_lm",        "MLX language-model runtime used by Marvis"),
-    ("mlx_audio",     "MLX inference wrapper for audio models (including OmniVoice and Fish S2 Pro)"),
-    ("mistral_common", "Voxtral speech tokenizer and audio request encoding"),
-    # F5-TTS (SWivid) — flow-matching voice cloning.
-    ("f5_tts",        "F5-TTS flow-matching TTS engine"),
-    ("vocos",         "VoCoS vocoder used by F5-TTS"),
+    # MLX-side packages. Apple Silicon native, not PyTorch.
+    ("mlx",           "Apple Silicon ML framework (MLX TTS families)"),
+    ("mlx_lm",        "MLX language-model runtime used by Fish S2 Pro"),
+    ("mlx_audio",     "MLX inference wrapper for audio models (all MLX TTS families)"),
     # Khmer VITS families (khmer-tts-mms uses torch/transformers above; the
     # ONNX female voice uses ONNX Runtime).
     ("onnxruntime",   "ONNX Runtime for the Khmer TTS Female (VITS/ONNX) family"),
 ]
 
-_ENGINE_REQUIREMENTS = {
-    "voxcpm-mlx":     ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "bark":           ["mlx", "mlx_audio", "transformers", "soundfile", "numpy"],
-    # Other mlx-audio-backed families. All share the same package set, since
-    # mlx-audio is the only inference dep.
-    "qwen3-tts":      ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "kokoro-mlx":     ["mlx", "mlx_audio", "misaki", "fugashi", "jieba", "soundfile", "numpy"],
-    "chatterbox-mlx": ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "spark-tts-mlx":  ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "orpheus":        ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "kittentts":      ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "vibevoice":      ["mlx", "mlx_audio", "soundfile", "numpy"],
-    # v0.4.6 OmniVoice is MLX + Transformers; no separate omnivoice package is
-    # required by the tracked generation environment. Torch may still be
-    # installed globally for other engines, but is not an OmniVoice contract.
-    "omnivoice":      ["mlx", "mlx_audio", "transformers", "soundfile", "numpy"],
-    "fish-audio-mlx": ["mlx", "mlx_lm", "mlx_audio", "transformers", "soundfile", "numpy"],
-    "longcat-audiodit": ["mlx", "mlx_audio", "transformers", "soundfile", "numpy"],
-    "voxtral-tts":    ["mlx", "mlx_audio", "mistral_common", "soundfile", "numpy"],
-    "marvis":         ["mlx", "mlx_lm", "mlx_audio", "soundfile", "numpy"],
-    # mlx-audio v0.4.7 additions. Both self-verified via a real local
-    # generation; arktts needs no extra package, moss_tts_nano pulls its
-    # codec as a runtime companion download (see catalog.FAMILY_COMPANIONS)
-    # rather than a Python package.
-    "arktts":         ["mlx", "mlx_audio", "soundfile", "numpy"],
-    "moss-tts-nano":  ["mlx", "mlx_lm", "mlx_audio", "soundfile", "numpy"],
-    # Echo-TTS bundles its DiT + sampling in mlx-audio and pulls the Fish S1 DAC
-    # codec as a runtime companion download, so no extra Python package.
-    "echo-tts":       ["mlx", "mlx_audio", "soundfile", "numpy"],
-    # F5-TTS (PyTorch, flow-matching). Wired in v1.3.0.
-    "f5-tts":     ["f5_tts", "torch", "torchaudio", "vocos", "soundfile"],
-    # Khmer VITS families (v0.6.55). Two distinct engines, neither MLX:
-    # khmer-tts-mms runs Meta's MMS Khmer VITS through transformers on torch;
-    # khmer-tts-onnx runs sengtha's Coqui VITS export through ONNX Runtime.
-    "khmer-tts-mms":  ["torch", "transformers", "soundfile", "numpy"],
-    "khmer-tts-onnx": ["onnxruntime", "soundfile", "numpy"],
+# ───────────── family wiring: derived from the producer, checked at import ─────────────
+#
+# This module used to carry three family lists -- `_ENGINE_REQUIREMENTS`, `_WIRED_FAMILIES`
+# and `MLX_AUDIO_FAMILIES` -- beside the catalog's own MLX tuple, and a family could be in one
+# and not the others. That is how one screen shows a family as wired and another as unsupported,
+# and it is how `kittentts`, `vibevoice` and `omnivoice` shipped published as "PyTorch / MPS"
+# and hidden behind the MLX-only filter (CHANGELOG, 2026-09-24).
+#
+# The producer is `catalog.FAMILIES`: each family states its engine and the packages that engine
+# imports. Everything here is derived from that registry. `MLX_AUDIO_FAMILIES` is the one table
+# that must stay a literal in this file -- `components/voice/audit_contract_runtime.py` parses it
+# out of the source with `ast` to resolve a model audit's engine mode -- so its membership is
+# *checked* against the catalog at import rather than trusted.
+_WORKER_BY_ENGINE: dict[str, str] = {
+    catalog.ENGINE_MLX_AUDIO: "_generate_mlx_audio",
+    catalog.ENGINE_TRANSFORMERS_VITS: "_generate_khmer_vits",
+    catalog.ENGINE_ONNX_VITS: "_generate_khmer_onnx",
 }
 
-# The two Khmer VITS families, which are sectioned like the MLX families but
-# dispatched to their own workers. Kept as one name so the parent sectioning
-# path, the dependency registry and the dispatch table cannot drift apart.
-_KHMER_VITS_FAMILIES = frozenset({"khmer-tts-mms", "khmer-tts-onnx"})
-
-# Which engines have an actual worker implemented in this app — i.e. picking
-# one of these models won't trip a NotImplementedError. Keep in sync with the
-# branches in `_dispatch_txt2speech` below + the MLX_AUDIO_FAMILIES table.
-_WIRED_FAMILIES = {
-    "bark",
-    # All mlx-audio-backed families share one worker.
-    "qwen3-tts", "voxcpm-mlx", "kokoro-mlx",
-    "chatterbox-mlx", "spark-tts-mlx", "orpheus",
-    "kittentts", "vibevoice", "voxtral-tts", "marvis",
-    "omnivoice", "fish-audio-mlx",
-    "arktts", "moss-tts-nano", "echo-tts", "longcat-audiodit",
-    # Its own loader (f5_tts.api.F5TTS) — separate worker.
-    "f5-tts",
-    # Khmer VITS: transformers VitsModel and ONNX Runtime workers below.
-    "khmer-tts-mms", "khmer-tts-onnx",
+# What to call an engine's runtime in a user-facing refusal. A label, not a
+# membership test.
+_ENGINE_RUNTIME_LABEL: dict[str, str] = {
+    catalog.ENGINE_MLX_AUDIO: "mlx-audio",
+    catalog.ENGINE_TRANSFORMERS_VITS: "torch/transformers",
+    catalog.ENGINE_ONNX_VITS: "onnxruntime",
 }
+
+# Packages each family's engine needs, published by `diagnostics()` and checked one-by-one by
+# the user-visible health panel. Read from the family entry, so a family cannot advertise a
+# dependency set nobody maintains.
+_ENGINE_REQUIREMENTS: dict[str, list[str]] = {
+    family_id: list(family.requirements)
+    for family_id, family in catalog.FAMILIES.items()
+}
+
+# Which engines have an actual worker implemented in this app -- i.e. picking one of these
+# models won't trip a NotImplementedError. Membership is the catalog's own family registry,
+# and `_validate_family_wiring` below refuses to import a family whose engine has no worker.
+_WIRED_FAMILIES = frozenset(catalog.FAMILIES)
+
+# Families whose long script Voice Studio renders in its own sentence-safe sections before
+# dispatch. Every shipped family states a long-form policy (`long_form_policy.policy_for` never
+# returns None), so a new family is sectioned from the day it lands instead of being sent to its
+# engine as one request.
+_SECTIONED_FAMILIES = frozenset(catalog.FAMILIES)
 
 
 # ───────────── mlx-audio family config table ─────────────
@@ -683,31 +516,22 @@ _WIRED_FAMILIES = {
 # - mode: which kwarg-resolver to dispatch to:
 #     "qwen3"             — repo-name picks one of custom/design/clone
 #     "voxcpm_flex"       — any combo of ref_audio + ref_text + instruct
-#     "voice_picker"      — voice param required (preset speaker), no clone
 #     "clone_with_intensity" — needs ref_audio, optional exaggeration/intensity
 #     "voice_or_clone"    — voice param OR ref_audio (zero-shot or clone)
+#     "omnivoice"         — design prompt and/or clone
+#     "fish_audio"        — optional ref_audio + optional instruct + full sampling
 #
-# To add a new mlx-audio family: add a catalog FAMILIES entry, add ModelEntry
-# rows, drop a config line here, list it in _WIRED_FAMILIES + _ENGINE_REQUIREMENTS.
-# No new worker code needed unless mlx-audio exposes a never-before-seen kwarg.
+# To add a new mlx-audio family: add a catalog FAMILIES entry with
+# `engine=catalog.ENGINE_MLX_AUDIO` and its requirements, add ModelEntry rows,
+# and drop a config line here. Both files refuse to import if the two
+# disagree, naming the family and the file to edit. No new worker code is
+# needed unless mlx-audio exposes a never-before-seen kwarg.
 MLX_AUDIO_FAMILIES: dict[str, dict] = {
-    "bark": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "bark",
-        "label": "Suno Bark (MLX)",
-    },
     "qwen3-tts": {
         "default_sample_rate": 24000,
         "uses_cfg": False,
         "mode": "qwen3",
         "label": "Qwen3-TTS",
-    },
-    "longcat-audiodit": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "longcat_clone",
-        "label": "LongCat AudioDiT",
     },
     "voxcpm-mlx": {
         "default_sample_rate": 48000,
@@ -715,57 +539,11 @@ MLX_AUDIO_FAMILIES: dict[str, dict] = {
         "mode": "voxcpm_flex",
         "label": "VoxCPM2 (MLX)",
     },
-    "kokoro-mlx": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "Kokoro (MLX)",
-    },
     "chatterbox-mlx": {
         "default_sample_rate": 24000,
         "uses_cfg": False,
         "mode": "clone_with_intensity",
         "label": "Chatterbox (MLX)",
-    },
-    "spark-tts-mlx": {
-        "default_sample_rate": 16000,
-        "uses_cfg": False,
-        "mode": "voice_or_clone",
-        "label": "Spark-TTS (MLX)",
-    },
-    "orpheus": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "Orpheus",
-    },
-    "kittentts": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "KittenTTS",
-    },
-    "vibevoice": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "VibeVoice Realtime",
-    },
-    "voxtral-tts": {
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "Voxtral-4B-TTS",
-    },
-    "marvis": {
-        # model_type "csm"/"marvis" → mlx-audio routes to the sesame engine.
-        # Voices (conversational_a/b) resolve their prompt wavs from the model
-        # repo itself (config text_tokenizer points at the Marvis repo), so no
-        # gated sesame/csm-1b fallback is ever hit.
-        "default_sample_rate": 24000,
-        "uses_cfg": False,
-        "mode": "voice_picker",
-        "label": "Marvis TTS",
     },
     "omnivoice": {
         "default_sample_rate": 24000,
@@ -779,63 +557,90 @@ MLX_AUDIO_FAMILIES: dict[str, dict] = {
         "mode": "fish_audio",
         "label": "Fish Audio S2 Pro (MLX)",
     },
-    "arktts": {
-        "default_sample_rate": 44100,
+    "pocket-tts": {
+        # Kyutai Pocket TTS 4-bit. `generate(text, voice=None, ref_audio=None, …)`
+        # takes a preset voice name OR a reference clip, which is exactly the
+        # `voice_or_clone` contract: the reference wins, a preset name is used when
+        # there is no reference, and with neither the engine falls back to its own
+        # default preset ("alba"). The catalogue declares `voice-cloning` for this
+        # family, so the app files it under the clone form.
+        "default_sample_rate": 24000,
         "uses_cfg": False,
-        "mode": "audio8",
-        "label": "Audio8 TTS Preview (MLX)",
-    },
-    "moss-tts-nano": {
-        "default_sample_rate": 48000,
-        "uses_cfg": False,
-        "mode": "moss_tts_nano",
-        "label": "MOSS-TTS-Nano (MLX)",
-    },
-    "echo-tts": {
-        "default_sample_rate": 44100,
-        "uses_cfg": False,
-        "mode": "echo_tts",
-        "label": "Echo-TTS (MLX)",
+        "mode": "voice_or_clone",
+        "label": "Pocket TTS (MLX)",
     },
 }
 
 
-# ───────────── Bark preset metadata ─────────────
+def engine_for_family(family: str) -> str:
+    """The engine a family runs on, or a failure that names both files to edit."""
+    entry = catalog.FAMILIES.get(family)
+    if entry is None:
+        raise ValueError(
+            f"family {family!r} is not in catalog.FAMILIES; add the Family entry in "
+            "components/voice/app/backend/catalog.py and a worker for its engine in "
+            "components/voice/app/backend/generation.py"
+        )
+    return entry.engine
 
-# The current MLX conversion ships all ten v2 prompts for all 13 languages.
-_BARK_LANGUAGES = {
-    "en": "English", "de": "German", "es": "Spanish", "fr": "French",
-    "hi": "Hindi", "it": "Italian", "ja": "Japanese", "ko": "Korean",
-    "pl": "Polish", "pt": "Portuguese", "ru": "Russian", "tr": "Turkish",
-    "zh": "Chinese",
-}
-BARK_VOICE_PRESETS = [
-    {
-        "id": f"v2/{lang}_speaker_{speaker}",
-        "lang": lang,
-        "label": f"{name} · Speaker {speaker}"
-                 + (" (popular)" if lang == "en" and speaker == 6 else ""),
+
+def runtime_ready_for_family(family: str) -> bool:
+    """Whether this family's engine runtime is importable right now.
+
+    One probe per engine, read off the family's own `engine` fact, so the three
+    former per-family branches cannot fall out of step with the engines the
+    registry declares.
+    """
+    engine = engine_for_family(family)
+    probe = _RUNTIME_PROBE_BY_ENGINE.get(engine)
+    if probe is None:
+        raise ValueError(
+            f"family {family!r} names engine {engine!r}, which has no runtime probe; add "
+            "one to _RUNTIME_PROBE_BY_ENGINE in "
+            "components/voice/app/backend/generation.py"
+        )
+    return probe()
+
+
+def _validate_family_wiring() -> None:
+    """Refuse to import a wiring table that disagrees with the family registry.
+
+    Three checks, each of which used to be a silent UI contradiction:
+      * every mlx-audio family in the catalog has a config row here;
+      * no config row here names a family the catalog does not run on mlx-audio
+        (a stale row is how a retired family keeps a "wired" chip);
+      * every engine a family names has a worker.
+    """
+    mlx_families = {
+        family_id for family_id, family in catalog.FAMILIES.items()
+        if family.engine == catalog.ENGINE_MLX_AUDIO
     }
-    for lang, name in _BARK_LANGUAGES.items()
-    for speaker in range(10)
-]
+    configured = set(MLX_AUDIO_FAMILIES)
+    if configured != mlx_families:
+        raise ValueError(
+            "MLX_AUDIO_FAMILIES and catalog.FAMILIES disagree about which families run on "
+            f"mlx-audio: missing from MLX_AUDIO_FAMILIES {sorted(mlx_families - configured)}, "
+            f"stale in MLX_AUDIO_FAMILIES {sorted(configured - mlx_families)}; fix "
+            "components/voice/app/backend/catalog.py (Family.engine) and "
+            "components/voice/app/backend/generation.py (MLX_AUDIO_FAMILIES)"
+        )
+    for family_id, family in catalog.FAMILIES.items():
+        if family.engine not in _WORKER_BY_ENGINE:
+            raise ValueError(
+                f"family {family_id!r} names engine {family.engine!r}, which has no worker; "
+                "add one to _WORKER_BY_ENGINE in "
+                "components/voice/app/backend/generation.py and set the engine in "
+                "components/voice/app/backend/catalog.py"
+            )
+        if family.engine not in _RUNTIME_PROBE_BY_ENGINE:
+            raise ValueError(
+                f"family {family_id!r} names engine {family.engine!r}, which has no runtime "
+                "probe; add one to _RUNTIME_PROBE_BY_ENGINE in "
+                "components/voice/app/backend/generation.py"
+            )
 
-# Non-verbal cues + style modifiers Bark understands. The UI exposes these as
-# clickable chips that insert at the cursor in the text input — engine-specific
-# UX per the prompts.js DESIGN RULE.
-BARK_TAGS = [
-    {"tag": "[laughter]",       "label": "Laughter",       "group": "non-verbal"},
-    {"tag": "[laughs]",         "label": "Laughs",         "group": "non-verbal"},
-    {"tag": "[sighs]",          "label": "Sighs",          "group": "non-verbal"},
-    {"tag": "[gasps]",          "label": "Gasps",          "group": "non-verbal"},
-    {"tag": "[clears throat]",  "label": "Clears throat",  "group": "non-verbal"},
-    {"tag": "[whispers]",       "label": "Whispers",       "group": "non-verbal"},
-    {"tag": "—",                "label": "— (em-dash hesitation)", "group": "prosody"},
-    {"tag": "...",              "label": "... (trailing off)",     "group": "prosody"},
-    {"tag": "[MUSIC]",          "label": "[MUSIC] — instrumental", "group": "musical"},
-    {"tag": "[singing]",        "label": "[singing] — sung lyric", "group": "musical"},
-    {"tag": "♪ ♪",              "label": "♪ ♪ — musical phrase",   "group": "musical"},
-]
+
+_validate_family_wiring()
 
 
 # ───────────── Qwen3-TTS preset metadata ─────────────
@@ -879,94 +684,6 @@ QWEN3_VOICE_DESIGN_EXAMPLES = [
 ]
 
 
-# ───────────── Preset-voice rosters for the MLX voice-picker families ─────────────
-#
-# Surfaced via /api/generate/availability so the frontend can render clickable
-# voice buttons instead of a free-text field. Each id is the EXACT string the
-# engine expects (verified against the installed mlx-audio engine source — same
-# rigor as QWEN3_PRESET_SPEAKERS) so a button click can never produce a phantom
-# voice. Families NOT listed here (KittenTTS, VibeVoice) keep the free-text
-# field because their exact rosters aren't verifiable without the model on disk.
-
-# Voxtral-4B-TTS — verified against voxtral_tts.py `VOICE_MAP` (20 entries).
-# The voice name selects the language.
-VOXTRAL_VOICES = [
-    {"id": "casual_male",     "lang": "en", "gender": "m", "label": "Casual male"},
-    {"id": "casual_female",   "lang": "en", "gender": "f", "label": "Casual female"},
-    {"id": "cheerful_female", "lang": "en", "gender": "f", "label": "Cheerful female"},
-    {"id": "neutral_male",    "lang": "en", "gender": "m", "label": "Neutral male"},
-    {"id": "neutral_female",  "lang": "en", "gender": "f", "label": "Neutral female"},
-    {"id": "fr_male",         "lang": "fr", "gender": "m", "label": "French male"},
-    {"id": "fr_female",       "lang": "fr", "gender": "f", "label": "French female"},
-    {"id": "es_male",         "lang": "es", "gender": "m", "label": "Spanish male"},
-    {"id": "es_female",       "lang": "es", "gender": "f", "label": "Spanish female"},
-    {"id": "de_male",         "lang": "de", "gender": "m", "label": "German male"},
-    {"id": "de_female",       "lang": "de", "gender": "f", "label": "German female"},
-    {"id": "it_male",         "lang": "it", "gender": "m", "label": "Italian male"},
-    {"id": "it_female",       "lang": "it", "gender": "f", "label": "Italian female"},
-    {"id": "pt_male",         "lang": "pt", "gender": "m", "label": "Portuguese male"},
-    {"id": "pt_female",       "lang": "pt", "gender": "f", "label": "Portuguese female"},
-    {"id": "nl_male",         "lang": "nl", "gender": "m", "label": "Dutch male"},
-    {"id": "nl_female",       "lang": "nl", "gender": "f", "label": "Dutch female"},
-    {"id": "ar_male",         "lang": "ar", "gender": "m", "label": "Arabic male"},
-    {"id": "hi_male",         "lang": "hi", "gender": "m", "label": "Hindi male"},
-    {"id": "hi_female",       "lang": "hi", "gender": "f", "label": "Hindi female"},
-]
-
-# Marvis TTS — verified against sesame.py SPEAKER_PROMPTS (2 entries).
-MARVIS_VOICES = [
-    {"id": "conversational_a", "lang": "en", "gender": "f", "label": "Conversational A (female)"},
-    {"id": "conversational_b", "lang": "en", "gender": "m", "label": "Conversational B (male)"},
-]
-
-# Orpheus — the 8 canonical fine-tune voices (also listed in the catalog
-# use_cases). mlx-audio passes the voice straight through to the prompt.
-ORPHEUS_VOICES = [
-    {"id": "tara", "lang": "en", "gender": "f", "label": "Tara"},
-    {"id": "leah", "lang": "en", "gender": "f", "label": "Leah"},
-    {"id": "jess", "lang": "en", "gender": "f", "label": "Jess"},
-    {"id": "mia",  "lang": "en", "gender": "f", "label": "Mia"},
-    {"id": "zoe",  "lang": "en", "gender": "f", "label": "Zoe"},
-    {"id": "dan",  "lang": "en", "gender": "m", "label": "Dan"},
-    {"id": "leo",  "lang": "en", "gender": "m", "label": "Leo"},
-    {"id": "zac",  "lang": "en", "gender": "m", "label": "Zac"},
-]
-
-# VibeVoice Realtime 0.5B — verified against the exact voice files shipped in
-# mlx-community/VibeVoice-Realtime-0.5B-4bit at revision
-# 550877a15358642c1e062aa38ce1fe0623beaa1b. Microsoft treats the seven
-# English / Indian-English presets as the supported roster. The additional
-# nine languages are explicitly exploratory upstream, so keep their files
-# selectable for owner research while labelling them experimental.
-VIBEVOICE_PRESET_VOICES = [
-    {"id": "en-Carter_man", "label": "Carter", "lang": "en", "gender": "m", "experimental": False},
-    {"id": "en-Davis_man", "label": "Davis", "lang": "en", "gender": "m", "experimental": False},
-    {"id": "en-Emma_woman", "label": "Emma", "lang": "en", "gender": "f", "experimental": False},
-    {"id": "en-Frank_man", "label": "Frank", "lang": "en", "gender": "m", "experimental": False},
-    {"id": "en-Grace_woman", "label": "Grace", "lang": "en", "gender": "f", "experimental": False},
-    {"id": "en-Mike_man", "label": "Mike", "lang": "en", "gender": "m", "experimental": False},
-    {"id": "in-Samuel_man", "label": "Samuel · Indian English", "lang": "en", "locale": "en-IN", "gender": "m", "experimental": False},
-    {"id": "de-Spk0_man", "label": "German speaker 0", "lang": "de", "gender": "m", "experimental": True},
-    {"id": "de-Spk1_woman", "label": "German speaker 1", "lang": "de", "gender": "f", "experimental": True},
-    {"id": "fr-Spk0_man", "label": "French speaker 0", "lang": "fr", "gender": "m", "experimental": True},
-    {"id": "fr-Spk1_woman", "label": "French speaker 1", "lang": "fr", "gender": "f", "experimental": True},
-    {"id": "it-Spk0_woman", "label": "Italian speaker 0", "lang": "it", "gender": "f", "experimental": True},
-    {"id": "it-Spk1_man", "label": "Italian speaker 1", "lang": "it", "gender": "m", "experimental": True},
-    {"id": "jp-Spk0_man", "label": "Japanese speaker 0", "lang": "ja", "gender": "m", "experimental": True},
-    {"id": "jp-Spk1_woman", "label": "Japanese speaker 1", "lang": "ja", "gender": "f", "experimental": True},
-    {"id": "kr-Spk0_woman", "label": "Korean speaker 0", "lang": "ko", "gender": "f", "experimental": True},
-    {"id": "kr-Spk1_man", "label": "Korean speaker 1", "lang": "ko", "gender": "m", "experimental": True},
-    {"id": "nl-Spk0_man", "label": "Dutch speaker 0", "lang": "nl", "gender": "m", "experimental": True},
-    {"id": "nl-Spk1_woman", "label": "Dutch speaker 1", "lang": "nl", "gender": "f", "experimental": True},
-    {"id": "pl-Spk0_man", "label": "Polish speaker 0", "lang": "pl", "gender": "m", "experimental": True},
-    {"id": "pl-Spk1_woman", "label": "Polish speaker 1", "lang": "pl", "gender": "f", "experimental": True},
-    {"id": "pt-Spk0_woman", "label": "Portuguese speaker 0", "lang": "pt", "gender": "f", "experimental": True},
-    {"id": "pt-Spk1_man", "label": "Portuguese speaker 1", "lang": "pt", "gender": "m", "experimental": True},
-    {"id": "sp-Spk0_woman", "label": "Spanish speaker 0", "lang": "es", "gender": "f", "experimental": True},
-    {"id": "sp-Spk1_man", "label": "Spanish speaker 1", "lang": "es", "gender": "m", "experimental": True},
-]
-
-
 def _qwen3_mode_from_repo(repo: str) -> str:
     """Detect the Qwen3-TTS subtype from the repo name.
     Base → 'clone' (uses voice library), CustomVoice → 'custom' (preset speakers),
@@ -989,7 +706,6 @@ def _qwen3_mode_from_repo(repo: str) -> str:
 _QWEN_CLONE_CHUNK_CHARS = (
     long_form_policy.QWEN_CLONE_SECTION_MAX_CHARACTERS
 )
-_VIBEVOICE_MAX_TOKENS = 4096
 _LONG_FORM_JOIN_PAUSE_S = long_form_policy.DEFAULT_JOIN_PAUSE_SECONDS
 _QWEN_SENTENCE_ENDINGS = frozenset(".!?。！？")
 _QWEN_TRAILING_CLOSERS = frozenset("\"'”’»）】〕〉")
@@ -1095,13 +811,13 @@ def _internal_mlx_text_chunks(
     one exact checkpoint. Until that evidence exists, the established family
     fallback remains active. Callers still submit one complete script.
     """
-    if repo == long_form_policy.QWEN_17B_BASE_REPO:
-        audited = model_audits.qwen_17b_production_v2_limits(repo)
+    pinned = model_audits.qwen_17b_production_v2_limits(repo)
+    if pinned:
         policy = long_form_policy.policy_for(
             family,
             repo,
-            audited_section_max_characters=audited.get("private_section_max_characters"),
-            audited_default_section_max_characters=audited.get(
+            audited_section_max_characters=pinned.get("private_section_max_characters"),
+            audited_default_section_max_characters=pinned.get(
                 "default_private_section_max_characters"
             ),
         )
@@ -1241,27 +957,16 @@ def _speed_delivery(family: str) -> str:
 
 
 # Engine labels for the error text of a tempo pass, where the family name alone is not what the
-# operator sees in the model list. This is a LABEL table, not the list of families that receive a
-# tempo pass - that is `long_form_policy.speed_policy_for(family).delivery`, so a family can never
-# be missing from the mechanism the way Bark was: it accepted no speed argument (excluded from the
-# pass-through) and was absent from this map, so the public speed control did nothing at all.
-_POSTPROCESSED_SPEED_FAMILIES = {
-    "qwen3-tts": "Qwen",
-    "voxcpm-mlx": "VoxCPM2",
-    "vibevoice": "VibeVoice",
-    "fish-audio-mlx": "Fish Audio S2 Pro",
-    "arktts": "Audio8 TTS Preview",
-    "moss-tts-nano": "MOSS-TTS-Nano",
-    "echo-tts": "Echo-TTS",
-    "omnivoice": "OmniVoice",
-    "bark": "Bark",
-    "longcat-audiodit": "LongCat AudioDiT",
-    "chatterbox-mlx": "Chatterbox",
-    "orpheus": "Orpheus",
-    "marvis": "Marvis TTS",
-    "voxtral-tts": "Voxtral-4B-TTS",
-    "spark-tts-mlx": "Spark-TTS",
-}
+# operator sees in the model list. The label comes from the family's own catalog entry, so a new
+# family is named correctly without an edit here. This is a LABEL lookup, not the list of families
+# that receive a tempo pass - that is `long_form_policy.speed_policy_for(family).delivery`, so a
+# family can never be missing from the mechanism: a family that accepts no speed argument and is
+# absent from this map would leave the public speed control doing nothing at all.
+def _family_engine_label(family: str) -> str:
+    entry = catalog.FAMILIES.get(family)
+    if entry is not None:
+        return entry.label
+    return (MLX_AUDIO_FAMILIES.get(family) or {}).get("label") or family
 
 
 # Qwen CustomVoice and Chatterbox can occasionally continue emitting silent
@@ -1507,9 +1212,7 @@ def _apply_mlx_output_speed(output_path: Path, speed: float, family: str,
     both short and already-joined long-form output obey one exact public speed
     control. Returns False for the 1.0 no-op.
     """
-    engine = (_POSTPROCESSED_SPEED_FAMILIES.get(family)
-              or (MLX_AUDIO_FAMILIES.get(family) or {}).get("label")
-              or family)
+    engine = _family_engine_label(family)
     speed = max(long_form_policy.SPEED_MINIMUM,
                 min(float(speed), long_form_policy.SPEED_MAXIMUM))
     if abs(speed - 1.0) < 1e-6:
@@ -1652,10 +1355,10 @@ def _enforce_output_duration_limit(output_path: Path, params: dict) -> None:
 _PACKAGE_DISTRIBUTIONS = {
     "mlx_lm": "mlx-lm",
     "mlx_audio": "mlx-audio",
-    "mistral_common": "mistral-common",
-    "f5_tts": "f5-tts",
 }
-_PACKAGE_MIN_VERSIONS = {"mistral_common": "1.10.0"}
+# No shipped engine pins a minimum version of its own any more: the MLX and
+# Khmer families run against the versions frozen into the packaged runtime.
+_PACKAGE_MIN_VERSIONS: dict[str, str] = {}
 
 
 def _probe_package(name: str) -> dict:
@@ -1891,17 +1594,12 @@ class GenerationManager:
         self._jobs: dict[str, GenerationJob] = {}
         # Cache one mlx-audio model at a time (loading is slow — 5-10s for
         # MLX 8-bit dequantization, longer for larger models). When the user
-        # switches repos OR switches mlx-audio families (qwen3-tts → kokoro-mlx
-        # → chatterbox-mlx etc.), we evict the old one to free Apple Silicon
+        # switches repos OR switches mlx-audio families (qwen3-tts →
+        # chatterbox-mlx etc.), we evict the old one to free Apple Silicon
         # unified memory. One cache slot is enough since unified memory is
         # shared — loading two large mlx-audio models would OOM anyway.
         self._mlx_audio_model = None
         self._mlx_audio_model_repo: Optional[str] = None
-        # F5-TTS — single F5TTS instance cached per repo. Holds the flow-matching
-        # transformer + VoCoS vocoder (~1.5 GB on disk, more at runtime). Heavy
-        # cold-start because the vocoder also loads from HF.
-        self._f5_tts_model = None
-        self._f5_tts_model_repo: Optional[str] = None
         # Khmer VITS engines — one cache slot each. They are small, but a repo
         # switch still evicts so `loaded_model_keys` can name exactly what is
         # resident and memory policy can release it.
@@ -2051,8 +1749,6 @@ class GenerationManager:
         loaded: list[tuple[str, str]] = []
         if self._mlx_audio_model is not None and self._mlx_audio_model_repo:
             loaded.append((self._mlx_audio_model_repo, "tts-mlx"))
-        if self._f5_tts_model is not None and self._f5_tts_model_repo:
-            loaded.append((self._f5_tts_model_repo, "f5-tts"))
         if getattr(self, "_khmer_vits_model", None) is not None and getattr(
             self, "_khmer_vits_model_repo", None
         ):
@@ -2071,7 +1767,7 @@ class GenerationManager:
 
         The single definition of "loaded" for this manager. `loaded_model_keys()`
         already knows where each engine parks its model — the MLX engine on
-        `_mlx_audio_model`, F5-TTS on `_f5_tts_model` — and memory_policy's
+        `_mlx_audio_model`, the Khmer engines on their own slots — and memory_policy's
         release path evicts exactly those. Per-job telemetry used to ask a
         second, invented question — it probed a private `_loaded_model`
         attribute that no engine has ever set — so `outcome.model_retained`
@@ -2083,15 +1779,8 @@ class GenerationManager:
 
     @staticmethod
     def runtime_ready_for_family(family: str) -> bool:
-        if family in MLX_AUDIO_FAMILIES:
-            return _have_mlx_audio()
-        if family == "f5-tts":
-            return _have_f5_tts()
-        if family == "khmer-tts-mms":
-            return TTS_AVAILABLE
-        if family == "khmer-tts-onnx":
-            return _have_onnxruntime()
-        return False
+        """Kept as a manager method for callers that already hold the manager."""
+        return runtime_ready_for_family(family)
 
     def model_runtime_status(self, model_entry) -> dict:
         """Truthful per-model load, dependency, and live-memory inventory."""
@@ -2133,7 +1822,7 @@ class GenerationManager:
         until they acquire the lock. To make the UI react instantly, flip
         queued → cancelled immediately. The worker still sees cancel_event when
         it eventually wakes up and exits cleanly. Running jobs only get the
-        signal — TTS engines (Kokoro/VoxCPM/Bark/mlx-audio) don't honor
+        signal — TTS engines (the mlx-audio families, the Khmer VITS engines) don't honor
         mid-generation cancellation, so the worker discards the result after
         generation completes.
         """
@@ -2372,15 +2061,13 @@ class GenerationManager:
             elif outcome.state == "uncertain":
                 self._native_loaded_model_keys = []
                 actions.append("native executor cache ownership became uncertain")
-        for attr in ("_mlx_audio_model", "_f5_tts_model",
-                     "_khmer_vits_model", "_khmer_onnx_model"):
+        for attr in ("_mlx_audio_model", "_khmer_vits_model", "_khmer_onnx_model"):
             model = getattr(self, attr, None)
             if model is not None:
                 setattr(self, attr, None)
                 actions.append(f"cleared {attr.removeprefix('_')}")
             model = None
         self._mlx_audio_model_repo = None
-        self._f5_tts_model_repo = None
         self._khmer_vits_model_repo = None
         self._khmer_onnx_model_repo = None
         _release_device_memory("mps")
@@ -2413,9 +2100,6 @@ class GenerationManager:
             (model_entry.family in MLX_AUDIO_FAMILIES
              and self._mlx_audio_model_repo == model_entry.repo
              and self._mlx_audio_model is not None)
-            or (model_entry.family == "f5-tts"
-                and self._f5_tts_model_repo == model_entry.repo
-                and self._f5_tts_model is not None)
             or (model_entry.family == "khmer-tts-mms"
                 and getattr(self, "_khmer_vits_model_repo", None) == model_entry.repo
                 and getattr(self, "_khmer_vits_model", None) is not None)
@@ -2563,7 +2247,7 @@ class GenerationManager:
         try:
             result = stt_manager.transcribe_locked(
                 str(output_path),
-                model_repo=qwen_quality.WHISPER_REPO,
+                model_repo=qwen_quality.validator_repo(str(job.params.get("repo") or "")),
                 language=job.params.get("language"),
                 word_timestamps=True,
             )
@@ -2703,7 +2387,7 @@ class GenerationManager:
             try:
                 result = stt_manager.transcribe_locked(
                     str(reference_path),
-                    model_repo=qwen_quality.WHISPER_REPO,
+                    model_repo=qwen_quality.validator_repo(str(job.params.get("repo") or "")),
                     language=job.params.get("language"),
                     word_timestamps=True,
                 )
@@ -2932,30 +2616,19 @@ class GenerationManager:
         normalized_repo = repo.lower()
         is_qwen = "qwen3-tts" in normalized_repo
         is_voxcpm = "voxcpm2" in normalized_repo
-        is_kokoro = "kokoro" in normalized_repo
         is_chatterbox = "chatterbox" in normalized_repo
         is_fish = "fish-audio-s2-pro" in normalized_repo
         is_omnivoice = "omnivoice" in normalized_repo
-        is_longcat = "longcat-audiodit" in normalized_repo
+        is_pocket = "pocket-tts" in normalized_repo
         if not (
-            is_qwen or is_voxcpm or is_kokoro or is_chatterbox
-            or is_fish or is_omnivoice or is_longcat
+            is_qwen or is_voxcpm or is_chatterbox
+            or is_fish or is_omnivoice or is_pocket
         ):
             return
         revision = cache.snapshot_revision(repo)
         if not revision:
             raise RuntimeError("Local TTS model revision evidence is unavailable")
         job.model_revision = revision
-        if is_kokoro:
-            # `preset_speaker` is the field the app's own audio request carries; `voice` is the
-            # internal name the picker resolvers use. Reading only `voice` here rejected every
-            # client-submitted Kokoro job with a terminal error before the engine was ever loaded.
-            voice = str(job.params.get("voice")
-                        or job.params.get("preset_speaker") or "").strip().lower()
-            if not voice:
-                raise RuntimeError("Kokoro preset voice evidence is unavailable")
-            job.voice_revision = f"{revision}:preset:{voice}"
-            return
         mode = _qwen3_mode_from_repo(repo) if is_qwen else "voxcpm"
         if is_qwen and mode == "custom":
             speaker = str(job.params.get("preset_speaker") or "").strip().lower()
@@ -2973,7 +2646,7 @@ class GenerationManager:
             or is_chatterbox
             or (is_fish and (voice_id or private_revision))
             or (is_omnivoice and (voice_id or private_revision))
-            or (is_longcat and (voice_id or private_revision))
+            or (is_pocket and (voice_id or private_revision))
         ):
             if private_revision:
                 job.voice_revision = private_revision
@@ -3079,7 +2752,7 @@ class GenerationManager:
         text = str(job.params.get("text") or "").strip()
         if (
             model is not None
-            and (model.family in MLX_AUDIO_FAMILIES or model.family in _KHMER_VITS_FAMILIES)
+            and model.family in _SECTIONED_FAMILIES
             and text
         ):
             normalized = _normalized_speech_text(model.family, text, job.params)
@@ -3228,42 +2901,33 @@ class GenerationManager:
             raise ValueError(f"Model {repo} is not fully cached locally — download it first")
 
         family = model.family
+        engine = engine_for_family(family)
         self._memory_preflight(model)
-        if family == "f5-tts":
-            if not _have_f5_tts():
-                raise RuntimeError(
-                    "The `f5-tts` runtime is unavailable in this packaged app. "
-                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
-                )
-            self._generate_f5_tts(job, model, output_path)
-        elif family == "khmer-tts-mms":
-            if not TTS_AVAILABLE:
-                raise RuntimeError(
-                    "The `torch`/`transformers` runtime is unavailable in this packaged app. "
-                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
-                )
-            self._generate_khmer_vits(job, model, output_path)
-        elif family == "khmer-tts-onnx":
-            if not _have_onnxruntime():
-                raise RuntimeError(
-                    "The `onnxruntime` runtime is unavailable in this packaged app. "
-                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
-                )
-            self._generate_khmer_onnx(job, model, output_path)
-        elif family in MLX_AUDIO_FAMILIES:
-            if not _have_mlx_audio():
-                raise RuntimeError(
-                    "The `mlx-audio` runtime is unavailable in this packaged app. "
-                    "Replace it with a tested standalone release that includes the runtime, then relaunch."
-                )
+        if not self.runtime_ready_for_family(family):
+            raise RuntimeError(
+                f"The `{_ENGINE_RUNTIME_LABEL[engine]}` runtime is unavailable in this packaged "
+                "app. Replace it with a tested standalone release that includes the runtime, "
+                "then relaunch."
+            )
+        if engine == catalog.ENGINE_MLX_AUDIO:
             self._generate_mlx_audio(job, model, output_path, postprocess_speed=postprocess_speed)
+        elif engine == catalog.ENGINE_TRANSFORMERS_VITS:
+            self._generate_khmer_vits(job, model, output_path)
+        elif engine == catalog.ENGINE_ONNX_VITS:
+            self._generate_khmer_onnx(job, model, output_path)
         else:
-            raise NotImplementedError(f"No worker implemented for family '{family}'.")
+            # Unreachable while `_validate_family_wiring` holds at import. Kept because a
+            # dispatcher that silently falls through is how a family reaches an engine it was
+            # never wired for; this names the engine and the file to edit instead.
+            raise NotImplementedError(
+                f"No worker implemented for engine '{engine}' (family '{family}'); add one to "
+                "_WORKER_BY_ENGINE in components/voice/app/backend/generation.py"
+            )
 
     # ──────────────────────────────────────────────────────────────────────
-    # mlx-audio worker — shared across qwen3-tts, voxcpm-mlx, kokoro-mlx,
-    # chatterbox-mlx, spark-tts-mlx, orpheus, and any future mlx-audio-backed
-    # family.
+    # mlx-audio worker — shared across every mlx-audio-backed family
+    # (qwen3-tts, voxcpm-mlx, chatterbox-mlx, omnivoice, fish-audio-mlx,
+    # pocket-tts) and any future one.
     #
     # Architecture:
     # 1. _mlx_audio_snapshot_path: find the HF cache snapshot folder for a repo
@@ -3313,7 +2977,7 @@ class GenerationManager:
         where all GPU memory comes out of the same pool as system RAM.
 
         One slot is enough across ALL mlx-audio families (qwen3-tts, voxcpm-mlx,
-        kokoro-mlx, etc.) — loading two large mlx-audio models simultaneously
+        chatterbox-mlx etc.) — loading two large mlx-audio models simultaneously
         would OOM anyway."""
         if self._mlx_audio_model_repo == repo and self._mlx_audio_model is not None:
             return self._mlx_audio_model
@@ -3334,43 +2998,16 @@ class GenerationManager:
         print(f"[gen] loading mlx-audio model from {snapshot_path}", flush=True)
         # IMPORTANT: pass the Path object, NOT str(snapshot_path).
         # mlx-audio's get_model_name_parts walks Path.parts to extract name
-        # hints (finds the `models--mlx-community--Spark-TTS-...` segment and
-        # parses "spark", "tts", etc.). When given a string it only takes the
-        # last "/" segment — which is just the snapshot hash like
-        # "be15d8bf101a4a400c568b387fb69dce0d37239b" — and the dispatch falls
-        # back to config.json's model_type. Spark-TTS reports `qwen2` there
-        # (its LM backbone), no `mlx_audio.tts.models.qwen2` exists, and you
-        # get `ValueError: Model type qwen2 not supported for tts.`
+        # hints (it finds the `models--<org>--<repo>` segment and parses the
+        # name for engine clues). When given a string it only takes the last
+        # "/" segment — which is just the snapshot hash like
+        # "be15d8bf101a4a400c568b387fb69dce0d37239b" — so the dispatch falls
+        # back to config.json's model_type alone, which is how a repo whose
+        # config reports its LM backbone (`qwen2`) instead of the TTS engine
+        # failed with `ValueError: Model type qwen2 not supported for tts.`
         # See v1.2.8 fix.
-        # Voxtral's tekken metadata includes voice_num_audio_tokens. mlx-audio
-        # reads that field itself, but mistral-common <=1.9 rejects the extra
-        # AudioConfig kwarg before the tokenizer can load. Ignore it only while
-        # loading this model; mlx-audio already preserved the mapping above.
-        audio_config_cls = None
-        original_audio_config_init = None
         entry = catalog.get_model(repo)
-        if entry is not None and entry.family == "kokoro-mlx":
-            _backport_kokoro_sinegen_length_alignment()
-        if entry is not None and entry.family == "voxtral-tts":
-            try:
-                import inspect
-                from mistral_common.tokens.tokenizers.tekken import AudioConfig
-                if "voice_num_audio_tokens" not in inspect.signature(AudioConfig).parameters:
-                    audio_config_cls = AudioConfig
-                    original_audio_config_init = AudioConfig.__init__
-
-                    def _compatible_audio_config_init(instance, *args,
-                                                      voice_num_audio_tokens=None, **kwargs):
-                        return original_audio_config_init(instance, *args, **kwargs)
-
-                    AudioConfig.__init__ = _compatible_audio_config_init
-            except (ImportError, TypeError, ValueError):
-                pass
-        try:
-            model = load_model(snapshot_path)
-        finally:
-            if audio_config_cls is not None and original_audio_config_init is not None:
-                audio_config_cls.__init__ = original_audio_config_init
+        model = load_model(snapshot_path)
         if entry is not None and entry.family == "voxcpm-mlx":
             # Backport mlx-audio 3b37f335 without advancing the shared pin by
             # 93 unrelated commits: materialize this lazy constant before the
@@ -3434,16 +3071,10 @@ class GenerationManager:
         # Speed is passed upstream ONLY to an engine that applies the multiplier itself. For every
         # other family the argument is omitted entirely and one pitch-preserving tempo pass is
         # applied to the finished artifact - because the alternatives are all silent: Chatterbox
-        # documents speed as "Ignored", LongCat never reads it, OmniVoice accepts and discards it,
-        # Spark-TTS indexes SPEED_MAP[float] and raises on any value but its five levels, and Bark
-        # still carries the original "# TODO: adjust speed". A control that is accepted and dropped
-        # is worse than one that is refused, because the caller cannot tell.
+        # documents speed as "Ignored" and OmniVoice accepts and discards it. A control that is
+        # accepted and dropped is worse than one that is refused, because the caller cannot tell.
         if _speed_delivery(family) == "native":
             gen_kwargs["speed"] = speed
-        if family == "vibevoice":
-            # At 7.5 acoustic frames per second this permits about nine minutes
-            # per private section. The model normally stops at EOS sooner.
-            gen_kwargs["max_tokens"] = _VIBEVOICE_MAX_TOKENS
         if family == "fish-audio-mlx":
             # Prevent a second model-owned split inside Voice Studio's private
             # 300-character sections. Fish still stops naturally at EOS.
@@ -3453,18 +3084,6 @@ class GenerationManager:
         # kwargs. Each resolver may raise ValueError if required inputs are missing.
         mode = family_config["mode"]
         mode_label = self._resolve_mlx_kwargs(mode, family, model_entry, params, gen_kwargs)
-
-        if family == "arktts":
-            # Confirmed via a real local generation (v1.27.20): arktts.py builds
-            # GenerationResult.prompt={"text":..., "ref_text":...} instead of the
-            # {"tokens":..., "tokens-per-sec":...} shape every other mlx-audio
-            # engine uses. generate_audio()'s verbose block (default True) reads
-            # result.prompt['tokens-per-sec'] unconditionally and raises KeyError
-            # before the WAV is ever written — turning EVERY Audio8 generation
-            # into a silent failure. Voice Studio's own [gen] print lines already
-            # cover this family; suppressing mlx-audio's internal verbose output
-            # is a safe, narrowly-scoped workaround pending an upstream fix.
-            gen_kwargs["verbose"] = False
 
         # Optional cfg knobs — currently only VoxCPM2 uses them.
         if family_config.get("uses_cfg"):
@@ -3480,17 +3099,6 @@ class GenerationManager:
             import random
             seed = random.randint(0, 2**32 - 1)
         job.resolved_seed = int(seed)
-
-        if family == "echo-tts":
-            # Echo's diffusion sampler draws from its OWN rng_seed kwarg rather
-            # than mlx.core.random, so seeding mx alone would not make a reuse
-            # repeatable. Feed it the same resolved seed (its own range is a
-            # plain int; keep it inside 2**32 like the mx seed below).
-            gen_kwargs["rng_seed"] = int(seed) % (2**32)
-        elif family == "longcat-audiodit":
-            # LongCat reseeds inside Model.generate(), so mlx.core.random.seed
-            # alone is overwritten. Pass the recorded job seed through too.
-            gen_kwargs["seed"] = int(seed) % (2**32)
 
         if job.cancel_event.is_set():
             return
@@ -3710,28 +3318,20 @@ class GenerationManager:
         exaggeration / etc.) and returns a human-readable mode label for the
         log line.
 
-        Modes:
+        Modes (the full set; each maps to one entry in MLX_AUDIO_FAMILIES):
         - "qwen3"             — repo-name picks custom (preset) / design (text) / clone (ref)
         - "voxcpm_flex"       — any combo of ref_audio + ref_text + instruct
-        - "voice_picker"      — voice param required, no clone
         - "clone_with_intensity" — needs ref_audio, optional exaggeration
         - "voice_or_clone"    — voice param OR ref_audio (zero-shot or clone)
+        - "omnivoice"         — design prompt and/or clone
         - "fish_audio"        — optional ref_audio + optional instruct + full sampling
-        - "audio8"            — optional ref_audio (zero-shot otherwise), full sampling, no instruct/language
-        - "moss_tts_nano"     — ref_audio REQUIRED (no zero-shot), full sampling, no instruct/language
-        - "echo_tts"          — optional ref_audio, NO ref_text at all, diffusion sampler knobs
-        - "longcat_clone"     — transcript-assisted reference clone with fixed APG defaults
         """
         from . import voices as voices_module
 
         if mode == "qwen3":
             return self._mlx_kwargs_qwen3(model_entry, params, gen_kwargs, voices_module)
-        if mode == "bark":
-            return self._mlx_kwargs_bark(model_entry, params, gen_kwargs)
         if mode == "voxcpm_flex":
             return self._mlx_kwargs_voxcpm_flex(params, gen_kwargs, voices_module)
-        if mode == "voice_picker":
-            return self._mlx_kwargs_voice_picker(family, params, gen_kwargs)
         if mode == "clone_with_intensity":
             return self._mlx_kwargs_clone_with_intensity(model_entry, params, gen_kwargs, voices_module)
         if mode == "voice_or_clone":
@@ -3740,48 +3340,15 @@ class GenerationManager:
             return self._mlx_kwargs_omnivoice(params, gen_kwargs, voices_module)
         if mode == "fish_audio":
             return self._mlx_kwargs_fish_audio(params, gen_kwargs, voices_module)
-        if mode == "audio8":
-            return self._mlx_kwargs_audio8(params, gen_kwargs, voices_module)
-        if mode == "moss_tts_nano":
-            return self._mlx_kwargs_moss_tts_nano(params, gen_kwargs, voices_module)
-        if mode == "echo_tts":
-            return self._mlx_kwargs_echo_tts(params, gen_kwargs, voices_module)
-        if mode == "longcat_clone":
-            return self._mlx_kwargs_longcat(params, gen_kwargs, voices_module)
-        raise RuntimeError(f"Unknown mlx-audio mode {mode!r} for family {family!r}")
+        # A family in MLX_AUDIO_FAMILIES whose mode is not handled here is a wiring bug, and it
+        # must name itself and both files rather than raise a bare "unknown mode" from inside a job.
+        raise RuntimeError(
+            f"Unknown mlx-audio mode {mode!r} for family {family!r}. "
+            "Add a resolver here and the matching mode in MLX_AUDIO_FAMILIES "
+            "(components/voice/app/backend/generation.py)."
+        )
 
     # --- per-mode kwarg builders ---
-
-    def _mlx_kwargs_bark(self, model_entry, params, gen_kwargs) -> str:
-        """Resolve Bark's local history prompt and native sampling controls."""
-        preset = (params.get("bark_voice_preset") or "").strip()
-        if preset:
-            valid_presets = {item["id"] for item in BARK_VOICE_PRESETS}
-            if preset not in valid_presets:
-                raise ValueError(f"Unknown Bark voice preset: {preset}")
-            voice_path = self._mlx_audio_snapshot_path(model_entry.repo) / f"{preset}.npz"
-            if not voice_path.exists():
-                raise ValueError(
-                    f"Bark voice preset {preset} is missing. Re-download the model from Models."
-                )
-            gen_kwargs["voice"] = str(voice_path)
-        else:
-            # generate_audio defaults to a Kokoro voice name, which Bark rejects.
-            gen_kwargs["voice"] = None
-
-        gen_kwargs["temperature"] = max(
-            0.1, min(float(params.get("bark_temperature", 0.7)), 1.5)
-        )
-        gen_kwargs["max_coarse_history"] = max(
-            60, min(int(params.get("bark_max_coarse_history", 60)), 630)
-        )
-        gen_kwargs["sliding_window_len"] = max(
-            30, min(int(params.get("bark_sliding_window_len", 60)), 120)
-        )
-        gen_kwargs["allow_early_stop"] = bool(
-            params.get("bark_allow_early_stop", True)
-        )
-        return f"preset={preset}" if preset else "random voice"
 
     def _mlx_kwargs_qwen3(self, model_entry, params, gen_kwargs, voices_module) -> str:
         """Qwen3-TTS: repo-name selects between custom (preset speakers),
@@ -3939,97 +3506,6 @@ class GenerationManager:
             return "voice-design"
         return "zero-shot"
 
-    def _mlx_kwargs_voice_picker(self, family: str, params, gen_kwargs) -> str:
-        """Kokoro-MLX / Orpheus / similar: voice param is required (named
-        preset voice). No reference audio cloning, no instruction prompt."""
-        # `preset_speaker` is the name the Qwen families use for the same idea, and it is what the
-        # app and the gateway send for every model. Accepting either here fixes every client at once,
-        # at the place that actually knows the difference, instead of teaching each of them a
-        # per-family field name - a mismatch that made three working models look broken.
-        voice = (params.get("voice") or params.get("preset_speaker") or "").strip()
-        if not voice:
-            raise ValueError(
-                f"{family} needs a preset voice. Pick one from the voice dropdown — "
-                "the Voices library doesn't apply here (this family doesn't clone)."
-            )
-
-        if family == "vibevoice":
-            known_voices = {item["id"] for item in VIBEVOICE_PRESET_VOICES}
-            if voice not in known_voices:
-                raise ValueError(
-                    f"Unknown VibeVoice preset: {voice!r}. Pick a verified checkpoint voice."
-                )
-
-        if family == "kokoro-mlx":
-            voices = [item.strip() for item in voice.split(",") if item.strip()]
-            known_voices = {item["id"] for item in KOKORO_VOICES}
-            unknown = [item for item in voices if item not in known_voices]
-            if unknown:
-                raise ValueError(
-                    "Unknown Kokoro voice: " + ", ".join(unknown) +
-                    ". Pick a voice from the verified preset list."
-                )
-            languages = {item[0] for item in voices}
-            if len(languages) != 1:
-                raise ValueError(
-                    "Kokoro can only blend voices from the same language. "
-                    "Choose a second voice in the same language as the first."
-                )
-            voice_language = next(iter(languages))
-            requested_language = params.get("language") or ""
-            lang_code = _normalize_kokoro_language(requested_language, voice_language)
-            if lang_code not in LANG_NAMES:
-                raise ValueError(f"Unsupported Kokoro language code: {lang_code}")
-            if lang_code != voice_language:
-                raise ValueError(
-                    f"The selected Kokoro voice is {LANG_NAMES[voice_language]}, "
-                    f"but the language control is {LANG_NAMES[lang_code]}."
-                )
-            gen_kwargs["lang_code"] = lang_code
-
-            # The audited Kokoro checkpoint already contains every verified
-            # voicepack.  mlx-audio otherwise resolves the same voice ID from
-            # prince-canuma/Kokoro-82M and performs a surprise Hub download on
-            # first use.  Pass the checkpoint-local safetensors paths so a
-            # cached model is genuinely offline-ready and remains bound to the
-            # exact audited revision.  Unit callers without a cache keep the
-            # plain IDs; generation itself cannot reach this point without a
-            # cached model.
-            try:
-                snapshot = self._mlx_audio_snapshot_path(
-                    "mlx-community/Kokoro-82M-bf16"
-                )
-            except RuntimeError:
-                snapshot = None
-            if snapshot is not None:
-                local_voices = [
-                    snapshot / "voices" / f"{voice_id}.safetensors"
-                    for voice_id in voices
-                ]
-                missing = [path.stem for path in local_voices if not path.is_file()]
-                if missing:
-                    raise RuntimeError(
-                        "The cached Kokoro checkpoint is missing audited voicepacks: "
-                        + ", ".join(missing)
-                        + ". Re-download this exact model revision."
-                    )
-                # Keep the snapshot filename instead of resolving its symlink
-                # into Hugging Face's extensionless blob path. Kokoro detects
-                # a direct local voicepack by the ``.safetensors`` suffix; an
-                # extensionless resolved blob is treated as a voice ID and the
-                # runtime appends another suffix, so inference completes with
-                # no output artifact.
-                voice = ",".join(str(path.absolute()) for path in local_voices)
-
-        gen_kwargs["voice"] = voice
-        # Some voice-picker families (Orpheus) accept an optional instruct
-        # for style nudges — forward it if present.
-        instruct = "" if family == "kokoro-mlx" else (params.get("instruct") or "").strip()
-        if instruct:
-            gen_kwargs["instruct"] = instruct
-        language_label = f" lang={gen_kwargs['lang_code']}" if family == "kokoro-mlx" else ""
-        return f"voice={voice}{language_label}" + (f" instruct={len(instruct)}c" if instruct else "")
-
     def _mlx_kwargs_clone_with_intensity(self, model_entry, params, gen_kwargs, voices_module) -> str:
         """Chatterbox (MLX): requires a reference audio for voice cloning,
         plus an optional `exaggeration` knob for emotion intensity."""
@@ -4151,123 +3627,10 @@ class GenerationManager:
             return f"zero-shot + style ({len(instruct)} char prompt)"
         return "zero-shot"
 
-    def _mlx_kwargs_audio8(self, params, gen_kwargs, voices_module) -> str:
-        """Audio8 TTS Preview (arktts): optional reference clone, otherwise
-        the model's single built-in default voice.
-
-        Verified against the installed mlx-audio source: generate() takes
-        text/ref_audio/ref_text/temperature/top_p/top_k/max_tokens/do_sample —
-        no instruct, no language, no speed. The public speed control is
-        applied as one pitch-preserving tempo pass on the finished WAV.
-        """
-        voice_id = (params.get("voice_library_id") or "").strip()
-        has_reference = bool(voice_id or params.get("_reference_audio_path"))
-        if has_reference:
-            self._inject_voice_clone(
-                voice_id, params, gen_kwargs, voices_module, fallback_transcript=""
-            )
-        gen_kwargs["temperature"] = max(
-            0.05, min(float(params.get("audio8_temperature", 0.7)), 2.0)
-        )
-        gen_kwargs["top_p"] = max(
-            0.05, min(float(params.get("audio8_top_p", 0.9)), 1.0)
-        )
-        gen_kwargs["top_k"] = max(
-            0, min(int(params.get("audio8_top_k", 50)), 200)
-        )
-        gen_kwargs["max_tokens"] = max(
-            128, min(int(params.get("audio8_max_tokens", 512)), 2048)
-        )
-        reference_label = voice_id or "private-reference"
-        return f"clone (voice={reference_label})" if has_reference else "zero-shot (default voice)"
-
-    def _mlx_kwargs_longcat(self, params, gen_kwargs, voices_module) -> str:
-        """LongCat AudioDiT: transcript-assisted APG voice cloning only."""
-        voice_id = (params.get("voice_library_id") or "").strip()
-        if not voice_id and not params.get("_reference_audio_path"):
-            raise ValueError(
-                "LongCat needs a reference voice or private reference upload."
-            )
-        self._inject_voice_clone(
-            voice_id, params, gen_kwargs, voices_module, fallback_transcript=""
-        )
-        if not str(gen_kwargs.get("ref_text") or "").strip():
-            raise ValueError(
-                "LongCat needs the exact transcript spoken in the reference audio."
-            )
-        gen_kwargs.update({
-            "guidance_method": "apg",
-            "cfg_strength": 4.0,
-            "steps": 16,
-        })
-        return f"clone (voice={voice_id or 'private-reference'}, APG 16 steps)"
-
-    def _mlx_kwargs_moss_tts_nano(self, params, gen_kwargs, voices_module) -> str:
-        """MOSS-TTS-Nano: voice_clone is the model's only generation mode —
-        a reference clip is always required (verified against the installed
-        mlx-audio source: generate() raises ValueError without ref_audio in
-        the default mode). No transcript is needed; ref_text is unused in
-        voice_clone mode. No instruct, no language, no speed.
-        """
-        voice_id = (params.get("voice_library_id") or "").strip()
-        if not voice_id and not params.get("_reference_audio_path"):
-            raise ValueError(
-                "MOSS-TTS-Nano needs a reference voice — it has no zero-shot mode."
-            )
-        self._inject_voice_clone(
-            voice_id, params, gen_kwargs, voices_module, fallback_transcript=""
-        )
-        gen_kwargs["temperature"] = max(
-            0.05, min(float(params.get("moss_temperature", 0.8)), 2.0)
-        )
-        gen_kwargs["top_p"] = max(
-            0.05, min(float(params.get("moss_top_p", 0.95)), 1.0)
-        )
-        gen_kwargs["top_k"] = max(
-            0, min(int(params.get("moss_top_k", 25)), 200)
-        )
-        gen_kwargs["repetition_penalty"] = max(
-            1.0, min(float(params.get("moss_repetition_penalty", 1.2)), 2.0)
-        )
-        return f"clone (voice={voice_id or 'private-reference'})"
-
-    def _mlx_kwargs_echo_tts(self, params, gen_kwargs, voices_module) -> str:
-        """Echo-TTS: optional reference clone, otherwise the model's own voice.
-
-        Cloning is AUDIO-ONLY — verified against the installed mlx-audio source:
-        Model.generate(text, voice, ref_audio, stream, **kwargs) has no ref_text
-        parameter, and everything else (speed, temperature, instruct, lang_code,
-        ref_text) falls into **kwargs where generate_latents() filters it against
-        the SamplerConfig field names and silently drops non-matches. So a
-        reference voice with no saved transcript works fine here, and the public
-        speed control is applied as one pitch-preserving tempo pass afterwards.
-        """
-        voice_id = (params.get("voice_library_id") or "").strip()
-        has_reference = bool(voice_id or params.get("_reference_audio_path"))
-        if has_reference:
-            self._inject_voice_clone(
-                voice_id, params, gen_kwargs, voices_module, fallback_transcript=""
-            )
-            # Echo ignores ref_text; drop it so the kwargs reflect what is used.
-            gen_kwargs.pop("ref_text", None)
-
-        # Real SamplerConfig fields (echo_tts/config.py). Anything else is dropped
-        # by the engine, so only expose knobs that actually take effect.
-        gen_kwargs["num_steps"] = max(
-            4, min(int(params.get("echo_num_steps", 40)), 128)
-        )
-        gen_kwargs["cfg_scale_text"] = max(
-            0.0, min(float(params.get("echo_cfg_scale_text", 3.0)), 10.0)
-        )
-        gen_kwargs["cfg_scale_speaker"] = max(
-            0.0, min(float(params.get("echo_cfg_scale_speaker", 8.0)), 20.0)
-        )
-        reference_label = voice_id or "private-reference"
-        return f"clone (voice={reference_label})" if has_reference else "zero-shot (default voice)"
-
     def _mlx_kwargs_voice_or_clone(self, params, gen_kwargs, voices_module) -> str:
-        """Spark-TTS (MLX): EITHER a voice picker (preset) OR a reference
-        audio. If both, the reference clip wins (Spark prefers clone over preset)."""
+        """Pocket TTS (MLX) and any family with the same contract: EITHER a preset
+        voice name OR a reference audio clip. If both are present the reference wins,
+        which is what the engine itself does."""
         voice_id = (params.get("voice_library_id") or "").strip() or None
         if voice_id or params.get("_reference_audio_path"):
             self._inject_voice_clone(voice_id or "", params, gen_kwargs, voices_module,
@@ -4279,7 +3642,7 @@ class GenerationManager:
             gen_kwargs["voice"] = voice
             return f"voice={voice}"
 
-        # Spark accepts pure zero-shot with default voice — useful for quick tests.
+        # The engine's own default preset voice is used when neither is given.
         return "zero-shot"
 
     def _inject_voice_clone(self, voice_id: str, params: dict, gen_kwargs: dict,
@@ -4304,165 +3667,6 @@ class GenerationManager:
         if not ref_text and voice_id:
             ref_text = voices_module.library.transcript(voice_id) or ""
         gen_kwargs["ref_text"] = ref_text or fallback_transcript
-
-    # ----- F5-TTS (SWivid flow-matching) -----
-
-    def _f5_tts_get_model(self, repo: str, device: str):
-        """Lazy-load + cache an F5TTS instance. Evicts on repo switch — the
-        model + VoCoS vocoder together hold several GB of MPS memory.
-
-        Note: F5-TTS auto-resolves checkpoint files from HF_HOME based on the
-        `model` name argument ('F5TTS_v1_Base'). The catalog's `repo` field
-        (`SWivid/F5-TTS`) is informational here — F5-TTS doesn't take a repo
-        path; it has hardcoded model registry entries. Other F5-TTS variants
-        (E2-TTS, F5TTS_Base, F5TTS_v1_Base_no_zero_init, multilingual ones)
-        would need their `model=` string flipped per-entry."""
-        if self._f5_tts_model_repo == repo and self._f5_tts_model is not None:
-            return self._f5_tts_model
-
-        if self._f5_tts_model is not None:
-            print(f"[gen] evicting cached F5-TTS model ({self._f5_tts_model_repo})", flush=True)
-            try:
-                del self._f5_tts_model
-            except Exception:
-                pass
-            self._f5_tts_model = None
-            self._f5_tts_model_repo = None
-            _release_device_memory(device)
-
-        # F5-TTS's api uses `cached_path` (a separate library, not huggingface_hub)
-        # for the main checkpoint. cached_path has its OWN cache layout that
-        # doesn't share with HF Hub's standard `hub/models--<org>--<repo>/...`
-        # structure — it creates `models--<org>--<repo>/` directly under the
-        # passed cache_dir, no `hub/` segment. So even though our HF Hub cache
-        # has the SWivid/F5-TTS files at:
-        #   {HF_HOME}/hub/models--SWivid--F5-TTS/snapshots/<hash>/F5TTS_v1_Base/
-        # passing hf_cache_dir={HF_HOME} (or even {HF_HOME}/hub) wouldn't make
-        # cached_path find them — the layouts are incompatible.
-        #
-        # v1.3.4 fix: locate the existing checkpoint + vocab files in our HF
-        # Hub cache and pass them explicitly via ckpt_file= and vocab_file=.
-        # F5TTS skips cached_path entirely when these args are non-empty.
-        # The VoCoS vocoder is still auto-downloaded via hf_hub_download (which
-        # DOES respect HF_HOME correctly) — small enough (~50 MB) to ignore.
-        from f5_tts.api import F5TTS
-        snapshot_path = self._mlx_audio_snapshot_path(repo)   # reuses HF Hub layout walker
-        ckpt_file = snapshot_path / "F5TTS_v1_Base" / "model_1250000.safetensors"
-        vocab_file = snapshot_path / "F5TTS_v1_Base" / "vocab.txt"
-        if not ckpt_file.exists():
-            raise RuntimeError(
-                f"F5-TTS checkpoint missing at {ckpt_file}. "
-                "Re-download SWivid/F5-TTS from the Models tab."
-            )
-        if not vocab_file.exists():
-            raise RuntimeError(
-                f"F5-TTS vocab file missing at {vocab_file}. "
-                "Re-download SWivid/F5-TTS from the Models tab."
-            )
-        hf_cache = os.environ.get("HF_HOME")
-        print(
-            f"[gen] loading F5-TTS from local ckpt {ckpt_file.name} "
-            f"({ckpt_file.stat().st_size / 1e9:.2f} GB); "
-            f"vocoder auto-downloads to {hf_cache or 'default HF cache'}",
-            flush=True,
-        )
-        model = F5TTS(
-            model="F5TTS_v1_Base",
-            ckpt_file=str(ckpt_file),
-            vocab_file=str(vocab_file),
-            device=device,
-            hf_cache_dir=hf_cache,                 # for the VoCoS vocoder download path
-        )
-        self._f5_tts_model = model
-        self._f5_tts_model_repo = repo
-        self._last_model_activity_at = time.time()
-        return model
-
-    def _generate_f5_tts(self, job: GenerationJob, model_entry, output_path: Path) -> None:
-        """F5-TTS voice cloning. The engine has no zero-shot mode — a reference
-        audio clip + transcript are mandatory. Long text auto-chunks into
-        ~135-char windows internally (see f5_tts.infer.utils_infer.chunk_text),
-        each chunk crossfaded with the next at 0.15s. Output is a single
-        stitched WAV at 24 kHz."""
-        import soundfile as sf
-        from . import voices as voices_module
-
-        params = job.params
-        device = _detect_device()
-
-        text = (params.get("text") or "").strip()
-        if not text:
-            raise ValueError("text is required")
-
-        # F5-TTS requires voice cloning — no zero-shot mode.
-        voice_id = (params.get("voice_library_id") or "").strip()
-        private_path = str(params.get("_reference_audio_path") or "").strip()
-        if not voice_id and not private_path:
-            raise ValueError(
-                "F5-TTS requires a reference voice or private reference upload."
-            )
-        if private_path:
-            ref_path = Path(private_path)
-            if not ref_path.is_file():
-                raise ValueError("The private reference audio is no longer available")
-        else:
-            voice = voices_module.library.get(voice_id)
-            if voice is None:
-                raise ValueError(f"Voice {voice_id} not found in library")
-            ref_path = voices_module.library.reference_path(voice_id)
-            if ref_path is None or not ref_path.exists():
-                raise ValueError(f"Reference audio for voice {voice_id} is missing on disk")
-
-        # Transcript: prefer per-request override, fall back to library entry.
-        ref_text = (params.get("ref_transcript") or "").strip()
-        if not ref_text and voice_id:
-            ref_text = (voices_module.library.transcript(voice_id) or "").strip()
-        if not ref_text:
-            raise ValueError(
-                "F5-TTS needs a transcript of the reference clip. Edit the voice "
-                "in your Voices library to add one, or provide a transcript "
-                "override in the Reference transcript field."
-            )
-
-        speed = float(params.get("speed", 1.0))
-        speed = max(long_form_policy.SPEED_MINIMUM,
-                    min(speed, long_form_policy.SPEED_MAXIMUM))
-
-        # F5-TTS knobs we surface via existing UI controls:
-        # - inference_timesteps → nfe_step (flow-matching steps, default 32)
-        # - cfg_value → cfg_strength (classifier-free guidance, default 2.0)
-        nfe_step = int(params.get("inference_timesteps", 32))
-        nfe_step = max(8, min(nfe_step, 64))
-        cfg_strength = float(params.get("cfg_value", 2.0))
-        cfg_strength = max(0.5, min(cfg_strength, 5.0))
-
-        seed = params.get("seed")
-        if seed is None or seed < 0:
-            import random
-            seed = random.randint(0, 2**32 - 1)
-        job.resolved_seed = int(seed)
-
-        if job.cancel_event.is_set():
-            return
-
-        model = self._f5_tts_get_model(model_entry.repo, device)
-
-        print(
-            f"[gen] f5-tts voice-clone ({len(text)} chars, ref={ref_path.name}, "
-            f"nfe={nfe_step}, cfg={cfg_strength}, speed={speed})",
-            flush=True,
-        )
-        wav, sr, _spec = model.infer(
-            ref_file=str(ref_path),
-            ref_text=ref_text,
-            gen_text=text,
-            nfe_step=nfe_step,
-            cfg_strength=cfg_strength,
-            speed=speed,
-            seed=int(seed),
-        )
-        sf.write(str(output_path), wav, sr, format="WAV", subtype="PCM_16")
-        print(f"[gen] f5-tts saved WAV at {sr} Hz, {len(wav)/sr:.2f}s: {output_path}", flush=True)
 
     # ----- Khmer TTS (MMS VITS, transformers) -----
 
@@ -4494,8 +3698,8 @@ class GenerationManager:
         """Meta MMS Khmer VITS through transformers.
 
         One built-in speaker, no reference clip, no presets. Long text is
-        sectioned by the parent dispatcher (this family is in
-        `_KHMER_VITS_FAMILIES`); this worker renders exactly the text it is
+        sectioned by the parent dispatcher (every shipped family is in
+        `_SECTIONED_FAMILIES`); this worker renders exactly the text it is
         given and writes one 16 kHz WAV.
         """
         import numpy as np
@@ -4788,8 +3992,6 @@ def _native_dispatch_payload(payload: dict, cancel_requested) -> dict:
         runtime = object.__new__(GenerationManager)
         runtime._mlx_audio_model = None
         runtime._mlx_audio_model_repo = None
-        runtime._f5_tts_model = None
-        runtime._f5_tts_model_repo = None
         runtime._khmer_vits_model = None
         runtime._khmer_vits_model_repo = None
         runtime._khmer_onnx_model = None

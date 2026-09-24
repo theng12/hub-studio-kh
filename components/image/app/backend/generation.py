@@ -39,6 +39,13 @@ from PIL import Image
 # exactly one load path, and nothing downstream has to know which publisher used which shape.
 WEIGHTS_SUBDIRECTORY = 'model'
 
+# The engine this worker serves. It is compared against a manifest's own ``engine`` field in
+# exactly one place - ``load_image_manifests`` - which is how a bundled manifest belonging to
+# another studio is recognised and reported instead of being loaded. Named once so the fact has
+# one home in the component; the Hub's engine table is what routes a manifest here in the first
+# place (``components/hub/standalone.py:_ENGINE_ROUTE``).
+IMAGE_ENGINE = 'image-mflux'
+
 SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
     '4:3': (1152, 864), '3:4': (864, 1152), '3:2': (1200, 800),
@@ -113,6 +120,11 @@ class ImageModel:
     guidance_ignored: bool = False
     # Warn a host below the qualified tier.  ``{memory_gb}`` is formatted by the worker.
     below_tier_warning: str | None = None
+    # What one item of this model actually costs, where it has been measured. Published as the
+    # lane contract's `runtime_seconds`; absent means unmeasured, and an unmeasured model must
+    # publish nothing rather than an estimate - a guessed runtime is how a scheduler sets a
+    # deadline that fails on use.
+    measured_runtime: dict | None = None
 
 
 FLUX2_KLEIN = ImageModel(
@@ -133,6 +145,18 @@ FLUX2_KLEIN = ImageModel(
     qualification={
         'historical_source_workload': '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
         'packaged_inference': 'pending',
+    },
+    # Measured on the host in `qualification`'s own terms: this Mac, this engine, this scene.
+    # `measured` is always a list of rows — one per configuration that was run — so a lane whose
+    # cost depends on a request parameter (music's duration, image's memory mode) publishes the
+    # same shape as one whose cost does not.
+    measured_runtime={
+        'measured': [
+            {'seconds': 79.34, 'steps': 4,
+             'scene': '1280x720, 4 steps, guidance 1.0, seed 42'},
+        ],
+        'measured_on': '32 GiB M2 Max, mflux 0.20.0, 4-bit pack',
+        'evidence': 'measured',
     },
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. FLUX is qualified on 16 GB and has '
@@ -183,6 +207,19 @@ Z_IMAGE_TURBO = ImageModel(
         'fleet_8gb': 'pending: this tier is being measured by the owner and is not claimed here',
         'packaged_inference': 'pending',
     },
+    # Two settings of the same model, measured the same way. Both are published because the
+    # memory mode changes the answer by 27 % and a scheduler reading one number would set the
+    # wrong deadline for whichever mode this host selects.
+    measured_runtime={
+        'measured': [
+            {'seconds': 185.61, 'steps': 9, 'memory_mode': 'default',
+             'scene': '1280x720, 9 steps, seed 42'},
+            {'seconds': 235.53, 'steps': 9, 'memory_mode': 'low_ram',
+             'scene': '1280x720, 9 steps, seed 42'},
+        ],
+        'measured_on': '32 GiB M2 Max, mflux 0.20.0, 4-bit pack',
+        'evidence': 'measured',
+    },
     guidance_ignored=True,
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Z-Image-Turbo is qualified at '
@@ -192,6 +229,20 @@ Z_IMAGE_TURBO = ImageModel(
 )
 
 MODELS: dict[str, ImageModel] = {model.repo: model for model in (FLUX2_KLEIN, Z_IMAGE_TURBO)}
+
+
+def missing_runtime_model_reason(manifest: dict) -> str:
+    """Why an accepted Image package cannot run here, and the file that must learn about it.
+
+    ``MODELS`` is the runtime registry: a manifest alone does not say which mflux class to
+    load or what its defaults are, so a package with no entry genuinely cannot run. The
+    message therefore names the manifest *and* the entry to add — "unavailable" with nothing
+    to act on is the silence this reconciliation exists to remove.
+    """
+    return (f'{manifest["package_id"]}.json declares engine {manifest["engine"]} for '
+            f'{manifest["model_id"]}, but no ImageModel in MODELS serves package '
+            f'{manifest["package_id"]}; add one in components/image/app/backend/generation.py')
+
 
 # The model the worker defaults to when nothing names one: the shipped FLUX.2 Klein.
 MODEL_ID = FLUX2_KLEIN.repo
@@ -347,6 +398,80 @@ def validate_request(raw: dict) -> dict:
             'steps': steps, 'guidance': float(guidance), 'seed': seed}
 
 
+LANE_CONTRACT_SCHEMA = 'studiohub.lane-contract.v1'
+
+
+def lane_contract(model: ImageModel) -> dict:
+    """The Image lane's dispatch contract for one model.
+
+    What a scheduler needs in order to *ask for* this lane's work: the operation name, the
+    parameters it may send and the bounds that will actually be enforced, the artifact it gets
+    back, the terminal vocabulary, and what a cancel does not promise. Published beside the
+    model's own defaults so a caller never has to read this worker's source.
+
+    Built from ``model.limits`` and ``model.defaults`` rather than from literals, because those
+    are the numbers ``validate_request`` actually enforces: a second copy here would be free to
+    disagree with the code that rejects the request, and the contract would be the thing that is
+    wrong. A new image model therefore publishes a correct contract with no edit in this function.
+
+    Deliberately **not** listed: the parameters ``validate_request`` refuses outright
+    (``reference_images``, ``image_path``, ``lora_names``, ``lora_paths``, ``negative_prompt``,
+    ``quantize``) and ``width``/``height``, which are derived from ``aspect_ratio`` and refused
+    unless they match the preset. A contract that offers a parameter the lane rejects is worse
+    than one that omits it.
+    """
+    contract = {
+        'schema': LANE_CONTRACT_SCHEMA,
+        'modality': 'image',
+        # The same token `capabilities.OPERATION_BY_MODALITY` publishes, so a reader can join the
+        # contract to the Hub's operation namespace without a table of its own.
+        'operation': 'image.text_to_image',
+        'parameters': [
+            {'name': 'prompt', 'type': 'string', 'required': True,
+             'max_characters': model.limits['max_prompt']},
+            {'name': 'aspect_ratio', 'type': 'string', 'required': False,
+             'enum': sorted(SIZE_PRESETS), 'default': model.defaults['aspect_ratio'],
+             'note': 'width and height follow from the preset; a mismatched pair is refused'},
+            {'name': 'resolution', 'type': 'string', 'required': False,
+             'enum': ['1K'], 'default': '1K'},
+            {'name': 'steps', 'type': 'integer', 'required': False,
+             'minimum': model.limits['min_steps'], 'maximum': model.limits['max_steps'],
+             'default': model.defaults['steps']},
+            {'name': 'guidance', 'type': 'number', 'required': False,
+             'minimum': model.limits['min_guidance'], 'maximum': model.limits['max_guidance'],
+             'default': model.defaults['guidance'],
+             'note': ('accepted and ignored: this model runs without classifier-free guidance'
+                      if model.guidance_ignored else None)},
+            {'name': 'seed', 'type': 'integer', 'required': False,
+             'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
+             'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
+        ],
+        'artifact': {'modality': 'image', 'media_type': 'image/png', 'extension': 'png',
+                     'per_item': 1},
+        'states': {
+            'accepted': ['queued'],
+            'active': ['running', 'cancel_requested'],
+            'terminal': ['done', 'error', 'cancelled'],
+            'uncertain': 'uncertain',
+            'uncertain_is_terminal': False,
+            'discard_supported': True,
+        },
+        'cancel': {
+            'supported': True,
+            'request': 'DELETE /api/hub/jobs/{batch_id}',
+            'semantics': ('asks the worker to stop; a generation already past its sampling loop '
+                          'may still write its PNG, so a cancelled item is not evidence that '
+                          'nothing was written'),
+        },
+    }
+    for parameter in contract['parameters']:
+        if parameter.get('note') is None:
+            parameter.pop('note', None)
+    if model.measured_runtime:
+        contract['runtime_seconds'] = model.measured_runtime
+    return contract
+
+
 def load_image_manifests(directory: Path, required: Path) -> tuple[dict, dict]:
     """Every Image manifest this build ships, keyed by ``package_id``.
 
@@ -366,9 +491,10 @@ def load_image_manifests(directory: Path, required: Path) -> tuple[dict, dict]:
     def read(path: Path, *, required_file: bool) -> None:
         try:
             candidate = json.loads(path.read_text())
-            if candidate.get('engine') != 'image-mflux':
+            if candidate.get('engine') != IMAGE_ENGINE:
                 if required_file:
-                    raise ValueError(f'Not an image-mflux manifest: {candidate.get("engine")!r}')
+                    raise ValueError(
+                        f'Not an {IMAGE_ENGINE} manifest: {candidate.get("engine")!r}')
                 return
             model_packages.validate_manifest(candidate)
         except (OSError, ValueError, AttributeError) as error:
@@ -538,6 +664,25 @@ class GenerationManager:
                     'reason': (f'{model.package_id} is pinned to {manifest.get("revision")} '
                                f'but this worker runs {model.revision}')}
         return model_packages.preflight(manifest, self.library)
+
+    def packages_without_a_runtime_model(self) -> list[dict]:
+        """Every Image manifest this build read that no registered model serves.
+
+        ``preflight`` above is one direction of the reconciliation — a registered model whose
+        manifest is missing or revision-drifted, reported for that model only. This is the
+        other: ``load_image_manifests`` accepts every ``image-mflux`` manifest the bundle
+        ships, while the catalog is enumerated from ``MODELS``, so a package with no
+        ``ImageModel`` entry was published by the Hub, offered by the kits, and simply absent
+        from this worker's ``/api/catalog`` — no row, no error, no entry in the picker. The
+        catalog publishes a row for each one instead, carrying
+        :func:`missing_runtime_model_reason`.
+
+        Identity is the manifest's ``package_id``, the same key ``manifest_for`` resolves a
+        registered model through, so a package that *is* served is never reported here.
+        """
+        served = {model.package_id for model in MODELS.values()}
+        return [manifest for package_id, manifest in sorted(self.manifests.items())
+                if package_id not in served]
 
     def get(self, job_id: str) -> dict | None:
         with self.lock:

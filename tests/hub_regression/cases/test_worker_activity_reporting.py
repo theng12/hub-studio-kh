@@ -8,6 +8,7 @@ older worker's 404 stays the Hub's compatibility path and is not changed here.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import threading
 import time
 
@@ -38,10 +39,24 @@ def _image_job(state: str = "running") -> dict:
     return job
 
 
+def _subtitle_manifests() -> list[dict]:
+    """One real shipped subtitle manifest, so the fixture exercises a real catalog.
+
+    This fixture used to pass an empty manifest list. The engine tolerates that with a named
+    "no-catalog" rule, but an empty catalog is not what the packaged Subtitle worker runs with,
+    and it cannot notice a default-selection rule that only fires once a manifest exists. The
+    shipped manifest declares its own ``default``, which is what the engine's deterministic rule
+    reads; assert it here rather than trusting the file.
+    """
+    manifest = json.loads((ROOT / "model-manifests" / "whisper-turbo.json").read_text())
+    manifest["default"] = True
+    return [manifest]
+
+
 def _subtitle_manager(tmp_path):
     from components.subtitle.app.backend.manager import SubtitleManager
 
-    return SubtitleManager(tmp_path / "subtitle", tmp_path, [], "b" * 64,
+    return SubtitleManager(tmp_path / "subtitle", tmp_path, _subtitle_manifests(), "b" * 64,
                            voice_app_dir=ROOT / "components" / "voice" / "app")
 
 

@@ -45,11 +45,29 @@ def test_both_families_are_catalogued_with_their_own_engine():
 
 
 def test_families_are_sectioned_but_not_mlx():
-    assert generation._KHMER_VITS_FAMILIES == {"khmer-tts-mms", "khmer-tts-onnx"}
-    for family in generation._KHMER_VITS_FAMILIES:
+    """Every non-MLX family is sectioned, wired and published as non-Apple-optimized.
+
+    Stated as an invariant over the registry rather than a list of two names:
+    a third non-MLX family is covered by this test the day it is added, and the
+    old exact-membership version could not have caught one.
+    """
+    non_mlx = {
+        family_id for family_id, family in catalog.FAMILIES.items()
+        if family.engine != catalog.ENGINE_MLX_AUDIO
+    }
+    assert non_mlx, "no non-MLX family is registered any more; this test would be vacuous"
+    for family in non_mlx:
         assert family in generation._WIRED_FAMILIES
         assert family in generation._ENGINE_REQUIREMENTS
+        assert family in generation._SECTIONED_FAMILIES
         assert family not in generation.MLX_AUDIO_FAMILIES
+        published = catalog.serialize_model(catalog.get_model(
+            next(entry.repo for entry in catalog.CATALOG if entry.family == family)
+        ))
+        assert published["apple_optimized"] is False, family
+    # The declared requirements are the family's own published ones.
+    for family_id, family in catalog.FAMILIES.items():
+        assert generation._ENGINE_REQUIREMENTS[family_id] == list(family.requirements)
     assert generation._ENGINE_REQUIREMENTS["khmer-tts-onnx"] == [
         "onnxruntime", "soundfile", "numpy"]
 

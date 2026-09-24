@@ -123,6 +123,5 @@
         "https://huggingface.co/mlx-community/fish-audio-s2-pro-bf16/resolve/eccd57bf5c1ebc13cb2f993df867f4e49931a36a/tokenizer_config.json"
       ]
     }
-  ],
-  "dependencies": null
+  ]
 }

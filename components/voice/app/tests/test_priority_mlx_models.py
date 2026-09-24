@@ -30,19 +30,6 @@ def _repos(family: str) -> list[str]:
     return [entry.repo for entry in catalog.CATALOG if entry.family == family]
 
 
-@pytest.fixture
-def no_cached_kokoro_snapshot(monkeypatch):
-    """Keep picker contract tests independent of a machine model cache."""
-    def missing_snapshot(_self, _repo):
-        raise RuntimeError("no test snapshot")
-
-    monkeypatch.setattr(
-        generation.GenerationManager,
-        "_mlx_audio_snapshot_path",
-        missing_snapshot,
-    )
-
-
 def test_priority_catalog_is_focused_and_clone_capable() -> None:
     qwen = _repos("qwen3-tts")
     assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit" in qwen
@@ -86,60 +73,6 @@ def test_priority_catalog_is_focused_and_clone_capable() -> None:
     serialized = catalog.serialize_model(fish_model)
     assert serialized["min_unified_memory_gb"] == 24
     assert serialized["fit"]["state"] != "unqualified"
-def test_longcat_clone_requires_an_exact_reference_transcript(tmp_path: Path) -> None:
-    reference = tmp_path / "reference.wav"
-    reference.write_bytes(b"private")
-    manager = object.__new__(generation.GenerationManager)
-
-    missing = SimpleNamespace(library=_VoiceLibrary(reference, transcript=""))
-    with pytest.raises(ValueError, match="exact transcript"):
-        manager._mlx_kwargs_longcat(
-            {"voice_library_id": "voice-1"}, {}, missing
-        )
-
-    voices = SimpleNamespace(
-        library=_VoiceLibrary(reference, transcript="The saved reference words.")
-    )
-    kwargs: dict = {}
-    label = manager._mlx_kwargs_longcat(
-        {"voice_library_id": "voice-1"}, kwargs, voices
-    )
-
-    assert label == "clone (voice=voice-1, APG 16 steps)"
-    assert kwargs == {
-        "ref_audio": str(reference),
-        "ref_text": "The saved reference words.",
-        "guidance_method": "apg",
-        "cfg_strength": 4.0,
-        "steps": 16,
-    }
-
-
-def test_frontend_offers_saved_voices_to_longcat() -> None:
-    script = Path(__file__).resolve().parents[1] / "frontend/app.js"
-    probe = """
-const fs = require('fs');
-const vm = require('vm');
-vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
-const app = studio();
-const repo = 'mlx-community/LongCat-AudioDiT-1B-4bit';
-app.models = [{
-  repo,
-  family: 'longcat-audiodit',
-  capabilities: ['tts', 'voice-cloning'],
-  apple_optimized: true,
-}];
-process.stdout.write(String(app.isMlxCloner(repo)));
-"""
-    result = subprocess.run(
-        ["node", "-e", probe, str(script)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert result.stdout == "true"
-
-
 def test_unqualified_fish_memory_never_renders_as_a_numeric_fit_claim() -> None:
     frontend = Path(__file__).resolve().parents[1] / "frontend"
     markup = (frontend / "index.html").read_text(encoding="utf-8")
@@ -182,56 +115,52 @@ def test_qwen_17b_base_uses_the_official_language_roster_and_its_floor() -> None
     assert all("11 languages" not in text for _kind, text in model.use_cases)
 
 
-def test_vibevoice_checkpoint_roster_is_exact_and_separates_experimental_languages() -> None:
-    voices = generation.VIBEVOICE_PRESET_VOICES
-    assert len(voices) == 25
-    assert len({voice["id"] for voice in voices}) == 25
-    assert {voice["id"] for voice in voices if not voice["experimental"]} == {
-        "en-Carter_man", "en-Davis_man", "en-Emma_woman", "en-Frank_man",
-        "en-Grace_woman", "en-Mike_man", "in-Samuel_man",
-    }
-    assert {voice["lang"] for voice in voices if voice["experimental"]} == {
-        "de", "fr", "it", "ja", "ko", "nl", "pl", "pt", "es",
-    }
-    assert generation.availability()["vibevoice_voices"] == voices
-
-
-def test_vibevoice_rejects_unverified_free_text_voice_names() -> None:
-    manager = object.__new__(generation.GenerationManager)
-    kwargs: dict = {}
-    manager._mlx_kwargs_voice_picker(
-        "vibevoice", {"voice": "en-Emma_woman"}, kwargs
-    )
-    assert kwargs["voice"] == "en-Emma_woman"
-
-    with pytest.raises(ValueError, match="Unknown VibeVoice preset"):
-        manager._mlx_kwargs_voice_picker(
-            "vibevoice", {"voice": "made-up-voice"}, {}
-        )
-
-
 def test_diagnostics_cover_every_wired_engine_and_show_package_versions() -> None:
     result = generation.diagnostics()
 
     assert {engine["family"] for engine in result["engines"]} == generation._WIRED_FAMILIES
-    # Derived, not hardcoded. This used to assert 14 and went stale the moment
-    # Audio8, MOSS-TTS-Nano and Echo-TTS were wired, which is a test failing for
-    # the one reason that carries no information -- the count changed on purpose.
-    # The line above already pins *which* engines exist; this pins that the
-    # reported total agrees with them.
+    # Derived, not hardcoded. This used to assert a fixed count and then name the engines that
+    # happened to be wired at the time, so it had to be edited whenever a family was added - and
+    # worse, it kept asserting that CUT families were still wired after they left the catalog.
+    # Both facts now come from the registries the app actually dispatches on, so this test can
+    # only fail for a real reason.
     assert result["total_engines"] == len(generation._WIRED_FAMILIES)
-    # A floor, so deleting engines wholesale still trips something.
-    assert result["total_engines"] >= 14
-    # The three wired most recently, named so a silent removal is caught.
-    assert {"arktts", "moss-tts-nano", "echo-tts"} <= generation._WIRED_FAMILIES
+    catalog_families = {model.family for model in catalog.CATALOG}
+    assert catalog_families <= generation._WIRED_FAMILIES, (
+        "a catalog family has no worker: "
+        + repr(sorted(catalog_families - generation._WIRED_FAMILIES)))
+    assert catalog_families <= set(generation._ENGINE_REQUIREMENTS), (
+        "a catalog family declares no dependencies: "
+        + repr(sorted(catalog_families - set(generation._ENGINE_REQUIREMENTS))))
+    # MLX_AUDIO_FAMILIES is the dispatch table and _WIRED_FAMILIES is what the app advertises, so
+    # a row in one without the other is the "new model needs a second edit" defect in miniature.
+    assert set(generation.MLX_AUDIO_FAMILIES) <= generation._WIRED_FAMILIES
     packages = {package["package"]: package for package in result["packages"]}
     assert packages["mlx_audio"]["version"]
-    assert packages["torchaudio"]["installed"]
-    assert "torchaudio" in generation._ENGINE_REQUIREMENTS["f5-tts"]
-    assert "mistral_common" in generation._ENGINE_REQUIREMENTS["voxtral-tts"]
-    assert "mlx_lm" in generation._ENGINE_REQUIREMENTS["marvis"]
+    # The two non-MLX engines each need a package no MLX family needs.
+    assert "onnxruntime" in generation._ENGINE_REQUIREMENTS["khmer-tts-onnx"]
+    assert "transformers" in generation._ENGINE_REQUIREMENTS["khmer-tts-mms"]
+    # Fish S2 Pro is the one shipped family that needs the MLX language-model runtime.
     assert "mlx_lm" in generation._ENGINE_REQUIREMENTS["fish-audio-mlx"]
     assert "omnivoice" not in generation._ENGINE_REQUIREMENTS["omnivoice"]
+
+
+def test_every_mlx_family_is_published_as_apple_optimized() -> None:
+    """The catalog's MLX marker and the dispatch table must agree, family for family.
+
+    `serialize_model` cannot import `generation` (circular import), so it carries its own tuple of
+    MLX family ids. When the two drift, the model is published as "PyTorch / MPS" and is HIDDEN by
+    the frontend's "MLX only" filter - which is exactly how `kittentts`, `vibevoice` and
+    `omnivoice` shipped invisible once. This asserts the invariant against serialized output rather
+    than pinning either list, so a family added to the dispatch table alone fails here by name.
+    """
+    published = {entry.family: catalog.serialize_model(entry)["apple_optimized"]
+                 for entry in catalog.CATALOG}
+    missing = sorted(family for family in generation.MLX_AUDIO_FAMILIES
+                     if not published.get(family))
+    assert not missing, (
+        "MLX family published as non-Apple-optimized (hidden by the MLX-only filter): "
+        + repr(missing))
 
 
 def test_mlx_cache_release_prefers_current_api() -> None:
@@ -259,8 +188,6 @@ def test_memory_preflight_refuses_when_live_headroom_is_too_low(monkeypatch) -> 
     manager = object.__new__(generation.GenerationManager)
     manager._mlx_audio_model = None
     manager._mlx_audio_model_repo = None
-    manager._f5_tts_model = None
-    manager._f5_tts_model_repo = None
     monkeypatch.setattr(
         generation,
         "_memory_snapshot",
@@ -282,8 +209,6 @@ def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     manager = object.__new__(generation.GenerationManager)
     manager._mlx_audio_model = None
     manager._mlx_audio_model_repo = None
-    manager._f5_tts_model = None
-    manager._f5_tts_model_repo = None
     # The 1.7B CustomVoice tier was cut on 2026-09-24 (ST-13.B); VoxCPM2 4-bit is
     # a kept 16 GB-floor model, which is what this guard is about.
     model = catalog.get_model("mlx-community/VoxCPM2-4bit")
@@ -305,197 +230,6 @@ def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     )
     with pytest.raises(generation.MemoryGuardError, match="Memory guard paused"):
         manager._memory_preflight(model)
-def test_kokoro_voice_picker_sets_language_and_validates_blends(
-    no_cached_kokoro_snapshot,
-) -> None:
-    manager = object.__new__(generation.GenerationManager)
-    kwargs: dict = {}
-    label = manager._mlx_kwargs_voice_picker(
-        "kokoro-mlx",
-        {"voice": "jf_alpha,jm_kumo", "language": "j"},
-        kwargs,
-    )
-    assert kwargs == {"voice": "jf_alpha,jm_kumo", "lang_code": "j"}
-    assert "lang=j" in label
-
-    try:
-        manager._mlx_kwargs_voice_picker(
-            "kokoro-mlx", {"voice": "af_heart,jf_alpha"}, {}
-        )
-    except ValueError as exc:
-        assert "same language" in str(exc)
-    else:
-        raise AssertionError("cross-language Kokoro blend should fail")
-
-
-@pytest.mark.parametrize(
-    ("voice", "language", "expected"),
-    [
-        ("af_heart", "en", "a"),
-        ("bf_emma", "English", "b"),
-        ("af_heart", "en_US", "a"),
-        ("bf_emma", "en-GB", "b"),
-    ],
-)
-def test_kokoro_voice_picker_accepts_public_english_aliases(
-    voice: str, language: str, expected: str, no_cached_kokoro_snapshot
-) -> None:
-    manager = object.__new__(generation.GenerationManager)
-    kwargs: dict = {}
-
-    manager._mlx_kwargs_voice_picker(
-        "kokoro-mlx",
-        {"voice": voice, "language": language},
-        kwargs,
-    )
-
-    assert kwargs["lang_code"] == expected
-
-
-def test_kokoro_sinegen_backport_trims_and_pads_to_f0_length() -> None:
-    class LongSineGen:
-        def _f02sine(self, _f0_values):
-            return np.ones((1, 7, 3), dtype=np.float32)
-
-    class ShortSineGen:
-        def _f02sine(self, _f0_values):
-            return np.ones((1, 3, 3), dtype=np.float32)
-
-    assert generation._backport_kokoro_sinegen_length_alignment(LongSineGen, np)
-    assert generation._backport_kokoro_sinegen_length_alignment(ShortSineGen, np)
-
-    target = np.zeros((1, 5, 3), dtype=np.float32)
-    trimmed = LongSineGen()._f02sine(target)
-    padded = ShortSineGen()._f02sine(target)
-
-    assert trimmed.shape == (1, 5, 3)
-    assert padded.shape == (1, 5, 3)
-    assert np.all(padded[:, :3, :] == 1)
-    assert np.all(padded[:, 3:, :] == 0)
-    assert not generation._backport_kokoro_sinegen_length_alignment(LongSineGen, np)
-
-
-def test_kokoro_sinegen_backport_defers_to_newer_upstream() -> None:
-    class UpstreamSineGen:
-        def _match_f0_length(self, sine_waves, _f0):
-            return sine_waves
-
-    assert not generation._backport_kokoro_sinegen_length_alignment(
-        UpstreamSineGen, np
-    )
-
-
-def test_kokoro_language_dependencies_are_explicit() -> None:
-    requirements = (Path(__file__).resolve().parents[1] / "requirements-generation.txt").read_text()
-    assert "misaki[en,zh]==0.9.4" in requirements
-    assert "fugashi[unidic-lite]" in requirements
-    assert "kokoro>=" not in requirements
-
-
-def test_f5_tts_uses_saved_voice_transcript_and_honors_override(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from backend import voices
-
-    reference = tmp_path / "reference.wav"
-    reference.touch()
-    library = _VoiceLibrary(reference, transcript="Saved F5 reference transcript")
-    monkeypatch.setattr(voices, "library", library)
-    monkeypatch.setattr(generation, "_detect_device", lambda: "cpu")
-
-    captured: dict = {}
-
-    class _F5Model:
-        def infer(self, **kwargs):
-            captured.update(kwargs)
-            return [0.0, 0.0], 24000, None
-
-    manager = object.__new__(generation.GenerationManager)
-    manager._f5_tts_get_model = lambda repo, device: _F5Model()
-    job = generation.GenerationJob(
-        job_id="f5-saved-transcript",
-        mode="txt2speech",
-        params={
-            "text": "Generated speech",
-            "voice_library_id": "voice-1",
-            "ref_transcript": "",
-            "seed": 123,
-        },
-    )
-
-    manager._generate_f5_tts(
-        job,
-        SimpleNamespace(repo="SWivid/F5-TTS"),
-        tmp_path / "output.wav",
-    )
-
-    assert captured["ref_file"] == str(reference)
-    assert captured["ref_text"] == "Saved F5 reference transcript"
-    assert captured["gen_text"] == "Generated speech"
-
-    job.params["ref_transcript"] = "One-time corrected transcript"
-    manager._generate_f5_tts(
-        job,
-        SimpleNamespace(repo="SWivid/F5-TTS"),
-        tmp_path / "override-output.wav",
-    )
-    assert captured["ref_text"] == "One-time corrected transcript"
-def test_bark_mlx_controls_and_local_voice_prompt(tmp_path: Path) -> None:
-    preset = tmp_path / "v2" / "en_speaker_6.npz"
-    preset.parent.mkdir()
-    preset.touch()
-    manager = object.__new__(generation.GenerationManager)
-    manager._mlx_audio_snapshot_path = lambda repo: tmp_path
-    kwargs: dict = {}
-
-    label = manager._mlx_kwargs_bark(
-        SimpleNamespace(repo="mlx-community/bark"),
-        {
-            "bark_voice_preset": "v2/en_speaker_6",
-            "bark_temperature": 0.85,
-            "bark_max_coarse_history": 240,
-            "bark_sliding_window_len": 80,
-            "bark_allow_early_stop": False,
-        },
-        kwargs,
-    )
-
-    assert label == "preset=v2/en_speaker_6"
-    assert kwargs == {
-        "voice": str(preset),
-        "temperature": 0.85,
-        "max_coarse_history": 240,
-        "sliding_window_len": 80,
-        "allow_early_stop": False,
-    }
-
-
-def test_bark_random_voice_does_not_inherit_kokoro_default() -> None:
-    manager = object.__new__(generation.GenerationManager)
-    kwargs: dict = {}
-    manager._mlx_kwargs_bark(
-        SimpleNamespace(repo="mlx-community/bark"), {}, kwargs
-    )
-    assert kwargs["voice"] is None
-
-
-def test_bark_api_preserves_native_controls() -> None:
-    from backend.main import Txt2SpeechBody
-
-    params = Txt2SpeechBody(
-        repo="mlx-community/bark",
-        text="Hello",
-        bark_temperature=0.6,
-        bark_max_coarse_history=300,
-        bark_sliding_window_len=90,
-        bark_allow_early_stop=False,
-    ).model_dump()
-    assert params["bark_temperature"] == 0.6
-    assert params["bark_max_coarse_history"] == 300
-    assert params["bark_sliding_window_len"] == 90
-    assert params["bark_allow_early_stop"] is False
-
-
 def test_mlx_worker_joins_all_generated_segments() -> None:
     source = inspect.getsource(generation.GenerationManager._generate_mlx_audio)
     assert "join_audio=True" in source
@@ -563,52 +297,6 @@ def test_mlx_worker_applies_seed_and_voxcpm_controls() -> None:
     assert "mx.random.seed" in source
     assert 'gen_kwargs["warmup_patches"]' in source
     assert 'gen_kwargs["max_tokens"]' in source
-
-
-def test_longcat_worker_passes_the_resolved_seed_to_its_sampler(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import importlib
-    import soundfile as sf
-
-    generate_module = importlib.import_module("mlx_audio.tts.generate")
-    sampler_seeds: list[int] = []
-
-    def fake_generate_audio(*, output_path, seed, **kwargs) -> None:
-        sampler_seeds.append(seed)
-        sf.write(
-            Path(output_path) / "audio.wav",
-            np.ones(240, dtype=np.float32),
-            24000,
-            subtype="PCM_16",
-        )
-
-    monkeypatch.setattr(generate_module, "generate_audio", fake_generate_audio)
-    monkeypatch.setattr(generation, "_release_device_memory", lambda device: None)
-
-    manager = object.__new__(generation.GenerationManager)
-    manager._mlx_audio_get_model = lambda repo: "longcat-model"
-    manager._resolve_mlx_kwargs = (
-        lambda mode, family, model_entry, params, gen_kwargs: "clone"
-    )
-    job = generation.GenerationJob(
-        job_id="longcat-seed",
-        mode="txt2speech",
-        params={"text": "A short reproducible sentence.", "seed": 4242},
-    )
-
-    manager._generate_mlx_audio(
-        job,
-        SimpleNamespace(
-            repo="mlx-community/LongCat-AudioDiT-1B-4bit",
-            family="longcat-audiodit",
-            sample_rate_hz=24000,
-        ),
-        tmp_path / "longcat.wav",
-    )
-
-    assert sampler_seeds == [4242]
-    assert job.resolved_seed == 4242
 
 
 def test_voxcpm_api_preserves_advanced_controls() -> None:
@@ -708,13 +396,13 @@ def test_qwen_clone_long_sentence_falls_back_to_word_boundaries() -> None:
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 288),
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", 360),
         ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 500),
-        ("chatterbox-mlx", "mlx-community/chatterbox-turbo-4bit", 400),
+        # The shipped 1.7B Base tier resolves to the measured production audit,
+        # so its Auto section size (280) governs, not the family clone default.
+        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 280),
         ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 400),
-        ("kokoro-mlx", "mlx-community/Kokoro-82M-bf16", 3000),
-        ("vibevoice", "mlx-community/VibeVoice-Realtime-0.5B-4bit", 3000),
         ("omnivoice", "mlx-community/OmniVoice-bfloat16", 288),
         ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 300),
-        ("longcat-audiodit", "mlx-community/LongCat-AudioDiT-1B-4bit", 280),
+        ("pocket-tts", "mlx-community/pocket-tts-4bit", 280),
     ],
 )
 def test_long_form_local_engines_split_safely_without_losing_text(
@@ -733,15 +421,9 @@ def test_long_form_local_engines_split_safely_without_losing_text(
 
 
 def test_long_form_catalogs_do_not_ask_callers_to_manually_chunk() -> None:
-    for family in (
-        "qwen3-tts",
-        "chatterbox-mlx",
-        "voxcpm-mlx",
-        "omnivoice",
-        "fish-audio-mlx",
-        "khmer-tts-mms",
-        "khmer-tts-onnx",
-    ):
+    # Derived from the catalog, so a newly adopted family is covered without editing this list -
+    # which is how the previous hardcoded tuple kept passing after its families were cut.
+    for family in sorted({model.family for model in catalog.CATALOG}):
         guidance = catalog.FAMILIES[family].text_guidance
         assert guidance.soft_max_chars is None
         assert guidance.chunking == "auto-split"
@@ -750,11 +432,9 @@ def test_long_form_catalogs_do_not_ask_callers_to_manually_chunk() -> None:
 @pytest.mark.parametrize(
     ("family", "repo"),
     [
-        ("kokoro-mlx", "mlx-community/Kokoro-82M-bf16"),
-        ("vibevoice", "mlx-community/VibeVoice-Realtime-0.5B-4bit"),
         ("omnivoice", "mlx-community/OmniVoice-bfloat16"),
         ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit"),
-        ("longcat-audiodit", "mlx-community/LongCat-AudioDiT-1B-4bit"),
+        ("pocket-tts", "mlx-community/pocket-tts-4bit"),
     ],
 )
 def test_customer_sized_40k_text_is_preserved_across_private_sections(
@@ -1110,70 +790,6 @@ def test_qwen_regular_long_form_speed_runs_once_after_join(
     assert len(generated_sections) > 1
     assert " ".join(generated_sections) == " ".join(text.split())
     assert tempo_calls == [(output, 0.95, "qwen3-tts")]
-    assert sf.info(output).frames > 240
-
-
-def test_vibevoice_long_form_uses_full_section_budget_and_applies_speed_once(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import importlib
-    import soundfile as sf
-
-    generate_module = importlib.import_module("mlx_audio.tts.generate")
-    generated_sections: list[str] = []
-    tempo_calls: list[tuple[Path, float, str]] = []
-
-    def fake_generate_audio(*, model, output_path, join_audio, **kwargs) -> None:
-        assert model == "vibevoice-model"
-        assert join_audio is True
-        assert kwargs["max_tokens"] == 4096
-        assert "speed" not in kwargs
-        generated_sections.append(kwargs["text"])
-        sf.write(
-            Path(output_path) / "audio.wav",
-            np.ones(240, dtype=np.float32),
-            24000,
-            subtype="PCM_16",
-        )
-
-    def fake_apply_speed(path: Path, speed: float, family: str) -> bool:
-        assert path.exists()
-        tempo_calls.append((path, speed, family))
-        return True
-
-    monkeypatch.setattr(generate_module, "generate_audio", fake_generate_audio)
-    monkeypatch.setattr(generation, "_apply_mlx_output_speed", fake_apply_speed)
-    monkeypatch.setattr(generation, "_release_device_memory", lambda device: None)
-
-    manager = object.__new__(generation.GenerationManager)
-    manager._mlx_audio_get_model = lambda repo: "vibevoice-model"
-    manager._resolve_mlx_kwargs = (
-        lambda mode, family, model_entry, params, gen_kwargs: "voice=en-Emma_woman"
-    )
-    text = " ".join(
-        f"Sentence {index} stays safely inside the VibeVoice long-form renderer."
-        for index in range(1, 101)
-    )
-    job = generation.GenerationJob(
-        job_id="vibevoice-long-speed",
-        mode="txt2speech",
-        params={"text": text, "speed": 0.93, "seed": 17, "voice": "en-Emma_woman"},
-    )
-    output = tmp_path / "vibevoice-long.wav"
-
-    manager._generate_mlx_audio(
-        job,
-        SimpleNamespace(
-            repo="mlx-community/VibeVoice-Realtime-0.5B-4bit",
-            family="vibevoice",
-            sample_rate_hz=24000,
-        ),
-        output,
-    )
-
-    assert len(generated_sections) > 1
-    assert " ".join(generated_sections) == " ".join(text.split())
-    assert tempo_calls == [(output, 0.93, "vibevoice")]
     assert sf.info(output).frames > 240
 
 

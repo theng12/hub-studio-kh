@@ -57,8 +57,21 @@ from .model_audits import candidate_summary
 # ───────────── Transcription model registry ─────────────
 # All repos verified live on huggingface.co. Sizes are approximate on-disk
 # (post-download). `recommended` marks the default the API uses when no model
-# is specified. Adding a new ASR model is a one-line append here — the download
-# flow (generic /api/downloads) and the worker below need no other changes.
+# is specified.
+#
+# Adding a new ASR model is NOT a one-line append. The real edit list:
+#   1. a TranscriptionModel row here (engine, sizes, timestamps, language scope);
+#   2. a packaged manifest under model-manifests/ whose `package_id` the worker's
+#      discovery finds — without it the model is catalog-only and cannot be
+#      selected, let alone downloaded (that was audit finding A1);
+#   3. for a Whisper row, the tokenizer/processor source. An mlx-community Whisper
+#      repo ships weights only, so the tokenizer comes from the OpenAI repo the
+#      manifest declares under `source.layout.companions` (see
+#      `whisper_processor_repo`). A row whose manifest declares no such companion
+#      and whose weights carry no processor fails at load with a named error
+#      rather than being handed another model's vocabulary;
+#   4. a dispatch branch and a result-shape branch in this file if the `engine`
+#      value is new — an unknown engine refuses by name (`_unknown_engine`).
 
 @dataclass(frozen=True)
 class TranscriptionModel:
@@ -138,28 +151,94 @@ _BY_REPO = {m.repo: m for m in TRANSCRIPTION_MODELS}
 
 
 def model_for_repo(repo: str) -> TranscriptionModel:
-    return _BY_REPO[repo]
+    model = _BY_REPO.get(repo)
+    if model is None:
+        raise ValueError(
+            f"unknown transcription model {repo!r}; add a TranscriptionModel row (with its "
+            "engine) in components/voice/app/backend/transcription.py. Known: "
+            f"{sorted(_BY_REPO)}"
+        )
+    return model
+
+
+def _unknown_engine(spec: TranscriptionModel) -> ValueError:
+    """The refusal for an engine this file has no branch for.
+
+    ``spec.engine`` is the registry's own value, so an engine reaching here was
+    added to the registry without its worker. The generate call and the
+    result-shape normalisation each need a branch: without this the first fell
+    into nemotron's call signature, and the second normalised a foreign result
+    shape with ``_result_field(result, "segments")``, which answers None and
+    silently yields an empty transcript.
+    """
+    return ValueError(
+        f"transcription engine {spec.engine!r} (model {spec.repo}) has no dispatch branch; "
+        "add it to TranscriptionManager.transcribe and to the result-shape normalisation in "
+        "components/voice/app/backend/transcription.py, and name the engine on the "
+        "TranscriptionModel row in the same file"
+    )
 
 # The mlx-community whisper repos ship ONLY config.json + weights — no HF
 # processor files (preprocessor_config.json, tokenizer, vocab). mlx-audio's
 # whisper post-load hook does `WhisperProcessor.from_pretrained(<local snapshot>)`,
 # which therefore fails → model._processor = None → at transcribe time you get
 # "Processor not found. Make sure the model was loaded with a HuggingFace
-# processor." This affects all five repos (turbo, turbo-q4, large-v3, small,
-# and base) equally — it is NOT specific to the quantized one.
+# processor." This affects every weights-only Whisper repo equally.
 #
 # Fix (v1.4.3): mlx-audio computes the mel spectrogram itself from the model's
 # own config (`log_mel_spectrogram(audio, n_mels=self.dims.n_mels)`) and uses
 # the processor ONLY for its tokenizer. So we attach a tokenizer-providing
-# WhisperProcessor from the model's base OpenAI repo (these DO ship the
-# processor). It's a ~2 MB one-time fetch, cached in HF_HOME thereafter.
-_PROCESSOR_BASE = {
-    "mlx-community/whisper-large-v3-turbo":    "openai/whisper-large-v3-turbo",
-    "mlx-community/whisper-large-v3-turbo-q4": "openai/whisper-large-v3-turbo",
-    "mlx-community/whisper-large-v3-mlx":      "openai/whisper-large-v3",
-    "mlx-community/whisper-small-mlx":         "openai/whisper-small",
-    "mlx-community/whisper-base-mlx":          "openai/whisper-base",
-}
+# WhisperProcessor from the OpenAI repo the model was converted from.
+#
+# WHICH OpenAI repo is not assumed: the packaged manifest declares it
+# (`source.layout.companions`, purpose "Whisper processor/tokenizer") and the
+# model's own config.json/tokenizer_config.json names it as `_name_or_path`.
+# This used to be a per-repo table with a silent default of
+# `openai/whisper-large-v3-turbo`, so a newly added Whisper repo was given
+# another model's vocabulary with no error at all.
+
+
+def _manifest_companion_repos(repo: str) -> list[str]:
+    """Companion repositories the model's own manifest declares."""
+    manifest = cache.manifest_for(repo)
+    layout = ((manifest or {}).get("source") or {}).get("layout") or {}
+    companions = layout.get("companions") or []
+    if not isinstance(companions, list):
+        return []
+    return [
+        str(companion.get("repo"))
+        for companion in companions
+        if isinstance(companion, dict) and companion.get("repo")
+    ]
+
+
+def whisper_processor_repo(repo: str, snapshot: Optional[Path] = None) -> Optional[str]:
+    """The Whisper repo whose processor/tokenizer this model must load.
+
+    Read from the model's own published data, in order:
+      1. the packaged manifest's processor/tokenizer companion;
+      2. ``config.json`` / ``tokenizer_config.json`` ``_name_or_path`` inside the
+         local snapshot (Hugging Face writes it at conversion time).
+    Returns None when neither states it. Callers that would otherwise use the
+    value refuse by name instead of substituting another model's tokenizer
+    (`_attach_processor`), so there is no default to fall back to.
+    """
+    for candidate in _manifest_companion_repos(repo):
+        if "whisper" in candidate.lower() or candidate.lower().startswith("openai/"):
+            return candidate
+    if snapshot is not None:
+        for name in ("config.json", "tokenizer_config.json"):
+            try:
+                payload = json.loads((snapshot / name).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for key in ("_name_or_path", "name_or_path"):
+                candidate = str(payload.get(key) or "").strip()
+                if candidate and candidate != repo:
+                    return candidate
+    return None
 
 
 def _local_tokenizer_source() -> Optional[str]:
@@ -168,9 +247,14 @@ def _local_tokenizer_source() -> Optional[str]:
     Every multilingual Whisper size shares one tokenizer vocabulary, and the ``openai/…``
     repositories these packages reference are unreachable offline. Reusing a local copy keeps
     base/small usable with no network; returns None when no local copy exists.
+
+    The candidates are the Whisper rows of this file's own registry — the packages this app
+    knows how to install — not a second list that can drift from it.
     """
-    for candidate in _PROCESSOR_BASE:
-        view = cache.package_snapshot(candidate)
+    for model in TRANSCRIPTION_MODELS:
+        if model.engine != "whisper":
+            continue
+        view = cache.package_snapshot(model.repo)
         if view is not None and (view[1] / "tokenizer.json").is_file():
             return str(view[1])
     return None
@@ -749,7 +833,7 @@ class TranscriptionManager:
 
     def _attach_processor(self, model, repo: str) -> None:
         """Give a weights-only MLX whisper model a working tokenizer, sourced
-        from its base OpenAI repo (~2 MB, cached in HF_HOME).
+        from the OpenAI repo it was converted from (~2 MB, cached in HF_HOME).
 
         Tries the NARROW `WhisperTokenizer` import first. The full
         `WhisperProcessor.from_pretrained` drags in much more of transformers'
@@ -760,22 +844,41 @@ class TranscriptionManager:
         mlx-audio actually needs. Falls back to the full processor, then to a
         clear, actionable error that distinguishes a dependency mismatch from a
         network failure."""
-        base = _PROCESSOR_BASE.get(repo, "openai/whisper-large-v3-turbo")
         # Prefer the tokenizer files this app already ships and verified (the package's
         # companions/processor, presented beside the weights by the merged snapshot view).
         # The hub name only resolves online with a populated cache, which a standalone
         # offline install does not have — that made every clone's internal quality check
         # fail with an empty tokenizer.
         local = cache.package_snapshot(repo)
-        source = str(local[1]) if local is not None else base
-        # Whisper base/small packages ship weights only — no tokenizer companions at all.
-        # Every multilingual Whisper size shares one tokenizer vocabulary, so reuse the copy
-        # another locally installed Whisper package already carries rather than requiring a
-        # network fetch that a standalone offline install cannot perform.
-        if local is None or not (local[1] / "tokenizer.json").is_file():
+        snapshot = local[1] if local is not None else None
+        source = ""
+        if snapshot is not None and (snapshot / "tokenizer.json").is_file():
+            source = str(snapshot)
+        else:
+            # Whisper base/small packages ship weights only — no tokenizer companions at
+            # all. Every multilingual Whisper size shares one tokenizer vocabulary, so reuse
+            # the copy another locally installed Whisper package already carries rather than
+            # requiring a network fetch that a standalone offline install cannot perform.
             donor = _local_tokenizer_source()
             if donor is not None:
                 source = donor
+        base = ""
+        if not source:
+            # Nothing local serves this tokenizer, so the only route left is the OpenAI repo
+            # the model was converted from. That name is read from the model's own manifest
+            # companion or config.json — never assumed. A silently substituted vocabulary
+            # produces wrong output rather than an error, which is why this refuses by name.
+            base = whisper_processor_repo(repo, snapshot) or ""
+            if not base:
+                raise RuntimeError(
+                    f"Whisper model {repo} ships no HF processor and no installed Whisper "
+                    "package carries the shared tokenizer, so the processor cannot be "
+                    "resolved. Add the OpenAI processor companion (repo + revision) under "
+                    "`source.layout.companions` in this model's manifest "
+                    "(model-manifests/<package_id>.json) or install another Whisper model "
+                    "first; Voice Studio will not substitute a different model's vocabulary."
+                )
+            source = base
         print(f"[stt] {repo} ships no processor — attaching tokenizer from {source}", flush=True)
         attempts: list[str] = []
 
@@ -803,14 +906,14 @@ class TranscriptionManager:
             raise RuntimeError(
                 "Whisper transcription is blocked by a Python dependency mismatch "
                 "in this server's environment — the tokenizer import from "
-                f"{base} failed ({joined}). This happens when transformers / "
+                f"{source} failed ({joined}). This happens when transformers / "
                 "mlx-audio drift to incompatible versions across machines. "
                 "Replace this app with a tested standalone release that includes "
                 "the Whisper runtime, then relaunch."
             )
         raise RuntimeError(
             f"Whisper model {repo} ships no HF processor and the fallback from "
-            f"{base} couldn't be loaded ({joined}). If the modal is offline, the "
+            f"{source} couldn't be loaded ({joined}). If the modal is offline, the "
             "one-time ~2 MB processor fetch can't complete — check network and retry."
         )
 
@@ -891,10 +994,12 @@ class TranscriptionManager:
                     )
                 elif spec.engine == "moonshine":
                     result = model.generate(str(p))
-                else:
+                elif spec.engine == "nemotron":
                     result = model.generate(
                         str(p), language=lang or "auto", chunk_duration=30.0
                     )
+                else:
+                    raise _unknown_engine(spec)
                 telemetry_state = "completed"
             except Exception as exc:
                 memory_failure = _is_memory_failure(exc)
@@ -933,8 +1038,10 @@ class TranscriptionManager:
                 result, word_timestamps=word_timestamps
             )
             detected_lang = lang or "auto"
-        else:
+        elif spec.engine == "whisper":
             raw_segments = _result_field(result, "segments")
+        else:
+            raise _unknown_engine(spec)
 
         text = (text or "").strip()
         raw_segments = raw_segments or []

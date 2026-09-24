@@ -19,8 +19,8 @@ Apple Silicon text-to-speech studio. Sibling app to **ImageStudio Mac** (FLUX im
   selected pace to the finished WAV with pitch-preserving tempo adjustment.
   The 1.7B Qwen tiers require a 16 GB Mac; 0.6B remains the qualified 8 GB tier.
   Chatterbox, OmniVoice, and Fish Audio S2 Pro expose their native cloning and
-  quality controls. Fish S2 Pro is a high-memory research/non-commercial model;
-  its 8-bit tier is the practical 24 GB candidate and its bf16 tier is for 32 GB+.
+  quality controls. Fish S2 Pro is a high-memory model; its 8-bit tier is the
+  practical 24 GB candidate and its bf16 tier is for 32 GB+.
   LongCat AudioDiT 1B 4-bit is a 16 GB+ internal cloning candidate using the
   shared MLX worker; it remains outside GenStudio routing until multi-voice
   long-form listening qualification passes.
@@ -528,14 +528,10 @@ The service files ship inside this launcher, so on each Mac you just click **Ins
 
 ## License
 
-The launcher scripts in this repo are MIT. Each TTS model has its own license — see the catalog for per-model notes. The big restrictions to remember:
-
-- **F5-TTS**: non-commercial
-- **Echo-TTS**: non-commercial **and ShareAlike** (CC-BY-NC-SA-4.0) — the most
-  restrictive license in the catalog
-- **Chatterbox, OmniVoice, Qwen3-TTS, Bark, Spark-TTS, Kokoro, Audio8 TTS
-  Preview, MOSS-TTS-Nano**: permissive
-  (MIT / Apache-2.0; check each catalog entry for exact terms)
-- **VoxCPM2**: Apache-2.0
+The launcher scripts in this repo are MIT. Each model carries its own license
+name, recorded once on its catalog row (`license.name` / `license.source`, and
+therefore published on `GET /api/catalog`); where a repository does not state
+one, the field is empty rather than guessed. Read the row for the model you are
+using.
 
 Voice cloning models can imitate any voice from a short reference. **Only clone voices you have permission to use.**

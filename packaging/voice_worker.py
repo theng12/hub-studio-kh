@@ -32,6 +32,38 @@ def read_private_token(path: Path, data: Path) -> str:
         return token
 
 
+def single_engine_manifest(catalog: Path, engine: str, *, component: str) -> tuple[Path, dict]:
+    """The one catalog manifest a deliberately single-model packaged worker serves.
+
+    A packaged studio worker may be built around exactly one model - one engine, one manifest,
+    one entry in its own ``/v1/models`` - and that is a real contract, not an accident (see
+    ``components/chat/app/backend/main.py``). It is only safe while it is enforced: the Hub
+    publishes every manifest the bundle carries and offers it in the picker, so a second
+    manifest for this engine would be routed here and this worker would silently serve the
+    other model. The worker therefore reads the shipped catalog to learn which model it serves
+    and refuses, by name, a bundle that carries none or more than one.
+    """
+    matches = []
+    for path in sorted(catalog.glob('*.json')):
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError(f'Model manifest {path.name} cannot be read: {exc}') from exc
+        if isinstance(value, dict) and value.get('engine') == engine:
+            matches.append((path, value))
+    if not matches:
+        raise ValueError(
+            f'this bundle carries no {engine} manifest in {catalog.name}/, so the packaged '
+            f'{component} worker has no model to serve')
+    if len(matches) > 1:
+        names = ', '.join(path.name for path, _ in matches)
+        raise ValueError(
+            f'the packaged {component} worker serves exactly one model, but this bundle carries '
+            f'{len(matches)} {engine} manifests: {names}. A second model needs its own worker; '
+            f'see components/{component.lower()}/app/backend/main.py')
+    return matches[0]
+
+
 def write_ready_file(path: Path, url: str, version: str, *, token: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary_name = tempfile.mkstemp(

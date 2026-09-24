@@ -65,6 +65,20 @@
       "official_check": "research/voice-adoption.json and components/voice/VERSION observed on 2026-09-15"
     }
   ],
+  "engines_outside_this_contract": {
+    "voice-vits": {
+      "reason": "Adopted 2026-09-24, after this record was observed on 2026-09-15. The two Khmer VITS packages run in the same .build/voice-runtime as voice-mlx with onnxruntime added, so the voice-mlx entry below is their runtime input record.",
+      "record": "research/khmer-tts-adoption-2026-09-24.md"
+    },
+    "music-mlx": {
+      "reason": "Adopted after this record was observed. Its runtime inputs are locked separately at packaging/music-runtime/requirements.lock.txt, which this 2026-09-15 record does not cover.",
+      "record": "docs/music-studio-adoption.md"
+    },
+    "chat-mlx": {
+      "reason": "Adopted 2026-09-24, after this record was observed. The packaged Chat worker reuses runtimes/voice (mlx-lm lives there), so the voice-mlx entry below is its runtime input record.",
+      "record": "research/chat-studio-adoption-2026-09-24.md"
+    }
+  },
   "runtimes": [
     {
       "engine": "voice-mlx",

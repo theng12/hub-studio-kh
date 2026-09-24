@@ -456,9 +456,24 @@ struct ReleaseInstaller {
 
     static let live = ReleaseInstaller()
 
-    /// The bundled runtime that `install_local.sh` checks. Its absence used to mean a copy had
-    /// arrived incomplete while the app looked installed.
-    static let requiredRuntime = "Contents/Resources/runtimes/voice/bin/python3"
+    /// The release manifest the staged bundle carries, whose `components` map is exactly what the
+    /// Hub inside will spawn. `packaging/stage_voice.py` writes it and `packaging/hub_worker.py`
+    /// reads it, so it is the release's own statement of what must be present.
+    static let releaseManifest = "Contents/Resources/release-manifest.json"
+
+    /// The bundle paths each runtime a manifest can name must carry.
+    ///
+    /// The manifest's `runtime` value is data; this table is the layout contract the Hub and
+    /// `packaging/install_local.sh` already share. A runtime name that is not here is refused by
+    /// name, with the file to update, rather than passing a release nothing can check.
+    static let runtimePaths: [String: [String]] = [
+        "voice": ["Contents/Resources/runtimes/voice/bin/python3"],
+        "image": ["Contents/Resources/runtimes/image/bin/python3"],
+        // The Music overlay rides on the base runtime and adds its own engine manifest, which the
+        // Hub's own `_music_spec` requires before it will start the worker.
+        "voice+music-overlay": ["Contents/Resources/runtimes/voice/bin/python3",
+                                "Contents/Resources/runtimes/music/manifest/music-runtime.json"],
+    ]
 
     static func attachImage(_ image: URL, _ mountPoint: URL) throws {
         _ = try runProcess("/usr/bin/hdiutil",
@@ -556,14 +571,16 @@ struct ReleaseInstaller {
         }
     }
 
-    /// The app is complete only if the bundled python3 is present and executable and the
-    /// Info.plist names a build; returns that build.
+    /// The app is complete only if every component its own release manifest declares is present,
+    /// and the Info.plist names a build; returns that build.
+    ///
+    /// This used to check exactly one hardcoded path — the Voice runtime's python3. A release
+    /// missing the image, music, chat or subtitle runtime therefore installed and looked healthy
+    /// until that worker failed, and moving the voice layout refused every release instead. What is
+    /// required now comes from the manifest the release itself carries.
     @discardableResult
     func verifyAppComplete(_ app: URL, expectedBuild: String?) throws -> String {
-        let python = app.appendingPathComponent(Self.requiredRuntime)
-        guard fileManager.isExecutableFile(atPath: python.path) else {
-            throw ReleaseError("The app bundle is incomplete: its bundled python3 is missing or not executable.")
-        }
+        try verifyDeclaredComponents(app)
         let plist = app.appendingPathComponent("Contents/Info.plist")
         guard let data = fileManager.contents(atPath: plist.path),
               let object = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
@@ -574,5 +591,41 @@ struct ReleaseInstaller {
             throw ReleaseError("The app bundle declares build \(build), but the release says \(expectedBuild).")
         }
         return build
+    }
+
+    /// Every component the release manifest declares must be present and runnable here.
+    ///
+    /// The manifest's `components` map is the release's own list of what it ships — the same map
+    /// the Hub inside spawns its workers from — so a component added there is checked here without
+    /// an edit, and a component whose runtime this installer does not know is refused by name.
+    func verifyDeclaredComponents(_ app: URL) throws {
+        let manifest = app.appendingPathComponent(Self.releaseManifest)
+        guard let data = fileManager.contents(atPath: manifest.path),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let components = object["components"] as? [String: Any], !components.isEmpty else {
+            throw ReleaseError("The app bundle is incomplete: its Contents/Resources/release-manifest.json is missing or lists no components, so the runtimes it ships cannot be checked.")
+        }
+        for (name, value) in components.sorted(by: { $0.key < $1.key }) {
+            let record = value as? [String: Any]
+            // A component that is the base runtime itself (`voice`) publishes no `runtime` name.
+            let runtime = (record?["runtime"] as? String) ?? name
+            guard let runtimeRequired = Self.runtimePaths[runtime] else {
+                throw ReleaseError("The release manifest lists component '\(name)' with runtime '\(runtime)', which this installer does not know. Add '\(runtime)' to `runtimePaths` in native/UpdateClient.swift — and to COMPONENT_WORKERS in packaging/hub_worker.py — before shipping a release that uses it.")
+            }
+            // Every component also ships its own worker entry point beside the shared runtime,
+            // named for the component. The path is derived from the component's own key rather
+            // than listed here, so a component added to the manifest is checked without an edit.
+            var required = runtimeRequired
+            required.append("Contents/Resources/\(name)_worker.py")
+            for relative in required {
+                let path = app.appendingPathComponent(relative).path
+                let mustExecute = relative.hasSuffix("bin/python3")
+                let present = mustExecute ? fileManager.isExecutableFile(atPath: path)
+                                          : fileManager.fileExists(atPath: path)
+                guard present else {
+                    throw ReleaseError("The app bundle is incomplete: the \(name) component's \(relative) is missing\(mustExecute ? " or not executable" : ""). Its own release manifest declares that component.")
+                }
+            }
+        }
     }
 }

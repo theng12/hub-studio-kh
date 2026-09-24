@@ -124,9 +124,14 @@ def _messages(value: object) -> list[dict]:
     return out
 
 
+# The parameters the Chat worker actually honours. This is the Hub's admission list for a pack,
+# so it must not accept a parameter the lane silently ignores: `stop`, `frequency_penalty` and
+# `presence_penalty` were accepted and forwarded here and dropped by the worker, which is the
+# silent-drop a caller cannot see. The worker publishes the same surface in its own
+# `lane_contract.parameters`; the two are asserted equal by the lane-contract test.
 _ALLOWED_PARAMS = {
     "temperature", "top_p", "max_tokens", "max_completion_tokens", "seed",
-    "stop", "frequency_penalty", "presence_penalty", "response_format",
+    "response_format", "thinking",
 }
 
 
@@ -645,6 +650,11 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                            f"scene IDs: {json.dumps(missing)}. Do not repeat completed IDs.",
             })
         body = {"model": batch["model"], "messages": messages, "stream": False, **pack["params"]}
+        # The Hub names the job, and the worker echoes this id into its own activity snapshot:
+        # without it one dispatched pack appears twice in the live view - once under the Hub's
+        # id and once under the worker's own completion id - and neither row can be joined to
+        # the other. It matches the `studio_job_id` `activity_batches` publishes below.
+        body["job_id"] = f"{batch['id']}:{pack['pack_id']}"
         if generation is not None and not peers.dispatch_ready(studio, generation):
             pack.update(state="queued", studio=None, tries=max(0, pack["tries"] - 1),
                         error="worker authentication changed before dispatch")
@@ -798,6 +808,29 @@ def restore_batches() -> int:
     if restored:
         _wakeup.set()
     return restored
+
+
+def activity_batches() -> dict[str, dict]:
+    """This queue's batches in the shape the live activity view consumes.
+
+    Each Hub-owned queue publishes its own view rather than being restated by the callers that
+    merge them, because both copies of that merge omitted Chat: a Chat job could not appear in
+    the polled activity ledger or in ``/api/hub/stats`` ``fleet_activity`` at all.
+
+    The activity view identifies a job by the worker's job id. Chat dispatch is a synchronous
+    request rather than a submitted job, so the Hub is the only party that can name one - and it
+    names it stably per pack, so repeated polls refresh one row instead of inventing a new one.
+    """
+    return {
+        f"chat:{batch_id}": {
+            "model": batch.get("model"), "operation": "chat",
+            "items": [
+                {**pack, "studio_job_id": f"{batch_id}:{pack.get('pack_id')}"}
+                for pack in batch.get("packs") or []
+            ],
+        }
+        for batch_id, batch in list(batches.items())
+    }
 
 
 def start_dispatcher(monitor) -> None:

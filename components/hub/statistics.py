@@ -6,7 +6,7 @@ import time
 
 from fastapi import Query
 
-from .backend import activity, broker, ledger, transcription_jobs
+from .backend import activity, ledger
 
 
 def register_routes(app, monitor) -> None:
@@ -36,17 +36,11 @@ def register_routes(app, monitor) -> None:
         result["timeline"] = ledger.timeline(
             since, bucket, source=source, op=modality, machine=machine,
         )
-        activity_batches = dict(broker.batches)
-        activity_batches.update({
-            f"transcription:{batch_id}": {
-                "model": batch.get("model"),
-                "operation": "transcription",
-                "items": batch.get("items") or [],
-            }
-            for batch_id, batch in transcription_jobs.batches.items()
-        })
+        # One producer-side source for "which queues contribute live activity" - the same call
+        # the monitor's poll cycle makes, so the route and the durable ledger cannot disagree
+        # about which queues exist. This used to be a second copy, and both omitted Chat.
         result["fleet_activity"] = activity.fleet_snapshot(
-            monitor.registry, monitor.status, activity_batches, since_s=since,
+            monitor.registry, monitor.status, activity.live_batches(), since_s=since,
         )
         result["filters"] = {
             "source": source,

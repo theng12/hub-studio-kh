@@ -158,6 +158,15 @@ def verified_packages(base: str, token: str) -> dict[str, list[dict]]:
     return out
 
 
+# The kinds this tool knows how to drive. It is a contract, not a menu: each one names a
+# request the Hub accepts, so a new modality needs a block below. `--kinds` used to default to
+# only three of these and to accept anything else in silence - `--kinds music` or `--kinds chat`
+# ran nothing at all, recorded no `skipped` row and still exited 0, so Music and Chat models were
+# never measured on any machine.
+KINDS = ("image", "subtitle", "voice", "music", "chat")
+DEFAULT_KINDS = ",".join(KINDS)
+
+
 def wait_for(base: str, token: str, batch: str, *, transcription: bool) -> dict:
     path = (f"/api/hub/transcription/jobs/{batch}" if transcription
             else f"/api/hub/jobs/{batch}")
@@ -180,7 +189,8 @@ def main() -> int:
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--label", default=platform.node() or "unnamed-machine")
-    parser.add_argument("--kinds", default="image,subtitle,voice")
+    parser.add_argument("--kinds", default=DEFAULT_KINDS,
+                        help="comma-separated subset of " + ", ".join(KINDS))
     parser.add_argument("--audio", type=Path, help="audio used for the subtitle run")
     parser.add_argument("--reference", type=Path, help="reference clip for the voice clone")
     parser.add_argument("--transcript", default="", help="exact words in the reference clip")
@@ -323,6 +333,21 @@ def main() -> int:
             break
 
         kinds = [kind.strip() for kind in arguments.kinds.split(",") if kind.strip()]
+        unknown = sorted(set(kinds) - set(KINDS))
+        if unknown:
+            parser.error(
+                f"unknown --kinds value(s) {unknown}; this tool drives {list(KINDS)}. Without "
+                f"this check `--kinds music` ran nothing, recorded nothing and still exited 0.")
+        if not kinds:
+            parser.error("--kinds selected nothing; pass one or more of " + ", ".join(KINDS))
+        # A kind the caller left out is stated in the receipt, with what it left unmeasured, so
+        # a partial run cannot read as a complete one.
+        for worker, rows in sorted(packages.items()):
+            if rows and worker not in kinds:
+                receipt["skipped"].append({
+                    "kind": worker,
+                    "reason": f"--kinds did not include {worker!r}, so {len(rows)} verified "
+                              f"package(s) were not measured; pass --kinds {worker} to cover it"})
         if "subtitle" in kinds:
             # The Hub's transcription route takes the repository name, and Turbo is the
             # default the app offers, so prefer it when several Whisper sizes are installed.
@@ -359,18 +384,29 @@ def main() -> int:
                 receipt["runs"].append(run)
 
         if "image" in kinds:
-            package = next(iter(packages.get("image") or []), None)
-            if package is None:
+            # A preference with a fallback - and then every other verified image package too.
+            # This block used to take `next(iter(packages.get("image") or []))`, the *first*
+            # package whatever it was, so on a library holding both image models Z-Image-Turbo
+            # 4-bit was never measured, and when only Z-Image was installed the miss was reported
+            # as "no verified FLUX package". Both are the same defect: the receipt must cover the
+            # packages the Hub verified and name the ones it could not.
+            image_choices = packages.get("image") or []
+            preferred = next((row for row in image_choices
+                              if row["package_id"] == "flux2-klein-4b-mlx-4bit"), None)
+            if not image_choices:
                 receipt["skipped"].append(
-                    {"kind": "image", "reason": "no verified FLUX package in this library"})
-            else:
+                    {"kind": "image", "reason": "no verified image package in this library"})
+            ordered = ([preferred] if preferred else []) + [
+                row for row in image_choices if row is not preferred]
+            for package in ordered:
                 started = time.time()
                 status, submitted = http(base, "/api/hub/jobs", token, method="POST", payload={
                     "modality": "image", "model": package["model_id"],
                     "clientRequestId": uuid.uuid4().hex,
                     "items": [{"prompt": arguments.prompt, "params": {}}]})
                 run = {"kind": "image", "model": package["model_id"],
-                       "package_id": package["package_id"], "submit_status": status}
+                       "package_id": package["package_id"], "submit_status": status,
+                       "preferred": package is preferred}
                 if status == 200:
                     batch = submitted.get("batch_id")
                     final = wait_for(base, token, batch, transcription=False)
@@ -378,6 +414,60 @@ def main() -> int:
                     run["items"] = [job_metrics(item) for item in (final.get("items") or [])]
                 else:
                     run["detail"] = submitted
+                run["wall_seconds"] = round(time.time() - started, 3)
+                receipt["runs"].append(run)
+
+        if "music" in kinds:
+            music_choices = packages.get("music") or []
+            if not music_choices:
+                receipt["skipped"].append(
+                    {"kind": "music", "reason": "no verified music package in this library"})
+            for package in music_choices:
+                started = time.time()
+                # Empty params: each Music engine fills its own defaults, and the point of this
+                # run is that the model loads and produces a WAV receipt, not a tuned render.
+                status, submitted = http(base, "/api/hub/jobs", token, method="POST", payload={
+                    "modality": "music", "model": package["model_id"],
+                    "clientRequestId": uuid.uuid4().hex,
+                    "items": [{"prompt": arguments.prompt, "params": {}}]})
+                run = {"kind": "music", "model": package["model_id"],
+                       "package_id": package["package_id"], "submit_status": status}
+                if status == 200:
+                    batch = submitted.get("batch_id")
+                    final = wait_for(base, token, batch, transcription=False)
+                    run["batch_id"] = batch
+                    run["items"] = [job_metrics(item) for item in (final.get("items") or [])]
+                else:
+                    run["status"] = "refused"
+                    run["detail"] = submitted
+                run["wall_seconds"] = round(time.time() - started, 3)
+                receipt["runs"].append(run)
+
+        if "chat" in kinds:
+            chat_choices = packages.get("chat") or []
+            if not chat_choices:
+                receipt["skipped"].append(
+                    {"kind": "chat", "reason": "no verified chat package in this library"})
+            for package in chat_choices:
+                # Chat is not a batch: the Hub proxies one OpenAI-shaped completion, so this is a
+                # single synchronous call and the receipt carries the completion's own usage
+                # numbers rather than a job's resource telemetry.
+                started = time.time()
+                status, completion = http(
+                    base, "/api/hub/chat/completions", token, method="POST", timeout=1800.0,
+                    payload={"model": package["model_id"],
+                             "messages": [{"role": "user", "content": arguments.prompt}]})
+                run = {"kind": "chat", "model": package["model_id"],
+                       "package_id": package["package_id"], "submit_status": status}
+                if status == 200:
+                    choice = (completion.get("choices") or [{}])[0]
+                    message = choice.get("message") if isinstance(choice, dict) else {}
+                    run["status"] = "done"
+                    run["usage"] = completion.get("usage")
+                    run["response_chars"] = len(str((message or {}).get("content") or ""))
+                else:
+                    run["status"] = "refused"
+                    run["detail"] = completion
                 run["wall_seconds"] = round(time.time() - started, 3)
                 receipt["runs"].append(run)
 

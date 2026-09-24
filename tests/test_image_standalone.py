@@ -65,6 +65,14 @@ def z_image_manifest() -> dict:
     }
 
 
+def unregistered_image_manifest() -> dict:
+    """An accepted ``image-mflux`` package that no ``ImageModel`` in this build serves."""
+    manifest = z_image_manifest()
+    manifest.update({'package_id': 'nano-banana-mlx-4bit',
+                     'model_id': 'someone/nano-banana-mlx-4bit', 'revision': 'd' * 40})
+    return model_packages.validate_manifest(manifest)
+
+
 def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float = 1.0,
                z_steps: int | None = None, z_ignores_guidance: bool = True):
     """Stand-in for mflux 0.20.0, with both registered model classes.
@@ -569,6 +577,73 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(files['state'], 'pin_mismatch')
         self.assertIn(Z_IMAGE_TURBO.revision, files['reason'])
         self.assertEqual(manager.preflight(MODEL_ID)['state'], 'files_verified')
+
+    # ── manifests the registry does not serve ──────────────────────────────────────────
+    # `load_image_manifests` accepts every image-mflux manifest the bundle ships, while the
+    # catalog is enumerated from `MODELS`. The reverse of the case above — a manifest with no
+    # registered model — used to be published by the Hub and simply absent from the picker,
+    # with no error anywhere. It must be published with its reason instead.
+
+    def test_a_manifest_with_no_runtime_model_is_published_with_its_reason(self):
+        orphan = unregistered_image_manifest()
+        manager = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID,
+                                    manifests=[self.manifest, self.z_manifest, orphan],
+                                    total_memory_bytes=HOST_BYTES)
+        client = TestClient(create_app(manager, TOKEN))
+        entries = {entry['repo']: entry for entry
+                   in client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertIn(orphan['model_id'], entries,
+                      'a shipped image package cannot be silently absent from the catalog')
+        row = entries[orphan['model_id']]
+        self.assertEqual(row['package_id'], orphan['package_id'])
+        self.assertEqual(row['engine'], 'image-mflux')
+        self.assertEqual(row['modality'], 'image')
+        self.assertFalse(row['execution_ready'])
+        self.assertFalse(row['available'])
+        self.assertEqual(row['readiness']['state'], 'no_runtime_model')
+        # The reason names the manifest file and the registry that must learn about it.
+        self.assertIn(f'{orphan["package_id"]}.json', row['readiness']['reason'])
+        self.assertIn('MODELS', row['readiness']['reason'])
+        self.assertIn('generation.py', row['readiness']['reason'])
+        # The reconciliation the catalog row is built from: exactly the unserved manifests.
+        self.assertEqual(manager.packages_without_a_runtime_model(), [orphan])
+        # The two registered models are untouched by the extra manifest: same set, still ready.
+        self.assertEqual(set(entries), set(MODELS) | {orphan['model_id']})
+        self.assertTrue(entries[MODEL_ID]['execution_ready'])
+        self.assertTrue(entries[Z_IMAGE_TURBO.repo]['execution_ready'])
+        # And a job for it is still refused with the registered models named.
+        refused = client.post('/api/generate/txt2img',
+                              json={'repo': orphan['model_id'], 'prompt': 'a river'},
+                              headers=self.headers)
+        self.assertEqual(refused.status_code, 422)
+        self.assertIn(MODEL_ID, refused.json()['detail'])
+
+    def test_every_shipped_image_manifest_reaches_the_catalog(self):
+        """The invariant: ship an image-mflux manifest and the catalog carries it, no edit."""
+        from components.image.app.backend.generation import load_image_manifests
+
+        directory = ROOT / 'model-manifests'
+        manifests, errors = load_image_manifests(
+            directory, directory / 'flux2-klein-4b-mlx-4bit.json')
+        self.assertEqual(errors, {})
+        declared = {manifest['model_id']: manifest for manifest in manifests.values()}
+        self.assertTrue(declared)
+        manager = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID,
+                                    manifests=manifests, total_memory_bytes=HOST_BYTES)
+        client = TestClient(create_app(manager, TOKEN))
+        entries = {entry['repo']: entry for entry
+                   in client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertEqual(set(entries), set(MODELS) | set(declared))
+        served = {model.package_id for model in MODELS.values()}
+        for manifest in declared.values():
+            row = entries[manifest['model_id']]
+            self.assertEqual(row['package_id'], manifest['package_id'])
+            if manifest['package_id'] not in served:
+                # The direction this test exists for: a package with no runtime model is
+                # published with its reason, never absent and never unexplained.
+                self.assertFalse(row['execution_ready'])
+                self.assertEqual(row['readiness']['state'], 'no_runtime_model')
+                self.assertIn(f'{manifest["package_id"]}.json', row['readiness']['reason'])
 
 
 if __name__ == '__main__':

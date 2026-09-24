@@ -511,5 +511,218 @@ class JsonModeTests(unittest.TestCase):
         self.assertNotIn("JSON", prompts[0])
 
 
+class ChatLaneContractTests(unittest.TestCase):
+    """The Chat lane publishes its own facts: label, family, limits, contract and activity.
+
+    Every value here is the *model's* or the *worker's* own, with its provenance. The catalog row
+    used to hardcode `"label": "Qwen3.5-9B"` (no quantization) and `"family": "qwen3.5"`, so a
+    second chat model would have been published under the first one's name, and the activity
+    route answered `{"active": None, "latest": None}` unconditionally, so Chat work appeared in
+    no activity view anywhere.
+    """
+
+    MODEL_ID = "mlx-community/Qwen3.5-9B-4bit"
+    REVISION = "8b2b98c00a6b4d291155e4890773ca8f769aee53"
+
+    def _engine(self, root: Path, *, model_id: str | None = None,
+                manifest_extra: dict | None = None, generation: dict | None = None,
+                context_key: bool = True) -> ChatEngine:
+        model_dir = root / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        config: dict = {"model_type": "qwen3_5"}
+        if context_key:
+            config["text_config"] = {"max_position_embeddings": 262144}
+        (model_dir / "config.json").write_text(json.dumps(config))
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "tokenizer.json").write_text("{}")
+        if generation is not None:
+            (model_dir / "generation_config.json").write_text(json.dumps(generation))
+        manifest_path = root / "model-manifests" / "chat-model.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text("{}")
+        manifest = {"model_id": model_id or self.MODEL_ID, **(manifest_extra or {})}
+        return ChatEngine(model_dir=model_dir, model_id=manifest["model_id"],
+                          revision=self.REVISION, manifest=manifest,
+                          manifest_path=manifest_path)
+
+    def _client(self, engine: ChatEngine) -> TestClient:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            app = create_app(engine, policy, TOKEN, "a" * 64)
+        return TestClient(app)
+
+    def test_the_label_and_family_come_from_the_model_not_the_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            catalog = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+        self.assertEqual(catalog["label"], "Qwen3.5-9B-4bit")
+        self.assertIn("4bit", catalog["label"], "the label does not name the quantization")
+        self.assertEqual(catalog["family"], "qwen3_5")
+        self.assertEqual(catalog["model_limits"]["context_window_tokens"], {
+            "value": 262144,
+            "source": "model/config.json text_config.max_position_embeddings",
+        })
+        self.assertEqual(catalog["model_limits"]["max_output_tokens"], {
+            "value": 4096,
+            "source": "worker default: the checkpoint ships no generation_config.json",
+        })
+
+    def test_a_second_model_cannot_be_published_under_the_first_models_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), model_id="org/Other-Chat-8bit",
+                                  manifest_extra={"label": "Other Chat 8-bit"})
+            catalog = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+        self.assertEqual(catalog["label"], "Other Chat 8-bit")
+        self.assertEqual(catalog["model_id"], "org/Other-Chat-8bit")
+        self.assertNotIn("Qwen", catalog["label"])
+
+    def test_a_manifest_that_states_a_tier_publishes_it_and_one_that_does_not_says_so(
+            self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stated = self._engine(Path(tmp) / "a", manifest_extra={
+                "qualification": {"minimum_unified_memory_gb": 16}})
+            silent = self._engine(Path(tmp) / "b")
+            published = self._client(stated).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+            unpublished = self._client(silent).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+        self.assertEqual(published["min_total_memory_gb"], 16.0)
+        self.assertEqual(published["min_unified_memory_gb"], 16.0)
+        self.assertIsNone(unpublished["min_total_memory_gb"])
+        self.assertIsNone(unpublished["min_unified_memory_gb"])
+
+    def test_a_stated_output_bound_is_read_with_its_own_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), generation={"max_new_tokens": 8192})
+            limits = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()[
+                    "models"][0]["model_limits"]
+        self.assertEqual(limits["max_output_tokens"], {
+            "value": 8192,
+            "source": "model/generation_config.json max_new_tokens",
+        })
+
+    def test_a_context_window_nothing_states_is_null_with_the_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), context_key=False)
+            limits = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()[
+                    "models"][0]["model_limits"]
+        self.assertIsNone(limits["context_window_tokens"]["value"])
+        self.assertIn("nothing states a context window",
+                      limits["context_window_tokens"]["source"])
+
+    def test_the_lane_contract_is_the_chat_lane_and_omits_what_the_hub_owns(self) -> None:
+        from components.hub.backend import chat_jobs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            contract = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()[
+                    "models"][0]["lane_contract"]
+        self.assertEqual(contract["schema"], "studiohub.lane-contract.v1")
+        self.assertEqual(contract["modality"], "chat")
+        self.assertEqual(contract["operation"], "chat.completion")
+        self.assertEqual(contract["artifact"]["media_type"], "application/json")
+        self.assertEqual(contract["artifact"]["per_item"], 1)
+        self.assertFalse(contract["states"]["uncertain_is_terminal"])
+        self.assertFalse(contract["states"]["discard_supported"])
+        self.assertTrue(contract["cancel"]["supported"])
+        self.assertIn("not evidence", contract["cancel"]["semantics"])
+        # The Hub owns the dispatch deadline; nothing here has measured a runtime.
+        self.assertNotIn("deadline_seconds", contract)
+        self.assertNotIn("runtime_seconds", contract)
+        # Never offer what the lane discards.
+        names = {parameter["name"] for parameter in contract["parameters"]}
+        self.assertEqual(
+            names & {"stop", "frequency_penalty", "presence_penalty"}, set(),
+            "the contract offers a parameter the worker silently ignores",
+        )
+        accepted = set(chat_jobs._ALLOWED_PARAMS) - {"max_completion_tokens"}
+        self.assertTrue(
+            accepted <= names,
+            f"the Hub accepts {sorted(accepted - names)} but the lane contract omits it",
+        )
+
+    def test_the_activity_route_is_honest_when_idle_and_reports_a_real_completion(self) -> None:
+        from components.hub.backend import activity as hub_activity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            client = self._client(engine)
+            empty = client.get("/api/fleet/activity",
+                               headers={"x-studio-token": TOKEN}).json()
+            self.assertIsNone(empty["active"])
+            self.assertIsNone(empty["latest"])
+            self.assertIsNotNone(
+                hub_activity.validate_snapshot(empty, expected_studio="chat"))
+
+            # A real engine cannot load weights here; the route's own contract is what is under
+            # test, so only the generation itself is stubbed.
+            with mock.patch.object(engine, "complete", return_value={
+                    "text": "hi", "elapsed_seconds": 0.01, "max_tokens": 4,
+                    "prompt_tokens": 1, "json_valid": None, "repairs": 0}):
+                response = client.post(
+                    "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                    json={"messages": [{"role": "user", "content": "hi"}],
+                          "job_id": "batch-1:pack-0"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["id"], "batch-1:pack-0")
+            latest = client.get("/api/fleet/activity",
+                                headers={"x-studio-token": TOKEN}).json()
+
+        self.assertIsNone(latest["active"])
+        self.assertEqual(latest["latest"]["id"], "batch-1:pack-0")
+        self.assertEqual(latest["latest"]["state"], "done")
+        self.assertEqual(latest["latest"]["model"], self.MODEL_ID)
+        validated = hub_activity.validate_snapshot(latest, expected_studio="chat")
+        self.assertIsNotNone(validated, "the Hub refused the Chat worker's own snapshot")
+        self.assertEqual(validated["latest"]["operation"], "chat")
+
+    def test_a_second_model_is_refused_by_name_and_the_directory_to_add_to(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            response = self._client(engine).post(
+                "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                json={"model": "org/another-model",
+                      "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(response.status_code, 404)
+        detail = response.json()["detail"]
+        self.assertIn(self.MODEL_ID, detail)
+        self.assertIn("model-manifests", detail)
+        self.assertIn("STUDIOHUB_CHAT_MANIFEST", detail)
+
+    def test_the_health_route_reports_the_release_not_a_word(self) -> None:
+        import re
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            health = self._client(engine).get(
+                "/api/health", headers={"x-studio-token": TOKEN}).json()
+        self.assertNotEqual(health["app_version"], "standalone")
+        self.assertTrue(
+            re.fullmatch(r"\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?|unknown",
+                         health["app_version"]),
+            f"{health['app_version']!r} cannot be mistaken for a version",
+        )
+
+    def test_refused_parameters_are_named_rather_than_silently_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            client = self._client(engine)
+            refused = client.post(
+                "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                json={"messages": [{"role": "user", "content": "hi"}],
+                      "response_format": {"type": "xml"}})
+            self.assertEqual(refused.status_code, 422)
+            self.assertIn("json_object", refused.json()["detail"])
+            negative = client.post(
+                "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 0})
+            self.assertEqual(negative.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()

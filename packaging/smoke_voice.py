@@ -53,12 +53,87 @@ def validate_pilot_inputs(models: Path, expected: dict) -> None:
                 raise ValueError(f'Pilot input checksum mismatch: {path}')
 
 
-def exercise_models(url: str, token: str, output: Path) -> dict:
-    started = time.monotonic()
+# The one Voice engine this smoke knows how to build a request for. A request body is
+# engine-shaped, so a family on another engine is recorded as skipped with the engine named -
+# never dropped without a word.
+DRIVEN_ENGINE = 'mlx-audio'
+SMOKE_FILE = 'packaging/smoke_voice.py'
+PILOT_INPUTS = Path(__file__).resolve().parents[1] / 'qualification/model-inputs.json'
+
+
+def pilot_models() -> dict:
+    """The recorded pilot snapshot by role, read from `qualification/model-inputs.json`.
+
+    Used only when a caller supplies no packaged catalogue. `run_worker` passes the worker's own
+    `/api/catalog`, so the exercised set is the packaged data and a model added there is smoked
+    without editing this file. Each recorded entry states its role - `tts`, `asr` or `companion` -
+    and a `tts` entry may carry the `smoke_params` that give it a voice, so the snapshot is data
+    rather than a pair of literals in this module.
+    """
+    plan: dict[str, list[dict]] = {'tts': [], 'asr': []}
+    for model in json.loads(PILOT_INPUTS.read_text())['models']:
+        role = model.get('role')
+        row = {'repo': model['repo'], 'family': '', 'capabilities': ['tts', 'voice-cloning'],
+               'languages': ['en'], 'engine': '', 'cached': True,
+               'smoke_params': model.get('smoke_params')}
+        if role in plan:
+            plan[role].append(row)
+        elif role != 'companion':
+            raise ValueError(
+                f"{PILOT_INPUTS}: {model.get('repo')!r} has no role; add \"role\": \"tts\", "
+                f"\"asr\" or \"companion\" so the smoke knows what to do with it")
+    if not plan['tts'] or not plan['asr']:
+        raise ValueError(f'{PILOT_INPUTS} must name at least one tts and one asr model')
+    return plan
+
+
+def model_rows(catalogue: dict | None, transcriptions: dict | None,
+               availability: dict | None) -> tuple[list[dict], list[dict]]:
+    """Every model the packaged catalogue offers, as (tts rows, asr rows).
+
+    A row that cannot be exercised is still returned, with `skip_reason` set: a model this smoke
+    does not run is a fact the report has to carry, which is what B37 was missing - the pilot
+    snapshot held two models and nothing said a third had been added to the catalogue.
+    """
+    if catalogue is None:
+        plan = pilot_models()
+        return plan['tts'], plan['asr']
+    tts_rows, asr_rows = [], []
+    for model in catalogue.get('models') or []:
+        repo = str(model.get('repo') or '')
+        capabilities = [str(value) for value in (model.get('capabilities') or [])]
+        languages = [str(value) for value in (model.get('languages') or [])]
+        row = {'repo': repo, 'family': str(model.get('family') or ''), 'capabilities': capabilities,
+               'languages': languages, 'engine': str(model.get('engine') or ''),
+               'cached': (model.get('cache') or {}).get('state') == 'cached'}
+        if not row['cached']:
+            row['skip_reason'] = 'not present in the pilot snapshot this run was given'
+        elif 'tts' not in capabilities:
+            row['skip_reason'] = f'capabilities {capabilities} declare no "tts"'
+        elif row['engine'] and row['engine'] != DRIVEN_ENGINE:
+            row['skip_reason'] = (
+                f'engine {row["engine"]!r} has no request recipe in {SMOKE_FILE}; add one so '
+                f'every engine the catalogue ships is exercised')
+        elif languages and 'en' not in languages:
+            row['skip_reason'] = (
+                f'languages {languages} do not include "en", the only text this smoke sends; add '
+                f'a per-language sample to {SMOKE_FILE}')
+        tts_rows.append(row)
+    for model in (transcriptions or {}).get('models') or []:
+        repo = str(model.get('repo') or '')
+        row = {'repo': repo, 'cached': bool(model.get('cached')),
+               'default': bool(model.get('recommended')) or model.get('repo') == (transcriptions or {}).get('default_model')}
+        if not row['cached']:
+            row['skip_reason'] = 'not present in the pilot snapshot this run was given'
+        asr_rows.append(row)
+    return tts_rows, asr_rows
+
+
+def _run_tts(url: str, token: str, repo: str, params: dict, output: Path) -> dict:
     status, response = request(url + '/api/generate/txt2speech', token, body={
-        'repo': 'mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit',
+        'repo': repo,
         'text': 'This is a standalone Voice Studio test. The bundled engine is speaking clearly.',
-        'preset_speaker': 'Ryan', 'language': 'en', 'seed': 42,
+        **params,
         'client_request_id': 'standalone-packaging-smoke',
     })
     assert status == 200, response
@@ -75,20 +150,80 @@ def exercise_models(url: str, token: str, output: Path) -> dict:
         expected_hash = response.headers.get('X-Content-SHA256')
     digest = hashlib.sha256(audio).hexdigest()
     assert expected_hash == digest and len(audio) > 44
-    audio_path = output / 'generated-audio.wav'
-    audio_path.write_bytes(audio)
-    generation_seconds = round(time.monotonic() - started, 3)
-    form = urllib.parse.urlencode({'job_id': job['id'],
-        'model': 'mlx-community/whisper-large-v3-turbo', 'language': 'en'}).encode()
+    slug = re.sub(r'[^a-z0-9]+', '-', repo.rsplit('/', 1)[-1].lower()).strip('-')
+    (output / f'generated-audio-{slug}.wav').write_bytes(audio)
+    return {'repo': repo, 'job_id': job['id'], 'audio_bytes': len(audio),
+            'audio_sha256': digest}
+
+
+def _run_asr(url: str, token: str, job_id: str, repo: str, output: Path, *, primary: bool) -> dict:
+    form = urllib.parse.urlencode({'job_id': job_id, 'model': repo, 'language': 'en'}).encode()
     req = urllib.request.Request(url + '/api/transcribe', data=form,
         headers={'Content-Type': 'application/x-www-form-urlencoded', 'X-Studio-Token': token})
     with urllib.request.urlopen(req, timeout=300) as response:
         transcript = json.load(response)
     assert str(transcript.get('text', '')).strip(), transcript
-    (output / 'transcription.json').write_text(json.dumps(transcript, indent=2) + '\n')
-    return {'generation_seconds': generation_seconds, 'audio_bytes': len(audio),
-            'audio_sha256': digest, 'transcription_text': transcript['text'],
-            'total_seconds': round(time.monotonic() - started, 3)}
+    slug = re.sub(r'[^a-z0-9]+', '-', repo.rsplit('/', 1)[-1].lower()).strip('-')
+    name = 'transcription.json' if primary else f'transcription-{slug}.json'
+    (output / name).write_text(json.dumps(transcript, indent=2) + '\n')
+    return {'repo': repo, 'artifact': name, 'transcription_text': transcript['text']}
+
+
+def exercise_models(url: str, token: str, output: Path, *, catalogue: dict | None = None,
+                    transcriptions: dict | None = None,
+                    availability: dict | None = None) -> dict:
+    """Run one generation per catalogue TTS model and one transcript per catalogue ASR model.
+
+    The model set comes from the worker's own published catalogue (or, when a caller has none, the
+    recorded pilot snapshot's roles). Every model is reported as run or skipped with the reason,
+    and a run that exercises nothing raises: the previous version sent one frozen TTS repo and one
+    frozen ASR repo, so a model added to the catalogue was simply not smoked and nothing said so.
+    """
+    started = time.monotonic()
+    tts_rows, asr_rows = model_rows(catalogue, transcriptions, availability)
+    report: dict = {'models': [], 'tts': [], 'asr': []}
+    first_job: str | None = None
+    for row in tts_rows:
+        if row.get('skip_reason'):
+            report['models'].append({'repo': row['repo'], 'role': 'tts', 'verdict': 'skipped',
+                                     'reason': row['skip_reason']})
+            continue
+        params = dict(row.get('smoke_params') or {})
+        run = _run_tts(url, token, row['repo'], params, output)
+        first_job = first_job or run['job_id']
+        report['tts'].append(run)
+        report['models'].append({'repo': row['repo'], 'role': 'tts', 'verdict': 'ran',
+                                 'audio_sha256': run['audio_sha256'],
+                                 'audio_bytes': run['audio_bytes']})
+    if not report['tts']:
+        reasons = '; '.join(f"{row['repo']}: {row.get('skip_reason') or 'not exercised'}"
+                            for row in tts_rows) or 'the catalogue published no TTS model'
+        raise RuntimeError(
+            f'no TTS model was exercised, so this smoke proves nothing: {reasons}. Refresh '
+            f'qualification/model-inputs.json (or pass --models-dir holding a model the packaged '
+            f'catalogue still offers) and run again.')
+    for index, row in enumerate(asr_rows):
+        if row.get('skip_reason'):
+            report['models'].append({'repo': row['repo'], 'role': 'asr', 'verdict': 'skipped',
+                                     'reason': row['skip_reason']})
+            continue
+        run = _run_asr(url, token, first_job, row['repo'], output, primary=index == 0)
+        report['asr'].append(run)
+        report['models'].append({'repo': row['repo'], 'role': 'asr', 'verdict': 'ran',
+                                 'artifact': run['artifact']})
+    if not report['asr']:
+        reasons = '; '.join(f"{row['repo']}: {row.get('skip_reason') or 'not exercised'}"
+                            for row in asr_rows) or 'the catalogue published no ASR model'
+        raise RuntimeError(f'no transcription model was exercised, so the audio was not read '
+                           f'back: {reasons}.')
+    elapsed = round(time.monotonic() - started, 3)
+    # The single-model summary keeps the shape report readers already parse; the per-model lists
+    # above are the coverage record.
+    report.update({'generation_seconds': elapsed, 'total_seconds': elapsed,
+                   'audio_bytes': report['tts'][0]['audio_bytes'],
+                   'audio_sha256': report['tts'][0]['audio_sha256'],
+                   'transcription_text': report['asr'][0]['transcription_text']})
+    return report
 
 
 def run_worker(artifact: Path, state: Path, models: Path, log: Path, *, generate: bool = False) -> dict:
@@ -131,6 +266,8 @@ def run_worker(artifact: Path, state: Path, models: Path, log: Path, *, generate
             assert status == 200 and notes['releases'][0]['version'] == release['version'], notes
             status, catalog = request(url + '/api/catalog')
             assert status == 200, catalog
+            status, transcription = request(url + '/api/transcribe/availability')
+            assert status == 200, transcription
             status, connectivity = request(url + '/api/connectivity')
             assert status == 200 and connectivity['bind_host'] == '127.0.0.1', connectivity
             assert connectivity['listen_port'] == urllib.parse.urlparse(url).port, connectivity
@@ -151,7 +288,10 @@ def run_worker(artifact: Path, state: Path, models: Path, log: Path, *, generate
                     'local_update_status': denied,
                     'packaged_update_status': unsupported}
             if generate:
-                result['model_execution'] = exercise_models(url, token, log.parent)
+                # The worker's own published model lists, so the exercised set is the packaged
+                # catalogue rather than a frozen pair of repos in this file.
+                result['model_execution'] = exercise_models(
+                    url, token, log.parent, catalogue=catalog, transcriptions=transcription)
             return result
         finally:
             process.terminate()
@@ -185,6 +325,10 @@ def smoke(artifact: Path, output: Path, models: Path | None = None) -> None:
     assert tree_digest(moved) == before, 'Relocated startup modified the app bundle'
     report = {'platform': platform.platform(), 'machine': platform.machine(),
         'first': first, 'relocated': second, 'bundle_sha256': before,
+        # What the run actually exercised, per model, including the ones it did not: a model the
+        # packaged catalogue offers and this receipt does not mention is the coverage hole B37
+        # was about.
+        'model_coverage': (second.get('model_execution') or {}).get('models', []),
         'bundle_unchanged': True, 'minimal_process_environment': True,
         'inherited_credential_stripping_tested': True,
         'fresh_os_install': False, 'generation_tested': generate,

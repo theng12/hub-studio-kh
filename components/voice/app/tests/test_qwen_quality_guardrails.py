@@ -7,6 +7,21 @@ import soundfile as sf
 
 from backend import catalog, generation, qwen_quality, transcription
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+MANIFESTS = REPO_ROOT / "model-manifests"
+QWEN_06B_BASE = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+
+
+@pytest.fixture(autouse=True)
+def _packaged_manifests(monkeypatch):
+    """A packaged install always carries its manifests; the gate reads them."""
+    monkeypatch.setenv("STUDIOHUB_MODEL_MANIFESTS", str(MANIFESTS))
+
+
+def _validator_repo() -> str:
+    """The validator ASR the Qwen Base manifest declares, not a constant."""
+    return qwen_quality.validator_repo(QWEN_06B_BASE)
+
 
 QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
 LONG_TEXT = " ".join(
@@ -18,7 +33,7 @@ LONG_TEXT = " ".join(
 def _stt(text: str, *, duration: float = 12.0, words: bool = True) -> dict:
     return {
         "text": text,
-        "model": qwen_quality.WHISPER_REPO,
+        "model": _validator_repo(),
         "duration": duration,
         "segments": [{
             "start": 0.0,
@@ -76,7 +91,7 @@ def test_catalog_publishes_qwen_guardrail_dependency() -> None:
     guardrails = catalog.serialize_model(model)["execution_contract"]["quality_guardrails"]
 
     assert guardrails["output_transcript_validation"] is True
-    assert guardrails["required_local_models"] == [qwen_quality.WHISPER_REPO]
+    assert guardrails["required_local_models"] == [_validator_repo()]
     assert guardrails["max_local_quality_retries"] == 1
 
 
@@ -674,7 +689,7 @@ def _stt_words(words: list[str], *, duration: float = 2_400.0) -> dict:
     """A Whisper result whose word timestamps are exactly ``words``, in order."""
     return {
         "text": " ".join(words),
-        "model": qwen_quality.WHISPER_REPO,
+        "model": _validator_repo(),
         "duration": duration,
         "segments": [{
             "start": 0.0,

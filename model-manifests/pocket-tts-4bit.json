@@ -1,0 +1,71 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "0e8cadcd0e3e5a562fdb3914f8184f6378aa1323ab33f83bff7b06b4b385f05d",
+      "size": 2203,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/pocket-tts-4bit/resolve/59592598c532759d2b66a3d8905a612dcbe8419c/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "d6f9704274f1929a0d09fd3f31ca153a7b6bc4cf4efd8d26408c78dce1813c20",
+      "size": 89282784,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/pocket-tts-4bit/resolve/59592598c532759d2b66a3d8905a612dcbe8419c/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "a4cd4f77ef6ef90cb64817ee80c76e191f55db088bf575df428434339d1dafc8",
+      "size": 28637,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/pocket-tts-4bit/resolve/59592598c532759d2b66a3d8905a612dcbe8419c/model.safetensors.index.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/pocket-tts-4bit",
+  "package_id": "pocket-tts-4bit",
+  "qualification": {
+    "memory_evidence": "Owner listening review 2026-09-24: 1.9 GB peak, one of only two engines with a credible 8 GB path. Local render through the app's own worker on a 32 GB M2 Max measured 1.93 GB peak for the cloning path (6.64 s of audio in 0.30 s of inference) and 0.25 GB for the preset path, so 8 GB is the floor and 16 GB the comfortable tier.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "requires_packages": [
+    "pocket-tts-tokenizer",
+    "pocket-tts-preset-voices"
+  ],
+  "revision": "59592598c532759d2b66a3d8905a612dcbe8419c",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/pocket-tts-4bit",
+        "revision": "59592598c532759d2b66a3d8905a612dcbe8419c"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/pocket-tts-4bit",
+        "revision": "59592598c532759d2b66a3d8905a612dcbe8419c",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/pocket-tts-4bit/revision/59592598c532759d2b66a3d8905a612dcbe8419c",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/pocket-tts-4bit/tree/59592598c532759d2b66a3d8905a612dcbe8419c?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

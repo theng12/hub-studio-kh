@@ -10,9 +10,9 @@ what has to be true before it can be called qualified.
 
 | Item | Notes |
 | --- | --- |
-| `Studio Hub 0.4.0.app` | The app: native shell + bundled Hub + Voice, Image and Subtitle workers. Unsigned. |
+| `Studio Hub.app` | The app: native shell + bundled Hub, Voice, Image, Subtitle, Chat and Music workers. Unsigned, and deliberately named without a version so a new release replaces the old copy. |
 | `model-library/` | The verified model packages, with `.studiohub/installed.json` recording the exact revision and file digest of each. |
-| `focused-release-manifest.json` | Generated receipt: app payload hash, per-component runtime identity, every advertised package and its installed revision. |
+| `focused-release-manifest.json` | Generated receipt: app payload hash, per-component runtime identity, every advertised package and its installed revision. The copy checked in at `qualification/focused-release-manifest.json` is a **historical sample** of this output, not any kit's record — `verify-kit.sh` reads the receipt on the drive. |
 
 The kit is **unsigned and unnotarized by decision** (owner, 2026-09-15): the distribution
 method is "copy the app over and open it with right-click → Open". macOS blocks a plain

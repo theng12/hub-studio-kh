@@ -391,8 +391,12 @@ def test_catalog_publishes_a_derived_section_control_for_every_sectioning_model(
             "source": published["source"],
         }, entry.repo
     qwen4 = catalog.serialize_model(catalog.get_model(QWEN_17B_BASE))["long_form_delivery"]
-    assert qwen4["section_max_characters"] == 400
+    # The shipped 1.7B Base is the 4-bit tier; its record derives from the
+    # measured production audit, so the published budget is the audited Auto
+    # 280 and the 400 remains the largest override a caller may ask for.
+    assert qwen4["section_max_characters"] == 280
     assert qwen4["source"] == "model_audit"
+    assert qwen4["section_size_control"]["maximum"] == 3000
 
 
 def test_frontend_custom_400_is_valid_and_auto_omits_the_override() -> None:
@@ -471,7 +475,10 @@ def test_readme_documents_the_section_size_control_contract() -> None:
 @pytest.mark.parametrize(
     ("requested", "expected", "source"),
     [
-        (None, 400, "audit"),
+        # Auto uses the measured production Auto default (280), not the 400
+        # maximum: the shipped 4-bit tier resolves to the v3 anchor through its
+        # derived record, so the number the runtime splits at is 280.
+        (None, 280, "audit"),
         (230, 230, "caller_override"),
         (280, 280, "caller_override"),
         (400, 400, "caller_override"),

@@ -78,25 +78,6 @@ def test_voxcpm_clone_records_model_and_reference_revisions(monkeypatch):
     assert result["voice_library_id"] == "voice-library-1"
 
 
-def test_kokoro_preset_records_model_and_voice_revision(monkeypatch):
-    revision = "4" * 40
-    monkeypatch.setattr(cache, "snapshot_revision", lambda _repo: revision)
-    job = generation.GenerationJob(
-        job_id="kokoro-proof",
-        mode="txt2speech",
-        params={
-            "repo": "mlx-community/Kokoro-82M-bf16",
-            "voice": "AF_Heart",
-        },
-    )
-
-    generation.GenerationManager._record_local_revision_evidence(job)
-
-    result = job.serialize()
-    assert result["runtime_revision"] == revision
-    assert result["voice_revision"] == f"{revision}:preset:af_heart"
-
-
 def test_chatterbox_clone_records_model_and_reference_revisions(monkeypatch):
     revision = "5" * 40
     digest = "c" * 64
@@ -157,7 +138,13 @@ def test_fish_clone_records_model_and_reference_revisions(monkeypatch):
     assert result["voice_revision"] == digest
 
 
-def test_longcat_clone_records_model_and_reference_revisions(monkeypatch):
+def test_a_clone_records_the_model_and_the_library_voice_revision(monkeypatch):
+    """Retargeted 2026-09-24 (ST-13.A cleanup): LongCat AudioDiT left the catalog in ST-13.B.
+
+    Pocket TTS is the remaining family that clones from a Voices-library entry, and the invariant
+    is unchanged: the finished record carries the exact model revision AND the digest of the
+    reference audio the engine actually used.
+    """
     revision = "7" * 40
     digest = "e" * 64
     monkeypatch.setattr(cache, "snapshot_revision", lambda _repo: revision)
@@ -166,16 +153,16 @@ def test_longcat_clone_records_model_and_reference_revisions(monkeypatch):
         "get",
         lambda voice_id: (
             SimpleNamespace(audio_sha256=digest)
-            if voice_id == "longcat-voice-1"
+            if voice_id == "pocket-voice-1"
             else None
         ),
     )
     job = generation.GenerationJob(
-        job_id="longcat-proof",
+        job_id="pocket-clone-proof",
         mode="txt2speech",
         params={
-            "repo": "mlx-community/LongCat-AudioDiT-1B-4bit",
-            "voice_library_id": "longcat-voice-1",
+            "repo": "mlx-community/pocket-tts-4bit",
+            "voice_library_id": "pocket-voice-1",
         },
     )
 

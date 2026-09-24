@@ -1,5 +1,128 @@
 # Changelog
 
+## 0.6.61 — 2026-09-25 · no model needs a code change
+
+The owner's rule, recorded in `AGENTS.md` on 2026-09-24: *"my rule is never hardcoded — everything
+must be dynamic for all generators and models, because we always have a new model to add."* This
+release is the audit that made it true rather than aspirational, and the work of 73 findings.
+
+**The reported symptom was khmer-tts not appearing, and the cause was broader than it looked.**
+`native/StudioAPI.swift` decided voice-model support from a hardcoded family allowlist
+(`qwen3-tts`, `voxcpm*`, `omnivoice`), and the Audio picker lists only supported models — so four
+**shipped** families were invisible: `khmer-tts-mms` (VITS), `khmer-tts-female-onnx` (ONNX),
+`chatterbox-mlx` (4-bit and 8-bit) and `fish-audio-mlx` (8-bit and bf16) — **six of thirteen voice
+packages**. The catalog, Hub, manifests, library and all four kits offered them correctly; the app
+alone refused to list them. A test asserted the broken behaviour, so it was green by construction.
+
+**Everything in the audit's Tier A (18 rows) and Tier B (40 rows) is fixed**, verified against the
+tree rather than against the report — `research/hardcoded-model-lists-audit.md` now carries the
+disposition. What that means per studio:
+
+- **A new model is now data.** Families, engines and modalities are read from the producer's own
+  registry and the manifest; where a list is genuinely unavoidable it fails loudly naming the
+  missing entry and the file to update, the way the Hub's engine table already did.
+- **Voice**: one wiring table instead of six (`_ENGINE_REQUIREMENTS`, `_WIRED_FAMILIES`,
+  `_SECTIONED_FAMILIES`, four behaviour sets and 14 `long_form_policy` branches, nine of them for
+  families cut in ST-13.B). The MLX label and the "🍎 MLX only" filter read the family's own
+  `engine`, which is the bug that had already shipped once. Every cloning model is governed by its
+  published capabilities instead of a name substring, and a Whisper tokenizer source is derived
+  from the model's own manifest instead of defaulting to another model's vocabulary.
+- **Hub and Chat**: `chat-mlx` is in the modality vocabulary that the fleet join, the worker table
+  and the ledger all read. `chat` jobs are governed by the memory gate, appear in fleet activity,
+  and the Chat worker publishes a real activity snapshot instead of a permanently empty one.
+- **Subtitle**: the worker's catalog is *every manifest declaring its engine*, not the packages
+  whose id starts with `whisper-`. Each publishes its own `family`, languages and timestamp
+  support from the manifest rather than claiming Multilingual and word timestamps for everything.
+  Its default model comes from `"default": true` in the manifest, with the rule published.
+- **Native**: the Transcription picker no longer requires an engine whose name contains
+  "whisper"; image and music configurations no longer require the shipped engine's exact control
+  set (a second engine of either modality decoded to `nil` and vanished); the Chat page uses the
+  same model picker as the other four; the four per-modality display lists are derived from
+  `StudioFunction`; and the installer verifies every runtime the release manifest declares, not
+  just Voice's.
+- **Tooling**: the capture tool can reproduce all **24** shipped packages (it could rebuild 17),
+  and refuses to overwrite one it cannot; the fleet measurement covers music and chat; the image
+  runtime smoke imports every class the Image registry names, so a broken Z-Image-Turbo module
+  fails the smoke instead of failing on first use.
+
+**One companion relationship, one spelling.** A manifest declares what it cannot run without in
+`requires_packages`; `dependencies` was the first spelling and was read by nothing that resolved
+the relationship, so `chatterbox-4bit`/`chatterbox-8bit` (MLX 4-bit and 8-bit) shipped with their
+`s3tokenizerv2` tokenizer **never verified or downloaded** — the engine fetched it at generation
+time, which is the offline failure the declaration exists to prevent. `validate_manifest` now
+refuses the legacy spelling by name, and the whole catalog is migrated. Measured: exactly those two
+packages' verification receipts change, and they re-verify once; nothing else is affected.
+
+**A companion package now reaches the path the engine loads from.** This was a real bug with a
+measured proof: Pocket TTS 4-bit (MLX 4-bit) loads its tokenizer and preset voices by
+`hf_hub_download` through `HF_HUB_CACHE=<library>/hub`, and an installed package lived only at
+`<library>/<package_id>/<revision>/model/`. On a Mac whose cache had never seen the repo — a kit
+node that copied packages and nothing else — generation failed offline. Installation now mirrors
+each companion into the HF cache layout from the manifest's own `source.layout` and
+`files[].source_path` (no repo, family or filename list anywhere), hard-linking where it can,
+idempotent, and degrading with a named reason on a read-only library. Verified with the network
+off: the engine's exact call opens the mirrored `tokenizer.model`, sha256 `d461765a…`, and Pocket
+TTS 4-bit generated 3.36 s of audio, byte-identical across runs.
+
+**Published facts now carry their provenance.** Gateway Studio measured this from the consuming
+side: with nothing stated it fell back to a curated flat `context_window_tokens = 1,000,000` and
+`max_output_tokens = 128,000`, labelled *curated*, which a UI then showed as the model's own. The
+shipped **Qwen3.5-9B 4-bit** states `text_config.max_position_embeddings = 262144` in its own
+`config.json`; that is now what is published, with its source, and `max_output_tokens: 4096` is
+labelled as the worker's default because the checkpoint ships no `generation_config.json`. Where
+nothing states a value, nothing is published. The manifest's dead `parameters_source` pointer at a
+file neither the package nor the publisher ships is fixed.
+
+**Every lane publishes how to ask it for work.** `docs/lane-execution-contract.md` specifies
+`lane_contract`: the canonical operation, the parameters with the bounds that are enforced, the
+artifact form, the terminal vocabulary with `uncertain` marked **not terminal**, and what a cancel
+does not promise — built from each model's own limits, beside the validator that enforces them.
+Image, Music, Voice, Transcription and Chat all publish it, and `/api/hub/model-packages` now
+carries `modality` and the contract, so a scheduler needs one read instead of a best-effort second
+one joined on model id.
+
+**A version field carries a version.** Four of five workers answered the literal string
+`"standalone"` on `/api/health`, which the Hub republished as `workers[].studio_version` — a value
+that reads as data, is indistinguishable from a version that failed to load, and makes every Mac
+look like the same build. Every worker now reports the release it was staged from, through one
+shared reader, and the Hub refuses to republish a value that cannot be a version.
+
+**A message that stops at a colon is worse than no message.** A node detail read
+`could not reach the node: ` with nothing after it. Refusals now name the peer, the exception type
+and the reason; a fleet-credential refusal names the credential it required and the one it was
+offered; and an unknown engine names the engine and both files to register it in.
+
+**The owner-approved production floor moved to the model that has it.** The 3.2 GB live-free floor
+for Qwen3-TTS 12Hz 0.6B Base 8-bit (the 8 GB voice-cloning tier, measured cold requirement 3.15 GB)
+lived in the Hub, keyed by that exact repo id, because the Voice worker published no free floor. A
+model-keyed table in a consumer is the defect this release is about — the next model the owner
+proves would silently get nothing until somebody remembered to edit it — so the floor is now on the
+model's own catalog row (`min_free_memory_gb`) and the Hub's table is deleted. Two guards replace
+it: `memory_admission`'s reason now distinguishes "its worker publishes a 3.20 GB live-free floor
+and that is what is enforced" from "nothing was published, the generic 2.0 GB default applies"
+(it previously said the generic default applied *while enforcing 3.2*), and a test reads the
+shipped Voice row end to end so a row that loses the field fails rather than quietly relaxing.
+
+Also in this release: the two documents a reader is most likely to trust state numbers that a test
+now **recomputes** rather than a human maintains (the catalog is **24** packages /
+**70,529,384,759** bytes, and six engines ship); `tests/hub_regression`, the adapted-upstream parity
+suite, is in the verification command set instead of being hidden behind its own `collect_ignore`;
+and advisory commercial-licensing sentences are gone from shipped, user-visible copy, per the
+owner's 2026-09-22 rule — a licence is now a name and a source, stated once as a fact.
+
+**Verification.** `tests/` — **935 passed, 11 skipped**; `tests/hub_regression/cases` — **172
+passed**; `bash native/build.sh` and `tests/native/pool-probe.sh` green.
+
+**Open, and named rather than guessed:** Pocket TTS 4-bit (MLX 4-bit) ships eight preset voices
+(the `pocket-tts-preset-voices` package) and also declares cloning, and a model that offers both
+is reachable in only one tab today; the producer field to close it is a per-model `preset_speakers`
+roster derived from that package plus a published `modes` list. The audited reference-audio
+profiles exist only for the Qwen families, so private-upload reference preparation now refuses by
+name for the other cloning models instead of using a guessed copy — closing that needs measured
+profile records, not code. And the recorded voice smoke pilot names
+`Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit`, which the catalog cut in ST-13.B, so the smoke reports
+that role as unexercised until a shipped model's parameters are recorded.
+
 ## 0.6.60 — 2026-09-24 · Z-Image-Turbo 4-bit can be tried on an 8 GB Mac
 
 A one-line fix with an outsized effect, and it was mine. When Z-Image-Turbo 4-bit was added it

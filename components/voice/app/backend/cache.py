@@ -374,6 +374,60 @@ def prune_stale_incomplete(
     return {"removed_files": removed_files, "removed_bytes": removed_bytes}
 
 
+def manifest_root() -> Optional[Path]:
+    """The packaged manifest directory, when this app was staged with one."""
+    location = (os.environ.get("STUDIOHUB_MODEL_MANIFESTS") or "").strip()
+    return Path(location).expanduser() if location else None
+
+
+def manifest_for(repo: str) -> Optional[dict]:
+    """The packaged manifest for one model repository, or None.
+
+    A manifest is producer data: it names the exact revision, the model's own
+    parameters file and the companion packages it cannot run without. Readers
+    take the fact from here rather than restating it (see
+    `transcription.whisper_processor_repo`).
+    """
+    root = manifest_root()
+    if root is None:
+        return None
+    try:
+        paths = sorted(root.glob("*.json"))
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(manifest, dict) and manifest.get("model_id") == repo:
+            return manifest
+    return None
+
+
+def manifests_by_package_id() -> dict[str, dict]:
+    """Every packaged manifest, keyed by ``package_id``."""
+    root = manifest_root()
+    if root is None:
+        return {}
+    found: dict[str, dict] = {}
+    try:
+        paths = sorted(root.glob("*.json"))
+    except OSError:
+        return {}
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        package_id = str(manifest.get("package_id") or "")
+        if package_id:
+            found[package_id] = manifest
+    return found
+
+
 def _manifest_catalog() -> dict[str, tuple[str, str]]:
     """Map a model repository to (package_id, revision) from the packaged manifests."""
     location = (os.environ.get("STUDIOHUB_MODEL_MANIFESTS") or "").strip()

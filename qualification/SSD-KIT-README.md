@@ -4,8 +4,9 @@ Everything needed to install and test this on a Mac is in this folder, or in thi
 No step requires another machine, a download, or anything from the machine this kit was
 built on.
 
-- **App:** `Studio Hub.app` — version 0.4.0, build `f146bc0e`, `development_build: false`
-- **Models:** `model-library/` — 12 verified packages, ~29 GB
+- **App:** `Studio Hub.app` — its version and build are in `focused-release-manifest.json`,
+  written beside it when the kit was staged (a pinned version here goes stale the next build)
+- **Models:** `model-library/` — 24 verified packages, ~70.5 GB
 - **Receipts:** `focused-release-manifest.json`, `Studio Hub.app.tree-sha256`
 **Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)

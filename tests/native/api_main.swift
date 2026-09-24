@@ -121,6 +121,9 @@ final class FixtureProtocol: URLProtocol {
     static var lastMemoryToken = ""
     static var memoryReleaseCount = 0
     static var memoryUnavailable = false
+    /// When true, `/api/hub/model-packages` answers the way the Hub does when one manifest is
+    /// malformed: a 503 for the whole route, not a partial list.
+    static var packagesUnavailable = false
     /// Remote app-update fixture: the controller's identity, the descriptor it holds, and the
     /// artifact bytes its route returns. `releaseArtifactOverride` exists so a signed descriptor
     /// can be paired with different bytes to exercise the SHA-256 refusal.
@@ -184,6 +187,7 @@ final class FixtureProtocol: URLProtocol {
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
     static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
     static func setMemoryUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; memoryUnavailable = value }
+    static func setPackagesUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; packagesUnavailable = value }
     static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil,
                            trustedPublisher: [String: Any]? = nil) {
         lock.lock(); defer { lock.unlock() }
@@ -339,7 +343,12 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/catalog"):
             result = (200, "application/json", Self.catalogFixture)
         case ("GET", "/api/hub/model-packages"):
-            result = (200, "application/json", Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"}]}"#.utf8))
+            Self.lock.lock(); let packagesDown = Self.packagesUnavailable; Self.lock.unlock()
+            // One malformed manifest is enough for the Hub to refuse the whole route. The app must
+            // survive that with the catalog intact.
+            result = packagesDown
+                ? (503, "application/json", Data(#"{"detail":"PackageError: manifest for one model is malformed"}"#.utf8))
+                : (200, "application/json", Self.packagesFixture)
         case ("POST", "/api/hub/model-health/recheck"):
             let body = requestBody()
             Self.lock.lock()
@@ -536,12 +545,12 @@ final class FixtureProtocol: URLProtocol {
             // One Studio frees its model, one is mid-job and must be left alone.
             result = (200, "application/json", Data(#"{"ok":false,"action":"release","selected":2,"succeeded":1,"failed":1,"mode":null,"results":[{"id":"subtitle","ok":true,"result":"released","detail":null},{"id":"voice","ok":false,"result":"busy","detail":"Voice generation or transcription is active; memory was not released"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
-            result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
+            result = (200, "application/json", Self.transcriptionFixture)
         case ("GET", "/studio/transcription/api/transcribe/availability"):
             // The Subtitle studio reads its availability from the subtitle worker, not Voice.
-            result = (200, "application/json", Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true}]}"#.utf8))
+            result = (200, "application/json", Self.transcriptionFixture)
         case ("GET", "/studio/voice/api/generate/availability"):
-            result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}],"secondvoice_preset_speakers":[{"id":"Sophea","lang":"km","gender":"female","description":"Clear"},{"id":"Dara","lang":"km","gender":"male","description":"Warm"}]}"#.utf8))
         case ("GET", "/studio/voice/api/settings"):
             result = (200, "application/json", Data(#"{"hf_token_set":false,"hf_token_masked":""}"#.utf8))
         case ("POST", "/api/hub/model-packages/whisper-turbo/download"):
@@ -570,6 +579,12 @@ final class FixtureProtocol: URLProtocol {
                 ["id": "old-job", "modality": "voice"],
                 ["id": "image-job", "modality": "image"],
                 ["id": "music-job", "modality": "music"],
+                // One modality that maps to a Studio with no batch history, and one this build has
+                // never heard of. Both must be named in the startup note: the old filter skipped
+                // anything not on its list before the loop, so neither was shown, counted or
+                // reported.
+                ["id": "video-job", "modality": "video"],
+                ["id": "hologram-job", "modality": "hologram"],
             ]
             if pendingImage { batches.append(["id": "image-uncertain", "modality": "image"]) }
             if pendingMusic { batches.append(["id": "music-uncertain", "modality": "music"]) }
@@ -773,7 +788,50 @@ final class FixtureProtocol: URLProtocol {
 
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
     private static let catalogFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2}]}"#.utf8)
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
+
+    /// Shaped like the Hub's own reply. The same repo appears four times at different levels of
+    /// detail, exactly as the aggregate catalogue delivers it — one studio publishes the full
+    /// transcription contract, others only a name — so the app's dedupe is exercised rather than
+    /// assumed. A bare row sits both before and after the rich one: neither "first seen" nor "last
+    /// seen" may win, because both would lose the engine and cache state the Subtitle form needs.
+    private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
+
+    private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
+
+    /// The catalogue exactly as the fixture serves it, so a test can derive what the app must
+    /// show from the data the app was given instead of restating it by hand. A hand-written
+    /// expected list is what let the Audio picker keep rejecting families it had never heard of.
+    static var catalogModels: [[String: Any]] {
+        ((try? JSONSerialization.jsonObject(with: catalogFixture)) as? [String: Any])?["models"]
+            as? [[String: Any]] ?? []
+    }
+
+    /// The repos the fixture's Hub reports a package for.
+    static var packageModelIDs: Set<String> {
+        let models = ((try? JSONSerialization.jsonObject(with: packagesFixture)) as? [String: Any])?["models"]
+            as? [[String: Any]] ?? []
+        return Set(models.compactMap { $0["model_id"] as? String })
+    }
+
+    /// The Hub package id the fixture publishes for each repo, which is how the app addresses
+    /// verification and downloads.
+    static var packageIDsByRepo: [String: String] {
+        let models = ((try? JSONSerialization.jsonObject(with: packagesFixture)) as? [String: Any])?["models"]
+            as? [[String: Any]] ?? []
+        var result: [String: String] = [:]
+        for row in models {
+            guard let repo = row["model_id"] as? String, let package = row["package_id"] as? String else { continue }
+            result[repo] = package
+        }
+        return result
+    }
+
+    /// The transcription rows the worker's availability route publishes, exactly as served.
+    static var transcriptionModels: [[String: Any]] {
+        ((try? JSONSerialization.jsonObject(with: transcriptionFixture)) as? [String: Any])?["models"]
+            as? [[String: Any]] ?? []
+    }
 
     private func finish(_ result: (Int, String, Data), headers: [String: String] = [:]) {
         var fields = headers
@@ -876,7 +934,57 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
-        require(store.models.count == 8, "combined model catalog")
+        // What the app offers is every model the Hub publishes a form for, once each. Derived from
+        // the fixture's own payloads instead of a count: a number restates the answer and has to be
+        // edited by hand for every new model, which is exactly how the voice allowlist stayed green
+        // while six of thirteen packages were invisible.
+        let fixtureCatalogRepos = Set(FixtureProtocol.catalogModels.compactMap { entry -> String? in
+            guard let repo = entry["repo"] as? String else { return nil }
+            let capabilities = Set(entry["capabilities"] as? [String] ?? [])
+            let family = entry["family"] as? String ?? ""
+            let isChat = !capabilities.isDisjoint(with: ["chat.completion", "chat", "conversational",
+                                                         "text-generation"])
+                || family.lowercased().hasPrefix("chat")
+                || (entry["hub_modality"] as? String)?.lowercased() == "chat"
+            let hasForm = capabilities.contains("tts") || capabilities.contains("txt2img")
+                || capabilities.contains("music") || isChat
+            return hasForm ? repo : nil
+        })
+        let fixtureTranscriptionRepos = Set(FixtureProtocol.transcriptionModels.compactMap { $0["repo"] as? String })
+        require(store.models.count == Set(store.models.map(\.repo)).count,
+                "a model must appear once per repo, got: \(store.models.map(\.repo).sorted())")
+        require(Set(store.models.map(\.repo)) == fixtureCatalogRepos.union(fixtureTranscriptionRepos),
+                "every model the Hub publishes a form for must be listed, and nothing else: got \(Set(store.models.map(\.repo)).symmetricDifference(fixtureCatalogRepos.union(fixtureTranscriptionRepos)).sorted())")
+
+        // One row per model. The aggregate catalogue lists the same repo once per studio that
+        // carries it, at different levels of detail; a picker that repeats a model three times is
+        // wrong, and letting a bare row win would also lose the engine and cache state the Subtitle
+        // form needs. A bare row sits both before and after the rich one, so neither "first seen"
+        // nor "last seen" can pass.
+        let turboRows = store.models.filter { $0.function == .transcription && $0.repo == "mlx-community/whisper-large-v3-turbo" }
+        require(turboRows.count == 1, "one transcription row per model, got \(turboRows.count)")
+        require(turboRows.first?.label == "Whisper turbo" && turboRows.first?.cached == true
+                && turboRows.first?.supportsWordTimestamps == true && turboRows.first?.supported == true,
+                "the richest entry must win the dedupe, got: \(String(describing: turboRows.first))")
+        require(store.models.filter { $0.function == .transcription }.count == fixtureTranscriptionRepos.count,
+                "deduplicating must not drop a model that is genuinely listed once")
+        let chatterboxRows = store.models.filter { $0.function == .audio && $0.repo == "mlx-community/chatterbox-8bit" }
+        require(chatterboxRows.count == 1, "one audio row per model, got \(chatterboxRows.count)")
+        require(chatterboxRows.first?.family == "chatterbox-mlx"
+                && chatterboxRows.first?.capabilities.contains("voice-cloning") == true,
+                "the bare duplicate must not win over the rich catalogue entry")
+        // The preset roster is carried by the model that publishes it, and the chosen speaker is
+        // still seeded from it. It used to live in a global list the Audio page read directly, which
+        // is how a Khmer model would have been offered Qwen's voice names.
+        // The roster is carried by the model that publishes it, so the speaker follows the model:
+        // selecting the Qwen preset model must seed its own first voice.
+        store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+        require(store.audioSpeaker == "Ryan",
+                "the selected model's own published roster must seed the speaker default, got: \(store.audioSpeaker)")
+        for mode in VoiceMode.allCases {
+            require(!mode.emptyReason.contains("Qwen") && !mode.emptyReason.contains("VoxCPM2"),
+                    "the \(mode.rawValue) tab's empty copy must not hardcode a family, got: \(mode.emptyReason)")
+        }
 
         // Fleet: one app can be told what it is. The role is the Hub's own setting, saved
         // through its controller route, and the screen shows the Hub's answer rather than the
@@ -1208,28 +1316,45 @@ struct NativeAPITests {
 
         // Which job a voice model does. The Audio page is arranged by this, and getting it wrong
         // put a CustomVoice model on the cloning path, where it was asked for a reference voice it
-        // does not have.
+        // does not have. The rule is the catalog's own data, so a family this build has never seen
+        // still lands in the right tab.
         require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", family: "qwen3-tts",
-                         declaredClone: true, isCloneFamily: false) == .cloning,
+                         declaredClone: true) == .cloning,
                 "a Base tier clones")
         require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", family: "qwen3-tts",
-                         declaredClone: false, isCloneFamily: false) == .preset,
+                         declaredClone: false) == .preset,
                 "CustomVoice takes preset speakers")
         require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", family: "qwen3-tts",
-                         declaredClone: false, isCloneFamily: false) == .design,
+                         declaredClone: false) == .design,
                 "VoiceDesign takes a description")
         require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/VoxCPM2-4bit", family: "voxcpm-mlx",
-                         declaredClone: true, isCloneFamily: true) == .cloning,
+                         declaredClone: true) == .cloning,
                 "VoxCPM2 clones")
         require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/OmniVoice-bfloat16", family: "omnivoice",
-                         declaredClone: true, isCloneFamily: true) == .cloning,
+                         declaredClone: true) == .cloning,
                 "OmniVoice clones")
-        // A name that says nothing either way: the declared capability decides.
+        // A name that says nothing either way: the declared capability decides, whatever the family.
         require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-tts", family: "other",
-                         declaredClone: true, isCloneFamily: false) == .cloning,
+                         declaredClone: true) == .cloning,
                 "a declared clone capability must be believed")
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-tts", family: "other",
+                         declaredClone: false) == .preset,
+                "a model that declares no cloning is the preset form, not a forced clone")
+        // The Qwen tier name is scoped to Qwen: a name that merely contains "base" must not decide
+        // another family's contract.
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-base-tts", family: "other",
+                         declaredClone: false) == .preset,
+                "a non-Qwen name must never force the clone form")
+        // A family added to the catalog after this build. It must land correctly without the app
+        // knowing its name.
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/pocket-tts-4bit", family: "pocket-tts",
+                         declaredClone: true) == .cloning,
+                "an unknown clone-capable family must land in cloning")
+        require(NativeWorkspaceStore.voiceMode(repo: "someone/pocket-tts-4bit", family: "pocket-tts",
+                         declaredClone: false) == .preset,
+                "an unknown preset family must land in preset")
         require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-qwen", family: "qwen3-tts",
-                         declaredClone: false, isCloneFamily: false) == .preset,
+                         declaredClone: false) == .preset,
                 "an unnamed Qwen tier is the preset form, the only mode needing nothing but a name")
 
         // Which container a fetched result is in, read from its own bytes. Playback needs the
@@ -1546,15 +1671,22 @@ struct NativeAPITests {
         let beforeVerifyAll = FixtureProtocol.modelCalls().count
         await store.verifyInstalledModels()
         let verifyAll = Array(FixtureProtocol.modelCalls().dropFirst(beforeVerifyAll))
-        require(Set(verifyAll) == ["verify:synthetic-custom-voice", "verify:fixture-flux",
-                                   "verify:whisper-turbo", "verify:voxcpm2-4bit",
-                                   "verify:ace-step-1-5-turbo"],
-                "Verify All must check every installed model with a Hub package: \(verifyAll)")
-        require(verifyAll.count == 5, "Verify All must not verify a model twice")
-        // Seven catalog entries report as cached, but only five have an approved Hub package.
-        // The summary must say so rather than claim everything was checked.
-        require(store.modelNote == "Verified 5 of 7. Could not verify: Other TTS, Moonshine.",
+        // Derived, not listed: every installed model the Hub publishes a package for, exactly once.
+        let installedModels = store.models.filter { $0.cached }
+        let verifiable = installedModels.compactMap { model -> String? in
+            guard let package = FixtureProtocol.packageIDsByRepo[model.repo] else { return nil }
+            return "verify:\(package)"
+        }
+        require(Set(verifyAll) == Set(verifiable),
+                "Verify All must check every installed model with a Hub package: \(verifyAll.sorted())")
+        require(verifyAll.count == Set(verifiable).count, "Verify All must not verify a model twice")
+        require(store.modelNote?.hasPrefix("Verified \(verifiable.count) of \(installedModels.count).") == true,
                 "Verify All must report what it could not verify, got: \(store.modelNote ?? "nil")")
+        let unverifiable = installedModels.filter { FixtureProtocol.packageIDsByRepo[$0.repo] == nil }
+        for model in unverifiable {
+            require(store.modelNote?.contains(model.label) == true,
+                    "\(model.label) has no Hub package and must be named as unverified")
+        }
         require(store.modelNoteRepo == nil, "a library-wide summary must not be scoped to a model")
 
         // Model memory: one Hub route the app reads, with the mode names, thresholds and
@@ -1610,17 +1742,299 @@ struct NativeAPITests {
         await store.refreshMemoryPolicy()
         require(store.memoryInventory?.studios.count == 3, "the inventory must recover once the Hub answers again")
 
+        // One bad manifest must not blank the app. The Hub builds its package list from every
+        // manifest in a single pass, so one malformed manifest refuses the whole route; read inside
+        // a hard `try`, that threw the refresh, marked the Hub unreachable and emptied every model
+        // picker on every Mac - the chat-mlx failure. The catalog and the pickers must survive with
+        // the package information missing, and the operator must be told why every model suddenly
+        // reads as unsupported.
+        let modelsBeforePackageFailure = store.models.count
+        FixtureProtocol.setPackagesUnavailable(true)
+        await store.refresh()
+        require(store.isReachable, "a failed package list must not mark the Hub unreachable")
+        require(store.models.count == modelsBeforePackageFailure,
+                "a failed package list must leave the catalog and the model list populated")
+        require(store.models.allSatisfy { !$0.supported },
+                "with no package rows nothing can be installed or dispatched, and nothing may claim otherwise")
+        require(store.startupNote?.contains("package list") == true,
+                "a degraded package read needs a visible reason, got: \(store.startupNote ?? "nil")")
+        FixtureProtocol.setPackagesUnavailable(false)
+        await store.refresh()
+        require(store.isReachable && store.models.contains { $0.supported },
+                "the model list must recover once the Hub answers again")
+        require(store.models.count == modelsBeforePackageFailure,
+                "recovering must not duplicate or drop models")
+
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
-        require(supportedAudio.map(\.repo) == ["mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", "mlx-community/VoxCPM2-4bit"], "native Audio support guard")
-        // The heavy voice families must be reachable from the Audio form, not filtered out by the
-        // Qwen-only gate: VoxCPM2 and OmniVoice clone from a reference clip and were previously
+
+        // Every voice model the catalogue publishes as a TTS form and this Hub can dispatch must be
+        // selectable, and each must land in the tab its own catalog data implies. This is the
+        // invariant, derived from the fixture the app was actually given, rather than a restatement
+        // of the answer: the old guard asserted exactly Qwen and VoxCPM2 and stayed green while
+        // khmer-tts-mms, khmer-tts-onnx, chatterbox-mlx and fish-audio-mlx were invisible to every
+        // user. Any family added to the catalog now fails this test if the app forgets it.
+        let voiceCatalog = FixtureProtocol.catalogModels.filter { entry in
+            guard (entry["capabilities"] as? [String])?.contains("tts") == true,
+                  let repo = entry["repo"] as? String else { return false }
+            return FixtureProtocol.packageModelIDs.contains(repo)
+        }
+        require(Set(supportedAudio.map(\.repo)) == Set(voiceCatalog.compactMap { $0["repo"] as? String }),
+                "every dispatched voice model must be selectable, got: \(supportedAudio.map(\.repo).sorted())")
+        for entry in voiceCatalog {
+            guard let repo = entry["repo"] as? String else { continue }
+            let family = entry["family"] as? String ?? ""
+            let declaredClone = (entry["reference_audio"] as? [String: Any])
+                .flatMap { $0["supported"] as? Bool ?? $0["declared"] as? Bool }
+                ?? ((entry["capabilities"] as? [String])?.contains("voice-cloning") ?? false)
+            let model = store.models.first { $0.function == .audio && $0.repo == repo }
+            let expected: VoiceMode
+            if family == "qwen3-tts" {
+                let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
+                expected = name.contains("voicedesign") ? .design
+                    : name.contains("customvoice") ? .preset
+                    : name.contains("base") ? .cloning
+                    : (declaredClone ? .cloning : .preset)
+            } else {
+                expected = declaredClone ? .cloning : .preset
+            }
+            require(model?.voiceMode == expected,
+                    "\(repo) must land in \(expected.rawValue) — its catalog data says so")
+            require(model?.requiresReference == (expected == .cloning),
+                    "\(repo) must need a reference clip only when it clones")
+        }
+
+        // The four families this fix exists for, named so a reader sees the bug's own coverage.
+        // Khmer is preset-only: the catalogue declares tts + multilingual and no voice-cloning, and
+        // its generator rejects a reference voice. Chatterbox and Fish clone from a clip.
+        let khmer = store.models.first { $0.repo == "khmerttsopensource/khmer-tts" }
+        require(khmer?.supported == true && khmer?.voiceMode == .preset && khmer?.requiresReference == false,
+                "khmer-tts-mms must be selectable, in the preset tab, needing no reference clip")
+        require(khmer?.speakers.isEmpty == true && khmer?.publishesPresetRoster == false,
+                "a single-speaker family must not be offered another family's preset roster")
+        let qwenPreset = store.models.first { $0.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit" }
+        require(qwenPreset?.speakers == ["Ryan", "Aiden"] && qwenPreset?.publishesPresetRoster == true,
+                "the family that publishes a roster must be the only one offered it")
+        let khmerOnnx = store.models.first { $0.repo == "sengtha/khmer-tts-female-v2" }
+        require(khmerOnnx?.supported == true && khmerOnnx?.voiceMode == .preset,
+                "khmer-tts-onnx must be selectable, in the preset tab")
+        let chatterbox = store.models.first { $0.repo == "mlx-community/chatterbox-8bit" }
+        require(chatterbox?.supported == true && chatterbox?.voiceMode == .cloning
+                && chatterbox?.requiresReference == true,
+                "chatterbox-mlx must be selectable, in the cloning tab")
+        let fish = store.models.first { $0.repo == "mlx-community/fish-audio-s2-pro-8bit" }
+        require(fish?.supported == true && fish?.voiceMode == .cloning,
+                "fish-audio-mlx must be selectable, in the cloning tab")
+        // The family arriving from the parallel job: it supports cloning, and it must land correctly
+        // without this build knowing the name "pocket-tts" at all.
+        let pocket = store.models.first { $0.repo == "mlx-community/pocket-tts-4bit" }
+        require(pocket?.supported == true && pocket?.voiceMode == .cloning && pocket?.requiresReference == true,
+                "an unknown clone-capable family must be selectable in the cloning tab")
+
+        // The heavy voice families must be reachable from the Audio form, not filtered out by a
+        // family gate: VoxCPM2 and OmniVoice clone from a reference clip and were previously
         // excluded despite working end to end through the Hub.
         let vox = store.models.first { $0.repo == "mlx-community/VoxCPM2-4bit" }
         require(vox?.requiresReference == true, "VoxCPM2 must be exposed as a clone model")
         require(vox?.requiresTranscript == false, "VoxCPM2 does not need a reference transcript")
-        require(supportedSTT.map(\.repo) == ["mlx-community/whisper-large-v3-turbo"], "native Transcription support guard")
-        require(store.models.first { $0.repo == "other/tts" }?.supportNote.contains("packaged model catalog") == true, "unsupported runtime model needs a catalog note")
+        require(vox?.speakers.isEmpty == true && vox?.publishesPresetRoster == false,
+                "a cloning model publishes no preset roster")
+        // Which transcription models are offered is the producer's own answer: the worker lists the
+        // model and the Hub publishes a package for it. The guard this replaces asserted the
+        // picker equalled one hardcoded repo, and the fixture's only other engine also had no
+        // package — so the assertion passed for two independent reasons and could not say which
+        // gate did the work. Moonshine now has a package, so only the engine-name gate could
+        // exclude it, and a Whisper-spelled model with no package proves the package gate still
+        // does real work.
+        let packagedSTT = Set(FixtureProtocol.transcriptionModels.compactMap { row -> String? in
+            guard let repo = row["repo"] as? String, FixtureProtocol.packageModelIDs.contains(repo) else { return nil }
+            return repo
+        })
+        require(Set(supportedSTT.map(\.repo)) == packagedSTT,
+                "every transcription model the Hub publishes a package for must be selectable, got: \(supportedSTT.map(\.repo).sorted())")
+        let moonshine = store.models.first { $0.repo == "moonshine-ai/moonshine-base" }
+        require(moonshine?.supported == true && moonshine?.cached == true,
+                "an engine the worker reports cached and the Hub packages must be offered whatever it is called")
+        require(moonshine?.family == "moonshine",
+                "a model's engine must be reported as the worker named it, got: \(moonshine?.family ?? "nil")")
+        require(moonshine?.supportNote.contains("Whisper") == false,
+                "a non-Whisper engine must not be described as a Whisper contract, got: \(moonshine?.supportNote ?? "nil")")
+        require(moonshine?.supportNote.contains("moonshine") == true,
+                "the note must name the engine the worker published, got: \(moonshine?.supportNote ?? "nil")")
+        let unpackagedSTT = store.models.first { $0.repo == "fixture/whisper-unpackaged" }
+        require(unpackagedSTT?.supported == false
+                && unpackagedSTT?.supportNote.contains("packaged model catalog") == true,
+                "an engine name alone must not make a model dispatchable: with no Hub package it is listed with a reason")
+        // The runtime's own `recommended` flag decides which model reads as the tested one, not a
+        // repo written down in the app.
+        let recommendedSTT = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
+        require(recommendedSTT?.supportNote.contains("Recommended") == true,
+                "the model the worker recommends must be described that way, got: \(recommendedSTT?.supportNote ?? "nil")")
+
+        // B24: a second engine of the same modality publishes a different control set. The shipped
+        // engine's exact key set is not a membership test — the model's own published controls are.
+        let imageCatalog = FixtureProtocol.catalogModels.filter { entry in
+            guard (entry["capabilities"] as? [String])?.contains("txt2img") == true,
+                  let repo = entry["repo"] as? String else { return false }
+            return FixtureProtocol.packageModelIDs.contains(repo)
+        }
+        let imagePickers = store.supportedModels(for: .image)
+        require(Set(imagePickers.map(\.repo)) == Set(imageCatalog.compactMap { $0["repo"] as? String }),
+                "every image model the Hub publishes a package for must be selectable, got: \(imagePickers.map(\.repo).sorted())")
+        let zimage = store.models.first { $0.repo == "fixture/zimage" }
+        require(zimage?.supported == true,
+                "a second image engine that publishes no guidance and no image_sizes must still be selectable")
+        store.imageModel = "fixture/zimage"
+        require(store.imageConfiguration?.stepsField == 8,
+                "the model's own published steps default must be used, got: \(String(describing: store.imageConfiguration?.stepsField))")
+        require(store.imageConfiguration?.guidanceField == nil,
+                "a control this model never publishes must not be invented")
+        require(store.imageConfiguration?.seedField == -1,
+                "the model's own published seed default must be used")
+        require(store.imageConfiguration?.sizes.count == 1
+                && store.imageConfiguration?.sizes.first?.width == 1024,
+                "a model publishing no image_sizes generates at the size its own defaults name")
+        require(store.imageConfiguration?.defaults.guidance == nil,
+                "the stored settings must carry no guidance for a model that has none")
+        store.imagePrompt = "A fixture image from a second engine"
+        await store.generateImage()
+        require(store.error == nil, "a differently-shaped image engine must be able to generate: \(store.error ?? "none")")
+        let zimageParams = (FixtureProtocol.generatedBody()?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(zimageParams?["steps"] as? Int == 8, "the model's own steps must be sent")
+        require(zimageParams?["guidance"] == nil,
+                "a control the model does not publish must be left out of the request for the engine to default")
+        require(zimageParams?["width"] as? Int == 1024 && zimageParams?["height"] as? Int == 1024,
+                "the size must be the one the model publishes")
+        store.imageModel = "fixture/flux"
+        require(store.imageConfiguration?.guidanceField == 1.0,
+                "switching back must load the shipped engine's own controls")
+
+        // The same rule for Music: a second engine publishing only a length and a step count is
+        // still selectable, and the controls it never named are not sent.
+        let musicCatalog = FixtureProtocol.catalogModels.filter { entry in
+            guard (entry["capabilities"] as? [String])?.contains("music") == true,
+                  let repo = entry["repo"] as? String else { return false }
+            return FixtureProtocol.packageModelIDs.contains(repo)
+        }
+        let musicPickers = store.supportedModels(for: .music)
+        require(Set(musicPickers.map(\.repo)) == Set(musicCatalog.compactMap { $0["repo"] as? String }),
+                "every music model the Hub publishes a package for must be selectable, got: \(musicPickers.map(\.repo).sorted())")
+        let secondMusic = store.models.first { $0.repo == "fixture/second-music" }
+        require(secondMusic?.supported == true, "a second music engine with a different control set must be selectable")
+        store.musicModel = "fixture/second-music"
+        require(store.musicConfiguration?.defaults.durationSeconds == 20.0, "the model's own duration default")
+        require(store.musicConfiguration?.guidanceField == nil && store.musicConfiguration?.shiftField == nil,
+                "controls this music engine never publishes must not be invented")
+        store.musicModel = "ACE-Step/Ace-Step1.5"
+
+        // B25: a chat model is whatever the catalogue publishes as one. The capability is spelled
+        // several ways across workers, and only two spellings were matched before.
+        let chatPickers = store.supportedModels(for: .chat)
+        let chatRepos = Set(chatPickers.map(\.repo))
+        for repo in ["Qwen/Qwen3.5-9B", "fixture/chat-conversational", "fixture/chat-family",
+                     "fixture/chat-annotated"] {
+            require(chatRepos.contains(repo),
+                    "\(repo) is published as a chat form and must be selectable, got: \(chatRepos.sorted())")
+        }
+        require(!chatRepos.contains("mlx-community/whisper-large-v3-turbo"),
+                "a model the catalogue does not publish as a chat form must not appear in the Chat picker")
+        require(store.chatModel == "Qwen/Qwen3.5-9B",
+                "the Chat page must open on the first chat model the Hub offers, got: \(store.chatModel)")
+
+        // B26: the Audio page opens on a model that is really in its own list, on the tab that
+        // model belongs to. The old repair wrote a hardcoded repo into the selection, so on a
+        // library without that exact model the page opened on nothing and Generate stayed shut.
+        require(store.supportedModels(for: .audio).contains { $0.repo == store.audioModel },
+                "the Audio selection must be one of the models the Audio picker lists, got: \(store.audioModel)")
+        require(store.supportedModels(for: .audio).contains { $0.repo == store.audioModel && $0.voiceMode == store.audioMode },
+                "the Audio tab must be the one the selected model belongs to")
+
+        // B29: the display and aggregation lists are derived, so a Studio cannot be missing from
+        // the sidebar, the status line or the history tabs.
+        let engineFunctions = StudioFunction.allCases.filter { $0.hasEngine }
+        require(Set(StudioPage.create.compactMap { $0.function }) == Set(engineFunctions),
+                "every Studio with an engine must have a Create page, got: \(StudioPage.create)")
+        require(StudioPage.comingLater.allSatisfy { $0.function?.hasEngine == false },
+                "the Coming later section must hold exactly the Studios with no engine")
+        require(Set(StudioFunction.allCases.map { StudioPage.page(for: $0) }) == Set(StudioFunction.allCases.map { Optional(StudioPage(rawValue: $0.rawValue)) }),
+                "every Studio must keep a page whose raw value matches, got: \(StudioFunction.allCases.map { $0.rawValue })")
+        // `HistoryTab` and the Jobs page derive from this same pair — `hasBatchHistory` for the
+        // tabs, `jobHistories` for the sections — so asserting the two here is asserting the tab
+        // list without needing the SwiftUI layer in this binary.
+        let historyFunctions = Set(store.jobHistories.map(\.function))
+        require(historyFunctions == Set(StudioFunction.allCases.filter { $0.hasBatchHistory }),
+                "every Studio with a Hub batch history must have a history tab and a Jobs section, got: \(historyFunctions.map(\.rawValue).sorted())")
+        for history in store.jobHistories {
+            require(!history.function.hasEngine || history.jobs.allSatisfy { !$0.id.isEmpty },
+                    "\(history.function.rawValue) rows must be real jobs")
+        }
+
+        // B28: "Use in …" must point the Studio that owns the model at it. It used to set the
+        // Subtitle selection for every non-audio model.
+        for function in engineFunctions where function != .video {
+            guard let model = store.models.first(where: { $0.function == function && $0.supported }) else { continue }
+            store.select(model)
+            let selected = store.supportedModels(for: function).contains { $0.repo == model.repo }
+            require(selected, "Use in \(function.rawValue) must select the model in its own picker, got: \(model.repo)")
+        }
+        store.select(store.models.first { $0.repo == "Qwen/Qwen3.5-9B" }!)
+        require(store.chatModel == "Qwen/Qwen3.5-9B", "Use in Chat must set the Chat selection, not Subtitle")
+        require(store.transcriptionModel != "Qwen/Qwen3.5-9B", "a Chat model must never become the Subtitle selection")
+
+        // B27: a preset roster belongs to the family that published it and is lent to no other.
+        let secondPreset = store.models.first { $0.repo == "fixture/second-preset" }
+        require(secondPreset?.speakers == ["Sophea", "Dara"],
+                "a second preset family's own published roster must reach its model, got: \(String(describing: secondPreset?.speakers))")
+        require(secondPreset?.publishesPresetRoster == true, "a family that published a roster must say so")
+        store.audioModel = "fixture/second-preset"
+        require(store.audioSpeaker == "Sophea",
+                "the chosen speaker must follow the selected model's roster, got: \(store.audioSpeaker)")
+        store.audioModel = "khmerttsopensource/khmer-tts"
+        require(store.audioSpeaker.isEmpty, "a single-voice family must not be handed another family's speaker")
+        store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+        require(store.audioSpeaker == "Ryan", "selecting the Qwen preset model must seed its own roster again")
+
+        // B23: a batch whose modality this build cannot place is named, not skipped before the
+        // loop. Both the fixture's unknown modality and the one that maps to a Studio with no
+        // batch history must appear in the startup note.
+        require(store.startupNote?.contains("hologram") == true,
+                "a modality with no Studio must be reported by name, got: \(store.startupNote ?? "nil")")
+        require(store.startupNote?.contains("video") == true,
+                "a Studio with no batch history must be reported by name, got: \(store.startupNote ?? "nil")")
+        require(store.startupNote?.contains("native/StudioAPI.swift") == true,
+                "the report must name the file to update, got: \(store.startupNote ?? "nil")")
+        require(store.audioJobs.allSatisfy { $0.id != "hologram-job" && $0.id != "video-job" },
+                "an unplaceable batch must not be filed under another Studio's history")
+        store.clearStartupNote()
+
+        // B31: the worker owns the voice-library vocabulary. Render what it published, and offer
+        // the short list only where the worker supplied nothing.
+        require(NativeVoice.genderLabel(for: "m") == "Male" && NativeVoice.genderLabel(for: "f") == "Female",
+                "the worker's own gender codes must be spelled out")
+        require(NativeVoice.genderLabel(for: "nonbinary") == "Nonbinary",
+                "an out-of-vocabulary gender must be rendered, not replaced with Neutral")
+        require(NativeVoice.genderLabel(for: "") == "Not stated",
+                "a field the worker did not supply must say so rather than claim a value")
+        require(NativeVoice.languageChoices(published: ["km", "en"]).contains("km"),
+                "a language the library holds must be offered: the app cannot tag only its own list")
+        require(NativeVoice.languageChoices(published: []).contains("en"),
+                "with no published language the short fallback list is offered")
+        require(NativeVoice.licenseChoices(current: "studio-licence").contains { $0.id == "studio-licence" },
+                "a licence the worker published must stay selectable, not silently blank the picker")
+
+        // A model the catalog does not declare drivable is still handled sensibly: it is offered
+        // with a truthful reason, and nothing claims it can run here. Hiding it would put the app
+        // back where it started; claiming it is ready would be worse.
+        require(store.models.first { $0.repo == "other/tts" }?.supported == false
+                && store.models.first { $0.repo == "other/tts" }?.supportNote.contains("packaged model catalog") == true,
+                "a model with no Hub package must be listed with a catalog note, not hidden")
+        let unwired = store.models.first { $0.repo == "fixture/unwired-voice" }
+        require(unwired?.supported == true, "a shipped model must stay visible even before its runtime is ready")
+        require(unwired?.runtimeReady == false, "a family the runtime does not report must never be shown as ready")
+        require(unwired?.voiceMode == .preset, "a model that declares no cloning is the preset form")
+        require(!store.models.contains { $0.repo == "mlx-community/S3TokenizerV2" },
+                "a companion codec the catalogue does not publish as a TTS form is not a voice model")
+
         require(store.audioJobs.first?.id == "old-job", "existing audio jobs must load")
         require(store.downloads.first?.percent == 50, "download progress must load")
         await store.startDownload(supportedSTT[0])
@@ -1635,7 +2049,7 @@ struct NativeAPITests {
         await store.generateAudio()
         require(FixtureProtocol.generatedBodies().count == submitsBeforeUnsupported, "unsupported voice model reached Hub dispatch")
         require(store.error?.contains("packaged model catalog") == true, "unsupported voice model needs an explanation")
-        store.audioModel = NativeWorkspaceStore.qwenCustomVoice
+        store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 
         store.audioText = "Hello locally"
         store.audioSpeaker = "Ryan"
@@ -1655,6 +2069,20 @@ struct NativeAPITests {
                 "the engine's own pace must be sent explicitly, got: \(String(describing: items?.first?["params"]))")
         require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
         require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
+
+        // A newly visible preset family must submit as itself. Khmer VITS has one built-in speaker
+        // and no roster, so the app must not lend it the Qwen names it happens to be holding: the
+        // job is sent with no speaker rather than with a voice the model has never heard of.
+        store.audioModel = "khmerttsopensource/khmer-tts"
+        store.audioText = "សួស្តី"
+        store.audioLanguage = "km"
+        await store.generateAudio()
+        require(store.error == nil, "a preset family must generate; error=\(store.error ?? "none")")
+        let khmerParams = (FixtureProtocol.generatedBody()?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(khmerParams?["preset_speaker"] as? String == "",
+                "a single-speaker model must not be sent another family's preset speaker, got: \(String(describing: khmerParams))")
+        require(khmerParams?["speed"] as? Double == 1.0, "the engine's own pace must still be sent")
+        store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 
         // A voice clip is the result the owner most cares about, and it used to be saved
         // without being checked or receipted at all: a damaged WAV could be written silently,
@@ -2457,21 +2885,49 @@ struct NativeAPITests {
         try FileManager.default.createDirectory(at: installParent, withIntermediateDirectories: true)
         let targetApp = installParent.appendingPathComponent("Studio Hub.app")
         let stagedApp = installParent.appendingPathComponent("staged/Studio Hub.app")
-        func makeFakeApp(at app: URL, build: String, withRuntime: Bool) throws {
+        /// One staged app, with the release manifest the real build writes and, for each component
+        /// named, the runtime paths that component requires. `components` is the caller's list, so a
+        /// test can omit exactly one runtime and prove that component is what is checked.
+        func makeFakeApp(at app: URL, build: String,
+                         components: [String: [String: Any]] = [
+                            "voice": [:],
+                            "hub": ["runtime": "voice"],
+                         ],
+                         includeMusicOverlay: Bool = true) throws {
             let contents = app.appendingPathComponent("Contents")
-            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            let resources = contents.appendingPathComponent("Resources")
+            try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
             let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>StudioHubBuild</key><string>\(build)</string></dict></plist>"
             try Data(plist.utf8).write(to: contents.appendingPathComponent("Info.plist"))
-            let runtime = app.appendingPathComponent(ReleaseInstaller.requiredRuntime)
-            try FileManager.default.createDirectory(at: runtime.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            if withRuntime {
-                try Data("#!/bin/sh\n".utf8).write(to: runtime)
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.path)
+            let manifest: [String: Any] = ["schema": "studiohub.standalone-release",
+                                           "schema_version": 1, "version": "0.6.50",
+                                           "components": components]
+            try JSONSerialization.data(withJSONObject: manifest)
+                .write(to: resources.appendingPathComponent("release-manifest.json"))
+            // Every declared component owns its worker entry point, derived from its own name, and
+            // exactly the paths its named runtime must carry — both read from the installer's own
+            // table, so the fixture cannot drift from what the installer checks.
+            for name in components.keys {
+                let worker = resources.appendingPathComponent("\(name)_worker.py")
+                try Data("# worker\n".utf8).write(to: worker)
+            }
+            for (_, record) in components {
+                let runtime = (record["runtime"] as? String) ?? "voice"
+                guard let paths = ReleaseInstaller.runtimePaths[runtime] else { continue }
+                for relative in paths {
+                    // The Music overlay is created only when the caller asked for it, so one test
+                    // can leave it out.
+                    if !includeMusicOverlay && relative.contains("runtimes/music") { continue }
+                    let file = app.appendingPathComponent(relative)
+                    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                            withIntermediateDirectories: true)
+                    try Data("#!/bin/sh\n".utf8).write(to: file)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+                }
             }
         }
-        try makeFakeApp(at: targetApp, build: "currentbuild", withRuntime: true)
-        try makeFakeApp(at: stagedApp, build: "newbuild", withRuntime: true)
+        try makeFakeApp(at: targetApp, build: "currentbuild")
+        try makeFakeApp(at: stagedApp, build: "newbuild")
         let installer = ReleaseInstaller(targetApp: targetApp, attach: { _, _ in }, detach: { _ in })
         let swapDescriptor = ReleaseDescriptor(json: descriptor)!
         let landed = try installer.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
@@ -2484,16 +2940,75 @@ struct NativeAPITests {
         require(landedPlist?["StudioHubBuild"] as? String == "newbuild",
                 "the target must hold the new build after the swap")
 
-        // An incomplete staged app is refused before anything is moved.
-        let incomplete = installParent.appendingPathComponent("incomplete/Studio Hub.app")
-        try makeFakeApp(at: incomplete, build: "newbuild", withRuntime: false)
+        // An app whose manifest declares a runtime it does not carry is refused before anything is
+        // moved. Each modality is checked, not just Voice: a release missing the Image runtime used
+        // to install and look healthy until the Image worker failed.
         let targetBefore = try Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist"))
+        let allComponents: [String: [String: Any]] = [
+            "voice": [:],
+            "hub": ["runtime": "voice"],
+            "image": ["runtime": "image"],
+            "music": ["runtime": "voice+music-overlay"],
+            "chat": ["runtime": "voice"],
+            "subtitle": ["runtime": "voice"],
+        ]
+        for missing in ["voice", "image", "music", "chat", "subtitle"] {
+            let incomplete = installParent.appendingPathComponent("missing-\(missing)/Studio Hub.app")
+            try makeFakeApp(at: incomplete, build: "newbuild", components: allComponents)
+            // Remove the component's own worker entry point, which its release manifest declares.
+            try FileManager.default.removeItem(
+                at: incomplete.appendingPathComponent("Contents/Resources/\(missing)_worker.py"))
+            do {
+                _ = try installer.swapStagedApp(staged: incomplete, descriptor: swapDescriptor)
+                fatalError("an app whose release manifest declares \(missing) but does not carry its worker must be refused")
+            } catch {
+                require(error.localizedDescription.contains("\(missing)_worker.py"),
+                        "the refusal must name the missing file, got: \(error.localizedDescription)")
+                let targetAfter = try Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist"))
+                require(targetBefore == targetAfter, "a refused staged app must leave the installed app untouched")
+            }
+        }
+        // The shared base runtime every worker rides on, and the Music overlay the Hub's own
+        // `_music_spec` requires before it will start that worker.
+        for (label, relative) in [("voice runtime", "Contents/Resources/runtimes/voice"),
+                                  ("music overlay", "Contents/Resources/runtimes/music")] {
+            let incomplete = installParent.appendingPathComponent("missing-\(label)/Studio Hub.app")
+            try makeFakeApp(at: incomplete, build: "newbuild", components: allComponents)
+            try FileManager.default.removeItem(at: incomplete.appendingPathComponent(relative))
+            do {
+                _ = try installer.swapStagedApp(staged: incomplete, descriptor: swapDescriptor)
+                fatalError("an app with no \(label) must be refused")
+            } catch {
+                require(error.localizedDescription.contains(relative),
+                        "the refusal must name the missing path, got: \(error.localizedDescription)")
+            }
+        }
+        // An app with no release manifest at all cannot be checked, so it is refused with a reason
+        // rather than installed on the strength of one hardcoded path.
+        let noManifest = installParent.appendingPathComponent("no-manifest/Studio Hub.app")
+        try makeFakeApp(at: noManifest, build: "newbuild")
+        try? FileManager.default.removeItem(at: noManifest.appendingPathComponent(ReleaseInstaller.releaseManifest))
         do {
-            _ = try installer.swapStagedApp(staged: incomplete, descriptor: swapDescriptor)
-            fatalError("an app with no bundled python3 must be refused")
+            _ = try installer.swapStagedApp(staged: noManifest, descriptor: swapDescriptor)
+            fatalError("an app with no release manifest must be refused")
         } catch {
-            let targetAfter = try Data(contentsOf: targetApp.appendingPathComponent("Contents/Info.plist"))
-            require(targetBefore == targetAfter, "a refused staged app must leave the installed app untouched")
+            require(error.localizedDescription.contains("release-manifest.json"),
+                    "the refusal must name the missing manifest, got: \(error.localizedDescription)")
+        }
+        // A component whose runtime name this installer does not know is refused by name, naming
+        // both files to update.
+        let unknownRuntime = installParent.appendingPathComponent("unknown-runtime/Studio Hub.app")
+        try makeFakeApp(at: unknownRuntime, build: "newbuild",
+                        components: ["voice": [:], "hologram": ["runtime": "holo-render"]])
+        do {
+            _ = try installer.swapStagedApp(staged: unknownRuntime, descriptor: swapDescriptor)
+            fatalError("a manifest naming an unknown runtime must be refused")
+        } catch {
+            let text = error.localizedDescription
+            require(text.contains("holo-render") && text.contains("hologram"),
+                    "the refusal must name the component and the runtime, got: \(text)")
+            require(text.contains("native/UpdateClient.swift"),
+                    "the refusal must name the file to update, got: \(text)")
         }
         updateStore.disconnect()
 

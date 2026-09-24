@@ -1,6 +1,7 @@
 """The first Music package has one installer-owned checkpoint layout."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import importlib.util
 import os
@@ -19,6 +20,62 @@ from components import model_packages
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "model-manifests" / "ace-step-1-5-turbo.json"
+
+# A third music model, used only by these tests.  It is deliberately unlike both
+# shipped models: its own package, revision, runtime contract and caps.
+THIRD_REPO = "fixture/third-music-model"
+THIRD_PACKAGE_ID = "fixture-third-medium"
+THIRD_REVISION = "c" * 40
+THIRD_DEFAULTS = {
+    "duration_seconds": 12, "steps": 4, "guidance_scale": 2.0, "shift": 1.0,
+    "seed": -1, "instrumental": True, "lyrics": "[Instrumental]",
+    "vocal_language": "unknown", "dit_model": "dit_third", "lm_model": "third-lm",
+}
+THIRD_LIMITS = {
+    "min_duration_seconds": 2, "max_duration_seconds": 90,
+    "single_pass_max_seconds": 90, "min_steps": 1, "max_steps": 12,
+    "min_guidance": 0.0, "max_guidance": 12.0, "min_seed": -1, "max_seed": 1000,
+}
+THIRD_QUALIFICATION = {
+    "historical_source_workload": "fixture third model",
+    "packaged_inference": "fixture only",
+}
+
+
+def third_model():
+    """One ModelEntry that states every one of its own per-model facts."""
+    from components.music.app.backend import catalog
+
+    return catalog.ModelEntry(
+        repo=THIRD_REPO,
+        label="Fixture Third Music Model",
+        family="fixture-third",
+        checkpoint="dit_third",
+        size_gb=1.0,
+        gated=False,
+        package_id=THIRD_PACKAGE_ID,
+        package_root="model/third",
+        revision=THIRD_REVISION,
+        runtime=catalog.RUNTIME_ACE_STEP,
+        defaults=dict(THIRD_DEFAULTS),
+        limits=dict(THIRD_LIMITS),
+        qualification=dict(THIRD_QUALIFICATION),
+        min_unified_memory_gb=8,
+        sample_rate_hz=44100,
+        channels=2,
+        license_name="Fixture License",
+        license_source="fixture",
+        capabilities=("music", "text-to-music"),
+        tiers=(),
+        long_form=catalog.LongFormStrategy(
+            single_pass_max_seconds=90, single_pass_cap_source="fixture",
+            beyond_cap="fixture", repaint_task_type="", repaint_mode="",
+            repaint_strength=0.0, repaint_latent_crossfade_frames=0,
+            repaint_wav_crossfade_sec=0.0, note="fixture"),
+        default_lm_model="third-lm",
+        inference_steps=4,
+        guidance_scale=2.0,
+    )
 
 
 class MusicPackageContractTests(unittest.TestCase):
@@ -105,18 +162,192 @@ class MusicPackageContractTests(unittest.TestCase):
         self.assertEqual(report["package"]["state"], "missing")
         self.assertNotIn("checkpoints", report)
 
-    def test_catalog_and_requests_offer_only_the_packaged_model_set(self):
+    def test_every_catalog_model_publishes_its_own_package_identity_and_revision(self):
+        """The invariant, not a membership list.
+
+        The assertion that used to live here pinned ``CATALOG`` to exactly the two
+        repos that shipped, so a third model that silently inherited ACE-Step's
+        manifest, package id, package root or revision could not fail it.  This
+        walks whatever the catalog holds and requires each model's published
+        identity to be its own — and unique — so the next model is covered.
+        """
+        from components.music.app.backend import catalog
+
+        packages: dict[str, str] = {}
+        for model in catalog.CATALOG:
+            with self.subTest(model=model.repo):
+                self.assertTrue(model.package_id, "the entry declares no package id")
+                self.assertTrue(model.package_root, "the entry declares no package root")
+                self.assertTrue(model.revision, "the entry declares no revision")
+                self.assertTrue(model.runtime, "the entry declares no runtime")
+                self.assertTrue(model.defaults, "the entry declares no defaults")
+                self.assertTrue(model.limits, "the entry declares no limits")
+                self.assertTrue(model.qualification, "the entry declares no qualification")
+                self.assertEqual(model.manifest_name, f"{model.package_id}.json")
+                self.assertEqual(catalog.package_id_for(model.repo), model.package_id)
+                self.assertEqual(catalog.manifest_name_for(model.repo), model.manifest_name)
+                self.assertEqual(catalog.package_root_for(model.repo), model.package_root)
+                self.assertEqual(catalog.revision_for(model.repo), model.revision)
+                self.assertEqual(catalog.runtime_for(model.repo), model.runtime)
+                self.assertNotIn(
+                    model.package_id, packages,
+                    f"{model.repo} reuses {packages.get(model.package_id)}'s package")
+                packages[model.package_id] = model.repo
+
+    def test_a_model_that_states_no_own_contract_cannot_be_registered(self):
+        """A missing per-model fact is a construction error, not a silent fallback."""
+        from components.music.app.backend import catalog
+
+        with self.assertRaises(TypeError) as caught:
+            catalog.ModelEntry(repo="fixture/no-contract", label="No contract",
+                               family="fixture", checkpoint="c", size_gb=1.0,
+                               gated=False)
+        for field_name in ("package_id", "package_root", "revision", "runtime",
+                           "defaults", "limits", "qualification"):
+            self.assertIn(field_name, str(caught.exception))
+
+    def test_a_third_music_model_publishes_its_own_contract(self):
+        """The regression test for the old per-repo maps and the two-way if/else.
+
+        Before this, a third entry was published with ACE-Step's manifest name,
+        package id, package root, revision, duration caps, defaults and
+        qualification text while its own label and capabilities were correct —
+        partly-right data nobody would spot.
+        """
+        from components.music.app.backend import catalog
+
+        third = third_model()
+        with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (third,)):
+            rows = published_rows(catalog.CATALOG)
+            row = rows[third.repo]
+            first = rows[catalog.MAIN_REPO]
+
+            self.assertEqual(row["name"], third.label)
+            self.assertEqual(row["model_revision"], third.revision)
+            self.assertEqual(row["qualified_revision"], third.revision)
+            self.assertEqual(row["cache"]["package_id"], third.package_id)
+            self.assertEqual(row["generation_defaults"], third.defaults)
+            self.assertEqual(row["generation_limits"], third.limits)
+            self.assertEqual(row["qualification"], third.qualification)
+            # Nothing above may be the first model's answer.
+            self.assertNotEqual(row["model_revision"], first["model_revision"])
+            self.assertNotEqual(row["cache"]["package_id"], first["cache"]["package_id"])
+            self.assertNotEqual(row["generation_limits"], first["generation_limits"])
+            self.assertNotEqual(row["qualification"], first["qualification"])
+            # The identity getters the package cache uses resolve that same entry.
+            self.assertEqual(catalog.package_id_for(third.repo), third.package_id)
+            self.assertEqual(catalog.manifest_name_for(third.repo), third.manifest_name)
+            self.assertEqual(catalog.package_root_for(third.repo), third.package_root)
+            self.assertEqual(catalog.revision_for(third.repo), third.revision)
+
+    def test_an_unregistered_music_repo_is_refused_by_name(self):
+        """No getter may fall back to ACE-Step for a repo the catalog lacks."""
+        from components.music.app.backend import catalog
+
+        for lookup in (catalog.package_id_for, catalog.manifest_name_for,
+                       catalog.package_root_for, catalog.revision_for,
+                       catalog.runtime_for):
+            with self.subTest(lookup=lookup.__name__):
+                with self.assertRaises(ValueError) as caught:
+                    lookup("fixture/not-registered")
+                self.assertIn("fixture/not-registered", str(caught.exception))
+                self.assertIn("catalog.py", str(caught.exception))
+
+    def test_a_model_with_an_unknown_runtime_is_refused_by_name(self):
+        """The worker refuses a runtime it cannot validate or run, by name."""
         from components.music.app.backend import catalog, generation
 
-        # Two packaged engines now: ACE-Step (instrumental + vocals, long form)
-        # and Stable Audio 3 (instrumental only, faster).
-        self.assertEqual([model.repo for model in catalog.CATALOG],
-                         [catalog.MAIN_REPO, catalog.STABLE_AUDIO_REPO])
+        model = dataclasses.replace(
+            catalog.CATALOG[0], repo="fixture/other-engine",
+            package_id="fixture-other-engine", runtime="a-new-engine")
+        with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (model,)):
+            with self.assertRaises(ValueError) as caught:
+                generation.validate_request({"repo": model.repo, "prompt": "piano"})
+            self.assertIn("a-new-engine", str(caught.exception))
+            self.assertIn(model.repo, str(caught.exception))
+            row = published_rows(catalog.CATALOG)[model.repo]
+        self.assertEqual(row["cache"]["state"], "missing")
+        self.assertIn("a-new-engine", row["readiness"]["reason"])
+
+    def test_each_model_verifies_its_own_package_manifest(self):
+        """A3: the package the worker verifies is the model's own, by manifest name."""
+        from components.music.app.backend import catalog, generation
+
+        third = third_model()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "models").mkdir()
+            with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (third,)):
+                manager = generation.GenerationManager(
+                    root / "data", library_dir=str(root / "models"),
+                    runtime_sha256="f" * 64)
+                self.addCleanup(manager.close)
+                ace = manager.cache_for(catalog.MAIN_REPO)
+                stable = manager.cache_for(catalog.STABLE_AUDIO_REPO)
+                self.assertEqual(ace.manifest_path.name, "ace-step-1-5-turbo.json")
+                self.assertEqual(ace.package_id, "ace-step-1-5-turbo")
+                self.assertEqual(stable.manifest_path.name, "stable-audio-3-medium.json")
+                self.assertEqual(stable.package_id, "stable-audio-3-medium")
+                # The third model has no manifest on disk: the worker must say so
+                # about *its* package instead of verifying ACE-Step's.
+                with self.assertRaises(ValueError) as caught:
+                    manager.cache_for(third.repo)
+                message = str(caught.exception)
+                self.assertIn(f"{third.package_id}.json", message)
+                self.assertNotIn("ace-step-1-5-turbo", message)
+
+    def test_a_catalog_that_confuses_two_models_is_refused_at_import(self):
+        """The catalog's own guard, so two entries cannot share an identity."""
+        from components.music.app.backend import catalog
+
+        shared_package = dataclasses.replace(catalog.CATALOG[0], repo="fixture/shared-package")
+        with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (shared_package,)):
+            with self.assertRaises(ValueError) as caught:
+                catalog._validate_catalog()
+            self.assertIn("fixture/shared-package", str(caught.exception))
+            self.assertIn("ace-step-1-5-turbo", str(caught.exception))
+        shared_repo = dataclasses.replace(catalog.CATALOG[0],
+                                          package_id="fixture-other-package")
+        with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (shared_repo,)):
+            with self.assertRaises(ValueError) as caught:
+                catalog._validate_catalog()
+            self.assertIn("repeats the repo", str(caught.exception))
+        contradictory = dataclasses.replace(
+            catalog.CATALOG[0], repo="fixture/contradictory",
+            package_id="fixture-contradictory",
+            limits={**catalog.CATALOG[0].limits, "single_pass_max_seconds": 999})
+        with mock.patch.object(catalog, "CATALOG", catalog.CATALOG + (contradictory,)):
+            with self.assertRaises(ValueError) as caught:
+                catalog._validate_catalog()
+            self.assertIn("single_pass_max_seconds", str(caught.exception))
+
+    def test_the_host_cap_comes_from_the_models_own_tier_table(self):
+        """A model without ACE-Step's tiers gets its own cap, not ACE-Step's 480."""
+        from components.music.app.backend import catalog, generation
+
+        third = third_model()
+        self.assertEqual(third.tiers, ())
+        self.assertEqual(generation._tier_cap_for_this_host(third), 90)
+        ace = catalog.get_model(catalog.MAIN_REPO)
+        self.assertIn(generation._tier_cap_for_this_host(ace), {240, 480, 600})
+
+    def test_shipped_models_keep_their_published_package_and_limits(self):
+        from components.music.app.backend import catalog, generation
+
+        ace = catalog.get_model(catalog.MAIN_REPO)
+        stable = catalog.get_model(catalog.STABLE_AUDIO_REPO)
         self.assertEqual(catalog.CATALOG[0].dit_tiers, (catalog.TURBO_DIT,))
         self.assertEqual(catalog.CATALOG[0].lm_tiers, (catalog.LM_06B,))
-        stable = catalog.get_model(catalog.STABLE_AUDIO_REPO)
+        self.assertEqual(ace.package_id, "ace-step-1-5-turbo")
+        self.assertEqual(ace.manifest_name, "ace-step-1-5-turbo.json")
+        self.assertEqual(ace.revision, catalog.MAIN_REVISION)
+        self.assertEqual(ace.limits["max_duration_seconds"], 600.0)
+        self.assertEqual(ace.limits["single_pass_max_seconds"], 480)
         self.assertEqual(stable.capabilities, ("music", "instrumental", "text-to-music"))
         self.assertEqual(stable.sample_rate_hz, 44100)
+        self.assertEqual(stable.package_id, "stable-audio-3-medium")
+        self.assertEqual(stable.revision, catalog.STABLE_AUDIO_REVISION)
+        self.assertEqual(stable.limits["max_duration_seconds"], 380)
         with self.assertRaisesRegex(ValueError, "Only the acestep-5Hz-lm-0.6B"):
             generation.validate_request({"prompt": "piano", "lm_model": "acestep-5Hz-lm-1.7B"})
 
@@ -129,6 +360,39 @@ class _VerifiedCache:
 
     def status(self, **unused):
         return {"state": "cached", "checkpoints_root": str(self.root)}
+
+
+def published_rows(models) -> dict:
+    """The real ``/api/catalog`` rows the worker publishes for these entries.
+
+    The worker and the route are the real ones; only the package cache is a
+    stand-in that reports every model's package cached, and the ACE-Step engine
+    source check is stubbed so no checkout is needed.
+    """
+    if importlib.util.find_spec("fastapi") is None:
+        raise unittest.SkipTest("FastAPI is not installed in the system test interpreter")
+    from fastapi.testclient import TestClient
+    from components.music.app.backend import generation
+    from components.music.app.backend.main import create_app
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "models").mkdir()
+        (root / "engine").mkdir()
+        with mock.patch.object(generation.cache_module, "MusicCache", _VerifiedCache):
+            manager = generation.GenerationManager(
+                root / "data", engine_root=str(root / "engine"),
+                library_dir=str(root / "models"), runtime_sha256="f" * 64)
+            manager._engine_contract_reason = lambda: None
+            try:
+                with mock.patch.object(generation.catalog, "CATALOG", tuple(models)):
+                    with TestClient(create_app(manager, "secret")) as client:
+                        response = client.get(
+                            "/api/catalog", headers={"X-Studio-Token": "secret"})
+                    assert response.status_code == 200, response.text
+                    return {row["repo"]: row for row in response.json()["models"]}
+            finally:
+                manager.close()
 
 
 class _FakeEngine:
@@ -173,7 +437,9 @@ class MusicWorkerContractTests(unittest.TestCase):
                 self.data, engine_root=str(self.engine), library_dir=str(self.models),
                 runtime_sha256="f" * 64)
         manager._engine_contract_reason = lambda: None
-        manager.executor = _FakeEngine()
+        # The default model's resident child is the fake; the map is how _run finds
+        # it, and close() still closes everything the manager owns.
+        manager._executors[self.generation.catalog.MAIN_REPO] = _FakeEngine()
         self.addCleanup(manager.close)
         return manager
 

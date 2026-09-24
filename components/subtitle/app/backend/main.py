@@ -17,7 +17,10 @@ import tempfile
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from components import app_version as app_version_module
+
 from . import memory_policy
+from .engine import ENGINE as SUBTITLE_ENGINE
 from .engine import ModelPackageError, host_eligibility
 from .manager import SubtitleManager, safe_input_name, validate_request, MAX_INPUT_BYTES
 
@@ -59,10 +62,28 @@ async def read_upload_limited(file, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def create_app(manager: SubtitleManager, token: str) -> FastAPI:
+def read_app_version() -> str:
+    """The release this worker was staged from, through the one shared reader.
+
+    `/api/health` answered the literal `"standalone"`, and the Hub publishes whatever a worker
+    says there as `workers[].studio_version` — so three of four workers carried a non-version in
+    a version field. The answer comes from `components/app_version.py`, which reads the release
+    manifest this worker was launched with (`STUDIOHUB_RELEASE_MANIFEST`), reports the checkout's
+    own version for a development run, and says `"unknown"` only when it has neither — a value
+    that cannot be mistaken for a release number.
+    """
+    return app_version_module.release_version()
+
+
+def create_app(manager: SubtitleManager, token: str, *, app_version: str | None = None) -> FastAPI:
     if not token:
         raise ValueError('Private Subtitle worker requires its owning Hub credential')
-    app = FastAPI(title='Studio Hub Subtitle', version='1')
+    fields = dict(app_version_module.version_fields())
+    if app_version is not None:
+        fields['app_version'] = app_version
+    app = FastAPI(title='Studio Hub Subtitle', version=fields['app_version'])
+    # `/api/health` reports these; the Hub republishes the version as the worker's studio version.
+    app.state.version_fields = fields
     # One resident Whisper model, released when idle. Without this a Subtitle model stayed
     # loaded for the life of the process, which is the memory that matters on an 8 GB Mac.
     memory_policy.start_background(manager)
@@ -72,7 +93,24 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
         offered = (request.headers.get('x-studio-token') or request.headers.get('x-hub-token')
                    or request.headers.get('authorization', '').removeprefix('Bearer '))
         if not hmac.compare_digest(offered, token):
-            return JSONResponse({'detail': 'Owner credential required'}, status_code=401)
+            # A bare 401 across a fleet is unattributable, so the refusal names what it required
+            # and what arrived. A controller does not hold this credential and must not: this
+            # worker accepts only the Hub token it was launched with, and the Hub that owns it
+            # re-signs every proxied request with that token before forwarding it.
+            offered_via = [name for name, value in (
+                ('X-Studio-Token', request.headers.get('x-studio-token')),
+                ('X-Hub-Token', request.headers.get('x-hub-token')),
+                ('Authorization: Bearer', request.headers.get('authorization')),
+            ) if value]
+            return JSONResponse({
+                'detail': ('Owner credential required: this Subtitle worker accepts only the Hub '
+                           'token it was launched with (X-Studio-Token, X-Hub-Token or an '
+                           'Authorization: Bearer header). Offered: '
+                           + (', '.join(offered_via) if offered_via else 'no credential')
+                           + '. A controller reaching this Mac through its Hub does not present '
+                             'this token; the owning Hub re-signs the request with it.'),
+                'required': 'hub-token', 'offered': offered_via,
+            }, status_code=401)
         return await call_next(request)
 
     def public_job(job: dict | None) -> dict | None:
@@ -92,7 +130,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
     @app.get('/api/health')
     def health() -> dict:
         active = [job for job in manager.list() if job['state'] in ('queued', 'running')]
-        return {'ok': True, 'app_version': 'standalone', 'transcription': {
+        return {'ok': True, **app.state.version_fields, 'transcription': {
             'available': True,
             'busy': bool(active),
             'queued': sum(job['state'] == 'queued' for job in active),
@@ -104,6 +142,7 @@ def create_app(manager: SubtitleManager, token: str) -> FastAPI:
     def catalog() -> dict:
         return {'models': manager.catalog(),
                 'default_model': manager.default_package(),
+                'default_rule': manager.engine.default_rule,
                 'export_source': manager.engine.export_source(),
                 'host': host_eligibility()}
 
@@ -298,21 +337,55 @@ async def _await_job(manager: SubtitleManager, job_id: str) -> dict:
         await asyncio.sleep(0.05)
 
 
+def load_subtitle_manifests(manifest_dir: Path) -> list[dict]:
+    """Every manifest in this bundle that *declares* the Subtitle engine.
+
+    One ``model-manifests`` directory ships in the bundle and holds every engine's packages
+    (``packaging/stage_voice.py`` copies the whole tracked tree), so a package's file name
+    says nothing about which worker runs it. Selecting on the manifest's own ``engine`` is
+    what lets the next subtitle package — a ``parakeet-tdt-0-6b``, a ``nemotron-asr-0-6b`` —
+    reach ``/api/catalog`` with no code change. The old ``whisper-*.json`` glob made this
+    worker's entire catalog "the packages whose id starts with whisper-": anything else was
+    loaded by nobody, absent from the picker, and refused at job time with a message about
+    Whisper models.
+
+    A file that does not parse, or that declares another engine, is skipped: it belongs to a
+    sibling worker and this one must not fail to start over it. A manifest that *does* declare
+    the subtitle engine and then fails validation is fatal and names its file — dropping it
+    silently would be the same invisibility this selection rule exists to remove.
+    """
+    import json
+    from components import model_packages
+
+    manifests: list[dict] = []
+    for path in sorted(manifest_dir.glob('*.json')):
+        try:
+            candidate = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(candidate, dict) or candidate.get('engine') != SUBTITLE_ENGINE:
+            continue
+        try:
+            model_packages.validate_manifest(candidate)
+        except ValueError as error:
+            raise ValueError(
+                f'{path.name} declares the {SUBTITLE_ENGINE} engine but is invalid: {error}'
+            ) from error
+        manifests.append(candidate)
+    if not manifests:
+        raise ValueError(
+            f'Subtitle model catalog is missing from the bundle: no manifest under '
+            f'{manifest_dir} declares "engine": "{SUBTITLE_ENGINE}"')
+    return manifests
+
+
 def from_environment() -> FastAPI:
     import json
     data = Path(os.environ['STUDIOHUB_SUBTITLE_DATA_DIR'])
     library = Path(os.environ['STUDIOHUB_MODELS_DIR'])
     voice_app = Path(os.environ['STUDIOHUB_VOICE_APP_DIR'])
     manifest_dir = Path(os.environ['STUDIOHUB_SUBTITLE_MANIFESTS'])
-    manifest_paths = sorted(manifest_dir.glob('whisper-*.json'))
-    if not manifest_paths:
-        raise ValueError('Subtitle model catalog is missing from the bundle')
-    manifests = [json.loads(path.read_text(encoding='utf-8')) for path in manifest_paths]
-    from components import model_packages
-    for manifest in manifests:
-        model_packages.validate_manifest(manifest)
-        if manifest['engine'] != 'subtitle-mlx':
-            raise ValueError(f'{manifest["package_id"]} is not a subtitle package')
+    manifests = load_subtitle_manifests(manifest_dir)
     release = json.loads(Path(os.environ['STUDIOHUB_RELEASE_MANIFEST']).read_text())
     identity = (release.get('components', {}).get('subtitle') or {}).get('runtime_sha256')
     if not isinstance(identity, str) or len(identity) != 64:
@@ -320,4 +393,5 @@ def from_environment() -> FastAPI:
     return create_app(
         SubtitleManager(data, library, manifests, identity, voice_app_dir=voice_app,
                         offline=os.environ.get('HF_HUB_OFFLINE') == '1'),
-        os.environ['STUDIOHUB_FLEET_TOKEN'])
+        os.environ['STUDIOHUB_FLEET_TOKEN'],
+        app_version=read_app_version())

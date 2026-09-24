@@ -4,6 +4,25 @@
 This tool requests repository and tree metadata only.  It retrieves a file body
 only when Hugging Face metadata lacks a digest and the file is at most 10 MiB;
 model weights must expose their LFS SHA-256 metadata.
+
+Nothing about a model is implied.  Every package the catalog ships needs an
+explicit ``CHOICES`` entry (what to fetch) and a matching ``DETAILS`` entry (the
+defaults and memory floors), and this tool refuses to run when the two disagree
+with ``model-manifests/``:
+
+* a manifest with no ``CHOICES`` entry is named as a package this tool cannot
+  reproduce, because a re-capture would silently drop it;
+* a ``CHOICES`` entry with no ``DETAILS`` entry is named with the file to edit,
+  instead of raising a bare ``KeyError`` that names nothing;
+* every field a spec supplies is compared with the shipped manifest, so a stale
+  revision, a wrong engine or a changed memory floor is a failure rather than a
+  quiet rewrite;
+* two packages declaring ``"default": true`` is refused - at most one package in
+  the catalog may be the default.
+
+``requires_packages`` is written only when the package has companions, and the
+optional ``subtitle`` and ``default`` blocks of a ``CHOICES`` entry are passed
+through verbatim, so a hand-declared block survives the next ``--write``.
 """
 from __future__ import annotations
 
@@ -22,11 +41,24 @@ API_ROOT = "https://huggingface.co/api/models/"
 WEB_ROOT = "https://huggingface.co/"
 MAX_SMALL_FILE_BYTES = 10 * 1024 * 1024
 MAX_METADATA_BYTES = 10 * 1024 * 1024
+# The capture date every manifest records. It is a tool-level constant rather than the wall
+# clock on purpose: a re-capture of unchanged pinned revisions must reproduce byte-identical
+# manifests, so `--write` over `model-manifests/` stays a no-op for packages nothing changed.
+# (The Khmer VITS and ST-16 captures shipped under this same value.)
 CAPTURE_DATE = "2026-09-15"
+# The file a person edits when a check below names a missing CHOICES or DETAILS entry.
+SPEC_FILE = "packaging/capture_model_manifests.py"
 PROCESSOR_FILES = frozenset({
     "added_tokens.json", "merges.txt", "normalizer.json", "special_tokens_map.json",
     "tokenizer.json", "tokenizer_config.json", "vocab.json",
 })
+# The optional per-model subtitle contract a CHOICES entry may carry. It is passed through
+# verbatim; every key is required when the block is present, because a half-declared contract
+# is worse than none - the Subtitle worker reads these fields to decide what to advertise.
+SUBTITLE_FIELDS: dict[str, type] = {
+    "family": str, "languages": list, "segment_timestamps": bool,
+    "word_timestamps": bool, "long_form": bool,
+}
 
 
 CHOICES: tuple[dict[str, Any], ...] = (
@@ -62,6 +94,51 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # Owner-selected Qwen3.5-9B, uniform 4-bit, text-only accepted. The OptiQ build was
     # rejected: its index requires an `optiq_vision` shard, making the snapshot 8.22 GB.
     {"package_id": "qwen3-5-9b-4bit", "model_id": "mlx-community/Qwen3.5-9B-4bit", "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53", "engine": "chat-mlx"},
+    # ── ST-13.A: Kyutai Pocket TTS 4-bit, the English cloning engine ──
+    # The 4-bit MLX conversion is the whole executable model: 4-bit weights, the flow-LM
+    # config and the mimi codec live in one 89 MB safetensors file. It carries no tokenizer
+    # and no voice prompts, because its config.json names both by `hf://` URL against a
+    # DIFFERENT repository (kyutai/pocket-tts-without-voice-cloning @ d4fdd22a). Those two
+    # companions are what make a generation possible at all, and on an offline kit node
+    # nothing can fetch them, so both are packaged and both are declared as dependencies.
+    {"package_id": "pocket-tts-4bit", "model_id": "mlx-community/pocket-tts-4bit", "revision": "59592598c532759d2b66a3d8905a612dcbe8419c", "engine": "voice-mlx", "requires_packages": ["pocket-tts-tokenizer", "pocket-tts-preset-voices"]},
+    # `tokenizer.model` is loaded on EVERY generation: the flow-LM's text conditioner calls
+    # mlx_audio's `download_if_necessary("hf://kyutai/pocket-tts-without-voice-cloning/
+    # tokenizer.model@d4fdd22a…")`, which resolves through `hf_hub_download` against the
+    # Hugging Face cache. Without these exact bytes in that cache the engine cannot encode
+    # text, online or not.
+    {"package_id": "pocket-tts-tokenizer", "model_id": "kyutai/pocket-tts-without-voice-cloning", "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3", "engine": "voice-mlx", "include": ("tokenizer.model",)},
+    # The eight preset voice prompts come from the same repository at the same revision and
+    # are fetched the same way, but only when no reference clip is supplied: `generate()`
+    # falls back to `DEFAULT_AUDIO_PROMPT = "alba"`, so the zero-shot path downloads
+    # `embeddings/alba.safetensors` and fails offline without it. 4.4 MB of prompts is worth
+    # carrying so "clone or preset" is true on a node with no network, as the catalogue says.
+    {"package_id": "pocket-tts-preset-voices", "model_id": "kyutai/pocket-tts-without-voice-cloning", "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3", "engine": "voice-mlx", "include": ("embeddings/*.safetensors",)},
+    # ── Adopted from the local Voice Studio cache (2026-09-20) ──
+    # These five shipped before they had a capture spec, so `--write` could not reproduce them
+    # and the catalog check below had nothing to compare. Repository, revision, engine,
+    # companion and memory values are read from `model-manifests/<package_id>.json`.
+    # `exclude` carries `.gitignore` because the cache importer that wrote these manifests
+    # skipped it while the publisher tree would otherwise bring it back on the next capture.
+    {"package_id": "chatterbox-4bit", "model_id": "mlx-community/chatterbox-4bit", "revision": "f1d7b9696e1b6242e64eb8c4a823b6d1a50425a8", "engine": "voice-mlx", "requires_packages": ["s3tokenizerv2"], "exclude": ("*.gitignore",)},
+    {"package_id": "chatterbox-8bit", "model_id": "mlx-community/chatterbox-8bit", "revision": "9617d61b596a03d1bed766a28c341680e993a1b9", "engine": "voice-mlx", "requires_packages": ["s3tokenizerv2"], "exclude": ("*.gitignore",)},
+    {"package_id": "fish-audio-s2-pro-8bit", "model_id": "mlx-community/fish-audio-s2-pro-8bit", "revision": "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff", "engine": "voice-mlx", "exclude": ("*.gitignore",)},
+    # `LICENSE.md` is publisher furniture the selection rule drops by default, but this package
+    # ships it - `keep` is the per-package override, so the next capture does not lose the file.
+    {"package_id": "fish-audio-s2-pro-bf16", "model_id": "mlx-community/fish-audio-s2-pro-bf16", "revision": "eccd57bf5c1ebc13cb2f993df867f4e49931a36a", "engine": "voice-mlx", "exclude": ("*.gitignore",), "keep": ("LICENSE.md",)},
+    {"package_id": "s3tokenizerv2", "model_id": "mlx-community/S3TokenizerV2", "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec", "engine": "voice-mlx", "exclude": ("*.gitignore",)},
+    # ── Music: the two engines the Music Studio ships ──
+    # `ace-step-1-5-turbo` is the one package whose shipped manifest this tool cannot rebuild
+    # byte for byte: its planner comes from a second repository
+    # (`ACE-Step/acestep-5Hz-lm-0.6B`) and two files come from GitHub, and `capture()` speaks to
+    # one Hugging Face snapshot per package. The spec still pins every identity field a reader
+    # uses - repo, revision, engine, defaults, memory floor - and the catalog check below
+    # compares them, so a stale spec is a failure rather than a quiet rewrite.
+    {"package_id": "ace-step-1-5-turbo", "model_id": "ACE-Step/Ace-Step1.5", "revision": "19671f406d603126926c1b7e2adc169acbcade22", "engine": "music-mlx", "exclude": ("*.gitignore",)},
+    # The publisher keeps this bundle under `MLX/`; the shipped manifest records the
+    # lower-case `model/mlx/` destination, which is the same file on macOS's
+    # case-insensitive volume and is why the file-selection check compares case-insensitively.
+    {"package_id": "stable-audio-3-medium", "model_id": "stabilityai/stable-audio-3-optimized", "revision": "da6edc54ddba10bfd79a077102ded687f80e882b", "engine": "music-mlx", "exclude": ("*.gitignore",)},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -78,7 +155,29 @@ DETAILS: dict[str, dict[str, Any]] = {
     "whisper-base": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
     "khmer-tts-mms": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "An 83M-parameter VITS on torch; the Voice catalogue publishes an 8 GB floor and local inference measured a sub-1 GB footprint.")},
     "khmer-tts-female-onnx": {"defaults": {"parameters_source": "model/tts_meta.json"}, "memory": (8, 16, "A ~115 MB VITS ONNX graph on CPU; the Voice catalogue publishes an 8 GB floor.")},
-    "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (16, 16, "ST-14 owner decision: the common local text model on the 16 GB tier. Measured 5.72 GB peak on an M2 Max; unqualified on the fleet tiers.")},
+    # `model/config.json`, not `model/generation_config.json`: the package ships no
+    # generation_config.json, so the old pointer named a file nobody could read and the Chat
+    # worker silently used its own defaults. The shipped manifest records the file the worker
+    # actually reads.
+    "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Owner-chosen common fleet model, uniform 4-bit MLX: 5.98 GB of weights loads inside the 16 GB tier with room for context. 8 GB is not viable. Local import and inference qualification remain required. See research/story-text-llm-shortlist.md.")},
+    # ── ST-13.A: Pocket TTS 4-bit and the two companions it cannot run without ──
+    # The owner's listening review on 2026-09-24 measured a 1.9 GB peak and judged this the
+    # best-sounding English cloning model on the menu. A local render through the app's own
+    # worker on 2026-09-24 re-measured the peak and is what the evidence line records.
+    "pocket-tts-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Owner listening review 2026-09-24: 1.9 GB peak, one of only two engines with a credible 8 GB path. Local render through the app's own worker on a 32 GB M2 Max measured 1.93 GB peak for the cloning path (6.64 s of audio in 0.30 s of inference) and 0.25 GB for the preset path, so 8 GB is the floor and 16 GB the comfortable tier.")},
+    "pocket-tts-tokenizer": {"defaults": {"parameters_source": "model/tokenizer.model"}, "memory": (8, 8, "A 58 KB sentencepiece model with no memory floor of its own; it is carried wherever pocket-tts-4bit is, because every generation loads it.")},
+    "pocket-tts-preset-voices": {"defaults": {"parameters_source": "model/embeddings/alba.safetensors"}, "memory": (8, 8, "Eight preset voice prompts totalling about 4.4 MB, used only by the preset/zero-shot path when no reference clip is supplied.")},
+    # ── Adopted from the local Voice Studio cache (2026-09-20) ──
+    # `defaults` and `memory` are the values already recorded in each shipped manifest, so a
+    # recapture writes the same floors rather than inventing new ones.
+    "chatterbox-4bit": {"defaults": {"parameters_source": "model/Cangjie5_TC.json"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    "chatterbox-8bit": {"defaults": {"parameters_source": "model/CACHEDIR.TAG"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    "fish-audio-s2-pro-8bit": {"defaults": {"parameters_source": "model/codec.safetensors"}, "memory": (24, 24, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    "fish-audio-s2-pro-bf16": {"defaults": {"parameters_source": "model/LICENSE.md"}, "memory": (32, 32, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    "s3tokenizerv2": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    # ── Music: the ACE-Step 1.5 Turbo and Stable Audio 3 Medium engines ──
+    "ace-step-1-5-turbo": {"defaults": {"dit_model": "acestep-v15-turbo", "lm_model": "acestep-5Hz-lm-0.6B", "inference_steps": 8, "guidance_scale": 1, "shift": 3, "audio_format": "wav", "sample_rate_hz": 48000, "channels": 2}, "memory": (8, 16, "Probe peak process-tree RSS 4.645 GiB; peak system used 14.552 GiB of 16 GiB.")},
+    "stable-audio-3-medium": {"defaults": {"dit_model": "dit_medium", "decoder": "same-l", "inference_steps": 8, "guidance_scale": 1.0, "audio_format": "wav", "sample_rate_hz": 44100, "channels": 2, "max_duration_seconds": 380}, "memory": (8, 16, "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s.")},
 }
 
 
@@ -157,11 +256,26 @@ def snapshot(repo: str, revision: str) -> dict[str, dict[str, Any]]:
     return files
 
 
-def required_primary_paths(files: dict[str, dict[str, Any]], exclude: tuple[str, ...] = ()) -> list[str]:
-    ignored = {".gitattributes", "README.md", "LICENSE", "LICENSE.md"}
+def required_primary_paths(files: dict[str, dict[str, Any]], exclude: tuple[str, ...] = (),
+                           include: tuple[str, ...] = (), keep: tuple[str, ...] = ()) -> list[str]:
+    """Select the publisher files one package ships.
+
+    ``include`` is the allow-list counterpart of ``exclude`` and exists because most of what a
+    companion repository publishes is not the companion: `kyutai/pocket-tts-without-voice-cloning`
+    is a 27 GB repository whose 235 MB training weights and 8 MB of unrelated code are irrelevant
+    to the one 58 KB sentencepiece model the engine asks for by name. Naming the wanted files
+    directly means a future capture of a different revision cannot quietly pull the rest in,
+    which an exclude-list of "everything else" could not promise.
+
+    ``keep`` is the narrow per-package exception to the publisher-furniture rule below: a
+    package that genuinely ships a `LICENSE.md` (fish-audio-s2-pro-bf16 does) names it here,
+    because the alternative is a capture that silently drops a file the manifest still lists.
+    """
+    ignored = {".gitattributes", "README.md", "LICENSE", "LICENSE.md"}.difference(keep)
     return sorted(path for path in files
                   if path.rsplit("/", 1)[-1] not in ignored
                   and not path.rsplit("/", 1)[-1].startswith("test_")
+                  and (not include or any(fnmatch(path, pattern) for pattern in include))
                   and not any(fnmatch(path, pattern) for pattern in exclude))
 
 
@@ -205,11 +319,47 @@ def captured_file(repo: str, revision: str, source_path: str, destination: str,
     return captured
 
 
+def details_for(package_id: str) -> dict[str, Any]:
+    """The captured defaults and memory floors for one package, or a named failure.
+
+    A bare ``KeyError`` from ``DETAILS[...]`` named nothing: not the package, not the file to
+    edit, not what was missing. Adding a model therefore failed in a way the person could only
+    diagnose by reading this module. The error below names all three.
+    """
+    details = DETAILS.get(package_id)
+    if details is None:
+        raise ValueError(
+            f"DETAILS has no entry for package {package_id!r}; add one in {SPEC_FILE} with its "
+            f"\"defaults\" and its \"memory\" floors before capturing it")
+    return details
+
+
+def subtitle_block(choice: dict[str, Any]) -> dict[str, Any] | None:
+    """The optional per-model subtitle contract, validated and passed through verbatim."""
+    block = choice.get("subtitle")
+    if block is None:
+        return None
+    package_id = choice.get("package_id")
+    if not isinstance(block, dict):
+        raise ValueError(f"{package_id}: \"subtitle\" must be an object, not {type(block).__name__}")
+    missing = sorted(key for key in SUBTITLE_FIELDS if key not in block)
+    wrong = sorted(key for key, kind in SUBTITLE_FIELDS.items()
+                   if key in block and not isinstance(block[key], kind))
+    if missing or wrong:
+        raise ValueError(
+            f"{package_id}: the \"subtitle\" block in {SPEC_FILE} needs "
+            f"{sorted(SUBTITLE_FIELDS)}; missing {missing or 'none'}, wrong type {wrong or 'none'}")
+    return block
+
+
 def capture(choice: dict[str, Any]) -> dict[str, Any]:
+    details = details_for(choice["package_id"])
     model_id, revision = choice["model_id"], choice["revision"]
     primary = snapshot(model_id, revision)
     selected = [captured_file(model_id, revision, path, f"model/{path}", primary)
-                for path in required_primary_paths(primary, tuple(choice.get("exclude") or ()))]
+                for path in required_primary_paths(primary, tuple(choice.get("exclude") or ()),
+                                                   tuple(choice.get("include") or ()),
+                                                   tuple(choice.get("keep") or ()))]
     sources = [{"role": "model", "repo": model_id, "revision": revision,
                 "snapshot_api_url": api_url(model_id, revision), "tree_api_url": tree_url(model_id, revision)}]
     layout: dict[str, Any] = {"model": {"destination": "model", "repo": model_id, "revision": revision}}
@@ -236,20 +386,209 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
         "engine": choice["engine"],
         "minimum_macos": "14.0",
         "files": sorted(selected, key=lambda item: item["path"]),
-        "defaults": DETAILS[choice["package_id"]]["defaults"],
+        "defaults": details["defaults"],
         "qualification": {
             "status": "unqualified",
-            "minimum_unified_memory_gb": DETAILS[choice["package_id"]]["memory"][0],
-            "recommended_unified_memory_gb": DETAILS[choice["package_id"]]["memory"][1],
-            "memory_evidence": DETAILS[choice["package_id"]]["memory"][2],
+            "minimum_unified_memory_gb": details["memory"][0],
+            "recommended_unified_memory_gb": details["memory"][1],
+            "memory_evidence": details["memory"][2],
             "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
         },
         "source": {"provider": "huggingface", "captured_at": CAPTURE_DATE, "sources": sources,
                    "layout": layout},
     }
+    # The key is written only when the package has companions, which is the shape the shipped
+    # catalog uses: the field is present exactly when there is a relationship to declare.
     if choice.get("requires_packages"):
         manifest["requires_packages"] = choice["requires_packages"]
+    # Two optional per-model blocks are carried verbatim rather than derived here, because they
+    # are declarations about the model (a subtitle contract; which package is the default) that
+    # no publisher metadata can supply. A block the spec omits is a block the manifest does not
+    # carry, which is why the catalog check refuses when a shipped manifest declares one and its
+    # CHOICES entry does not.
+    subtitle = subtitle_block(choice)
+    if subtitle is not None:
+        manifest["subtitle"] = subtitle
+    if choice.get("default") is True:
+        manifest["default"] = True
     return manifest
+
+
+def duplicate_default_problems(manifests: list[dict[str, Any]]) -> list[str]:
+    """At most one package in a catalog may declare ``"default": true``.
+
+    The Subtitle worker reads that flag to pick its default model, so two of them is not a
+    tie to be broken silently - it is a catalog that cannot say what its default is.
+    """
+    declared = sorted(manifest["package_id"] for manifest in manifests
+                      if manifest.get("default") is True)
+    if len(declared) > 1:
+        return [f"{len(declared)} packages declare \"default\": true ({', '.join(declared)}); "
+                f"at most one package in the catalog may be the default"]
+    return []
+
+
+def preserve_declared_blocks(manifest: dict[str, Any],
+                             previous: dict[str, Any] | None) -> dict[str, Any]:
+    """Carry the blocks only a person can declare over from the manifest already on disk.
+
+    ``subtitle`` and ``default`` are declarations about a model that no publisher tree contains,
+    so a capture cannot derive them: it can only keep what the shipped manifest already says.
+    ``CHOICES`` remains the place to declare them for a package being captured for the first
+    time, and a block supplied there wins; a block the shipped manifest carries and the spec does
+    not restate survives unchanged instead of being silently dropped by ``--write``.
+    """
+    if not isinstance(previous, dict):
+        return manifest
+    for key in ("subtitle", "default"):
+        if key not in manifest and key in previous:
+            manifest[key] = previous[key]
+    return manifest
+
+
+def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    """Every way one ``CHOICES`` entry disagrees with the manifest it is supposed to produce.
+
+    This is the offline half of "the capture tool can reproduce the catalog": it cannot re-fetch
+    a publisher tree here, but it can compare the fields the spec supplies with the manifest that
+    ships, and it can prove that no shipped file would be filtered out by the spec's own
+    selection rules. A disagreement is a failure naming the package, the field and the file to
+    edit - never a quiet rewrite on the next ``--write``.
+    """
+    package_id = choice["package_id"]
+    problems: list[str] = []
+    for field in ("model_id", "revision", "engine"):
+        if choice.get(field) != manifest.get(field):
+            problems.append(
+                f"{package_id}: CHOICES says {field}={choice.get(field)!r} but "
+                f"model-manifests/{package_id}.json says {manifest.get(field)!r}")
+    declared = list(manifest.get("requires_packages") or [])
+    if list(choice.get("requires_packages") or []) != declared:
+        problems.append(
+            f"{package_id}: CHOICES declares requires_packages="
+            f"{list(choice.get('requires_packages') or [])} but "
+            f"model-manifests/{package_id}.json declares {declared}")
+    details = DETAILS.get(package_id)
+    if details is None:
+        problems.append(f"{package_id}: no DETAILS entry in {SPEC_FILE}; add one with its "
+                        f"\"defaults\" and its \"memory\" floors")
+    else:
+        if details["defaults"] != manifest.get("defaults"):
+            problems.append(f"{package_id}: DETAILS defaults {details['defaults']!r} but "
+                            f"model-manifests/{package_id}.json has {manifest.get('defaults')!r}")
+        qualification = manifest.get("qualification") or {}
+        recorded = (qualification.get("minimum_unified_memory_gb"),
+                    qualification.get("recommended_unified_memory_gb"),
+                    qualification.get("memory_evidence"))
+        if tuple(details["memory"]) != recorded:
+            problems.append(
+                f"{package_id}: DETAILS memory {tuple(details['memory'])!r} but "
+                f"model-manifests/{package_id}.json records (minimum, recommended, evidence)="
+                f"{recorded!r}")
+    # A `subtitle` contract or a `default` flag is a person's declaration, not publisher
+    # metadata, so `preserve_declared_blocks` carries a shipped manifest's block forward when
+    # the spec does not restate it - see the docstring there. Only a malformed spec block is a
+    # problem here, because that one would be written into the catalog.
+    try:
+        subtitle_block(choice)
+    except ValueError as exc:
+        problems.append(str(exc))
+    if "default" in choice and choice["default"] is not True:
+        problems.append(f"{package_id}: \"default\" in {SPEC_FILE} must be true when present, "
+                        f"not {choice['default']!r}")
+    exclude = tuple(choice.get("exclude") or ())
+    include = tuple(choice.get("include") or ())
+    keep = tuple(choice.get("keep") or ())
+    for entry in manifest.get("files") or []:
+        source_path = entry.get("source_path")
+        if source_path is None or entry.get("provider") == "github":
+            continue
+        if entry.get("repo") not in (None, manifest.get("model_id")):
+            continue
+        # macOS volumes are case-insensitive and the Stable Audio bundle records a lower-case
+        # destination for the publisher's `MLX/` directory, so a case-only difference is the
+        # same file rather than a selection defect.
+        if entry["path"].casefold() != f"model/{source_path}".casefold():
+            continue
+        if not required_primary_paths({source_path: {}}, exclude, include, keep):
+            problems.append(
+                f"{package_id}: model-manifests/{package_id}.json ships {entry['path']} but the "
+                f"CHOICES exclude/include/keep rules would drop {source_path}")
+    return problems
+
+
+def catalog_problems(output: Path) -> list[str]:
+    """Compare ``CHOICES``/``DETAILS`` with the shipped catalog before touching the network.
+
+    The tool used to cover a silent subset: a manifest the author never added to ``CHOICES`` was
+    simply not captured, and nothing said so. Every manifest in ``output`` must now have a spec,
+    and every field that spec supplies must match the manifest, so `--write` can only ever
+    reproduce the catalog it was written against.
+    """
+    problems: list[str] = []
+    specs: dict[str, dict[str, Any]] = {}
+    for choice in CHOICES:
+        package_id = str(choice.get("package_id") or "")
+        if package_id in specs:
+            problems.append(f"CHOICES lists {package_id!r} twice; one entry per package")
+        specs[package_id] = choice
+        if package_id not in DETAILS:
+            problems.append(f"CHOICES lists {package_id} but DETAILS in {SPEC_FILE} has no entry "
+                            f"for it; add one with its \"defaults\" and its \"memory\" floors")
+    shipped: list[dict[str, Any]] = []
+    for path in sorted(output.glob("*.json")):
+        try:
+            manifest = json.loads(path.read_text())
+        except ValueError as exc:
+            problems.append(f"model-manifests/{path.name} is not readable JSON: {exc}")
+            continue
+        shipped.append(manifest)
+        package_id = str(manifest.get("package_id") or path.stem)
+        choice = specs.get(package_id)
+        if choice is None:
+            problems.append(
+                f"model-manifests/{path.name} has no CHOICES entry in {SPEC_FILE}: this tool "
+                f"cannot reproduce it, so a re-capture would silently drop the package")
+            continue
+        problems.extend(manifest_problems(choice, manifest))
+    if not shipped:
+        problems.append(f"{output} holds no manifests to capture; check --output")
+    problems.extend(duplicate_default_problems(shipped))
+    return problems
+
+
+def unreproducible_problems(manifests: list[dict[str, Any]],
+                            output: Path) -> list[tuple[str, str]]:
+    """Shipped manifests whose *file set* this capture would change, as (package_id, why).
+
+    `catalog_problems` compares the fields a spec declares before anything is fetched; this
+    compares what the capture actually selected against what ships. They are not the same check:
+    two packages - `ace-step-1-5-turbo`, whose planner lives in a second repository and whose two
+    code files come from GitHub, and `stable-audio-3-medium`, whose lower-case `model/mlx/`
+    destinations name the publisher's `MLX/` directory - ship a manifest this single-source
+    capture cannot rebuild file for file. Naming them and leaving their manifests untouched is the
+    only honest outcome: replacing them would quietly delete files the catalog still lists, and
+    silently writing a different catalog is the defect this whole check exists to stop.
+    """
+    problems: list[tuple[str, str]] = []
+    for manifest in manifests:
+        package_id = str(manifest["package_id"])
+        path = output / f"{package_id}.json"
+        if not path.is_file():
+            continue
+        try:
+            previous = json.loads(path.read_text())
+        except ValueError:
+            continue
+        before = [(entry.get("path"), entry.get("sha256")) for entry in previous.get("files") or []]
+        after = [(entry.get("path"), entry.get("sha256")) for entry in manifest.get("files") or []]
+        if before != after:
+            problems.append((
+                package_id,
+                f"this capture selects {len(after)} file(s) but model-manifests/{package_id}.json "
+                f"lists {len(before)}; see the comment above its CHOICES entry for the sources "
+                f"this single-snapshot capture does not fetch"))
+    return problems
 
 
 def main() -> int:
@@ -257,17 +596,52 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("model-manifests"))
     parser.add_argument("--write", action="store_true", help="write the captured manifest files")
     args = parser.parse_args()
+    # Checked before the first request: a spec that disagrees with the shipped catalog has to be
+    # fixed first, so a metadata-only run never spends requests proving a manifest it should not
+    # write, and `--write` cannot quietly replace the catalog.
+    problems = catalog_problems(args.output)
+    if problems:
+        print("The capture specs and the shipped catalog disagree; nothing was captured.",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
     # Choices do not share mutable state.  Four workers keep the bounded
     # metadata/small-file capture practical without issuing a broad crawl.
     with ThreadPoolExecutor(max_workers=4) as executor:
         manifests = list(executor.map(capture, CHOICES))
+    # A hand-declared block survives a re-capture: `--write` may never drop what only a person
+    # can state. Read before the write loop, and after the pre-flight check above has already
+    # proved every manifest on disk has a spec.
+    previous = {path.stem: json.loads(path.read_text())
+                for path in args.output.glob("*.json")} if args.output.is_dir() else {}
+    manifests = [preserve_declared_blocks(manifest, previous.get(manifest["package_id"]))
+                 for manifest in manifests]
+    problems = duplicate_default_problems(manifests)
+    if problems:
+        print("Refusing to write a catalog whose default package is ambiguous.", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
+    withheld = unreproducible_problems(manifests, args.output)
+    for package_id, why in withheld:
+        print(f"not replacing model-manifests/{package_id}.json: {why}", file=sys.stderr)
+    blocked = {package_id for package_id, _why in withheld}
+    written = 0
     if args.write:
         args.output.mkdir(parents=True, exist_ok=True)
         for manifest in manifests:
+            if manifest["package_id"] in blocked:
+                continue
             (args.output / f"{manifest['package_id']}.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"packages": [item["package_id"] for item in manifests], "written": args.write}))
-    return 0
+            written += 1
+    print(json.dumps({"packages": [item["package_id"] for item in manifests],
+                      "written": written if args.write else args.write,
+                      "not_replaced": sorted(blocked)}))
+    # A partial write is a failure, not a success with a footnote: the operator asked for the
+    # catalog to be reproduced and two packages were left alone.
+    return 3 if withheld and args.write else 0
 
 
 if __name__ == "__main__":

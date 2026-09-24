@@ -7,7 +7,7 @@ workflows remain their named later tasks. This document extends the existing Hub
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.
-- [Model catalog](../model-manifests/): ten exact packages; no moving model revisions.
+- [Model catalog](../model-manifests/): 24 exact packages; no moving model revisions.
 - [Runtime input records](../research/st01-runtime-contracts.json): engine families,
   lock hashes, source provenance and limits of the import/audit evidence.
 - [Model package tests](../tests/test_model_packages.py): filesystem, download and receipt behavior.
@@ -24,11 +24,13 @@ Each package contains:
 | schema_version | 1; reject unknown versions |
 | package_id | Stable local catalog key, independent of its download host |
 | model_id / revision | Publisher model ID and full pinned Git revision |
-| engine | image-mflux, voice-mlx or subtitle-mlx |
+| engine | The engines the catalog ships: image-mflux, voice-mlx, voice-vits, subtitle-mlx, music-mlx, chat-mlx |
 | minimum_macos | Current qualification candidate; not physical model qualification |
 | files | Relative destination path, byte size, expected SHA-256 and HTTPS sources |
 | files.source_path | Optional primary-file alias for an original publisher folder without the model/ prefix |
-| requires_packages | Shared companion packages, resolved against the same trusted catalog |
+| requires_packages | Shared companion packages, resolved against the same trusted catalog. Present **exactly when** the package declares a companion, so an empty list is not a valid shape. `dependencies` was the first spelling and is **refused** by `validate_manifest` — a second field nothing resolves is how a declared companion gets silently ignored |
+| subtitle | Present exactly when `engine` is `subtitle-mlx`: this model's own `family`, `languages`, `segment_timestamps`, `word_timestamps` and `long_form`, so a worker publishes no capability it was not told |
+| default | Optional; `true` on at most one manifest per engine — the model a worker picks when no model is asked for |
 | defaults / qualification | Model-specific defaults/evidence; never permission to bypass device checks |
 | source | Exact upstream repositories, revisions, file layout and capture provenance |
 
@@ -41,6 +43,18 @@ The content identity hashes schema, package/model/revision/engine/OS requirement
 required companions, file paths/aliases, sizes and checksums. Download mirrors and
 editable generation defaults are excluded. Changing a mirror does not invalidate the
 expected content; changing a file checksum or runtime family requires reverification.
+
+A digest keys an installed verification receipt, so it is deliberately narrow. Moving a manifest's
+companion list from the legacy `dependencies` field to `requires_packages` **does** change that
+package's digest, and the one shipped package that carried it (`chatterbox-{4,8}bit`, companion
+`s3tokenizerv2`) is re-verified once on the next launch — correct, because the receipt it replaces
+was written by code that ignored the companion relationship entirely.
+
+Measured on 2026-09-25, computing `manifest_digest` for every manifest this migration touched,
+old against new: **`chatterbox-4bit` and `chatterbox-8bit` changed; `ace-step-1-5-turbo`,
+`stable-audio-3-medium`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `s3tokenizerv2` and
+`qwen3-5-9b-4bit` are unchanged** — the first five because the key removed from them was never
+read, the last because its edit is in `defaults`, which this identity excludes on purpose.
 
 ## Library ownership and installation
 

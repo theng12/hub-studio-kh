@@ -77,8 +77,17 @@ def test_missing_companion_stays_visible_beneath_its_installed_parent(tmp_path, 
 
 
 def test_whisper_processor_without_weights_is_a_complete_dependency(tmp_path, monkeypatch) -> None:
-    parent = "mlx-community/whisper-large-v3-turbo-q4"
+    # The parent must be a repo the app can actually install, and the processor
+    # companion is what that repo's own manifest declares. The old test used
+    # `whisper-large-v3-turbo-q4`, a registry row with no packaged manifest, and
+    # leaned on a second hand-kept table in transcription.py to name its
+    # tokenizer source.
+    parent = "mlx-community/whisper-large-v3-turbo"
     companion = "openai/whisper-large-v3-turbo"
+    monkeypatch.setenv(
+        "STUDIOHUB_MODEL_MANIFESTS",
+        str(Path(__file__).resolve().parents[4] / "model-manifests"),
+    )
     _cached_repo(tmp_path, monkeypatch, parent)
     _cached_repo(tmp_path, monkeypatch, companion, weight=False)
 

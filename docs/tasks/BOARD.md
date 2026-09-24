@@ -2,66 +2,48 @@
 
 ## ▶ TAKE OVER HERE
 
-### ST-19 — No model may need a code change (owner rule, 2026-09-24)
+### ST-19 — No model may need a code change — **DONE in 0.6.61**, 2026-09-25
 
 Owner: *"my rule is never hardcoded — everything must be dynamic for all generators and models,
-because we always have a new model to add."* Recorded in `AGENTS.md`, and this is the workstream
-that makes it true rather than aspirational.
+because we always have a new model to add."* Recorded in `AGENTS.md`; **implemented** in 0.6.61.
 
-**The reported symptom was khmer-tts not appearing. The cause is broader.** `native/StudioAPI.swift`
-decided voice-model support from a hardcoded family allowlist — `qwen3-tts`, `voxcpm*`,
-`omnivoice` — and the Audio picker lists only `supported` models. So four **shipped** families were
-invisible: `khmer-tts-mms`, `khmer-tts-onnx`, `chatterbox-mlx`, `fish-audio-mlx` — **six of the
-thirteen voice packages.** The catalog, Hub, manifests, Mac library and all four kits all offered
-them correctly; the app alone refused to list them. Verified against the packaged 0.6.60 Hub:
-khmer reports `runtime_ready: true`, `available: true`, `cache: cached`.
+**Reported symptom:** khmer-tts not appearing. **Cause, broader than reported:** the native
+`formCompatible` decided voice support from a hardcoded family allowlist (`qwen3-tts`, `voxcpm*`,
+`omnivoice`), so six of thirteen voice packages — `khmer-tts-mms` (VITS), `khmer-tts-female-onnx`
+(ONNX), `chatterbox-mlx` (4-bit, 8-bit) and `fish-audio-mlx` (8-bit, bf16) — were invisible in the
+Audio picker while the catalog, Hub, manifests, library and all four kits offered them correctly.
+**Third instance of one shape** after the 0.6.57 `chat-mlx` outage, and the first where a test
+asserted the broken behaviour.
 
-A second bug sat behind it: `voiceMode` falls back to `.cloning`, so khmer — which declares no
-`voice-cloning` — would have demanded a reference clip it cannot use.
+**Disposition.** `research/hardcoded-model-lists-audit.md` — 73 findings, **Tier A (18) and Tier B
+(40) all fixed**, Tier C kept as contracts with its two named caveats fixed. Every fix was verified
+against the tree, not against a worker's report: `tests/` **935 passed, 11 skipped**;
+`tests/hub_regression/cases` **172 passed**; `bash native/build.sh` green.
 
-**And a test asserted the broken behaviour.** The native suite required the Audio picker to contain
-exactly Qwen and VoxCPM2, and its fixture carried a `family: "other"` model to prove unknown
-families were rejected. Green by construction: it tested that the allowlist worked, never that
-every shipped family was on it.
-
-Third instance of one shape. `chat-mlx` missing from the Hub's engine→worker map did the same thing
-in 0.6.57 and was worse — an HTTP 500 that blanked **every** model picker on every Mac.
-
-**A second, unrelated bug found by auditing the Hub catalog against the manifests** (the
-systematic "does every model show" check the owner asked for). `/api/hub/catalog` returns **three
-entries for the same repo** for three whisper models, because the Hub aggregates every studio's
-catalog plus a separate transcription read and the Voice worker also lists the whisper models it
-depends on:
-
-```
-mlx-community/whisper-base-mlx
-  label="Whisper Base"  family=whisper  engine=subtitle-mlx  caps=['transcribe','subtitles']  <- rich
-  label="Whisper base"  family=None     engine=whisper       caps=None
-  label="Whisper Base"  family=None     engine=subtitle-mlx  caps=None
-```
-
-`combineModels` concatenates without deduplicating, and `NativeModel` is `Identifiable` by `id`, so
-the Subtitle picker shows each of those three models **three times**. Fixed in the native consumer
-rather than in the Hub, whose aggregate is shared with gateway-kh and documented as pass-through.
-Assigned to job A with the invariant to assert: one row per repo, and it must be the rich entry.
-
-**Audit result for everything else:** all 21 shipped manifests are offered by the Hub catalog with
-`runtime_ready: true`. The only manifest with no catalog entry is `s3tokenizerv2`, which is a
-companion (Chatterbox's tokenizer dependency) and correctly not a user-facing model. Four catalog
-entries have no manifest — `whisper-large-v3-turbo-q4`, `whisper-large-v3-mlx`,
-`moonshine-ai/moonshine-base`, `nemotron-3.5-asr-streaming-0.6b-8bit` — which is the worker offering
-more than the app ships, and the package gate correctly hides them.
-
-| job | what | owner |
+| job | scope | outcome |
 | --- | --- | --- |
-| A | Voice support + mode derived from catalog data; test rewritten to assert the invariant | sub-agent |
-| B | `research/hardcoded-model-lists-audit.md` — every enumeration of models/families/engines/workers, classified trap vs contract, ranked silent-first | sub-agent |
-| C | ST-13.A `pocket-tts-4bit` adoption, including the tokenizer companion, plus the inert-wiring cleanup | sub-agent |
-| D | Integration, verification, release | coordinator |
+| A | native support/mode derived from catalog data | done — 12/12 voice packages selectable, duplicate whisper rows deduped |
+| B | `research/hardcoded-model-lists-audit.md` | done — the standing inventory |
+| C | ST-13.A `pocket-tts-4bit` adoption + inert-wiring cleanup | done — offline tokenizer proof, ~1000 lines of dead wiring removed |
+| D | Hub Tier-A traps (A2, A7, A8, A11–A14, HUB-19) | done — new `components/hub/backend/vocabulary.py` |
+| E | worker discovery (A1, A5) | done — Subtitle and Image catalogs are manifest-driven |
+| F | music per-repo fallbacks (A3, A4) | done — per-model facts, byte-identical output proved |
+| G | packaging component ladders (A15–A17) | done — `COMPONENT_WORKERS`/`COMPONENT_STAGERS`, byte-identical stages |
+| H | voice studio (A6, A9, A10, B16–B21, C4, C15, licensing copy) | done — one wiring table, family flags on the registry |
+| I | Hub + Chat (B3–B12, C9, `modality`, defects) | done — `modality` and `lane_contract` on the package route |
+| J | companion cache + subtitle (B13–B15, pocket-tts tokenizer) | done — measured offline proof; companion mirror into the HF cache |
+| K | native (B22–B31) | done — every modality list derived or exhaustive |
+| L | packaging/qualification tooling (A18, B32–B40, Annex 2) | done — all 24 packages reproducible, silent coverage holes closed |
 
-**Files are partitioned so no two writers touch one file:** A owns `native/**` and the native
-tests; B is read-only apart from its report; C owns `components/voice/**`, the capture tool, the
-two new manifests and the voice/catalog tests.
+**Also delivered here, from Gateway Studio's measured ask** (`docs/tasks/ST-20.md`): `modality` and
+per-model `lane_contract` on `/api/hub/model-packages`, so dispatch is data too; real version
+fields on every worker; and a refusal that names what it could not reach.
+
+**Open, and named rather than guessed** — see `docs/tasks/HANDOFF.md`: Pocket TTS 4-bit's eight
+preset voices need a per-model `preset_speakers` roster plus a published `modes` list and the app
+offering a model in each mode; audited reference-audio profiles exist only for the Qwen families;
+the voice smoke pilot names a model ST-13.B cut; and `capture --write` still withholds the two
+multi-source music packages instead of overwriting them.
 
 ### ST-18 — Z-Image kit rollout: what has to move before it ships
 

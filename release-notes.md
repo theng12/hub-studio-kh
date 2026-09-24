@@ -2,6 +2,54 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.61 — 2026-09-25
+
+### The models that were there all along
+
+If you looked for Khmer TTS in the Audio picker and could not find it, the app was wrong, not your
+Mac. Four voice families that ship in every kit — Khmer MMS, Khmer female ONNX, Chatterbox (4-bit
+and 8-bit) and Fish Audio (8-bit and bf16) — were being filtered out of the picker by a list inside
+the app. Six of the thirteen voice packages were invisible. They are all there now, and the same
+check has been applied to every other studio, so nothing that ships can be hidden again.
+
+### Every model you have is now a model you can pick
+
+- **Transcription** no longer insists a model's engine be called "Whisper". Anything the worker
+  offers and the kit carries is listed.
+- **Image and Music** no longer need a model to publish exactly the controls the first model
+  published. A model with its own set of controls appears with its own controls, and anything it
+  does not support is simply not sent.
+- **Chat** uses the same model picker as the other four studios, and the page no longer names one
+  model in its message whatever you have selected.
+- **Installers** now check that every runtime the release says it contains is really there, not
+  just Voice's — so a half-copied update is refused instead of installed.
+
+### Offline kits really are offline
+
+Pocket TTS 4-bit loads its tokenizer and its built-in voices through a model cache. The kit copied
+the package, but nothing put it where the engine looks, so on a Mac that had never downloaded that
+model the first generation would have failed — the kit's whole purpose. Installing a model now also
+places its companion files where the engine reads them. Verified with the network switched off.
+
+### Smaller, true things
+
+- **Builds are named.** Every studio reports the version it was installed from. Before, four of the
+  five answered the word "standalone", so a Mac's build could not be told apart from another's.
+- **A failure says what failed.** "Could not reach the node: " with nothing after the colon now
+  names what it tried and why. A credential refusal says which credential it wanted and which one
+  arrived.
+- **Numbers are the model's own.** The Chat page was showing a context window of 1,000,000 tokens
+  from a generic default. Qwen3.5-9B 4-bit's own configuration says 262,144, and that is what is
+  shown now — along with where each number came from.
+- **One licence line, no advice.** Model notes state the licence name where it is known and say
+  nothing about what you may do with it.
+
+### For anything you add later
+
+Adding a model no longer needs a change to the app. The catalog and the manifests are the list;
+every screen, router and worker reads them. Where something genuinely cannot be derived, it now
+fails with the file to edit named in the message instead of quietly leaving the model out.
+
 ## 0.6.60 — 2026-09-24
 
 ### Z-Image-Turbo on an 8 GB Mac

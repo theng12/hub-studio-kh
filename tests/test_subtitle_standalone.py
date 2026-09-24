@@ -91,7 +91,10 @@ class SubtitleFixture(unittest.TestCase):
         self.data = self.root / 'state'
         self.audio = self.root / 'clip.wav'
         self.audio_bytes = _write_tone(self.audio)
-        self.manifests = [self._package('whisper-turbo', 'weights.safetensors'),
+        # Turbo is the declared default, as its shipped manifest declares it; every fixture
+        # carries the capability block its manifest would, because the worker now publishes
+        # exactly that block and nothing it was not told.
+        self.manifests = [self._package('whisper-turbo', 'weights.safetensors', default=True),
                           self._package('whisper-base', 'weights.npz'),
                           self._package('whisper-small', 'weights.npz')]
         # A saved memory policy must land in this worker's own state directory. Without the
@@ -108,7 +111,7 @@ class SubtitleFixture(unittest.TestCase):
         os.environ.update(self.old_environ)
         self.temporary.cleanup()
 
-    def _package(self, package_id: str, weight_name: str) -> dict:
+    def _package(self, package_id: str, weight_name: str, **declared) -> dict:
         revision = {
             'whisper-turbo': TURBO_REVISION,
             'whisper-base': '1e3e249fb8d01c655324bd6841b1deadffd6d04c',
@@ -138,7 +141,12 @@ class SubtitleFixture(unittest.TestCase):
         manifest = {'schema_version': 1, 'package_id': package_id,
                     'model_id': model_id, 'revision': revision,
                     'engine': 'subtitle-mlx', 'minimum_macos': '14.0',
+                    'subtitle': declared.pop('subtitle', None) or {
+                        'family': 'whisper', 'languages': ['multilingual'],
+                        'segment_timestamps': True, 'word_timestamps': True,
+                        'long_form': True},
                     'files': files, 'source': {'provider': 'fixture'}}
+        manifest.update(declared)
         model_packages.import_folder(manifest, source, self.library)
         return manifest
 
@@ -245,10 +253,11 @@ class ExportSourceTests(SubtitleFixture):
 class CatalogContractTests(SubtitleFixture):
     """ST-06.4 — Base, Small and Turbo pinned, Turbo the recommended default."""
 
-    def test_catalog_pins_the_three_whisper_models(self) -> None:
+    def test_catalog_publishes_the_manifests_it_was_given(self) -> None:
+        """The fixture's own manifests are the expectation, not a hand-kept list."""
         manager = self.build_manager()
         entries = {entry['package_id']: entry for entry in manager.catalog()}
-        self.assertEqual(sorted(entries), ['whisper-base', 'whisper-small', 'whisper-turbo'])
+        self.assertEqual(sorted(entries), sorted(m['package_id'] for m in self.manifests))
         self.assertEqual(entries['whisper-turbo']['model_revision'], TURBO_REVISION)
         self.assertTrue(entries['whisper-turbo']['recommended'])
         self.assertEqual(manager.default_package(), 'whisper-turbo')
@@ -265,6 +274,11 @@ class CatalogContractTests(SubtitleFixture):
         def small_mac(_command, **_kwargs):
             return str(6 * 1024 ** 3)
 
+        # The probe caches the host's memory for the process lifetime, so a value read by any
+        # earlier test would survive the patch and this test would see this Mac instead of the
+        # 6 GB one it is describing.
+        engine_module._MEMORY_CACHE.clear()
+        self.addCleanup(engine_module._MEMORY_CACHE.clear)
         with patch.object(engine_module.subprocess, 'check_output', small_mac):
             host = engine_module.host_eligibility()
         self.assertTrue(host['eligible'], host)
@@ -339,6 +353,396 @@ class CatalogContractTests(SubtitleFixture):
         for name in ('', '..', '../escape.wav', 'a/b.wav', 'clip.txt', 'clip', 'bad\x00.wav'):
             with self.assertRaises(ValueError, msg=name):
                 safe_input_name(name)
+
+
+class SubtitleCapabilityPublicationTests(SubtitleFixture):
+    """B13/B14 — what is published about a package comes from that package's manifest.
+
+    The fixture is the mislabelling the audit found: `family` was read with a `'whisper'`
+    fallback, and Multilingual plus all three timestamp/long-form capabilities were asserted
+    for every package the worker loaded. A non-Whisper engine was therefore published as
+    Whisper, and a model that cannot produce word timestamps was advertised as able to.
+    """
+
+    def manager_with(self, manifests, **kwargs) -> SubtitleManager:
+        manager = SubtitleManager(self.data, self.library, manifests, 'b' * 64,
+                                  voice_app_dir=VOICE_APP, **kwargs)
+        self.addCleanup(manager.close)
+        factory, _ = _fake_factory([{'start': 0.0, 'end': 1.0, 'text': 'hello'}])
+        manager.engine.model_factory = factory
+        return manager
+
+    def non_whisper_package(self) -> dict:
+        """An English-only model with no word timings and no long form."""
+        manifest = json.loads(json.dumps(self.manifests[0]))
+        manifest.update({'package_id': 'parakeet-tdt-0-6b',
+                         'model_id': 'nvidia/parakeet-tdt-0.6b-v2', 'revision': 'f' * 40})
+        manifest.pop('default', None)
+        manifest['subtitle'] = {'family': 'parakeet', 'languages': ['en'],
+                                'segment_timestamps': True, 'word_timestamps': False,
+                                'long_form': False}
+        model_packages.validate_manifest(manifest)
+        return manifest
+
+    def test_every_published_capability_is_the_one_its_manifest_declares(self) -> None:
+        manager = self.build_manager()
+        entries = {entry['package_id']: entry for entry in manager.catalog()}
+        for manifest in self.manifests:
+            block = manifest['subtitle']
+            entry = entries[manifest['package_id']]
+            self.assertEqual(entry['family'], block['family'])
+            self.assertEqual(entry['languages'], block['languages'])
+            self.assertEqual(entry['supports_segment_timestamps'], block['segment_timestamps'])
+            self.assertEqual(entry['supports_word_timestamps'], block['word_timestamps'])
+            self.assertEqual(entry['supports_long_form'], block['long_form'])
+
+    def test_a_non_whisper_package_is_published_as_what_it_is(self) -> None:
+        parakeet = self.non_whisper_package()
+        manager = self.manager_with([*self.manifests, parakeet])
+        entry = {item['package_id']: item for item in manager.catalog()}['parakeet-tdt-0-6b']
+        self.assertEqual(entry['family'], 'parakeet')
+        self.assertEqual(entry['languages'], ['en'])
+        self.assertTrue(entry['supports_segment_timestamps'])
+        self.assertFalse(entry['supports_word_timestamps'],
+                         'a model with no word timings must not be advertised as able to')
+        self.assertFalse(entry['supports_long_form'])
+
+    def test_the_availability_payload_restates_nothing_of_its_own(self) -> None:
+        """The second place the old code asserted True; it must mirror the catalog exactly."""
+        manager = self.manager_with([*self.manifests, self.non_whisper_package()])
+        catalog = {entry['package_id']: entry for entry in manager.catalog()}
+        for model in manager.availability()['models']:
+            entry = catalog[model['package_id']]
+            self.assertEqual(model['family'], entry['family'])
+            self.assertEqual(model['languages'], entry['languages'])
+            self.assertEqual(model['supports_segment_timestamps'],
+                             entry['supports_segment_timestamps'])
+            self.assertEqual(model['supports_word_timestamps'],
+                             entry['supports_word_timestamps'])
+            self.assertEqual(model['supports_long_form'], entry['supports_long_form'])
+
+    def test_a_manifest_without_the_block_fails_loudly_instead_of_defaulting(self) -> None:
+        broken = json.loads(json.dumps(self.manifests[0]))
+        broken.pop('subtitle')
+        with self.assertRaises(engine_module.ModelPackageError) as caught:
+            SubtitleManager(self.data, self.library, [*self.manifests, broken], 'b' * 64,
+                            voice_app_dir=VOICE_APP)
+        self.assertIn('whisper-turbo', str(caught.exception))
+        self.assertIn('subtitle', str(caught.exception))
+
+    def test_an_incomplete_block_fails_loudly_naming_the_field(self) -> None:
+        broken = json.loads(json.dumps(self.manifests[0]))
+        broken['subtitle'].pop('word_timestamps')
+        with self.assertRaises(engine_module.ModelPackageError) as caught:
+            SubtitleManager(self.data, self.library, [*self.manifests, broken], 'b' * 64,
+                            voice_app_dir=VOICE_APP)
+        self.assertIn('word_timestamps', str(caught.exception))
+
+    def test_a_declared_default_is_used_and_the_rule_is_published(self) -> None:
+        manager = self.build_manager()
+        self.assertEqual(manager.default_package(), 'whisper-turbo')
+        self.assertEqual(manager.engine.default_rule, 'declared')
+        for entry in manager.catalog():
+            self.assertEqual(entry['default_rule'], 'declared')
+            self.assertEqual(entry['recommended'], entry['package_id'] == 'whisper-turbo')
+
+    def test_without_a_declared_default_the_rule_is_stated_not_silent(self) -> None:
+        """The old hardcode: 'whisper-turbo' if present, else alphabetical-first, unannounced.
+
+        Retiring whisper-turbo silently changed the default, and nothing said which rule had
+        been applied. With no declaration the worker still picks, and says how.
+        """
+        undeclared = []
+        for manifest in self.manifests:
+            value = json.loads(json.dumps(manifest))
+            value.pop('default', None)
+            undeclared.append(value)
+        manager = self.manager_with(undeclared)
+        self.assertEqual(manager.default_package(), 'whisper-base')
+        self.assertEqual(manager.engine.default_rule, 'first-package-id')
+        for entry in manager.catalog():
+            self.assertEqual(entry['default_rule'], 'first-package-id')
+
+    def test_a_worker_with_no_manifest_has_no_default_and_says_so(self) -> None:
+        """An empty catalog is not a crash; it is a state with a name.
+
+        The packaged worker refuses an empty catalog before it starts
+        (`load_subtitle_manifests` names the manifest directory and the engine it looked for).
+        An engine built by something else - the cancellation and credential tests build one - must
+        still be able to say *why* it has no default instead of failing on construction.
+        """
+        from components.subtitle.app.backend.manager import validate_request
+        manager = self.manager_with([])
+        self.assertIsNone(manager.default_package())
+        self.assertEqual(manager.engine.default_rule, 'no-catalog')
+        self.assertEqual(manager.catalog(), [])
+        with self.assertRaises(ValueError) as caught:
+            validate_request({'formats': ['srt']}, packages=[], default_package=None)
+        self.assertIn('no packaged subtitle model is available', str(caught.exception))
+        self.assertIn('model-manifests', str(caught.exception))
+
+    def test_two_declared_defaults_are_refused_by_name(self) -> None:
+        first, second = (json.loads(json.dumps(value)) for value in self.manifests[:2])
+        second['default'] = True
+        with self.assertRaises(engine_module.ModelPackageError) as caught:
+            self.manager_with([first, second, self.manifests[2]])
+        message = str(caught.exception)
+        self.assertIn('whisper-base', message)
+        self.assertIn('whisper-turbo', message)
+
+
+class LaneContractTests(SubtitleFixture):
+    """The transcription lane publishes what a scheduler must send and gets back.
+
+    `docs/lane-execution-contract.md`: the contract comes from the worker that owns the API, so
+    a gateway needs no table of its own. Two rules are tested here rather than described: no
+    parameter is listed that the route does not honour, and no number is published that the
+    worker does not enforce.
+    """
+
+    def transcribe_form_fields(self) -> set[str]:
+        """The form fields `POST /api/transcribe` really declares, read from the route itself."""
+        from fastapi.routing import APIRoute
+        client = TestClient(create_app(self.build_manager(), TOKEN))
+        for route in client.app.routes:
+            if isinstance(route, APIRoute) and route.path == '/api/transcribe':
+                return {field.alias or field.name for field in route.dependant.body_params}
+        self.fail('the worker serves no POST /api/transcribe')
+
+    def test_every_row_publishes_the_lane_contract(self) -> None:
+        manager = self.build_manager()
+        for entry in manager.catalog():
+            contract = entry['lane_contract']
+            self.assertEqual(contract['schema'], 'studiohub.lane-contract.v1')
+            self.assertEqual(contract['modality'], 'transcription')
+            self.assertEqual(contract['operation'], 'audio.transcription')
+            self.assertEqual(contract['artifact'], {
+                'modality': 'transcription', 'media_type': 'application/json',
+                'extension': 'json', 'per_item': 1})
+            self.assertEqual(contract['states'], {
+                'accepted': ['queued'], 'active': ['running', 'cancel_requested'],
+                'terminal': ['done', 'error', 'cancelled'], 'uncertain': 'uncertain',
+                'uncertain_is_terminal': False, 'discard_supported': True})
+            self.assertEqual(contract['cancel']['request'], 'DELETE /api/hub/jobs/{batch_id}')
+            self.assertTrue(contract['cancel']['supported'])
+            self.assertIn('not evidence that nothing was written',
+                          contract['cancel']['semantics'])
+            # The Hub owns the only dispatch deadline for every lane and adds it when it echoes
+            # the contract; a worker restating it would be another copy of a Hub number.
+            self.assertNotIn('deadline_seconds', contract)
+
+    def test_the_listed_parameters_are_the_route_that_is_served(self) -> None:
+        from components.subtitle.app.backend import manager as subtitle_manager
+        manager = self.build_manager()
+        contract = manager.catalog()[0]['lane_contract']
+        listed = {parameter['name'] for parameter in contract['parameters']}
+        self.assertEqual(listed, self.transcribe_form_fields(),
+                         'the contract must list exactly what POST /api/transcribe accepts')
+        parameters = {parameter['name']: parameter for parameter in contract['parameters']}
+        self.assertTrue(parameters['file']['required'])
+        self.assertEqual(parameters['file']['max_bytes'], subtitle_manager.MAX_INPUT_BYTES)
+        self.assertEqual(set(parameters['file']['enum']),
+                         set(subtitle_manager.ALLOWED_EXTENSIONS))
+        self.assertIs(parameters['word_timestamps']['default'], False)
+        expected = {manifest['package_id'] for manifest in self.manifests}
+        expected |= {manifest['model_id'] for manifest in self.manifests}
+        self.assertEqual(set(parameters['model']['enum']), expected,
+                         'every packaged model is offerable, by either spelling')
+        self.assertEqual(parameters['model']['default'], 'whisper-turbo')
+
+    def test_runtime_seconds_is_published_only_with_its_measurement(self) -> None:
+        manager = self.build_manager()
+        for entry in manager.catalog():
+            self.assertNotIn('runtime_seconds', entry['lane_contract'],
+                             'an estimator is not a measurement')
+        measured = json.loads(json.dumps(self.manifests[0]))
+        measured['subtitle']['runtime_seconds'] = {
+            'measured': [{'seconds': 12.5, 'duration_seconds': 30.0, 'word_timestamps': False},
+                         {'seconds': 13.75, 'duration_seconds': 30.0, 'word_timestamps': True}],
+            'measured_on': '32 GiB M2 Max, MLX fp16', 'evidence': 'measured',
+            'source': 'qualification/evidence/example.json'}
+        model_packages.validate_manifest(measured)
+        manager = self.manager_with_extra([measured])
+        contract = {entry['package_id']: entry['lane_contract']
+                    for entry in manager.catalog()}['whisper-turbo']
+        rows = contract['runtime_seconds']['measured']
+        self.assertEqual([row['seconds'] for row in rows], [12.5, 13.75],
+                         'one row per configuration that was run, so a scheduler can match one')
+        self.assertEqual(contract['runtime_seconds']['measured_on'], '32 GiB M2 Max, MLX fp16')
+        self.assertEqual(contract['runtime_seconds']['evidence'], 'measured')
+        self.assertEqual(contract['runtime_seconds']['source'],
+                         'qualification/evidence/example.json')
+
+    def manager_with_extra(self, manifests) -> SubtitleManager:
+        manager = SubtitleManager(self.data, self.library, manifests, 'b' * 64,
+                                  voice_app_dir=VOICE_APP)
+        self.addCleanup(manager.close)
+        factory, _ = _fake_factory([{'start': 0.0, 'end': 1.0, 'text': 'hello'}])
+        manager.engine.model_factory = factory
+        return manager
+
+    def test_the_shipped_whisper_turbo_manifest_publishes_its_measured_runtime(self) -> None:
+        """The one shipped measurement, cited so a reader can check it rather than trust it."""
+        manifest = json.loads((PROJECT_ROOT / 'model-manifests' /
+                               'whisper-turbo.json').read_text(encoding='utf-8'))
+        runtime = manifest['subtitle']['runtime_seconds']
+        self.assertEqual(runtime['evidence'], 'measured')
+        self.assertIn('M2 Max', runtime['measured_on'])
+        rows = runtime['measured']
+        # One row per configuration that was run: a cold worker and a warm one cost different
+        # amounts, and a scheduler picks the row matching what it is about to ask for.
+        self.assertEqual({row['seconds'] for row in rows}, {9.66, 2.004, 3.013})
+        for row in rows:
+            self.assertEqual(row['duration_seconds'], 5.166)
+            self.assertTrue(row['scene'])
+            self.assertTrue(row['source'], 'every row names where its number came from')
+        self.assertIn('r07-2026-09-21', rows[0]['source'],
+                      'the cold row traces to the stored receipt')
+
+
+class CatalogDiscoveryTests(SubtitleFixture):
+    """A1 — the worker's catalog is every manifest that *declares* the Subtitle engine.
+
+    One ``model-manifests`` directory ships in the bundle and carries every engine's packages
+    (``packaging/stage_voice.py`` copies the whole tree), so a package's *file name* is not a
+    contract. The worker read ``whisper-*.json``, which made its whole catalog "packages whose
+    id starts with whisper-": the next subtitle package — ``parakeet-tdt-0-6b``,
+    ``nemotron-asr-0-6b`` — shipped, was published by the Hub, and never reached this worker's
+    ``/api/catalog`` or the picker, and a job for it was refused with a message about Whisper.
+
+    These tests go through the packaged entry point (``from_environment``) so the discovery
+    rule itself is what is under test, not a manager built from an already-chosen list.
+    """
+
+    @staticmethod
+    def subtitle_manifests_in(directory: Path) -> list[dict]:
+        """Every manifest in ``directory`` that declares this worker's engine."""
+        return [manifest for manifest in
+                (json.loads(path.read_text(encoding='utf-8'))
+                 for path in sorted(directory.glob('*.json')))
+                if manifest.get('engine') == 'subtitle-mlx']
+
+    def manifest_directory(self, extra: list[dict]) -> Path:
+        directory = self.root / 'model-manifests'
+        directory.mkdir(exist_ok=True)
+        for manifest in [*self.manifests, *extra]:
+            (directory / f'{manifest["package_id"]}.json').write_text(
+                json.dumps(manifest), encoding='utf-8')
+        return directory
+
+    def package_named(self, package_id: str, model_id: str, **declared) -> dict:
+        """A subtitle package whose id has nothing to do with Whisper.
+
+        Its capabilities are its own: an English-only model that returns segment timings and
+        cannot return word timings or transcribe long form. The worker has to publish that, not
+        the Whisper-shaped default it used to assert for every package it loaded.
+        """
+        manifest = json.loads(json.dumps(self.manifests[0]))
+        manifest.update({'package_id': package_id, 'model_id': model_id,
+                         'revision': 'f' * 40})
+        manifest.pop('default', None)
+        manifest['subtitle'] = declared.pop('subtitle', {
+            'family': 'parakeet', 'languages': ['en'], 'segment_timestamps': True,
+            'word_timestamps': False, 'long_form': False})
+        manifest.update(declared)
+        model_packages.validate_manifest(manifest)
+        return manifest
+
+    def worker_over(self, directory: Path) -> tuple[TestClient, SubtitleManager]:
+        """The packaged entry point over one directory, as the bundle builds it."""
+        from unittest.mock import patch
+
+        from components.subtitle.app.backend import main as subtitle_main
+
+        release = self.root / 'release-manifest.json'
+        release.write_text(json.dumps({
+            'schema': 'studiohub.standalone-release', 'schema_version': 1, 'version': 'fixture',
+            'components': {'subtitle': {'runtime_sha256': 'b' * 64}}}), encoding='utf-8')
+        previous = dict(os.environ)
+        os.environ.update({
+            'STUDIOHUB_SUBTITLE_MANIFESTS': str(directory),
+            'STUDIOHUB_MODELS_DIR': str(self.library),
+            'STUDIOHUB_VOICE_APP_DIR': str(VOICE_APP),
+            'STUDIOHUB_RELEASE_MANIFEST': str(release),
+            'STUDIOHUB_FLEET_TOKEN': TOKEN,
+            'STUDIOHUB_SUBTITLE_DATA_DIR': str(self.data),
+        })
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(previous)))
+        captured: dict = {}
+        build_app = subtitle_main.create_app
+
+        def capture(manager, token, **kwargs):
+            captured['manager'] = manager
+            return build_app(manager, token, **kwargs)
+
+        with patch.object(subtitle_main, 'create_app', capture):
+            app = subtitle_main.from_environment()
+        manager = captured.get('manager')
+        if manager is not None:
+            self.addCleanup(manager.close)
+        return TestClient(app), manager
+
+    def published(self, client: TestClient) -> dict[str, dict]:
+        response = client.get('/api/catalog', headers={'X-Studio-Token': TOKEN})
+        self.assertEqual(response.status_code, 200, response.text)
+        return {entry['package_id']: entry for entry in response.json()['models']}
+
+    def test_a_subtitle_package_named_anything_is_published(self) -> None:
+        """The fixture the file-name glob could never see."""
+        parakeet = self.package_named('parakeet-tdt-0-6b', 'nvidia/parakeet-tdt-0.6b-v2')
+        image = json.loads((PROJECT_ROOT / 'model-manifests' /
+                            'flux2-klein-4b-mlx-4bit.json').read_text(encoding='utf-8'))
+        client, manager = self.worker_over(self.manifest_directory([parakeet, image]))
+        published = self.published(client)
+        self.assertIn('parakeet-tdt-0-6b', published,
+                      'a subtitle package is discovered by its declared engine, not its file name')
+        self.assertEqual(published['parakeet-tdt-0-6b']['repo'], 'nvidia/parakeet-tdt-0.6b-v2')
+        self.assertEqual(published['parakeet-tdt-0-6b']['engine'], 'subtitle-mlx')
+        # Another engine's manifest in the same directory is simply not this worker's catalog —
+        # it must neither appear nor stop the worker from starting.
+        self.assertEqual(set(published), {manifest['package_id']
+                                          for manifest in [*self.manifests, parakeet]})
+        # And the job contract accepts it, by repository or by package id. Before the fix the
+        # request was refused as "choose one of the packaged Whisper models" — a message about
+        # a model the caller had not asked for.
+        from components.subtitle.app.backend.manager import validate_request
+
+        for spelling in ('nvidia/parakeet-tdt-0.6b-v2', 'parakeet-tdt-0-6b'):
+            request = validate_request({'model': spelling, 'formats': ['srt']},
+                                       packages=sorted(published),
+                                       default_package='whisper-turbo',
+                                       aliases=manager.model_aliases())
+            self.assertEqual(request['model'], 'parakeet-tdt-0-6b')
+
+    def test_every_shipped_manifest_declaring_the_subtitle_engine_is_published(self) -> None:
+        """The invariant: ship a subtitle manifest and it is published without editing code."""
+        directory = PROJECT_ROOT / 'model-manifests'
+        declared = {manifest['package_id'] for manifest in self.subtitle_manifests_in(directory)}
+        self.assertTrue(declared, 'the shipped catalog must declare the subtitle engine somewhere')
+        client, _ = self.worker_over(directory)
+        published = self.published(client)
+        self.assertEqual(set(published), declared)
+        # A non-whisper file name is what the next package will look like: the test above proves
+        # that case, and this one fails the moment a new subtitle manifest ships unseen.
+        for entry in published.values():
+            self.assertEqual(entry['engine'], 'subtitle-mlx')
+
+    def test_a_sibling_engines_unreadable_file_does_not_stop_the_worker(self) -> None:
+        """The shared directory belongs to every worker; a bad sibling is not this worker's."""
+        directory = self.manifest_directory([])
+        (directory / 'broken.json').write_text('{not json', encoding='utf-8')
+        client, _ = self.worker_over(directory)
+        published = self.published(client)
+        self.assertEqual(set(published), {manifest['package_id'] for manifest in self.manifests})
+
+    def test_an_invalid_subtitle_manifest_is_fatal_and_names_its_file(self) -> None:
+        """A declared subtitle package that cannot be read must not vanish silently."""
+        from components.subtitle.app.backend.main import load_subtitle_manifests
+
+        broken = self.package_named('parakeet-tdt-0-6b', 'nvidia/parakeet-tdt-0.6b-v2')
+        broken['revision'] = 'not-a-revision'
+        with self.assertRaisesRegex(ValueError, r'parakeet-tdt-0-6b\.json'):
+            load_subtitle_manifests(self.manifest_directory([broken]))
 
 
 class DecodePathTests(SubtitleFixture):
@@ -598,6 +1002,29 @@ class OwnerTokenTests(SubtitleFixture):
             self.assertEqual(response.status_code, 401, headers)
         self.assertEqual(client.get('/api/health', headers={'X-Hub-Token': TOKEN}).status_code, 200)
 
+    def test_a_refused_credential_says_what_was_required_and_what_arrived(self) -> None:
+        """A bare 401 across a fleet is unattributable.
+
+        Gateway Studio measured one on `/studio/voice/api/transcribe/availability` and could not
+        tell whether the controller's credential, the node's Hub, or the worker behind it had
+        refused. This worker cannot accept a controller's credential by design - the owning Hub
+        re-signs every proxied request with the worker's own token - so the refusal states which
+        token it wanted and which headers it saw, and says where the token comes from.
+        """
+        manager = self.build_manager()
+        client = TestClient(create_app(manager, TOKEN))
+        response = client.get('/api/transcribe/availability',
+                              headers={'Authorization': 'Bearer a-controller-token'})
+        self.assertEqual(response.status_code, 401)
+        payload = response.json()
+        self.assertIn('Hub token', payload['detail'])
+        self.assertIn('Authorization: Bearer', payload['detail'])
+        self.assertEqual(payload['required'], 'hub-token')
+        self.assertEqual(payload['offered'], ['Authorization: Bearer'])
+        missing = client.get('/api/transcribe/availability').json()
+        self.assertIn('no credential', missing['detail'])
+        self.assertEqual(missing['offered'], [])
+
 
 class SubtitleApiTests(SubtitleFixture):
     """ST-06.1/2 — the public Subtitle endpoints on a private loopback app."""
@@ -621,6 +1048,63 @@ class SubtitleApiTests(SubtitleFixture):
         self.assertTrue(payload['ok'])
         self.assertFalse(payload['transcription']['busy'])
         self.assertEqual(payload['transcription']['runtime_revision'], 'b' * 64)
+
+    def test_health_reports_the_release_or_says_it_cannot_know(self) -> None:
+        """A version field must not carry a non-version.
+
+        `/api/health` answered `"standalone"` and the Hub republishes that verbatim as the
+        worker's `studio_version`, so three of four workers reported a word where a version
+        belongs. The value now comes from `components/app_version.py`: the staged release when
+        there is one, the checkout's own version for a development run, and `unknown` when it has
+        neither — never a word that reads as data.
+        """
+        from components import app_version
+        from components.subtitle.app.backend import main as subtitle_main
+        manager = self.build_manager()
+        self.addCleanup(manager.close)
+        payload = TestClient(create_app(manager, TOKEN)).get(
+            '/api/health', headers={'X-Hub-Token': TOKEN}).json()
+        self.assertEqual(set(app_version.version_fields()) - {'app_version'},
+                         {'app_commit', 'development_build'})
+        self.assertIn('app_commit', payload)
+        self.assertIn('development_build', payload)
+        self.assertRegex(payload['app_version'], r'^(\d+\.\d+\.\d+|unknown)$')
+        self.assertNotEqual(payload['app_version'], 'standalone')
+
+        release = self.root / 'release-manifest.json'
+        release.write_text(json.dumps({
+            'schema': 'studiohub.standalone-release', 'schema_version': 1, 'version': '0.7.3',
+            'development_build': False, 'implementation_commit': 'c' * 40,
+            'components': {'subtitle': {'runtime_sha256': 'b' * 64}}}), encoding='utf-8')
+        previous = os.environ.get(app_version.ENVIRONMENT_VARIABLE)
+        os.environ[app_version.ENVIRONMENT_VARIABLE] = str(release)
+        self.addCleanup(self.restore_release_manifest, previous)
+        self.assertEqual(subtitle_main.read_app_version(), '0.7.3')
+        client = TestClient(create_app(self.build_manager(), TOKEN))
+        staged = client.get('/api/health', headers={'X-Hub-Token': TOKEN}).json()
+        self.assertEqual(staged['app_version'], '0.7.3')
+        self.assertEqual(staged['app_commit'], 'c' * 40)
+        self.assertFalse(staged['development_build'])
+
+    def test_a_release_manifest_that_is_not_one_is_never_reported_as_a_version(self) -> None:
+        from components import app_version
+        from components.subtitle.app.backend import main as subtitle_main
+        broken = self.root / 'broken-release.json'
+        broken.write_text(json.dumps({'schema': 'something-else', 'version': '1.0.0'}),
+                          encoding='utf-8')
+        previous = os.environ.get(app_version.ENVIRONMENT_VARIABLE)
+        os.environ[app_version.ENVIRONMENT_VARIABLE] = str(broken)
+        self.addCleanup(self.restore_release_manifest, previous)
+        # A manifest that is not one is ignored, so the checkout's own version (a development
+        # run) or `unknown` is reported - both of which are versions or the honest word.
+        self.assertRegex(subtitle_main.read_app_version(), r'^(\d+\.\d+\.\d+|unknown)$')
+
+    def restore_release_manifest(self, previous) -> None:
+        from components import app_version
+        if previous is None:
+            os.environ.pop(app_version.ENVIRONMENT_VARIABLE, None)
+        else:
+            os.environ[app_version.ENVIRONMENT_VARIABLE] = previous
 
     def test_catalog_and_availability_expose_the_same_models(self) -> None:
         catalog = self.client.get('/api/catalog', headers=self.headers).json()
@@ -874,11 +1358,15 @@ class SubtitleModelIdentifierTests(unittest.TestCase):
     def test_an_unpackaged_model_is_still_refused(self) -> None:
         from components.subtitle.app.backend import manager as subtitle_manager
 
-        with self.assertRaisesRegex(ValueError, 'packaged Whisper models'):
+        with self.assertRaisesRegex(ValueError, 'no packaged subtitle model') as caught:
             subtitle_manager.validate_request(
                 {'model': 'someone/unknown-whisper', 'formats': ['srt']},
                 packages=['whisper-turbo'], default_package='whisper-turbo',
                 aliases=self.aliases)
+        # The refusal names the entry that was asked for and the ones that exist, so a missing
+        # package is diagnosable without reading this worker's source.
+        self.assertIn('someone/unknown-whisper', str(caught.exception))
+        self.assertIn('whisper-turbo', str(caught.exception))
 
     def test_engine_publishes_repository_aliases(self) -> None:
         """The alias map must be derived from the real manifests, not hard-coded."""

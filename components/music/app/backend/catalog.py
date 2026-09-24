@@ -49,9 +49,6 @@ ENGINE_MODEL_CODE_SHA256 = {
         "71b22e01b490bd9e149e4c0c5da2e1f512126f3ab3316e0ae97779af84d19512",
 }
 
-# The package the local manifest describes. Periods are normalized to hyphens
-# to match the model package identifier contract.
-PACKAGE_ID = "ace-step-1-5-turbo"
 ENGINE = "music-mlx"
 
 # ---------------------------------------------------------------------------
@@ -146,40 +143,14 @@ LM_06B = Checkpoint(
 # Instrumental only (no vocals); 44.1 kHz stereo; 380 s absolute maximum.
 STABLE_AUDIO_REPO = "stabilityai/stable-audio-3-optimized"
 STABLE_AUDIO_REVISION = "da6edc54ddba10bfd79a077102ded687f80e882b"
-STABLE_AUDIO_PACKAGE_ID = "stable-audio-3-medium"
 SA3_MAX_DURATION_SECONDS = 380
 
-# One Music worker serves more than one engine now, so a request names its repo and
-# these maps decide which installed package and engine files it needs.
-PACKAGE_MANIFESTS: dict[str, str] = {
-    MAIN_REPO: "ace-step-1-5-turbo.json",
-    STABLE_AUDIO_REPO: "stable-audio-3-medium.json",
-}
-PACKAGE_IDS: dict[str, str] = {
-    MAIN_REPO: PACKAGE_ID,
-    STABLE_AUDIO_REPO: STABLE_AUDIO_PACKAGE_ID,
-}
-# Where the engine's own files sit inside an imported package folder.
-PACKAGE_ROOTS: dict[str, str] = {
-    MAIN_REPO: "model",
-    STABLE_AUDIO_REPO: "model/mlx",
-}
-
-
-def manifest_name_for(repo: str) -> str:
-    return PACKAGE_MANIFESTS.get(repo, PACKAGE_MANIFESTS[MAIN_REPO])
-
-
-def package_id_for(repo: str) -> str:
-    return PACKAGE_IDS.get(repo, PACKAGE_ID)
-
-
-def package_root_for(repo: str) -> str:
-    return PACKAGE_ROOTS.get(repo, PACKAGE_ROOTS[MAIN_REPO])
-
-
-def is_stable_audio(repo: str) -> bool:
-    return repo == STABLE_AUDIO_REPO
+# One Music worker serves more than one engine, so the engine is a property of the
+# model itself (``ModelEntry.runtime``), not of a per-repo table.  generation.py maps
+# these values to a request validator and a runner, and refuses an unknown value by
+# naming the model and this file; add the engine there when you add the model.
+RUNTIME_ACE_STEP = "ace-step"
+RUNTIME_STABLE_AUDIO = "stable-audio"
 
 SA3_DIT_MEDIUM = Checkpoint(
     name="dit_medium", kind="dit", repo=STABLE_AUDIO_REPO,
@@ -288,8 +259,8 @@ FAMILIES: dict[str, Family] = {
             "Open-source text-to-music foundation model from ACE Studio and "
             "StepFun. A CFG-distilled DiT generates the audio while a 5 Hz "
             "semantic LM plans duration, structure and, when asked, lyrics and "
-            "metadata. MIT licensed and trained on licensed/royalty-free/synthetic "
-            "audio, so output is intended to be commercially usable."
+            "metadata. MIT licensed, trained on licensed, royalty-free and "
+            "synthetic audio."
         ),
         how_to_use=(
             "Describe the music in a caption (genre, instruments, mood, tempo). "
@@ -321,32 +292,66 @@ FAMILIES: dict[str, Family] = {
 
 @dataclass(frozen=True)
 class ModelEntry:
+    """One music model: what it is, which package it runs from, and its contract.
+
+    Every per-model fact is a required field.  The worker publishes these from the
+    entry (``main.catalog_route``), verifies and loads the package named by
+    ``package_id``/``package_root`` (``cache.MusicCache`` -> ``package_id_for`` /
+    ``package_root_for``) and enforces the entry's own ``limits``.  A third model
+    therefore cannot be added without its own package identity, revision and
+    contract, and cannot inherit ACE-Step's.
+
+    ``manifest_name`` is derived: the installer-owned manifest for a package is
+    ``<package_id>.json`` (``cache.resolve_manifest_path``), and ``MusicCache``
+    refuses a manifest whose ``package_id`` is not this model's.
+    """
+
     repo: str
     label: str
     family: str
     checkpoint: str
     size_gb: float
     gated: bool
-    min_unified_memory_gb: Optional[int] = 8
+    # ── Package identity: the installed folder this model is verified from ──
+    package_id: str
+    package_root: str
+    revision: str
+    # ── The executor that runs it, one of the RUNTIME_* values above ──
+    runtime: str
+    # ── What the worker publishes and request validation enforces for it ──
+    defaults: dict
+    limits: dict
+    qualification: dict
+    min_unified_memory_gb: Optional[int]
+    sample_rate_hz: int
+    channels: int
+    license_name: str
+    license_source: str
+    capabilities: tuple[str, ...]
+    tiers: tuple[TierLimit, ...]
+    long_form: LongFormStrategy
+    # Default LM the worker loads at the current tier, from this model's engine.
+    default_lm_model: str
+    inference_steps: int
+    guidance_scale: float
+    # ── Optional prose and checkpoint detail; an honest empty means "none" ──
     recommended_hardware: str = ""
-    capabilities: tuple[str, ...] = ("music", "instrumental", "text-to-music")
     best_for: str = ""
-    sample_rate_hz: int = 48000
-    channels: int = 2
-    license_name: str = "MIT License"
-    license_source: str = "ACE-Step-1.5/LICENSE"
     checkpoints: tuple[Checkpoint, ...] = field(default_factory=tuple)
     dit_tiers: tuple[Checkpoint, ...] = field(default_factory=tuple)
     lm_tiers: tuple[Checkpoint, ...] = field(default_factory=tuple)
-    tiers: tuple[TierLimit, ...] = TIERS
-    long_form: LongFormStrategy = LONG_FORM
-    # Default LM the worker loads at the current tier.  The engine's own
-    # recommendation for tier4, kept explicit so the HTTP surface can report it.
-    default_lm_model: str = "acestep-5Hz-lm-0.6B"
-    inference_steps: int = 8
-    guidance_scale: float = 1.0
     # huggingface_hub-style glob patterns to skip during a download.
     ignore_patterns: tuple[str, ...] = ()
+    # What one item of this model actually costs, where it has been measured. Published as the
+    # lane contract's `runtime_seconds`; `None` means unmeasured, and an unmeasured model must
+    # publish nothing rather than an estimate — a guessed runtime is how a scheduler sets a
+    # deadline that fails on use.
+    measured_runtime: Optional[dict] = None
+
+    @property
+    def manifest_name(self) -> str:
+        """The installed manifest for this model's package: ``<package_id>.json``."""
+        return f"{self.package_id}.json"
 
 
 CATALOG: tuple[ModelEntry, ...] = (
@@ -359,6 +364,57 @@ CATALOG: tuple[ModelEntry, ...] = (
         # separately published 0.6B planner.
         size_gb=7709377612 / 1e9,
         gated=False,
+        # The package the local manifest describes. Periods are normalized to
+        # hyphens to match the model package identifier contract.
+        package_id="ace-step-1-5-turbo",
+        package_root="model",
+        revision=MAIN_REVISION,
+        runtime=RUNTIME_ACE_STEP,
+        defaults={
+            "duration_seconds": 30.0,
+            "steps": 8,
+            "guidance_scale": 1.0,
+            "shift": 3.0,
+            "seed": -1,
+            "instrumental": True,
+            "lyrics": "[Instrumental]",
+            "vocal_language": "unknown",
+            "dit_model": "acestep-v15-turbo",
+            "lm_model": "acestep-5Hz-lm-0.6B",
+        },
+        limits={
+            "min_duration_seconds": 1.0,
+            # The engine's absolute supported maximum
+            # (acestep/gpu_config.py:GPU_TIER_CONFIGS["unlimited"]); the per-tier cap
+            # this host gets is 480 s at tier4 (see TIERS).
+            "max_duration_seconds": 600.0,
+            "single_pass_max_seconds": LONG_FORM.single_pass_max_seconds,
+            "min_steps": 1,
+            "max_steps": 50,
+            "min_guidance": 0.0,
+            "max_guidance": 30.0,
+            "min_seed": -1,
+            "max_seed": 2 ** 32 - 1,
+        },
+        qualification={
+            "historical_source_workload":
+                "30 s instrumental, 8 steps, turbo DiT + 0.6B LM, MLX backend, tier4",
+            "packaged_inference": "unqualified; source contract only",
+        },
+        # Measured, not estimated: `qualification/evidence/r07-2026-09-21/` holds one JSON per
+        # run with its own wall time. Published as the lane contract's `runtime_seconds` so a
+        # scheduler sets its deadline from a number this hardware actually produced — the
+        # per-run detail stays in the evidence, the contract carries the shape of it.
+        measured_runtime={
+            "measured": [
+                {"duration_seconds": 30.0, "seconds": 97.35},
+                {"duration_seconds": 60.0, "seconds": 104.71},
+                {"duration_seconds": 360.0, "seconds": 256.41},
+                {"duration_seconds": 20.0, "seconds": 106.65, "note": "with vocals"},
+            ],
+            "measured_on": "M2 Max 32 GB, ACE-Step 1.5 Turbo, 8 steps",
+            "evidence": "measured",
+        },
         min_unified_memory_gb=8,
         recommended_hardware=(
             "Apple Silicon with 16 GB unified memory; runs at tier4 on this "
@@ -377,7 +433,11 @@ CATALOG: tuple[ModelEntry, ...] = (
         checkpoints=(TURBO_DIT, VAE, TEXT_ENCODER, LM_06B),
         dit_tiers=(TURBO_DIT,),
         lm_tiers=(LM_06B,),
+        tiers=TIERS,
+        long_form=LONG_FORM,
         default_lm_model="acestep-5Hz-lm-0.6B",
+        inference_steps=8,
+        guidance_scale=1.0,
         # The two executable model files that upstream normally synchronizes
         # are package members instead. Studio Hub's adapter verifies equality
         # and refuses a mismatch; it never writes into the installed package.
@@ -390,6 +450,34 @@ CATALOG: tuple[ModelEntry, ...] = (
         checkpoint="dit_medium",
         size_gb=6883369494 / 1e9,
         gated=False,
+        package_id="stable-audio-3-medium",
+        # Where the engine's own files sit inside the imported package folder.
+        package_root="model/mlx",
+        revision=STABLE_AUDIO_REVISION,
+        runtime=RUNTIME_STABLE_AUDIO,
+        defaults={
+            "duration_seconds": 30,
+            "steps": 8,
+            "guidance_scale": 1.0,
+            "seed": -1,
+            "dit_model": "dit_medium",
+        },
+        limits={
+            "min_duration_seconds": 1,
+            "max_duration_seconds": SA3_MAX_DURATION_SECONDS,
+            "single_pass_max_seconds": SA3_LONG_FORM.single_pass_max_seconds,
+            "min_steps": 1,
+            "max_steps": 50,
+            "min_guidance": 0.0,
+            "max_guidance": 30.0,
+            "min_seed": -1,
+            "max_seed": 2 ** 32 - 1,
+        },
+        qualification={
+            "historical_source_workload":
+                "1.4B medium DiT + SAME-L codec, pure MLX backend",
+            "packaged_inference": "measured locally, not yet qualified in-app",
+        },
         min_unified_memory_gb=8,
         recommended_hardware=(
             "Any Apple Silicon Mac. Measured 3.89 GB peak for a 30 s clip and "
@@ -404,8 +492,18 @@ CATALOG: tuple[ModelEntry, ...] = (
         channels=2,
         license_name="Stability AI Community License",
         license_source=(
-            "stabilityai/stable-audio-3-optimized model card; commercial terms at "
+            "stabilityai/stable-audio-3-optimized model card; license text at "
             "https://stability.ai/license"),
+        # Measured on the same host as the ACE-Step runs, recorded in
+        # `qualification/evidence/sa3-2026-09-22/proof.json` with each artifact's own SHA-256.
+        measured_runtime={
+            "measured": [
+                {"duration_seconds": 30.0, "seconds": 9.26, "realtime_x": 3.24},
+                {"duration_seconds": 380.0, "seconds": 61.58, "realtime_x": 6.17},
+            ],
+            "measured_on": "M2 Max 32 GB, Stable Audio 3 Medium MLX, 8 steps, seed 42",
+            "evidence": "measured",
+        },
         checkpoints=(SA3_DIT_MEDIUM, SA3_SAME_L_ENCODER, SA3_SAME_L_DECODER,
                      SA3_T5GEMMA),
         dit_tiers=(SA3_DIT_MEDIUM,),
@@ -419,11 +517,102 @@ CATALOG: tuple[ModelEntry, ...] = (
 )
 
 
-def get_model(repo: str) -> Optional[ModelEntry]:
+def _validate_catalog() -> None:
+    """Refuse a catalog that could publish one model's facts for another.
+
+    ``ModelEntry`` already makes every per-model fact mandatory, so this only has
+    to catch the ways two entries can still be confused: a repeated repo or
+    package id, an empty identity, a package root that escapes the installed
+    package, and generation limits that contradict the entry's own long-form
+    strategy.  A violation is raised at import, so it fails the worker and the
+    tests rather than reaching ``/api/catalog``.
+    """
+    repos: set[str] = set()
+    packages: dict[str, str] = {}
+    required_limits = ("min_duration_seconds", "max_duration_seconds",
+                       "single_pass_max_seconds", "min_steps", "max_steps",
+                       "min_guidance", "max_guidance", "min_seed", "max_seed")
     for model in CATALOG:
-        if model.repo == repo:
+        for label, value in (("package_id", model.package_id),
+                             ("package_root", model.package_root),
+                             ("revision", model.revision),
+                             ("runtime", model.runtime)):
+            if not value:
+                raise ValueError(f"Music catalog entry {model.repo!r} has no {label}")
+        if model.repo in repos:
+            raise ValueError(f"Music catalog repeats the repo {model.repo!r}")
+        repos.add(model.repo)
+        if model.package_id in packages:
+            raise ValueError(
+                f"Music catalog entry {model.repo!r} reuses package id "
+                f"{model.package_id!r} from {packages[model.package_id]!r}")
+        packages[model.package_id] = model.repo
+        if model.package_root.startswith("/") or ".." in model.package_root.split("/"):
+            raise ValueError(
+                f"Music catalog entry {model.repo!r} has a package root outside its "
+                f"package: {model.package_root!r}")
+        missing = [key for key in required_limits if key not in model.limits]
+        if missing:
+            raise ValueError(
+                f"Music catalog entry {model.repo!r} publishes no generation limit "
+                f"for {', '.join(missing)}")
+        if model.limits["single_pass_max_seconds"] != model.long_form.single_pass_max_seconds:
+            raise ValueError(
+                f"Music catalog entry {model.repo!r} publishes single_pass_max_seconds="
+                f"{model.limits['single_pass_max_seconds']!r} but its long_form strategy "
+                f"says {model.long_form.single_pass_max_seconds!r}")
+        if model.limits["min_duration_seconds"] > model.limits["max_duration_seconds"]:
+            raise ValueError(
+                f"Music catalog entry {model.repo!r} has min_duration_seconds above "
+                "max_duration_seconds")
+
+
+_validate_catalog()
+
+
+def get_model(identifier: str) -> Optional[ModelEntry]:
+    """One registered model by repo id or by package id, or None when unknown."""
+    for model in CATALOG:
+        if identifier in (model.repo, model.package_id):
             return model
     return None
+
+
+def require_model(identifier: str) -> ModelEntry:
+    """One model by repo id or package id, refused by name when unregistered.
+
+    Every per-model fact the worker publishes, verifies or loads is read from the
+    returned entry.  There is deliberately no fallback to the first model: that
+    fallback is how a newly added model used to be published with ACE-Step's
+    manifest, package id and package root.
+    """
+    model = get_model(identifier)
+    if model is None:
+        known = ", ".join(item.repo for item in CATALOG)
+        raise ValueError(
+            f"Music model {identifier!r} is not in catalog.CATALOG ({known}); add a "
+            "ModelEntry in components/music/app/backend/catalog.py")
+    return model
+
+
+def manifest_name_for(repo: str) -> str:
+    return require_model(repo).manifest_name
+
+
+def package_id_for(repo: str) -> str:
+    return require_model(repo).package_id
+
+
+def package_root_for(repo: str) -> str:
+    return require_model(repo).package_root
+
+
+def revision_for(repo: str) -> str:
+    return require_model(repo).revision
+
+
+def runtime_for(repo: str) -> str:
+    return require_model(repo).runtime
 
 
 def get_checkpoint(name: str) -> Optional[Checkpoint]:

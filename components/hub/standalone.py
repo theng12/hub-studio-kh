@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import logging
 import os
 import re
 import threading
@@ -25,8 +26,18 @@ from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, shared_voices, transcription_jobs
+from .backend import app_release, shared_voices, transcription_jobs, vocabulary
 from .backend.monitor import StudioMonitor
+
+# The key one unusable manifest carries into the catalog so its row can say what is wrong
+# without taking the other packages down. Private to this module: it is an implementation
+# detail of `_model_catalog`, and no worker or manifest may set it.
+_MANIFEST_ERROR = "_manifest_error"
+
+# The one request timeout this Hub enforces on a job request it proxies to a worker. The lane
+# contract's `deadline_seconds` is this number, so the deadline a scheduler reads is the one the
+# Hub will actually hold it to; a worker restating it would be a second copy of a Hub number.
+PEER_PROXY_TIMEOUT_S = 900.0
 
 
 def _model_library() -> Path:
@@ -40,16 +51,114 @@ def _model_library() -> Path:
 
 
 def _model_catalog() -> dict[str, dict[str, Any]]:
+    """Every manifest in the catalog directory, keyed by package id.
+
+    Each manifest is read and validated **on its own**. A file that cannot be parsed, or that
+    fails the manifest contract, becomes one entry carrying a ``_MANIFEST_ERROR`` reason rather
+    than raising for the whole catalog: this function feeds `/api/hub/model-packages`, the app
+    reads that route with a hard ``try`` inside its refresh, and one malformed manifest used to
+    answer 503 for every package - which marked the Hub unreachable and blanked every model
+    picker on every Mac. Only a catalog directory that cannot be listed at all still raises,
+    because "no models" would be a lie rather than a degradation.
+    """
+    from components import model_packages
     location = os.environ.get("STUDIOHUB_MODEL_MANIFESTS", "").strip()
     root = Path(location).expanduser().resolve() if location else Path(__file__).resolve().parents[2] / "model-manifests"
     try:
-        manifests = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(root.glob("*.json"))]
+        paths = sorted(root.glob("*.json"))
     except OSError as exc:
-        raise ValueError("model manifest catalog is unavailable") from exc
-    from components import model_packages
-    for manifest in manifests:
-        model_packages.validate_manifest(manifest)
-    return {manifest["package_id"]: manifest for manifest in manifests}
+        raise ValueError(f"model manifest catalog is unavailable: {root}") from exc
+    catalog: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            catalog[path.stem] = _manifest_error(
+                {"package_id": path.stem, "model_id": path.stem},
+                f"{path.name} could not be read as JSON: {exc}")
+            continue
+        if not isinstance(manifest, dict):
+            catalog[path.stem] = _manifest_error(
+                {"package_id": path.stem, "model_id": path.stem},
+                f"{path.name} is not a manifest object")
+            continue
+        key = str(manifest.get("package_id") or path.stem)
+        try:
+            model_packages.validate_manifest(manifest)
+        except ValueError as exc:
+            catalog[key] = _manifest_error(manifest, f"{path.name} is not a usable manifest: {exc}")
+            continue
+        catalog[key] = manifest
+    return catalog
+
+
+def _manifest_error(manifest: dict[str, Any], reason: str) -> dict[str, Any]:
+    """One unusable manifest, kept in the catalog so it can have its own row.
+
+    The reason travels with it: a package that cannot be used is a fact the operator needs to
+    see where the model is chosen, not a 503 that hides every other package.
+    """
+    return {**manifest, _MANIFEST_ERROR: reason}
+
+
+def _row_modality(manifest: dict[str, Any]) -> str | None:
+    """The modality for a row whose manifest may be unusable.
+
+    An unregistered engine has no modality to publish, and that is the row's own reason: the
+    engine allowlist message names the file to edit. Anything else publishes its modality, so
+    a reader never has to guess one from the engine name.
+    """
+    engine = str(manifest.get("engine") or "").strip()
+    if not engine:
+        return None
+    try:
+        return _modality_for_engine(engine)
+    except ValueError:
+        return None
+
+
+def _manifest_error_row(manifest: dict[str, Any], reason: str, *,
+                        hint: str | None = None) -> dict[str, Any]:
+    """The `/api/hub/model-packages` row for a package that cannot be used.
+
+    Shaped like a real row - the app decodes `package_id`, `model_id`, `state` and
+    `dispatch_state` as required fields, so an error row missing them would fail the whole
+    response's decoding and blank the pickers a second way.
+    """
+    package_id = str(manifest.get("package_id") or "unknown")
+    text = reason if reason.endswith(".") else f"{reason}."
+    if hint:
+        text = f"{text} {hint}"
+    return {
+        "package_id": package_id,
+        "model_id": str(manifest.get("model_id") or package_id),
+        "engine": manifest.get("engine"),
+        # Present whenever the engine is registered, even on a row whose manifest is unusable:
+        # a scheduler reading the row must not need a second join to learn the lane.
+        "modality": _row_modality(manifest),
+        "lane_contract": None,
+        "revision": manifest.get("revision"),
+        "state": "invalid",
+        "files_state": "invalid",
+        "runtime_state": "unknown",
+        "os_state": "unknown",
+        "chip_state": "unknown",
+        "worker_state": "unavailable",
+        "worker_id": None,
+        "minimum_macos": manifest.get("minimum_macos"),
+        "macos_version": None,
+        "dispatch_state": "ineligible",
+        "type": "model",
+        "dependencies": _declared_companions(manifest),
+        "paused": False,
+        "paused_reason": None,
+        "paused_studio": None,
+        "paused_failures": None,
+        "manifest_error": True,
+        # The app shows `reason` verbatim under the model, so it says what is wrong. A silent
+        # unavailability with no cause is the failure this whole route exists to prevent.
+        "reason": text,
+    }
 
 
 def _dependency_package_ids(catalog: dict[str, dict[str, Any]]) -> set[str]:
@@ -58,14 +167,64 @@ def _dependency_package_ids(catalog: dict[str, dict[str, Any]]) -> set[str]:
     A codec, a tokenizer and a real model are indistinguishable in this row otherwise: all of them
     report `engine=voice-mlx`, `state=files_verified` and `runtime_state=ready`, which is how a
     tokenizer ended up offered in a voice picker on the gateway's side. The catalogue already says
-    which packages are dependencies - each manifest lists its companions in `dependencies` - so the
-    fact is stated here rather than left to be inferred from membership of some other list.
+    which packages are dependencies - each manifest lists its companions - so the fact is stated
+    here rather than left to be inferred from membership of some other list.
+
+    Read through `model_packages.required_packages`, which honours both spellings the shipped
+    catalog uses. Reading one spelling here and the other in `model_packages` typed
+    `s3tokenizerv2` correctly while publishing `whisper-turbo` - a Subtitle ASR package two Qwen
+    voice packages require - as a pickable Voice model.
     """
+    from components import model_packages
     required: set[str] = set()
     for entry in catalog.values():
-        for dependency in entry.get("dependencies") or ():
-            required.add(str(dependency))
+        if entry.get(_MANIFEST_ERROR):
+            continue
+        try:
+            required.update(model_packages.required_packages(entry))
+        except ValueError:  # an unusable manifest is already its own row
+            continue
     return required
+
+
+def _declared_companions(manifest: dict[str, Any]) -> list[str]:
+    """The companions a row publishes, tolerating a manifest too broken to resolve them."""
+    from components import model_packages
+    try:
+        return list(model_packages.required_packages(manifest))
+    except ValueError:
+        return []
+
+
+# engine -> (the worker that runs it, the modality a job for it must declare). ONE map, because
+# this vocabulary has been restated three times in this area and every copy drifted: the worker
+# map itself (`chat-mlx` → HTTP 500 → every picker blank), the inline modality dict in
+# `_submission_readiness` (an engine registered everywhere but there returned None, and every
+# job for every model of that engine was refused with MODEL_MODALITY_MISMATCH - "model is not
+# available for this job modality", which blames the operator's request instead of the missing
+# map), and the fleet join's copy.
+_ENGINE_ROUTE: dict[str, tuple[str, str]] = {
+    "image-mflux": ("image", "image"),
+    "voice-mlx": ("voice", "voice"),
+    "voice-vits": ("voice", "voice"),
+    "subtitle-mlx": ("subtitle", "transcription"),
+    "music-mlx": ("music", "music"),
+    "chat-mlx": ("chat", "chat"),
+}
+
+_ENGINE_REGISTRATION_HINT = (
+    "add it to _ENGINE_ROUTE in components/hub/standalone.py and to the engine allowlist in "
+    "components/model_packages.py"
+)
+
+
+def _engine_route(engine: str) -> tuple[str, str]:
+    try:
+        return _ENGINE_ROUTE[engine]
+    except KeyError as exc:
+        raise ValueError(
+            f"the manifest engine {engine!r} has no worker or modality; "
+            f"{_ENGINE_REGISTRATION_HINT}") from exc
 
 
 def _worker_for_engine(engine: str) -> str:
@@ -77,23 +236,100 @@ def _worker_for_engine(engine: str) -> str:
     `KeyError: 'chat-mlx'` and answered 500. The app reads that route with a hard `try` inside its
     refresh, so the 500 did not degrade one list - it marked the whole Hub unreachable and left
     every model picker empty. `tests/test_model_manifest_catalog.py` now fails if the two lists
-    drift apart again.
+    drift apart again, and it checks the modality half of the same map as well.
     """
-    mapping = {"image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
-               "subtitle-mlx": "subtitle", "music-mlx": "music", "chat-mlx": "chat"}
+    return _engine_route(engine)[0]
+
+
+def _modality_for_engine(engine: str) -> str:
+    """Which modality a job for a manifest's engine must declare.
+
+    Read from the same map as the worker, so registering an engine in one place registers both.
+    """
+    return _engine_route(engine)[1]
+
+
+def _model_row(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
+               monitor: StudioMonitor,
+               lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """One `/api/hub/model-packages` row, isolated from every other row.
+
+    A manifest that cannot be used gets its own row carrying the reason instead of an exception
+    that takes the whole route - and therefore every model picker on every Mac - down with it.
+    The catch is deliberately broad: the point of the isolation is that a package the Hub has
+    never seen before must not be able to fail the catalog in a way this code did not predict.
+    """
+    reason = str(manifest.get(_MANIFEST_ERROR) or "")
+    if reason:
+        return _manifest_error_row(
+            manifest, f"Its package manifest is unusable: {reason}",
+            hint=("Fix or remove that file in the Hub's model-manifests folder, "
+                  "then reload."))
     try:
-        return mapping[engine]
-    except KeyError as exc:
-        raise ValueError(
-            f"the manifest engine {engine!r} has no worker; add it here and to the engine "
-            f"allowlist in components/model_packages.py") from exc
+        return _model_state(manifest, catalog, monitor, lane_contracts)
+    except Exception as exc:  # noqa: BLE001 - one package must never blank the catalog
+        logging.getLogger("studiohub.models").exception(
+            "model package %r could not be described",
+            manifest.get("package_id") or manifest.get("model_id"))
+        return _manifest_error_row(
+            manifest, f"The Hub could not describe this package: {exc}")
 
 
-def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], monitor: StudioMonitor) -> dict[str, Any]:
+def _lane_contracts(monitor: StudioMonitor) -> dict[str, dict[str, Any]]:
+    """Last-known ``lane_contract`` per model identifier, from the studios' own catalogs.
+
+    The studio is the only thing that knows its own API, so the Hub carries the contract the
+    worker published and never invents one. A studio that is not currently up contributes
+    nothing - a contract from a worker that is down describes a build that is not running - and
+    any failure here yields an empty map: this join must never be able to fail a package row.
+    That is the 0.6.57 lesson, where one row's failure blanked every picker on every Mac.
+    """
+    contracts: dict[str, dict[str, Any]] = {}
+    try:
+        rows = monitor.cached_aggregate_catalog().get("models") or []
+    except Exception:  # noqa: BLE001 - a missing contract is not a failed package row
+        return contracts
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        contract = row.get("lane_contract")
+        if not isinstance(contract, dict):
+            continue
+        studio_id = row.get("hub_studio")
+        if studio_id and monitor.status.get(studio_id, {}).get("status") != "up":
+            continue
+        for identifier in (row.get("repo"), row.get("model_id"), row.get("package_id"),
+                           *(row.get("aliases") or [])):
+            key = str(identifier or "").strip()
+            if key:
+                contracts.setdefault(key, contract)
+    return contracts
+
+
+def _contract_for(manifest: dict[str, Any],
+                  lane_contracts: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    for key in (manifest.get("model_id"), manifest.get("package_id")):
+        contract = lane_contracts.get(str(key or "").strip())
+        if contract is not None:
+            return contract
+    return None
+
+
+def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
+                 monitor: StudioMonitor,
+                 lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     from components import model_packages
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
     worker_id = _worker_for_engine(manifest["engine"])
     worker = next((item for item in monitor.registry if item["id"] == worker_id), None)
+    if lane_contracts is None:
+        lane_contracts = _lane_contracts(monitor)
+    contract = _contract_for(manifest, lane_contracts)
+    if contract is not None:
+        # The deadline is the Hub's own proxy timeout - the number this process will actually
+        # hold the request to - not a worker's estimate, so it is added here rather than
+        # restated by five workers. `lane_contract` itself stays verbatim from the studio.
+        contract = {**contract, "deadline_seconds": PEER_PROXY_TIMEOUT_S}
     # A paused model still reports verified files and a compatible runtime; it is the Hub's own
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
     # then declined before dispatch, which read as the model silently not working.
@@ -108,10 +344,18 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], m
         "model_id": manifest["model_id"],
         "revision": manifest["revision"],
         "engine": manifest["engine"],
+        # The modality a job for this package must declare. Read from the same engine table the
+        # worker comes from (no second mapping), so a scheduler does not have to make a second,
+        # best-effort catalog read and join on model id - which is what silently dropped a model
+        # whose engine the reader did not know.
+        "modality": _modality_for_engine(manifest["engine"]),
+        # The dispatch contract the model's own studio published, verbatim except for the Hub's
+        # own `deadline_seconds`, or null when no studio is up with one.
+        "lane_contract": contract,
         # `model` for something a person can pick; `dependency` for a package that only exists to
         # serve another one. Consumers must not have to infer this.
         "type": ("dependency" if manifest["package_id"] in _dependency_package_ids(catalog) else "model"),
-        "dependencies": list(manifest.get("dependencies") or ()),
+        "dependencies": _declared_companions(manifest),
         "worker_id": worker_id,
         "worker_state": "running" if worker else "unavailable",
         "paused": paused is not None,
@@ -183,16 +427,19 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
         return None
     catalog = _model_catalog()
     manifest = next((row for row in catalog.values()
-                     if row["model_id"] == envelope.get("model")), None)
+                     if row.get("model_id") == envelope.get("model")), None)
     if manifest is None:
         return {"code": "MODEL_NOT_PACKAGED", "detail": "model is not in the packaged catalog"}
-    expected_modality = {
-        "image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
-        "subtitle-mlx": "transcription", "music-mlx": "music", "chat-mlx": "chat",
-    }.get(manifest["engine"])
+    # One row, built the same way the catalog route builds it, so an unusable manifest is a
+    # named refusal here rather than an exception on the submission path.
+    state = _model_row(manifest, catalog, monitor)
+    if state.get("manifest_error"):
+        return {"code": "MODEL_NOT_READY",
+                "detail": "this model's package manifest is unusable on this Hub",
+                "readiness": state}
+    expected_modality = _modality_for_engine(str(manifest.get("engine") or ""))
     if expected_modality != envelope.get("modality"):
         return {"code": "MODEL_MODALITY_MISMATCH", "detail": "model is not available for this job modality"}
-    state = _model_state(manifest, catalog, monitor)
     if state["dispatch_state"] != "eligible":
         return {"code": "MODEL_NOT_READY", "detail": "model files, runtime, OS, or chip are not ready",
                 "readiness": state}
@@ -659,12 +906,23 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/hub/model-packages")
     def model_packages_list() -> dict[str, Any]:
+        """Every package the Hub ships, one row per manifest, each built on its own.
+
+        This route is how the app learns which models exist, and the app reads it with a hard
+        ``try`` inside its refresh: a failure here does not degrade one list, it marks the Hub
+        unreachable and blanks every model picker on every Mac. So a manifest that cannot be
+        used produces its own row carrying the reason, and the other rows are returned anyway.
+        """
         try:
             catalog = _model_catalog()
-            return {"models": [_model_state(manifest, catalog, monitor)
-                               for manifest in catalog.values()]}
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
+        # One pass over the studios' last-good catalogs for the whole route: the `lane_contract`
+        # join is per model but its source is shared, and a worker that is down simply leaves the
+        # key null on its rows.
+        contracts = _lane_contracts(monitor)
+        return {"models": [_model_row(manifest, catalog, monitor, contracts)
+                           for manifest in catalog.values()]}
 
     @app.get("/api/hub/catalog")
     @app.get("/api/hub/models")
@@ -1632,10 +1890,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # as this Hub talks to its own workers. Serving that surface is what makes a packaged app a
     # valid fleet member: the rest of the fleet logic already exists on the controller side and
     # only ever needed somewhere to point.
-    WORKER_FOR_MODALITY = {
-        "image": "image", "voice": "voice", "transcription": "subtitle", "music": "music",
-        "chat": "chat",
-    }
+    #
+    # The table itself lives in `backend/vocabulary.py`, because this routing table, the fleet
+    # join's accepted set and the packaged worker descriptors are one vocabulary seen from three
+    # directions - and each copy of it fell behind in turn.
+    WORKER_FOR_MODALITY = vocabulary.WORKER_FOR_MODALITY
 
     def _proxy_target(path: str) -> tuple[str, str]:
         """Resolve a peer path to a local worker, or refuse it.
@@ -1693,7 +1952,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             upstream = await monitor._client.request(
                 request.method, url, headers=headers, content=body or None,
-                timeout=httpx.Timeout(900.0, connect=5.0),
+                timeout=httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0),
             )
         except (httpx.HTTPError, OSError) as exc:
             if owner is not None:

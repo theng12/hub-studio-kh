@@ -47,6 +47,16 @@ QWEN06_PRESET = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 QWEN17_PRESET = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
 QWEN17_DESIGN = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
 
+# The packaged app always carries its manifests, and the quality gate reads the
+# validator ASR from them (`requires_packages` -> that package's `model_id`).
+# Set at import so the Voice-suite shim, which re-exports these classes, sees it.
+os.environ.setdefault("STUDIOHUB_MODEL_MANIFESTS", str(REPO_ROOT / "model-manifests"))
+
+
+def _validator_repo() -> str:
+    """The validator ASR the Qwen Base manifest declares, not a constant."""
+    return qwen_quality.validator_repo(QWEN06)
+
 
 def _wav_bytes(seconds: float = 1.0, sample_rate: int = 24000, amplitude: int = 8000) -> bytes:
     buffer = io.BytesIO()
@@ -99,7 +109,7 @@ class QwenBaseCatalogTests(unittest.TestCase):
             payload = catalog.serialize_model(catalog.get_model(repo))
             guardrails = payload["execution_contract"]["quality_guardrails"]
             self.assertIsNotNone(guardrails, repo)
-            self.assertEqual(guardrails["required_local_models"], [qwen_quality.WHISPER_REPO])
+            self.assertEqual(guardrails["required_local_models"], [_validator_repo()])
             self.assertEqual(guardrails["validator_revision"], qwen_quality.VALIDATOR_REVISION)
             self.assertEqual(guardrails["max_local_quality_retries"], 1)
         # The CustomVoice/VoiceDesign tiers were cut on 2026-09-24 (ST-13.B), so only
@@ -311,7 +321,7 @@ class QualityCheckLeaseTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertTrue(calls[0]["lock_held"], "quality check must run inside the parent job lease")
-        self.assertEqual(calls[0]["model_repo"], qwen_quality.WHISPER_REPO)
+        self.assertEqual(calls[0]["model_repo"], _validator_repo())
         self.assertTrue(calls[0]["word_timestamps"])
         self.assertEqual(release_calls, ["qwen-reference-validation-complete"])
         self.assertTrue(job.params["_qwen_reference_validation"]["accepted"])

@@ -780,7 +780,11 @@ def check_voice_clone_required(
 
 
 def check_section_budget(
-    contract: dict[str, Any], model_id: str, policy: Optional[dict[str, Any]]
+    contract: dict[str, Any],
+    model_id: str,
+    policy: Optional[dict[str, Any]],
+    *,
+    auto_default_from_derivation: bool = False,
 ) -> dict[str, Any]:
     """The highest-value check: this number is fed straight into the runtime.
 
@@ -847,7 +851,7 @@ def check_section_budget(
     section_claim = {"maximum": claimed, "auto_default": default}
     section_expected = {"maximum": expected, "auto_default": v2_default}
     if (
-        model_id != "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+        (model_id != anchor.get("model_id") and not auto_default_from_derivation)
         or type(default) is not int
         or not 230 <= default <= claimed
         or default != v2_default
@@ -1019,6 +1023,12 @@ def _derived_section_override(record: dict[str, Any]) -> dict[str, int] | None:
     ``derivation``, and it has to claim exactly the anchored numbers. That keeps
     the property this validator exists for: a record can inherit independently
     measured evidence, it can never author a number of its own.
+
+    Inheriting means inheriting *all* of it, so the same self-consistency the
+    measured path demands is demanded here: the promotion envelope has to be the
+    record's own, the contract hash has to match the contract, and the canary
+    fields the anchor was measured on have to be the ones this record carries.
+    Without that, a record could copy the numbers and then edit the evidence.
     """
     derivation = record.get("derivation")
     if not isinstance(derivation, dict):
@@ -1028,6 +1038,7 @@ def _derived_section_override(record: dict[str, Any]) -> dict[str, int] | None:
     if anchor is None:
         return None
     subject = record.get("subject") or {}
+    contract = record.get("contract") or {}
     # The derivation must name the same upstream model, and the derived record
     # must be a different checkpoint — inheriting your own audit is not a thing.
     if (
@@ -1035,6 +1046,12 @@ def _derived_section_override(record: dict[str, Any]) -> dict[str, int] | None:
         or derivation.get("derived_from_model_id") != subject.get("upstream_model_id")
         or subject.get("model_id") == anchor["model_id"]
     ):
+        return None
+    # The contract has to describe the subject, not a neighbour whose numbers
+    # were copied wholesale.
+    if contract.get("model_id") not in (None, subject.get("model_id")):
+        return None
+    if not _promotion_envelope_is_self_consistent(record, anchor):
         return None
     limits = (record.get("contract") or {}).get("input_limits") or {}
     if limits.get("private_section_max_characters") != anchor["section_max_characters"]:
@@ -1048,6 +1065,54 @@ def _derived_section_override(record: dict[str, Any]) -> dict[str, int] | None:
             return None
         result["default"] = anchor["auto_default_section_max_characters"]
     return result
+
+
+def _promotion_envelope_is_self_consistent(
+    record: dict[str, Any], anchor: dict[str, Any]
+) -> bool:
+    """Whether a record's own promotion envelope and canary match its contract.
+
+    The checks `_measured_section_override` makes about the record *being* the
+    anchored run, minus the identity comparisons that legitimately differ for a
+    derived checkpoint (a different model id, a different checkpoint revision).
+    """
+    candidate = record.get("genstudio_candidate") or {}
+    contract = record.get("contract") or {}
+    evidence = record.get("evidence") or {}
+    canary = evidence.get("five_thousand_character_canary")
+    qualified_runtime = evidence.get("qualified_runtime")
+    if (
+        candidate.get("audit_status") != "passed"
+        or candidate.get("candidate_for_genstudio") is not True
+        or candidate.get("audit_id") != record.get("audit_id")
+        or candidate.get("contract_hash") != contract_hash(contract)
+        or not isinstance(canary, dict)
+        or not isinstance(qualified_runtime, dict)
+    ):
+        return False
+    return (
+        canary.get("hub_batch_id") == anchor["canary_batch_id"]
+        and canary.get("worker_job_id") == anchor["canary_job_id"]
+        and canary.get("section_max_characters") == anchor["section_max_characters"]
+        and qualified_runtime.get("commit") == anchor["canary_commit"]
+        and qualified_runtime.get("target") == anchor["canary_target"]
+    )
+
+
+def _policy_anchor_audit_id(record: dict[str, Any]) -> str:
+    """The audit id whose measured numbers this record's policy stands on.
+
+    A derived record resolves to the audit it derives from: the numbers are the
+    anchor's and the anchor is where the evidence lives, so
+    `check_section_budget` must compare against the anchor's measured pair
+    rather than find nothing under the derived record's own id.
+    """
+    derivation = record.get("derivation")
+    if isinstance(derivation, dict):
+        parent_id = str(derivation.get("derived_from_audit_id") or "")
+        if parent_id in _MEASURED_SECTION_PROVENANCE:
+            return parent_id
+    return str(record.get("audit_id") or "")
 
 
 def _superseded_by_audit_id(record: dict[str, Any]) -> str | None:
@@ -1106,6 +1171,7 @@ def validate_record(
         }
 
     policy: Optional[dict[str, Any]] = None
+    anchor_audit_id: Optional[str] = None
     if family:
         measured = (
             _measured_section_override(record)
@@ -1119,10 +1185,19 @@ def validate_record(
             audited_default_section_max_characters=measured.get("default"),
         )
         if policy is not None and measured:
-            policy = {**policy, "audit_id": record.get("audit_id")}
+            anchor_audit_id = _policy_anchor_audit_id(record)
+            policy = {**policy, "audit_id": anchor_audit_id}
 
     checks = [
-        check_section_budget(contract, model_id, policy),
+        check_section_budget(
+            contract,
+            model_id,
+            policy,
+            auto_default_from_derivation=(
+                anchor_audit_id is not None
+                and anchor_audit_id != str(record.get("audit_id") or "")
+            ),
+        ),
         check_reference_window(contract, fn),
         check_join_pause(contract, policy),
         check_language_control(contract, fn, catalog_entry),

@@ -101,12 +101,29 @@ def main() -> int:
             } for key, row in studios.items()
         }
         problems = []
-        for expected in ("voice", "image", "subtitle"):
-            row = studios.get(expected)
-            if row is None:
-                problems.append(f"{expected} is missing from the memory inventory")
-            elif row["state"] != "ready":
-                problems.append(f"{expected} reports {row['state']}: {row.get('detail')}")
+        # Every Studio the Hub publishes a memory policy for must be ready. This used to be a
+        # membership test over exactly ("voice", "image", "subtitle"), so a build where Music and
+        # Chat were entirely absent printed `"ok": true` and exited 0 - a green gate over two
+        # missing studios. Iterating the inventory the Hub just returned cannot miss one.
+        for key, row in sorted(studios.items()):
+            if row["state"] != "ready":
+                problems.append(f"{key} reports {row['state']}: {row.get('detail')}")
+        # Absence is not a pass either: every component this build's own release manifest ships
+        # must have answered, so a staged-but-never-registered worker is named rather than simply
+        # not being in the loop above.
+        release_file = RESOURCES / "release-manifest.json"
+        if not release_file.is_file():
+            problems.append(f"the staged app has no {release_file.name}, so the shipped studio "
+                            f"set cannot be checked against the memory inventory")
+        else:
+            release = json.loads(release_file.read_text())
+            shipped = sorted(name for name in (release.get("components") or {}) if name != "hub")
+            evidence["shipped_studios"] = shipped
+            for name in shipped:
+                if name not in studios:
+                    problems.append(
+                        f"{name} ships in this build's release manifest but the Hub publishes no "
+                        f"memory-policy row for it (rows: {sorted(studios)})")
 
         status, changed = request(f"{base}/api/hub/memory/policy", method="PUT", token=token,
                                   payload={"mode": "memory_saver"})

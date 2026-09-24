@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-Truth audit: verify _WIRED_FAMILIES matches actual dispatch coverage.
+Truth audit: verify the wired family set matches actual dispatch coverage.
+
+Since 2026-09-25 the wiring is derived rather than restated: every family
+declares its `engine` in `catalog.FAMILIES`, and `generation._WORKER_BY_ENGINE`
+maps an engine to its worker. `_WIRED_FAMILIES` is `frozenset(catalog.FAMILIES)`
+and the dispatcher branches on the engine, not on family names, so this audit
+reads the two registries and reports the same four kinds of drift:
 
 Why this exists
 ---------------
@@ -99,6 +105,51 @@ def parse_catalog_families(catalog_path: Path) -> set[str]:
     return families
 
 
+def parse_engine_constants(catalog_path: Path) -> dict[str, str]:
+    """`ENGINE_MLX_AUDIO = "mlx-audio"` style assignments, by constant name."""
+    tree = ast.parse(catalog_path.read_text())
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target, value = node.targets[0], node.value
+        if isinstance(target, ast.Name) and target.id.startswith("ENGINE_"):
+            literal = _string_literal(value)
+            if literal:
+                out[target.id] = literal
+    return out
+
+
+def parse_family_registry(catalog_path: Path) -> dict[str, str]:
+    """`catalog.FAMILIES`: family id -> the engine constant or literal it declares."""
+    tree = ast.parse(catalog_path.read_text())
+    registry: dict[str, str] = {}
+    for node in tree.body:
+        value: Optional[ast.expr] = None
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        if not (isinstance(target, ast.Name) and target.id == "FAMILIES"):
+            continue
+        if not isinstance(value, ast.Dict):
+            continue
+        for key_node, entry in zip(value.keys, value.values):
+            family_id = _string_literal(key_node) if key_node is not None else None
+            if not family_id or not isinstance(entry, ast.Call):
+                continue
+            for keyword in entry.keywords:
+                if keyword.arg != "engine":
+                    continue
+                literal = _string_literal(keyword.value)
+                if literal:
+                    registry[family_id] = literal
+                elif isinstance(keyword.value, ast.Name):
+                    registry[family_id] = keyword.value.id
+    return registry
+
+
 # ─── generation.py audit ───────────────────────────────────────────────────
 
 class GenerationAuditor:
@@ -107,9 +158,34 @@ class GenerationAuditor:
        - What families does the dispatch code actually handle without raising?
     """
 
-    def __init__(self, generation_path: Path):
+    def __init__(self, generation_path: Path, engine_constants: Optional[dict[str, str]] = None):
         self.tree = ast.parse(generation_path.read_text())
         self.module_sets = self._collect_module_level_sets()
+        self._engine_constants = engine_constants or {}
+        self._engine_keys = self._collect_worker_engines()
+
+    def _collect_worker_engines(self) -> set[str]:
+        """Resolve `_WORKER_BY_ENGINE`'s keys to engine strings."""
+        out: set[str] = set()
+        for node in self.tree.body:
+            value: Optional[ast.expr] = None
+            target = None
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                target, value = node.target, node.value
+            if not (isinstance(target, ast.Name) and target.id == "_WORKER_BY_ENGINE"):
+                continue
+            if not isinstance(value, ast.Dict):
+                continue
+            for key in value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    out.add(key.value)
+                elif isinstance(key, ast.Attribute):
+                    resolved = self._engine_constants.get(key.attr)
+                    if resolved:
+                        out.add(resolved)
+        return out
 
     def _collect_module_level_sets(self) -> dict[str, set[str]]:
         """Find module-level `NAME = {...}` or `NAME: type = {...}` assignments
@@ -141,8 +217,23 @@ class GenerationAuditor:
         return out
 
     def wired_families(self) -> set[str]:
-        """Read the literal `_WIRED_FAMILIES = {...}` assignment."""
-        return self.module_sets.get("_WIRED_FAMILIES", set())
+        """The wired set, from the literal if present, else the family registry.
+
+        `_WIRED_FAMILIES` is `frozenset(catalog.FAMILIES)` now, so the registry
+        is what this reads; an older revision's literal still works.
+        """
+        literal = self.module_sets.get("_WIRED_FAMILIES", set())
+        if literal:
+            return literal
+        return set(self.module_sets.get("FAMILIES", set()))
+
+    def worker_engines(self) -> set[str]:
+        """`_WORKER_BY_ENGINE`'s keys, resolved through the engine constants.
+
+        The keys are `catalog.ENGINE_*` attributes, so this reads the constant
+        values out of catalog.py and matches them to the keys here.
+        """
+        return self._engine_keys
 
     def dispatch_families(self) -> tuple[set[str], set[str]]:
         """
@@ -239,9 +330,21 @@ def build_report(app_root: Path) -> dict:
         )
 
     catalog_families = parse_catalog_families(catalog_path)
-    auditor = GenerationAuditor(generation_path)
-    wired = auditor.wired_families()
-    handled, raising = auditor.dispatch_families()
+    engines = parse_engine_constants(catalog_path)
+    registry = parse_family_registry(catalog_path)
+    auditor = GenerationAuditor(generation_path, engines)
+    # `_WIRED_FAMILIES` is `frozenset(catalog.FAMILIES)`; read the registry.
+    wired = auditor.wired_families() or set(registry)
+    workers = auditor.worker_engines()
+    # A family is dispatched when the engine it declares has a worker. The
+    # dispatcher branches on the engine now, so there are no family-literal
+    # branches left to inspect; a registry entry naming an engine with no worker
+    # is the "commission lie" this audit exists to catch.
+    handled = {
+        family for family, engine in registry.items()
+        if engines.get(engine, engine) in workers
+    }
+    raising = set()
 
     # Compute drift
     commission_lies = wired & raising            # green chip but errors at runtime

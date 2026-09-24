@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 
 from . import (broker, chat_jobs, hardware_profiles, memory_admission,
-               model_exposure, model_ids, peers, transcription_jobs)
+               model_exposure, model_ids, peers, transcription_jobs, vocabulary)
 from .registry import machine_enabled, studio_enabled
 from .resources import host_stats
 
@@ -650,15 +650,33 @@ def _missing_release_component(managed_release: dict, component: str,
     }
 
 
+def _release_component_for(modality: object) -> str | None:
+    """The release-descriptor component id that serves this modality, or ``None``.
+
+    A studio's registry modality and the release manifest's `components` keys use different
+    spellings for the same worker - the Subtitle worker *is* the `transcription` modality - so
+    the join is the Hub's existing worker table (`WORKER_FOR_MODALITY`: modality -> worker id),
+    which is also the component id each worker is staged under. A modality the Hub does not
+    route has no component to point at, and its row simply carries none.
+    """
+    return vocabulary.WORKER_FOR_MODALITY.get(str(modality or "").strip().lower())
+
+
 def _machine_release_evidence(managed_release: dict | None, machine: str) -> dict | None:
     if not isinstance(managed_release, dict) or not managed_release.get("desired"):
         return None
     existing = (managed_release.get("machines") or {}).get(machine)
     if isinstance(existing, dict):
         return existing
+    # Every component the release descriptor names gets a row, plus the controller. The list used
+    # to be the literal ("hub", "image", "voice"), so a machine whose release carried music,
+    # subtitle or chat evidence was reported as having no component row at all for them - a
+    # silent omission with no error, for exactly the components added most recently.
+    desired_components = (managed_release["desired"].get("components") or {})
+    names = {"hub", *(str(name) for name in desired_components)}
     components = {
         name: _missing_release_component(managed_release, name)
-        for name in ("hub", "image", "voice")
+        for name in sorted(names)
     }
     return {
         "desired_release_id": managed_release["desired"].get("release_id"),
@@ -671,7 +689,7 @@ def _machine_release_evidence(managed_release: dict | None, machine: str) -> dic
 
 def _managed_release_reason(managed_release: dict | None,
                             machine_release: dict | None,
-                            component: str | None) -> str | None:
+                            modality: str | None) -> str | None:
     if not isinstance(managed_release, dict) or not managed_release.get("desired"):
         return None
 
@@ -683,7 +701,10 @@ def _managed_release_reason(managed_release: dict | None,
         return "managed_release_blocked"
     components = (machine_release or {}).get("components") or {}
     rows = [components.get("hub")]
-    if component in {"image", "voice"}:
+    # The studio's own component, resolved from its modality. This was `component in {"image",
+    # "voice"}`, so a blocked music, subtitle or chat release never reported as blocked.
+    component = _release_component_for(modality)
+    if component is not None:
         rows.append(components.get(component))
     if any(
         isinstance(row, dict) and blocks(row.get("state"))

@@ -7,6 +7,7 @@ import io
 import json
 import shutil
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import stat
@@ -30,6 +31,24 @@ def manifest(files=None, package_id='test-model', revision='a' * 40):
         'files': [{'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
                    'urls': ['https://example.test/' + name]} for name, data in files.items()],
     }
+
+
+def companion_manifest(package_id, files, revision='a' * 40):
+    """A companion shaped the way every shipped manifest is: files under their layout.
+
+    `source.layout` names the publisher repository, its immutable revision and the destination
+    the tree was installed to; `source_path` names the file inside that repository. Both are what
+    the companion mirror reads to place a companion's bytes where its engine looks for them, so a
+    fixture that omits them is a fixture for a manifest that cannot be placed at all.
+    """
+    value = manifest(files, package_id=package_id, revision=revision)
+    for entry in value['files']:
+        entry['source_path'] = entry['path']
+        entry['path'] = 'model/' + entry['path']
+    value['source'] = {
+        'provider': 'huggingface', 'captured_at': '2026-09-25',
+        'layout': {'model': {'destination': 'model', 'repo': 'owner/model', 'revision': revision}}}
+    return value
 
 
 class Response(io.BytesIO):
@@ -331,7 +350,7 @@ class ModelPackageTests(unittest.TestCase):
     def test_companion_download_uses_explicit_catalog_and_is_cycle_safe(self):
         main = copy.deepcopy(self.manifest)
         main['requires_packages'] = ['whisper-turbo']
-        companion = manifest(self.files, package_id='whisper-turbo')
+        companion = companion_manifest('whisper-turbo', self.files)
         catalog = {'whisper-turbo': companion}
         def download(request, **kwargs):
             return Response(self.files[request.full_url.split('example.test/')[1]])
@@ -456,10 +475,263 @@ class ModelPackageTests(unittest.TestCase):
         dependent['requires_packages'] = ['whisper-turbo']
         packages.import_folder(dependent, self.source, self.library)
         self.assertEqual(packages.preflight(dependent, self.library)['state'], 'dependency_missing')
-        companion = manifest(self.files, package_id='whisper-turbo')
-        packages.import_folder(companion, self.source, self.library)
+        companion = companion_manifest('whisper-turbo', self.files)
+        packages.import_folder(companion, self.source, self.library, catalog={'whisper-turbo': companion})
         catalog = {'whisper-turbo': companion}
         self.assertEqual(packages.preflight(dependent, self.library, catalog=catalog)['state'], 'files_verified')
+
+
+class CompanionCacheTests(unittest.TestCase):
+    """A companion must reach the path the engine loads it from, not only the library.
+
+    The controlled experiment: the companion is installed and verified, the library is complete,
+    and the engine's own lookup still finds nothing - because the engine asks the Hugging Face
+    cache, which no install path used to write. Every assertion below is about that path.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.source = self.root / 'source'
+        self.library = self.root / 'library'
+        self.source.mkdir()
+        self.library.mkdir()
+        self.files = {'weights.safetensors': b'companion weights',
+                      'tokenizer/config.json': b'{"n_bins": 4000}'}
+        for name, data in self.files.items():
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.companion = companion_manifest('whisper-turbo', self.files)
+        self.host = copy.deepcopy(manifest(self.files))
+        self.host['requires_packages'] = ['whisper-turbo']
+        self.catalog = {'whisper-turbo': self.companion, self.host['package_id']: self.host}
+        packages.import_folder(self.companion, self.source, self.library,
+                               catalog=self.catalog)
+
+    def targets(self):
+        plan, problems = packages._companion_plan(self.library, self.host, self.catalog)
+        self.assertEqual(problems, [])
+        return plan
+
+    def test_an_installed_companion_is_mirrored_where_the_engine_reads_it(self):
+        report = packages.materialize_companions(self.host, self.library, catalog=self.catalog)
+        self.assertEqual(report['state'], 'ready', report.get('reason'))
+        installed = self.library / 'whisper-turbo' / ('a' * 40) / 'model'
+        for target, item in sorted(self.targets().items()):
+            path = self.library / target
+            self.assertTrue(path.is_file(), target)
+            self.assertEqual(path.read_bytes(), (self.library / item['source']).read_bytes())
+            # A hard link, not a copy: same inode, so the mirror costs no bytes.
+            self.assertEqual(path.stat().st_ino, (self.library / item['source']).stat().st_ino)
+            self.assertEqual(path.stat().st_dev, (self.library / item['source']).stat().st_dev)
+        # An engine that names no revision resolves through refs/<default>; one that names the
+        # commit reads snapshots/<revision> directly. Both must resolve with no network.
+        ref = (self.library / 'hub' / 'models--owner--model' / 'refs' / 'main')
+        self.assertEqual(ref.read_text().strip(), 'a' * 40)
+        self.assertTrue(installed.is_dir())
+
+    def test_a_second_run_writes_nothing_and_leaves_the_mirror_alone(self):
+        packages.materialize_companions(self.host, self.library, catalog=self.catalog)
+        before = {target: (self.library / target).stat().st_ino for target in self.targets()}
+        stamps = {target: (self.library / target).stat().st_mtime_ns for target in self.targets()}
+        report = packages.materialize_companions(self.host, self.library, catalog=self.catalog)
+        self.assertEqual(report['state'], 'ready', report.get('reason'))
+        self.assertEqual(report['written'], {'linked': 0, 'copied': 0, 'present': 2})
+        after = {target: (self.library / target).stat().st_ino for target in self.targets()}
+        self.assertEqual(before, after, 'an idempotent run must not replace what is already right')
+        self.assertEqual(stamps, {target: (self.library / target).stat().st_mtime_ns
+                                  for target in self.targets()})
+
+    def test_the_engines_own_lookup_finds_the_companion_with_the_network_off(self):
+        """The exact call the engine makes, in the environment the worker is launched with.
+
+        `hf_hub_download` is what mlx-audio's `download_if_necessary` calls, and `HF_HUB_CACHE` /
+        `HF_HUB_OFFLINE` are what `packaging/voice_worker.py` sets. A subprocess is used because
+        huggingface_hub reads those constants at import time, which is also why the check is a
+        fresh interpreter rather than a patched one.
+        """
+        try:
+            import huggingface_hub  # noqa: F401
+        except ImportError:  # pragma: no cover - the packaged runtimes always carry it
+            self.skipTest('huggingface_hub is unavailable in this interpreter')
+        packages.materialize_companions(self.host, self.library, catalog=self.catalog)
+        script = (
+            'import hashlib, json, sys\n'
+            'from huggingface_hub import hf_hub_download\n'
+            'out = {}\n'
+            'for label, revision in (("pinned", "a" * 40), ("unpinned", None)):\n'
+            '    path = hf_hub_download(repo_id="owner/model",\n'
+            '                           filename=sys.argv[1], revision=revision)\n'
+            '    out[label] = [path, hashlib.sha256(open(path, "rb").read()).hexdigest()]\n'
+            'print(json.dumps(out))\n')
+        environment = dict(os.environ)
+        environment.update({'HF_HOME': str(self.library), 'HF_HUB_CACHE': str(self.library / 'hub'),
+                            'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
+                            'PYTHONPATH': os.pathsep.join(sys.path)})
+        for filename, data in sorted(self.files.items()):
+            completed = subprocess.run([sys.executable, '-c', script, filename],
+                                       capture_output=True, text=True, env=environment)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            found = json.loads(completed.stdout)
+            for label, (path, digest) in found.items():
+                self.assertEqual(digest, hashlib.sha256(data).hexdigest(), (filename, label))
+                self.assertTrue(Path(path).is_file(), (filename, label, path))
+
+    def test_an_unwritable_library_degrades_by_name_instead_of_reporting_success(self):
+        # Installed first without the catalog, which is the shape a receipt copied from a Mac
+        # that never wrote the engine cache has: verified files, nothing at the engine's path.
+        packages.import_folder(self.host, self.source, self.library)
+        hub = self.library / 'hub'
+        hub.mkdir(mode=0o500)
+        self.addCleanup(lambda: hub.chmod(0o700))
+        report = packages.verify_installed(self.host, self.library, catalog=self.catalog)
+        self.assertEqual(report['state'], packages.COMPANION_CACHE_STATE, report)
+        self.assertIn('whisper-turbo', report['reason'])
+        self.assertIn('model/weights.safetensors', report['reason'])
+        self.assertEqual(report['companion_cache']['state'], 'degraded')
+        # The package's own bytes are installed and verified; what is not true is the engine's
+        # access to them, and that is what the state and the reason say.
+        self.assertEqual(report['verification'], 'full_rehash')
+
+    def test_a_companion_whose_manifest_does_not_say_where_files_publish_is_named(self):
+        companion = copy.deepcopy(self.companion)
+        companion.pop('source')
+        report = packages.materialize_companions(
+            self.host, self.library, catalog={'whisper-turbo': companion})
+        self.assertEqual(report['state'], 'degraded')
+        self.assertIn('source.layout', report['reason'])
+        self.assertIn('whisper-turbo', report['reason'])
+
+
+class SubtitleManifestContractTests(unittest.TestCase):
+    """The `subtitle` block is validated centrally, so no consumer has to guess."""
+
+    def subtitle_manifest(self, **overrides):
+        value = manifest()
+        value['engine'] = 'subtitle-mlx'
+        value['subtitle'] = {'family': 'whisper', 'languages': ['multilingual'],
+                             'segment_timestamps': True, 'word_timestamps': True,
+                             'long_form': True}
+        value.update(overrides)
+        return value
+
+    def test_a_subtitle_manifest_without_the_block_is_refused_by_name_and_field(self):
+        value = self.subtitle_manifest()
+        value.pop('subtitle')
+        with self.assertRaises(packages.PackageError) as caught:
+            packages.validate_manifest(value)
+        self.assertIn('test-model', str(caught.exception))
+        self.assertIn('subtitle', str(caught.exception))
+
+    def test_a_malformed_subtitle_block_is_refused_by_name_and_field(self):
+        for field, broken in (('family', ''), ('languages', 'multilingual'),
+                              ('segment_timestamps', 'yes'), ('word_timestamps', None),
+                              ('long_form', 1)):
+            with self.subTest(field=field):
+                value = self.subtitle_manifest()
+                value['subtitle'] = {**value['subtitle'], field: broken}
+                with self.assertRaises(packages.PackageError) as caught:
+                    packages.validate_manifest(value)
+                self.assertIn(field, str(caught.exception))
+        value = self.subtitle_manifest()
+        value.pop('subtitle')
+        value['subtitle'] = {'family': 'whisper', 'languages': ['multilingual'],
+                             'segment_timestamps': True, 'word_timestamps': True}
+        with self.assertRaises(packages.PackageError) as caught:
+            packages.validate_manifest(value)
+        self.assertIn('long_form', str(caught.exception))
+
+    def test_a_runtime_measurement_must_carry_its_evidence(self):
+        value = self.subtitle_manifest()
+        value['subtitle']['runtime_seconds'] = {'measured': [{'seconds': 9.0, 'scene': 'x'}]}
+        with self.assertRaises(packages.PackageError) as caught:
+            packages.validate_manifest(value)
+        self.assertIn('evidence', str(caught.exception))
+        # `measured` is a list of rows, each carrying seconds and what produced them.
+        for broken in ({'seconds': 9.0, 'scene': 'x'},           # not a list
+                       [],                                        # nothing measured
+                       [{'scene': 'x'}],                          # no seconds
+                       [{'seconds': 0}],                          # not a positive cost
+                       [{'seconds': 9.0}]):                       # names no configuration
+            with self.subTest(broken=broken):
+                value = self.subtitle_manifest()
+                value['subtitle']['runtime_seconds'] = {
+                    'evidence': 'measured', 'measured': broken,
+                    'measured_on': 'a host'}
+                with self.assertRaises(packages.PackageError) as caught:
+                    packages.validate_manifest(value)
+                self.assertIn('measured', str(caught.exception))
+        value['subtitle']['runtime_seconds'] = {
+            'evidence': 'measured',
+            'measured': [{'seconds': 9.66, 'duration_seconds': 5.166, 'word_timestamps': False}],
+            'measured_on': '32 GiB M2 Max, MLX fp16',
+            'source': 'qualification/evidence/example.json'}
+        packages.validate_manifest(value)
+
+    def test_another_engine_is_not_forced_to_carry_the_block(self):
+        value = manifest()
+        value.pop('subtitle', None)
+        packages.validate_manifest(value)
+        self.assertNotIn('subtitle', value)
+
+    def test_every_shipped_subtitle_manifest_declares_its_capabilities(self):
+        manifests = [json.loads(path.read_text())
+                     for path in sorted((ROOT / 'model-manifests').glob('*.json'))]
+        subtitle = [value for value in manifests if value.get('engine') == 'subtitle-mlx']
+        self.assertTrue(subtitle, 'the shipped catalog declares subtitle packages')
+        for value in subtitle:
+            with self.subTest(package=value.get('package_id')):
+                packages.validate_manifest(value)
+                self.assertTrue({'family', 'languages', 'long_form', 'segment_timestamps',
+                                 'word_timestamps'} <= set(value['subtitle']))
+        self.assertLessEqual(
+            sum(1 for value in subtitle if value.get('default') is True), 1,
+            'at most one shipped subtitle manifest may declare itself the default')
+
+    def test_every_shipped_companion_can_be_placed_where_its_engine_reads_it(self):
+        """The invariant that catches the next companion package.
+
+        A companion whose manifest does not say which publisher repository each file came from -
+        destination, repo and revision in `source.layout` - cannot be mirrored, so its engine
+        would fetch it over the network at generation time. This walks the real catalog: add a
+        companion package without that data and this fails, naming the file to fix.
+        """
+        manifests = {value['package_id']: value
+                     for value in (json.loads(path.read_text())
+                                   for path in sorted((ROOT / 'model-manifests').glob('*.json')))}
+        for package_id, value in sorted(manifests.items()):
+            for dependency in packages.required_packages(value):
+                with self.subTest(package=package_id, companion=dependency):
+                    companion = manifests.get(dependency)
+                    self.assertIsNotNone(companion, f'{dependency} has no shipped manifest')
+                    for entry in companion['files']:
+                        repo, revision, publish_path = packages.publisher_location(companion, entry)
+                        self.assertRegex(repo, r'^[^/]+/.+$')
+                        self.assertRegex(revision, r'^[0-9a-f]{40}$')
+                        self.assertFalse(publish_path.startswith('/'))
+
+    def test_the_unknown_engine_refusal_names_the_engine_and_both_files(self):
+        value = manifest()
+        value['engine'] = 'chat-mlx-2'
+        with self.assertRaises(packages.PackageError) as caught:
+            packages.validate_manifest(value)
+        message = str(caught.exception)
+        self.assertIn('chat-mlx-2', message)
+        self.assertIn('_ENGINE_ROUTE', message)
+        self.assertIn('components/hub/standalone.py', message)
+        self.assertIn('components/model_packages.py', message)
+
+    def test_the_engine_allowlist_and_the_hubs_worker_map_are_one_vocabulary(self):
+        """Two files carry the engine vocabulary; this is what stops them drifting.
+
+        When they last disagreed, `chat-mlx` reached `/api/hub/model-packages` with no worker and
+        the route returned 500 - which the native refresh read as "Hub unreachable" and answered
+        by blanking every model picker on every Mac.
+        """
+        from components.hub import standalone
+        self.assertEqual(set(packages.ENGINES), set(standalone._ENGINE_ROUTE))
 
 
 if __name__ == '__main__':

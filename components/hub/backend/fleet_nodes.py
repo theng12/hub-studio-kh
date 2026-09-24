@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -24,6 +25,9 @@ import httpx
 
 from .registry import DATA_DIR
 from .peers import fleet_token, fresh_snapshot
+from .vocabulary import NODE_MODALITIES
+
+log = logging.getLogger("studiohub.fleet_nodes")
 
 FILE_NAME = "fleet_nodes.json"
 MAX_NODES = 64
@@ -106,10 +110,17 @@ def validate_address(value: object) -> str:
 
 
 # The modalities a node may offer. A controller dispatches by modality, so this is the only
-# vocabulary the fleet routing understands. Music joined the app on 2026-09-22; while it was
-# missing here, a node reporting its Music worker was refused outright at join time, so no
-# current build could connect to a controller at all.
-NODE_MODALITIES = {"image", "voice", "transcription", "music"}
+# vocabulary the fleet routing understands - and it is the Hub's own routing vocabulary
+# (`backend/vocabulary.py`), imported rather than restated here.
+#
+# It has been restated twice, and both times the copy fell behind. Music joined the app on
+# 2026-09-22; while it was missing here, a node reporting its Music worker was refused outright
+# at join time, so no current build could connect to a controller at all. Then `chat` was
+# missing from the same copy, with the same two consequences: a node running the shipped Chat
+# worker was refused at join, and an already-joined node's chat studio was silently skipped when
+# the controller built its registry. There is now one table, so a modality the Hub routes is a
+# modality a node may offer, by construction.
+NODE_MODALITIES = frozenset(NODE_MODALITIES)
 
 
 def _studios(value: object) -> list[dict[str, str]]:
@@ -132,7 +143,10 @@ def _studios(value: object) -> list[dict[str, str]]:
         if not ID_PATTERN.fullmatch(worker):
             raise ValueError("studio id must be lowercase letters, numbers, dots, dashes or underscores")
         if modality not in NODE_MODALITIES:
-            raise ValueError(f"studio modality must be one of {sorted(NODE_MODALITIES)}")
+            raise ValueError(
+                f"studio modality {modality!r} is not one of {sorted(NODE_MODALITIES)}; "
+                f"register it in WORKER_FOR_MODALITY in components/hub/backend/vocabulary.py "
+                f"so the Hub routes it too")
         seen.append({"id": worker, "modality": modality})
     return seen
 
@@ -197,6 +211,14 @@ def remote_studios() -> list[dict[str, Any]]:
         for studio in node.get("studios") or []:
             worker, modality = studio.get("id"), studio.get("modality")
             if not worker or modality not in NODE_MODALITIES:
+                # Join already refuses an unrouted modality, so this is only reachable for a
+                # registry written by another build. It must not be silent: a studio that
+                # disappears here is a Mac the controller will never send work to.
+                log.warning(
+                    "skipping the studio %r on node %s: modality %r is not routed by this "
+                    "Hub (%s); register it in WORKER_FOR_MODALITY in "
+                    "components/hub/backend/vocabulary.py",
+                    worker, node_id, modality, sorted(NODE_MODALITIES))
                 continue
             entries.append({
                 "id": f"{node_id}:{worker}",
@@ -287,7 +309,9 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
             return {**row, "state": "unauthorized",
                     "detail": _CREDENTIAL_DETAIL.format(why=f"HTTP {response.status_code}")}
         if not response.is_success:
-            return {**row, "state": "error", "detail": f"node answered HTTP {response.status_code}"}
+            return {**row, "state": "error",
+                    "detail": (f"{node.get('address') or 'the node'} answered "
+                               f"HTTP {response.status_code} on {PROBE_PATH}")}
         try:
             body = response.json()
         except ValueError:
@@ -300,7 +324,15 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         return {**row, "state": "reachable", "detail": None, "host": host,
                 "version": body.get("version"), "source": body.get("source")}
     except (httpx.HTTPError, OSError) as exc:
-        return {**row, "state": "unreachable", "detail": f"could not reach the node: {exc}"}
+        # A message that stops at the colon ("could not reach the node: ") reads as though the
+        # reason were withheld, and it happens whenever the exception carries an empty message -
+        # which is the common case for a connect timeout or a reset. Always name what was tried,
+        # what failed, and why when the exception says.
+        reason = str(exc).strip()
+        detail = f"could not reach {node.get('address') or 'the node'} ({PROBE_PATH}): {type(exc).__name__}"
+        if reason:
+            detail = f"{detail}: {reason}"
+        return {**row, "state": "unreachable", "detail": detail}
     finally:
         if owned:
             await client.aclose()

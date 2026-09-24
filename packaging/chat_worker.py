@@ -3,6 +3,12 @@
 Chat reuses the base ``runtimes/voice`` runtime because ``mlx-lm`` is already installed
 there for Whisper/MLX-audio. A dedicated ``runtimes/chat`` is preferred automatically if
 one is ever staged, so this can move to a slimmer runtime without touching the Hub.
+
+This worker is deliberately single-model: one engine, one manifest, one entry in its own
+``/v1/models``. Which model it serves comes from the bundle's own catalog rather than a file
+name fixed here, so re-pointing the release at another chat manifest works, and a second
+``chat-mlx`` manifest in the same bundle is refused at startup instead of being routed here
+and silently answered by the wrong model.
 """
 from __future__ import annotations
 
@@ -14,7 +20,7 @@ import sys
 
 RESOURCES = Path(__file__).resolve().parent
 sys.path.insert(0, str(RESOURCES))
-from voice_worker import read_private_token, run_server
+from voice_worker import read_private_token, run_server, single_engine_manifest
 
 
 def _runtime(resources: Path) -> Path:
@@ -43,7 +49,7 @@ def main() -> None:
     release_path = resources / 'release-manifest.json'
     source = resources / 'components' / 'chat' / 'app'
     runtime = _runtime(resources)
-    manifest_path = resources / 'model-manifests' / 'qwen3-5-9b-4bit.json'
+    catalog = resources / 'model-manifests'
     if not models.is_dir():
         parser.error('Selected model library is unavailable; reconnect its volume')
     if any(path == bundle or path.is_relative_to(bundle) for path in (data, models)):
@@ -51,8 +57,12 @@ def main() -> None:
     if ready.is_symlink() or not ready.resolve().is_relative_to(data):
         parser.error('Ready file must stay inside external app data')
     if not (release_path.is_file() and (source / 'backend/main.py').is_file()
-            and manifest_path.is_file() and (runtime / 'bin/python3').is_file()):
-        parser.error('Incomplete Chat bundle: release, source, model catalog or runtime is missing')
+            and (runtime / 'bin/python3').is_file()):
+        parser.error('Incomplete Chat bundle: release, source or runtime is missing')
+    try:
+        manifest_path, manifest = single_engine_manifest(catalog, 'chat-mlx', component='Chat')
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         release = json.loads(release_path.read_text())
         chat = release['components']['chat']
@@ -108,6 +118,10 @@ def main() -> None:
         print(json.dumps({'component': 'chat', 'version': release['version'],
                           'source': str(source), 'runtime_sha256': identity,
                           'data': str(chat_data), 'models': str(models),
+                          # The single model this worker serves, read from the bundle's own
+                          # catalog: the packaged Chat worker is one model by contract.
+                          'model_manifest': manifest_path.name,
+                          'model_id': manifest.get('model_id'),
                           'offline': bool(args.offline), 'managed_updates': False}))
         return
     os.chdir(chat_data)

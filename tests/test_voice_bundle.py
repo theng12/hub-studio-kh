@@ -434,6 +434,54 @@ class StagingTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 module.stage(runtime, output)
 
+    def test_a_studio_source_tree_with_no_stager_is_refused(self):
+        """A new studio must stop the build, not ship nothing while the build succeeds."""
+        spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = base / 'repo'
+            repo.mkdir()
+            files = {
+                'VERSION': '0.1.0',
+                'CHANGELOG.md': '# Standalone changes',
+                'release-notes.md': "# What's new",
+                'assets/app-icon.icns': 'icns-fixture',
+                'components/voice/app/backend/main.py': '# source',
+                'components/voice/app/frontend/index.html': '<html>Proof</html>',
+                'components/voice/model-audits/example.audit.json': '{}',
+                'components/voice/VERSION': '2.7.2',
+                'components/voice/CHANGELOG.md': '# Upstream',
+                'research/voice-adoption.json': json.dumps({'commit': 'b' * 40, 'version': '2.7.2'}),
+                'packaging/voice_worker.py': '# worker',
+                # A studio adopted tomorrow, with its worker wrapper and no stager entry:
+                'components/video/app/backend/main.py': '# video source',
+                'packaging/video_worker.py': '# video worker',
+            }
+            for name, content in files.items():
+                path = repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture',
+                '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'], check=True)
+            runtime = base / 'runtime'
+            (runtime / 'bin').mkdir(parents=True)
+            (runtime / 'bin/python3').write_text('#!/bin/sh\n/usr/bin/env\n')
+            (runtime / 'bin/python3').chmod(0o755)
+            artifact = base / 'Proof.app'
+            with mock.patch.object(module, 'ROOT', repo):
+                with self.assertRaises(ValueError) as caught:
+                    module.stage(runtime, artifact)
+            message = str(caught.exception)
+            self.assertIn('video', message, 'the refusal must name the unregistered studio')
+            self.assertIn('stage_voice.py', message, 'the refusal must name the file to update')
+            self.assertIn('hub_worker.py', message,
+                          'a new studio also needs a worker the Hub can spawn')
+            self.assertFalse(artifact.exists(), 'a refused stage must leave no artifact')
+
     def test_complete_stage_excludes_untracked_state_and_hashes_the_payload(self):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
         module = importlib.util.module_from_spec(spec)
@@ -577,6 +625,19 @@ class StagingTests(unittest.TestCase):
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
             manifest = json.loads((contents / 'Resources/release-manifest.json').read_text())
             self.assertFalse(manifest['development_build'])
+            # What ships is what is recorded, and what is recorded is what ships: the release
+            # manifest's components are the data every consumer reads, so a component that is
+            # staged without a record (or recorded without being staged) is a broken release.
+            recorded = set(manifest['components'])
+            self.assertLessEqual(recorded, set(module.COMPONENT_STAGERS),
+                                 "the release manifest names a component staging does not know")
+            staged = {path.name for path in (contents / 'Resources/components').iterdir()
+                      if path.is_dir()}
+            staged.add('voice')  # staged at Resources/voice, not under components/
+            self.assertEqual(staged, recorded,
+                             "a staged component directory and the release manifest disagree")
+            for name in recorded:
+                self.assertIn('source_sha256', manifest['components'][name])
             if image:
                 self.assertEqual(manifest['components']['image']['upstream_commit'], 'e' * 40)
                 self.assertEqual(manifest['components']['image']['runtime_sha256'], module.tree_digest(runtime))

@@ -225,6 +225,14 @@ def _manifest(package_id: str, model_id: str, engine: str = "voice-mlx") -> dict
         "files": [{"path": "model.bin", "size": len(payload),
                    "sha256": hashlib.sha256(payload).hexdigest(), "urls": []}],
     }
+    if engine == "subtitle-mlx":
+        # A subtitle manifest must declare what its model actually does; the central validator
+        # refuses one without the block, so a fixture that omits it never reaches the worker.
+        # This is the embedded twin of `tests/_hub_dispatch_proof.py`; both must carry it.
+        result["subtitle"] = {
+            "family": "whisper", "languages": ["multilingual"],
+            "segment_timestamps": True, "word_timestamps": True, "long_form": True,
+        }
     (_MANIFESTS / f"{package_id}.json").write_text(json.dumps(result))
     model_packages.import_folder(result, source, _LIBRARY)
     return result

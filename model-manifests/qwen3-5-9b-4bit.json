@@ -1,6 +1,6 @@
 {
   "defaults": {
-    "parameters_source": "model/generation_config.json"
+    "parameters_source": "model/config.json"
   },
   "engine": "chat-mlx",
   "files": [

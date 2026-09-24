@@ -33,7 +33,7 @@ OMNIVOICE_RECORD = (
     / "2026-08-08-omnivoice"
     / "mlx-community--OmniVoice-bfloat16.audit.json"
 )
-QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
 QWEN_17B_PRODUCTION_V1_RECORD = (
     ROOT
     / "model-audits"
@@ -46,17 +46,19 @@ QWEN_17B_PRODUCTION_V2_RECORD = (
     / "2026-08-15-qwen3-17b-production-v2"
     / "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json"
 )
-# The current record. v3 raised the request ceiling 5,000 -> 10,000 and changed
-# nothing about sectioning, so it inherits v2's 400/280 anchor -- and with that
-# inheritance v2 becomes superseded historical evidence, which the validator
-# refuses to treat as runtime policy authority. The override and anchor tests
-# below therefore run against v3: they are about what governs the runtime, and
-# after 2026-08-26 that is v3.
+# The current record, for the tier the app actually ships. v3 raised the request
+# ceiling 5,000 -> 10,000 on the 8-bit checkpoint and changed nothing about
+# sectioning; the 8-bit tier was then pruned (ST-13.B), leaving the 4-bit build
+# as the only shipped 1.7B Base. Its record reaches the same measured 400/280
+# pair through `derivation.derived_from_audit_id`, so the validator has to
+# resolve the override through the derivation for the model that runs. Pinning
+# these tests to the retired 8-bit repo is what let the Auto section policy go
+# inert with no red test.
 QWEN_17B_PRODUCTION_RECORD = (
     ROOT
     / "model-audits"
     / "2026-08-26-qwen3-17b-ten-thousand"
-    / "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json"
+    / "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-4bit.audit.json"
 )
 
 
@@ -442,8 +444,12 @@ def test_a_record_derived_from_an_anchored_audit_may_inherit_its_section_budget(
     assert result["mismatches"] == []
     section = next(c for c in result["checks"] if c["id"] == "section_budget")
     assert section["status"] == acr.OK
-    assert section["claimed"] == 400
-    assert section["expected"] == 400
+    # The claimed pair, not a bare maximum: since the shipped 4-bit tier's record
+    # resolves to the v3 anchor, the validator compares the Auto default it
+    # carries (280) against the measured one, which is the number the runtime
+    # now splits scripts at.
+    assert section["claimed"] == {"maximum": 400, "auto_default": 280}
+    assert section["expected"] == {"maximum": 400, "auto_default": 280}
 
 
 def test_a_derived_record_can_never_author_its_own_section_number(

@@ -13,6 +13,7 @@ So these tests are about the two properties that make the failure impossible to 
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,8 +22,31 @@ from components.voice.app.backend import catalog, long_form_policy  # noqa: E402
 
 GENERATION = (ROOT / "components/voice/app/backend/generation.py").read_text()
 FAMILIES = sorted({entry.family for entry in catalog.CATALOG})
-# Families whose engine stops working past a fixed input length. These are not quality budgets.
-ENGINE_CLIFFS = {"orpheus": 170, "bark": 150}
+
+
+def _engine_cliff_family():
+    """A throwaway registry entry with an engine cliff, for the cap mechanism.
+
+    The shipped families that had cliffs (orpheus at 170 characters, bark at
+    150) were cut on 2026-09-24, so the mechanism is exercised on a declared
+    entry rather than a dead `if family == "orpheus"` branch that would hand a
+    re-adopted family a policy nobody has measured since.
+    """
+    return catalog.Family(
+        id="engine-cliff-probe",
+        label="Engine cliff probe",
+        engine=catalog.ENGINE_MLX_AUDIO,
+        requirements=("soundfile",),
+        summary="probe",
+        how_to_use="probe",
+        text_guidance=catalog.TextGuidance(
+            soft_max_chars=None, chunking="auto-split", note="probe"
+        ),
+        section_max_characters=170,
+        section_hard_cap_characters=170,
+        section_origin="engine_input_limit",
+        section_note="Stops rather than degrading past its own input limit.",
+    )
 
 
 class SectionBudgetTests(unittest.TestCase):
@@ -41,21 +65,48 @@ class SectionBudgetTests(unittest.TestCase):
         self.assertEqual(policy["source"], "conservative_default")
         self.assertEqual(policy["origin"], "conservative_default")
 
-    def test_a_family_with_its_own_evidence_keeps_its_own_number(self) -> None:
-        self.assertEqual(long_form_policy.policy_for("omnivoice", "x")["section_max_characters"], 288)
-        self.assertEqual(long_form_policy.policy_for("chatterbox-mlx", "x/turbo")["section_max_characters"], 400)
+    def test_every_shipped_family_publishes_its_registry_sectioning(self) -> None:
+        """One place decides a family's long-form behaviour: its registry entry.
 
-    def test_engine_cliffs_are_the_section_budget_and_are_published_as_a_cap(self) -> None:
-        for family, limit in ENGINE_CLIFFS.items():
-            policy = long_form_policy.policy_for(family, f"{family}/repo")
-            self.assertEqual(policy["section_max_characters"], limit, family)
-            self.assertEqual(policy["hard_cap_characters"], limit, family)
+        Stated over the registry, so it covers a new family: the budget, the
+        join pause and the provenance the policy publishes are the family's own
+        declared facts, and a refinement applies only to the checkpoint whose
+        name it marks.
+        """
+        for entry in catalog.FAMILIES.values():
+            policy = long_form_policy.policy_for(entry.id, f"{entry.id}/repo")
+            self.assertEqual(policy["section_max_characters"], entry.section_max_characters, entry.id)
+            self.assertEqual(policy["join_pause_milliseconds"],
+                             round(entry.join_pause_seconds * 1000), entry.id)
+            self.assertEqual(policy["origin"], entry.section_origin, entry.id)
+            for refinement in entry.section_refinements:
+                refined = long_form_policy.policy_for(
+                    entry.id, f"mlx-community/{entry.id}-{refinement.marker}-probe"
+                )
+                if refinement.section_max_characters is not None:
+                    self.assertEqual(refined["section_max_characters"],
+                                     refinement.section_max_characters, entry.id)
+                if refinement.join_pause_seconds is not None:
+                    self.assertEqual(refined["join_pause_milliseconds"],
+                                     round(refinement.join_pause_seconds * 1000), entry.id)
+        # The families with their own measurements keep them.
+        self.assertEqual(long_form_policy.policy_for("omnivoice", "x")["section_max_characters"], 288)
+        self.assertEqual(long_form_policy.policy_for("chatterbox-mlx", "x")["section_max_characters"], 500)
+
+    def test_an_engine_cliff_is_the_section_budget_and_is_published_as_a_cap(self) -> None:
+        with patch.dict(catalog.FAMILIES, {"engine-cliff-probe": _engine_cliff_family()}):
+            policy = long_form_policy.policy_for(
+                "engine-cliff-probe", "mlx-community/engine-cliff-probe"
+            )
+        self.assertEqual(policy["section_max_characters"], 170)
+        self.assertEqual(policy["hard_cap_characters"], 170)
 
     def test_an_audit_cannot_raise_a_family_past_its_engine_cliff(self) -> None:
         """A model audit may pick a finer section. It may never send an engine past its own limit."""
-        raised = long_form_policy.policy_for(
-            "orpheus", "mlx-community/orpheus-3b-0.1-ft-4bit",
-            audited_section_max_characters=900)
+        with patch.dict(catalog.FAMILIES, {"engine-cliff-probe": _engine_cliff_family()}):
+            raised = long_form_policy.policy_for(
+                "engine-cliff-probe", "mlx-community/engine-cliff-probe",
+                audited_section_max_characters=900)
         self.assertEqual(raised["section_max_characters"], 170)
         finer = long_form_policy.policy_for(
             "orpheus", "mlx-community/orpheus-3b-0.1-ft-4bit",
@@ -84,10 +135,24 @@ class SpeedDeliveryTests(unittest.TestCase):
             self.assertIn(delivery, {"native", "tempo"}, family)
 
     def test_only_the_engines_that_apply_a_multiplier_get_it_natively(self) -> None:
-        """Audited against the installed mlx-audio source: these predict their own durations."""
-        self.assertEqual(sorted(long_form_policy.NATIVE_SPEED_FAMILIES), ["kittentts", "kokoro-mlx"])
-        self.assertEqual(long_form_policy.speed_policy_for("kokoro-mlx").delivery, "native")
-        self.assertEqual(long_form_policy.speed_policy_for("kittentts").delivery, "native")
+        """The engine's own declaration decides, and the policy obeys it.
+
+        This used to pin `NATIVE_SPEED_FAMILIES` to exactly {"kittentts",
+        "kokoro-mlx"} - two families that no longer ship - so it asserted a fact
+        about a list rather than the rule. The rule is: a family whose engine
+        scales its own predicted durations is delivered natively, and every
+        other family gets exactly one tempo pass. Stated over the registry, it
+        covers the next family instead of needing an edit.
+        """
+        for entry in catalog.FAMILIES.values():
+            expected = "native" if entry.native_speed else "tempo"
+            self.assertEqual(
+                long_form_policy.speed_policy_for(entry.id).delivery, expected, entry.id
+            )
+        # A family the registry has never heard of takes the conservative path:
+        # one tempo pass is audible and correct, while claiming native delivery
+        # would silently drop the caller's speed control.
+        self.assertEqual(long_form_policy.speed_policy_for("brand-new-family").delivery, "tempo")
 
     def test_the_families_that_ignore_or_misread_speed_get_the_tempo_pass(self) -> None:
         # Chatterbox documents speed as "Ignored"; LongCat as "Unused"; Bark still has the original
@@ -152,22 +217,25 @@ class SectionSizeControlTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE")
 
     def test_an_undeclared_section_size_uses_the_family_budget(self) -> None:
-        repo = "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
-        resolved = catalog.resolve_section_budget("voxtral-tts", repo, None)
+        repo = "mlx-community/VoxCPM2-4bit"
+        resolved = catalog.resolve_section_budget("voxcpm-mlx", repo, None)
         self.assertEqual(resolved["section_max_characters"],
-                         long_form_policy.VOXTRAL_SECTION_MAX_CHARACTERS)
+                         catalog.FAMILIES["voxcpm-mlx"].section_max_characters)
 
-    def test_the_measured_family_keeps_its_measurement(self) -> None:
-        """Voxtral's 800 comes from a measurement, not from the shared default."""
-        policy = long_form_policy.policy_for("voxtral-tts", "x")
-        self.assertEqual(policy["section_max_characters"], 800)
-        self.assertEqual(policy["origin"], "measured")
-        self.assertEqual(policy["source"], "measured_fleet")
+    def test_a_measured_family_publishes_a_budget_below_its_engine_ceiling(self) -> None:
+        """OmniVoice's 288 is a measurement, not the shared default, and is not raised.
+
+        Measured 2026-08-07 by transcribe-back coverage at equal text/seed/voice:
+        288 and 350 both held every word at 99.4% coverage, while 400 dropped to
+        97.0% and 600 to 83.0%. 288 is kept because it paces better at that equal
+        coverage. The evidence lives beside the constant in `long_form_policy`.
+        """
+        policy = long_form_policy.policy_for("omnivoice", "x")
+        self.assertEqual(policy["section_max_characters"], 288)
+        self.assertEqual(policy["origin"], "family_policy")
         self.assertNotEqual(policy["section_max_characters"],
                             long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS)
-        # The evidence: a single call still held every word at 1162 characters, and began losing
-        # words by 1685. The budget must stay under the point that was verified perfect.
-        self.assertLess(policy["section_max_characters"], 1162)
+        self.assertLess(policy["section_max_characters"], 350)
 
     def test_the_hand_declared_qwen_control_still_wins(self) -> None:
         # The 1.7B Base 8-bit production-v2 audit was cut on 2026-09-24; the kept 4-bit tier
@@ -176,9 +244,15 @@ class SectionSizeControlTests(unittest.TestCase):
         control = catalog.section_size_control_for(repo)
         self.assertEqual(control["source"], "model_audit")
         self.assertEqual((control["minimum"], control["maximum"]), (40, 3000))
-        self.assertEqual(control["runtime_default"], 400)
+        # The kept tier's record derives from the measured production audit, so the
+        # published runtime default is the audited Auto 280 - not the family's 288 and
+        # not the 400 maximum, which stays the largest override a caller may ask for.
+        self.assertEqual(control["runtime_default"], 280)
         self.assertEqual(
             long_form_policy.policy_for("qwen3-tts", repo)["section_max_characters"], 288
+        )
+        self.assertEqual(
+            catalog._audited_long_form_policy("qwen3-tts", repo)["section_max_characters"], 280
         )
 
 
