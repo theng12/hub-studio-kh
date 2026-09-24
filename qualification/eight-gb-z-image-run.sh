@@ -22,7 +22,11 @@ set -u
 # ── where things are ───────────────────────────────────────────────────────────────
 PACK="${1:-}"
 if [ -z "$PACK" ]; then
+  # The library location comes first: Z-Image became a shipped model in 0.6.59 and the drive
+  # copy moved from optional-models/ into model-library/<package>/<revision>/model/. The old
+  # path is kept so this still runs against a drive that has not been restocked yet.
   for candidate in \
+    /Volumes/*/"Video Generation Kit/Studio Hub KH/model-library/z-image-turbo-mflux-4bit"/*/model \
     /Volumes/*/"Video Generation Kit/Studio Hub KH/optional-models/z-image-turbo-mflux-4bit" \
     "$HOME"/StudioHubModels/z-image-turbo-mflux-4bit/*/model \
     "$HOME"/.cache/huggingface/hub/models--filipstrand--Z-Image-Turbo-mflux-4bit/snapshots/*; do
@@ -34,7 +38,7 @@ if [ -z "$PACK" ] || [ ! -d "$PACK/transformer" ]; then
 Could not find the Z-Image-Turbo pack.
 
 Pass it explicitly, e.g.:
-  bash eight-gb-z-image-run.sh "/Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/optional-models/z-image-turbo-mflux-4bit"
+  bash eight-gb-z-image-run.sh "/Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/model-library/z-image-turbo-mflux-4bit/<revision>/model"
 
 It must be a folder containing transformer/, text_encoder/, tokenizer/ and vae/.
 EOF
