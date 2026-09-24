@@ -65,6 +65,23 @@ a compatibility target until re-qualified on the shipped bundle.
 - So the whole remaining change is: the worker adapter, the manifest, the library import, the
   stage argument, and the kit move. Nothing in the native shell.
 
+**Verified this round, independently of the agents that produced them:**
+
+- **The new runtime's audit, from its own build report** (`.build/image-runtime-mflux020/manifest/macho-audit.json`,
+  read rather than taken on trust): `status: passed`, target macOS 14.0, **193 binaries, 0 failures**.
+  The shipped 0.17.5 runtime reports 194/0 on the same target — one fewer, consistent with mflux
+  0.20.0 dropping the twine-only subtree. The runtime is read-only by design, so re-running the
+  audit in place cannot write its report; the build's own is the artefact.
+- **The drive pack satisfies the new manifest exactly.** All **15/15** files verified by SHA-256
+  and size against the manifest's `source_path` entries, totalling **5,907,438,792** bytes —
+  byte-for-byte the declared total. So `model_packages.import_folder` will accept the kit copy
+  with no re-download, which is the path all fifty machines take.
+- **The library import landed in the intended shape:**
+  `~/StudioHubModels/z-image-turbo-mflux-4bit/b3a8f311…/model/{transformer,text_encoder,tokenizer,vae}`
+  with a receipt entry in `.studiohub/installed.json` (37 → 38). The `model/` prefix is real on
+  disk, so the worker's `Path(model_folder) / 'model'` needs no special case — which is what
+  the layout decision two rounds ago was for.
+
 **Cross-check that passed:** the Z-Image pack on `/Volumes/KH-STUDIO-ATLAS/…/optional-models/` is
 byte-identical to the HF cache snapshot — 19 non-dotfile files, same sizes and SHA-256 — so the
 kits can supply these weights without a re-download.
