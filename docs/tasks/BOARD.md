@@ -29,9 +29,22 @@ swap fell. Same class as the "A Bediime Story" miss the model was chosen to fix.
 
 Images: `~/Desktop/StudioHub Image Text Review/10-12`.
 
-**Open:** the `dense` scene (titles plus a long body of text) is awaiting the owner's
-clarification of whether the 2000-3000 characters describe text *in the image* or the length of
-the *prompt*.
+**Done — `dense` (1280x720, seed 42, a 2,599-character prompt).** The owner clarified the
+2000-3000 characters are the *prompt*, not text inside the picture. Prompt kept at
+`.build/text-tests/dense-prompt.txt`; it asks for a titled cover with a subtitle.
+
+| Model | Wall (incl. load) | Title | Subtitle | Peak MLX | Footprint |
+| --- | --- | --- | --- | --- | --- |
+| Z-Image-Turbo | 201.7 s | The Golden Light of Dreams — correct | A STORY FOR SLEEP — correct | 9.84 GB | 17.64 GB |
+| FLUX.2 Klein | 55.2 s | THE GOLDEN **LIGF REEMS** — wrong | A STORY FOR **SLEP** — wrong | n/a | 24.07 GB |
+
+FLUX failed both text elements on the long prompt, Z-Image got both. A longer prompt made FLUX
+*faster* (55 s vs 79 s on the short one) and Z-Image slightly slower (202 s vs 186 s).
+
+**Both scenes are now done.** Across four generations the pattern is the same every time:
+FLUX.2 Klein is 2.3-3.7x faster and misspells; Z-Image-Turbo is slower and correct, and far
+lighter on the machine (compressor delta 0.2-0.8 GB against FLUX's 10.7-11.9 GB, with FLUX
+driving a 32 GB Mac from ~2.1 GB to ~4.8-5.3 GB of swap while Z-Image's swap fell).
 
 ### ST-16 — Z-Image-Turbo into the app (the mflux 0.17.5 → 0.20.0 bump) — 2026-09-24
 
