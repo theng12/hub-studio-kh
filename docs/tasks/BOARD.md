@@ -90,6 +90,25 @@ dispatch onto a Mac with 3 GB free and let it thrash rather than refusing cleanl
 publish a free floor consistent with its chosen memory mode (≈8 GB if low-RAM), and the 8 GB tier
 stays unclaimed until the owner's run returns. Raised with the adapter job.
 
+**Two verifier hazards found during the kit stocking, recorded but NOT fixed — both fail in
+directions that waste an operator's time:**
+
+1. **`verify-kit.sh` can report a FALSE FAIL.** ATLAS's first Phase B run returned `RESULT: FAIL`
+   while its library line still read 21/21. `verify-launch.sh` guards port 47873 with
+   `/usr/sbin/lsof -nP -iTCP:$PORT -sTCP:LISTEN`, which misses a port held in a **non-LISTEN**
+   state; the launch then dies and the verifier blames the copy. A re-run passed. So a good drive
+   can be reported as broken, which is the worst direction for a check whose entire job is telling
+   you whether a drive is safe to hand to a node. Workaround until it is fixed: `PORT=<n>`.
+   Nothing was changed in `verify-kit.sh` — it needed no change for the Z-Image layout.
+2. **`prepare-kit.sh` overwrites several drive files in place, displacing only the app bundle.**
+   `1 - Install the app.command`, `2 - Copy the models.command`, `Technical/copy_models_for_this_mac.py`,
+   `Technical/verify-kit.sh`, `NODE-SETUP-CHECKLIST.md`, `Studio Hub.app.tree-sha256` and
+   `focused-release-manifest.json` are all replaced with no copy kept, while `Studio Hub.app` alone
+   goes to the volume's `_trash/`. Nothing was lost here — the drive's verifier was diffed against
+   the repo's before the swap and they were byte-identical — but the project's never-delete rule
+   arguably covers these too, and the next repo-side edit to them would silently replace a drive's
+   copy with no way back.
+
 **Two defects found by the adapter job and NOT fixed here — recorded because both are real:**
 
 1. **`components/model_packages.py` cannot import a package from a normal Hugging Face cache.**
