@@ -65,6 +65,22 @@ a compatibility target until re-qualified on the shipped bundle.
 - So the whole remaining change is: the worker adapter, the manifest, the library import, the
   stage argument, and the kit move. Nothing in the native shell.
 
+**A model's memory floors come from the worker's catalog, not from its manifest — and the
+live-free floor has a 2 GB default nobody chose for these models.** Traced through
+`memory_admission.py` / `workload_policy.py`: the total-memory floor is the stricter of
+`catalog_entry["min_unified_memory_gb"]` and a repo-prefix override in
+`_MIN_MACHINE_MEMORY_GB_BY_REPO_PREFIX` — and that table contains only the two
+`qwen3-tts-12hz-0.6b-` prefixes, so **no image model matches it** and the catalog entry is the
+sole source. The free floor is `catalog_entry["min_free_memory_gb"]`, else
+`DEFAULT_MIN_FREE_MEMORY_GB` = **2.0 GB**.
+
+The FLUX entry publishes `min_total_memory_gb` and `min_unified_memory_gb` but no
+`min_free_memory_gb`, so it runs on that 2 GB default today. For Z-Image — measured 17.6 GB
+footprint at the engine default, 7.1-7.2 GB with low-RAM — a 2 GB free floor means the Hub will
+dispatch onto a Mac with 3 GB free and let it thrash rather than refusing cleanly. Z-Image should
+publish a free floor consistent with its chosen memory mode (≈8 GB if low-RAM), and the 8 GB tier
+stays unclaimed until the owner's run returns. Raised with the adapter job.
+
 **Verified this round, independently of the agents that produced them:**
 
 - **The new runtime's audit, from its own build report** (`.build/image-runtime-mflux020/manifest/macho-audit.json`,
