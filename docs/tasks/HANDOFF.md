@@ -159,28 +159,28 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   catalog**, so a re-stage is owed: `verify-kit.sh` passes on the pruned libraries, but the app
   bundle on them advertises the old menu. `generation.py` still carries inert per-family wiring
   for the cut families. ST-13.A (pocket-tts adoption) is planned but not started.
-- **ST-14 local Chat Studio — scope change; app-side structure DONE, distribution BLOCKED
-  (2026-09-24).** The owner directed that Chat is no longer deferred. Built and verified: a
-  packaged MLX chat worker (`components/chat/`, `packaging/chat_worker.py`) with JSON mode and
-  seed support; Hub wiring (`POST /api/hub/chat/completions`, the `/studio/chat/...` peer
-  proxy, the `chat-mlx → chat` engine map, `chat` in `WORKER_FOR_MODALITY`,
-  `activity.VALID_STUDIOS` and `standalone_config._REQUIRED_WORKERS`); and the native Chat page
-  moved from "Coming later" into Create. **49 chat tests pass**, `native/build.sh` exits 0, and
-  the full root suite (710 tests) has **no Chat failure** — its one error is the Voice product
-  subprocess timeout that ST-13 is fixing. Chosen model: `mlx-community/Qwen3.5-9B-4bit` @
-  `8b2b98c0…`, 5.98 GB (revised from OptiQ, whose index requires an 8.22 GB complete snapshot).
-  **Blocked on two remaining external conditions:** the shared `model-manifests/`/staging/kit
-  paths are owned by another session (the tree changed under this work on 2026-09-24 15:19–15:20
-  — 0.6.56 released and the manifest prune no longer appears in the working tree — so re-confirm
-  ownership before integrating); and gateway-kh is read-only here and does not serve chat on its
-  `studio_hub` kind (`research/chat-studio-gateway-bridge.md`). **The weights are now local** —
-  the 5.98 GB snapshot downloaded to `.build/chat-model/qwen3.5-9b-4bit` and the first real
-  generation ran: load 2.3 s, peak 5.72 GB, ~2.7–2.9 tok/s on an M2 Max, context 262144. **A
-  thinking toggle is required**: without `enable_thinking=False` the model emits a
-  `Thinking Process:` trace and JSON mode fails. The exact single-change unblock list is in
-  `ST-14.md`; the implementation record is
-  `research/chat-studio-adoption-2026-09-24.md`. Note: streaming through the Hub is buffered by
-  `studio_proxy`, so the app uses non-streaming.
+- **ST-14 local Chat Studio — built, packaged and proven on the 32 GB tier (2026-09-24).** The
+  owner directed that Chat is no longer deferred. A packaged MLX chat worker
+  (`components/chat/`, `packaging/chat_worker.py`) with JSON mode and seed support; Hub wiring
+  (`POST /api/hub/chat/completions`, the `/studio/chat/...` peer proxy, the `chat-mlx → chat`
+  engine map, `chat` in `WORKER_FOR_MODALITY`, `activity.VALID_STUDIOS` and
+  `standalone_config._REQUIRED_WORKERS`); and the native Chat page moved from "Coming later" into
+  Create. Chosen model: `mlx-community/Qwen3.5-9B-4bit` @ `8b2b98c0…`, 5.98 GB (revised from
+  OptiQ, whose index requires an 8.22 GB complete snapshot).
+  **Proven 2026-09-24** through the installed 0.6.56 bundle (`928ebd4`) against the real
+  snapshot: the packaged worker answers `/api/health` and `/api/catalog`, returns a real
+  completion with **no `Thinking Process:` trace**, and **JSON mode now returns
+  `json_valid: true`** — the case that failed before the fix; peak MLX memory **5.22 GB**. The
+  packaged Hub then started all five workers (voice, subtitle, music, image, **chat**) and one
+  authenticated `POST /api/hub/chat/completions` returned a real completion. Evidence:
+  [`qualification/st14-chat-2026-09-24.md`](../../qualification/st14-chat-2026-09-24.md). The
+  thinking fix (`apply_chat_template(enable_thinking=False)` by default, plus a per-request
+  toggle) is committed with a test.
+  **Still owed:** the four kit libraries could not be stocked (the `KH-STUDIO-*` SSDs were
+  unmounted), 8/16/24 GB throughput is unmeasured, the packaged GUI interaction is unproven, and
+  **ST-14.8 independent review has not happened**. gateway-kh remains read-only here and does not
+  serve chat on its `studio_hub` kind (`research/chat-studio-gateway-bridge.md`). Streaming
+  through the Hub is buffered by `studio_proxy`, so the app uses non-streaming.
 - **The VibeVoice offer is dead in 0.6.55** (loader remap bug, see the board's cautions). It is
   one of the families ST-13 cuts, so it disappears with the re-stage; the bug is still worth
   fixing upstream.

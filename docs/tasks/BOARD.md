@@ -24,25 +24,25 @@ Owner request: stock a local LLM and add a real **Chat** Studio, taking it out o
 revised from OptiQ, whose index requires an 8.22 GB complete snapshot), text-only accepted.
 Card: [ST-14](ST-14.md); implementation record
 [chat-studio-adoption-2026-09-24.md](../../research/chat-studio-adoption-2026-09-24.md).
-**App-side structure is DONE and verified:** worker, Hub routing/admission/memory, native Chat
-page in `Create`, packaging spec and CLI, 49 chat tests, `native/build.sh` exit 0, and the full
-root suite with no Chat failures.
-**BLOCKED on three external conditions** (unchanged since 2026-09-24):
-1. **ST-13** (another session, uncommitted/IN PROGRESS) owns `model-manifests/`,
-   `capture_model_manifests.py`, shared staging and the four kit libraries, and says "do not
-   stage a release" until its Voice tests are green. The Chat manifest stays staged at
-   `.build/chat-stage/`.
-2. ~~**Bandwidth.**~~ **Cleared 2026-09-24:** the 5.98 GB snapshot downloaded locally
-   (`.build/chat-model/qwen3.5-9b-4bit`). First real generation: load 2.3 s, peak 5.72 GB,
-   ~2.7–2.9 tok/s on an M2 Max, context 262144. **New required step:** the worker must pass
-   `enable_thinking=False` (or offer a toggle) — the model otherwise emits a thinking trace and
-   JSON fails. Still needed: import into the library and stocking the four kits.
-3. **gateway-kh is read-only here.** Its `studio_hub` kind does not serve chat
-   (`StudioHubBackend.generate` raises `MODEL_MODALITY_MISMATCH`); the change belongs to the
-   gateway session, handed off in `research/chat-studio-gateway-bridge.md`.
-**Unblock = one ST-13-gated change** (exact list in ST-14): `git add` the new files, copy the
-staged manifest, add the capture/catalog rows, add the `stage_voice.py` chat block, then stock
-the library and kits.
+**Integrated and proven on the 32 GB tier (2026-09-24).** Worker, Hub
+routing/admission/memory, native Chat page in `Create`, packaging spec and CLI are committed on
+`implementation/voice-runtime`; the manifest is registered; all 11 model files are
+SHA-256-verified in `~/StudioHubModels/qwen3-5-9b-4bit/8b2b98c0…/model/`. Through the installed
+0.6.56 bundle (`928ebd4`) the packaged worker proved `/api/health`, `/api/catalog`, a real
+completion with **no thinking trace**, and **JSON mode with `json_valid: true`** (peak MLX
+**5.22 GB**); the packaged Hub then started all five workers and one authenticated
+`POST /api/hub/chat/completions` returned a real completion. The thinking fix
+(`enable_thinking=False` by default + a per-request toggle) is committed with a test.
+Evidence: [qualification/st14-chat-2026-09-24.md](../../qualification/st14-chat-2026-09-24.md).
+
+**Still owed:**
+1. **Kit stocking** — the four `KH-STUDIO-*` SSDs were unmounted, so `qwen3-5-9b-4bit` is only
+   in the Mac library.
+2. **Per-tier throughput** (8/16/24 GB) is unmeasured; the manifest publishes a 16 GB floor that
+   nothing has yet qualified.
+3. **ST-14.8 independent review** has not happened.
+4. **gateway-kh** is read-only here and does not serve chat on its `studio_hub` kind
+   (`research/chat-studio-gateway-bridge.md`).
 **Shared-file edits made:** `components/model_packages.py` engine allowlist now includes
 `chat-mlx`; the `chat` modality is registered in `components/hub/backend/activity.py`,
 `components/hub/standalone.py` (engine map, worker map, peer-work predicate, native route) and
