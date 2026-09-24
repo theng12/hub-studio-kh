@@ -43,6 +43,21 @@ the stage argument `.build/image-runtime-mflux020` and nothing else. The
 not an enforced pin, and it becomes historical when the new runtime ships — per AGENTS.md that is
 a compatibility target until re-qualified on the shipped bundle.
 
+**Scope, checked rather than assumed — Z-Image needs NO native change and no mandatory Hub change.**
+
+- `native/StudioAPI.swift` and `StudioViews.swift` are already model-generic: `imageModel` is a
+  repo string, `imageConfigurations[imageModel]` reads per-model settings from the catalog, the
+  picker selects `models.first { $0.function == .image && $0.supported }`, and the model's own
+  `generation_defaults` / `image_sizes` drive the controls. The only occurrences of "FLUX" in the
+  native shell are **two code comments** — no display string, no logic. A second image model that
+  the worker advertises appears in the picker with its own steps and sizes.
+- The Hub has exactly **one** hardcoded model id, `memory_admission._FLEET_DEFAULTS` for
+  `aitrader/flux2-klein-4b-mlx-4bit` — a fleet-qualified memory default, not a dispatch gate.
+  `capabilities.py` is generic and keyed off the worker's catalog. A `_FLEET_DEFAULTS` entry for
+  Z-Image is **optional** and becomes worth adding once the 8 GB tier is measured.
+- So the whole remaining change is: the worker adapter, the manifest, the library import, the
+  stage argument, and the kit move. Nothing in the native shell.
+
 **Cross-check that passed:** the Z-Image pack on `/Volumes/KH-STUDIO-ATLAS/…/optional-models/` is
 byte-identical to the HF cache snapshot — 19 non-dotfile files, same sizes and SHA-256 — so the
 kits can supply these weights without a re-download.
