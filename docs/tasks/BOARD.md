@@ -2,6 +2,20 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-12 — Khmer VITS families, 0.6.55 cut locally — 2026-09-24
+
+Owner direction: add two surveyed Khmer TTS models to Voice Studio and the model library. Both
+are non-MLX, so each got its own engine under a new `voice-vits` packaging engine:
+`khmer-tts-mms` (MMS VITS via transformers) and `khmer-tts-onnx` (Coqui VITS via ONNX Runtime).
+Implemented, tested and verified with real Khmer renders; card and evidence at
+[ST-12](ST-12.md) and
+[research/khmer-tts-adoption-2026-09-24.md](../../research/khmer-tts-adoption-2026-09-24.md).
+
+Release **0.6.55** is staged, installed, DMG'd and the four drive kits refreshed — **but not
+pushed**; the owner runs the two pushes in `HANDOFF.md` step 8. Local commit `3ab8984`. Voice
+suite 716/2; root suite 659/11/1 pre-existing Subtitle failure. Owner ear check of the two
+voices is the remaining open item.
+
 ### Local verification and GatewayKH continuation — 2026-09-21
 
 Owner direction: continue work runnable/testable on this Mac. **GatewayKH replaces

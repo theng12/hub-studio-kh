@@ -59,14 +59,18 @@ alone and is unrelated to this work. New manifest + engine tests pass (10 + 8).
   copied and registered; each library now has **37** entries.
 - The `examples/inference.py` file from the MMS repo is included (1 KB) and the
   sengtha training checkpoint (`best_model.pth`, 998 MB) is excluded.
-- **App bundle on the drives is still 0.6.54.** The new families appear in the app only
-  after the next staged app release carries the updated catalog + manifests. Payloads are
-  in place and `prepare-kit.sh` preserves the model library across app restages.
+- **Release 0.6.55 cut locally**: staged at `.build/StudioHub-0655`, installed to
+  `/Applications`, DMG at `dist/StudioHub-0.6.55-3ab8984.dmg` (verified by mounting), and all
+  four drive kits refreshed with the new app bundle + `focused-release-manifest.json`. Local
+  commit `3ab8984`. **Nothing pushed.**
 
 ## Not done / open
 
-- No version bump, staged app, DMG, local install or drive app refresh was performed —
-  that is the release step and awaits the owner's release decision.
-- Nothing pushed to any remote.
-- Khmer quality of both voices has not been judged by ear by the owner (generated clips
-  are under `.build/khmer-adoption/audio/`).
+- **Not pushed** to `main` or `implementation/voice-runtime` — the owner runs the two pushes.
+- Khmer quality of both voices has not been judged by the owner's ear. Generated clips are under
+  `.build/khmer-adoption/audio/`. Whisper cannot score Khmer, so the passing tests are not a
+  quality claim.
+- Independent review not performed.
+- The capture-tool pagination fix means any *other* manifest captured from a >50-file repo may
+  have been silently truncated in the past. Only the two new packages were recaptured; the
+  existing 35 were not re-verified against a full tree in this session.

@@ -3,12 +3,18 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.54.
+Last updated: 0.6.55.
 
 ## Where things stand
 
-- Release **0.6.54**. Every release is pushed to `main` and to
-  `implementation/voice-runtime`; `main` is the release branch.
+- Release **0.6.55**. Every release is pushed to `main` and to
+  `implementation/voice-runtime`; `main` is the release branch. **0.6.55 is cut locally but not
+  yet pushed**: staged, installed to `/Applications`, DMG built, and all four drive kits
+  refreshed. The pushing owner still has to run the two pushes in step 8.
+- **0.6.55 adds two Khmer voice families** — `khmer-tts-mms` (`khmerttsopensource/khmer-tts`,
+  MMS VITS via transformers/torch) and `khmer-tts-onnx` (`sengtha/khmer-tts-female-v2`, Coqui
+  VITS via ONNX Runtime). Both are single-speaker, Khmer-only, non-MLX, under the new
+  `voice-vits` packaging engine. Prepared through `.build/voice-runtime`.
 - The four SSDs carry `Video Generation Kit/` holding `GatewayKH/`, `Story Studio/` and
   `Studio Hub KH/`, refreshed from the current build on every release.
 - The app is **unsigned**. First launch needs right-click → Open; the kit's
@@ -70,6 +76,16 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   as local, so a join is refused with code -1022.
 - **A runtime identity must not include file permissions**, for the reason above.
 - **The runtime tree is read-only**: `chmod -R u+w .build/voice-runtime` before adding anything.
+  The same applies to a previous `.build/StudioHub-<n>` stage: `chmod -R u+w` it before `rm -rf`,
+  or the delete half-fails and the next stage lands on top of a broken tree.
+- **Staging ships `git ls-files`, not the working tree.** `stage_voice.py`'s `copy_tracked_tree`
+  copies only tracked paths, so a brand-new manifest or catalog file that was never `git add`ed
+  silently does **not** reach the bundle — the staged app then looks fine while missing it. Run
+  `git add` on new shipped files before staging; check the bundle afterwards (0.6.55 caught this
+  when only 35 of 37 manifests were bundled).
+- **The Hugging Face `/tree` API pages at 50 entries.** A manifest capture that reads one page
+  looks complete while omitting the weights — the MMS Khmer repo captured 2 of 9 files. The capture
+  tool now follows the `Link` header; `expand=true` refuses a page larger than 100.
 - **The drives are frequently ejected.** `prepare-kit.sh` expects
   `KH-STUDIO-{NOVA,UGREEN,ATLAS,ORICO}`; if a drive is renamed, pass the new name rather than
   assuming. Four kit drives, plus sometimes an unrelated drive appears (`ORICO 2TB` is not a kit).
@@ -107,6 +123,14 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
 
 ## In flight / open
 
+- **0.6.55 is local only.** Staged at `.build/StudioHub-0655`, installed, DMG at
+  `dist/StudioHub-0.6.55-3ab8984.dmg`, four kits refreshed, `VERSION`/`CHANGELOG`/`release-notes`
+  written, and the implementation committed locally at `3ab8984`. **Not pushed.** The owner runs
+  the two pushes (step 8) and updates `main`. The Khmer adoption is written up in
+  `research/khmer-tts-adoption-2026-09-24.md` and tracked by `docs/tasks/ST-12.md`.
+- **Khmer quality is ear-only and not yet judged by the owner.** Generated clips are in
+  `.build/khmer-adoption/audio/`. Whisper cannot score Khmer (it labels even the purpose-built
+  MMS model Vietnamese), so a passing test is not a quality claim.
 - **Remote update**: built on both sides (Hub controller routes + node UI), **never exercised
   across a real fleet**. GatewayKH publishes → controllers mirror → nodes pull. Trust is the
   publisher key pinned on the node; `POST /api/hub/release/trust` is Hub-token only and now has a
