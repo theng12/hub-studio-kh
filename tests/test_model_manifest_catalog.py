@@ -57,6 +57,45 @@ class ModelManifestCatalogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.manifests = {path.stem: json.loads(path.read_text()) for path in CATALOG.glob("*.json")}
 
+    def test_every_catalog_engine_can_actually_be_served(self):
+        """The catalog and the Hub's engine->worker map have to agree.
+
+        They did not. `chat-mlx` was added to the engine allowlist in `model_packages` and to the
+        shipped catalog, but not to the map in `standalone.py`, so `/api/hub/model-packages`
+        raised `KeyError: 'chat-mlx'` and answered 500 — in 0.6.57, on every Mac, because the chat
+        manifest ships in the catalog whether or not its model is installed. The app reads that
+        route with a hard `try` inside its refresh, so the 500 did not degrade one list: it marked
+        the whole Hub unreachable and left every model picker empty.
+
+        Every existing test of that route used fixture manifests, which is exactly why none of
+        them saw it. This one walks the real catalog, so a seventh engine cannot repeat it.
+        """
+        from components.hub import standalone
+        from components import model_packages
+        for package_id, manifest in sorted(self.manifests.items()):
+            engine = manifest["engine"]
+            with self.subTest(package=package_id, engine=engine):
+                # The allowlist accepts it, so the worker map must serve it.
+                try:
+                    model_packages.validate_manifest(dict(manifest))
+                except model_packages.PackageError as exc:
+                    self.fail(f"{package_id}: the catalog ships a manifest the Hub rejects: {exc}")
+                worker = standalone._worker_for_engine(engine)
+                self.assertTrue(worker, f"{package_id}: engine {engine} maps to no worker")
+
+    def test_an_unknown_engine_names_itself_rather_than_raising_a_bare_keyerror(self):
+        """A KeyError from deep inside the route reads as "the Hub is down".
+
+        The failure has to say which engine is unmapped and where to register it, because the
+        person seeing it is looking at an empty model list with no other clue.
+        """
+        from components.hub import standalone
+        with self.assertRaises(ValueError) as caught:
+            standalone._worker_for_engine("not-a-real-engine")
+        message = str(caught.exception)
+        self.assertIn("not-a-real-engine", message)
+        self.assertIn("model_packages.py", message)
+
     def test_catalog_is_the_exact_release_menu(self):
         self.assertEqual(set(self.manifests), set(EXPECTED))
         for package_id, (model_id, revision, engine) in EXPECTED.items():

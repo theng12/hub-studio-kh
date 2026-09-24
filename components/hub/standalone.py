@@ -68,11 +68,31 @@ def _dependency_package_ids(catalog: dict[str, dict[str, Any]]) -> set[str]:
     return required
 
 
+def _worker_for_engine(engine: str) -> str:
+    """Which worker runs a manifest's engine.
+
+    Kept as one named mapping rather than an inline dict because it has to agree with the engine
+    allowlist in `components/model_packages.py`, and for a while it did not: `chat-mlx` was added
+    to the allowlist and to the shipped catalog, but not here, so `/api/hub/model-packages` raised
+    `KeyError: 'chat-mlx'` and answered 500. The app reads that route with a hard `try` inside its
+    refresh, so the 500 did not degrade one list - it marked the whole Hub unreachable and left
+    every model picker empty. `tests/test_model_manifest_catalog.py` now fails if the two lists
+    drift apart again.
+    """
+    mapping = {"image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
+               "subtitle-mlx": "subtitle", "music-mlx": "music", "chat-mlx": "chat"}
+    try:
+        return mapping[engine]
+    except KeyError as exc:
+        raise ValueError(
+            f"the manifest engine {engine!r} has no worker; add it here and to the engine "
+            f"allowlist in components/model_packages.py") from exc
+
+
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]], monitor: StudioMonitor) -> dict[str, Any]:
     from components import model_packages
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
-    worker_id = {"image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
-                 "subtitle-mlx": "subtitle", "music-mlx": "music"}[manifest["engine"]]
+    worker_id = _worker_for_engine(manifest["engine"])
     worker = next((item for item in monitor.registry if item["id"] == worker_id), None)
     # A paused model still reports verified files and a compatible runtime; it is the Hub's own
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was

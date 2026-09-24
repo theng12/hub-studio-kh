@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.58 — 2026-09-24
+
+### Do not install 0.6.57
+
+0.6.57 broke the app: every model list came up empty and the Hub showed as not answering. The
+cause was a single missing entry in a lookup table — the new Chat model was added to the list of
+models the app offers, but not to the table that says which worker runs it. Asking the Hub for the
+model list then failed outright, and the app treats a failed model list as "the Hub is down".
+
+Nothing was wrong with your Mac, your models or your network, and updating fixes it. If you
+already installed 0.6.57, the app would have looked broken the moment it opened.
+
 ## 0.6.57 — 2026-09-24
 
 ### You can see your pool of Macs, from either end

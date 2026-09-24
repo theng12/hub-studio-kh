@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.58 — 2026-09-24 · hotfix: 0.6.57 left every model picker empty
+
+**0.6.57 shipped a broken build and this fixes it.** Do not install 0.6.57.
+
+The Chat manifest reached the release catalog in 0.6.57, but the Hub's engine→worker map in
+`components/hub/standalone.py` was never extended for it. That map was an inline dict lookup, so
+`GET /api/hub/model-packages` raised `KeyError: 'chat-mlx'` and answered **HTTP 500** — on every
+Mac, because the manifest ships in the catalog whether or not the model is installed. The native
+app reads that route with a hard `try` inside `refresh()`, so the 500 did not degrade one list: it
+threw the whole refresh, set `isReachable = false`, and left **every model picker empty with the
+Hub reported as not answering**.
+
+- The mapping is now the named `_worker_for_engine()`, with `chat-mlx` added, and an unknown
+  engine raises a `ValueError` naming the engine and both files to update instead of a bare
+  `KeyError` from inside a route.
+- `tests/test_model_manifest_catalog.py` gains a guard that walks the **real** catalog and asserts
+  every shipped manifest's engine maps to a worker. Every previous test of that route used fixture
+  manifests, which is exactly why none of them caught this. Reverting the one-line mapping makes
+  the new test fail, which is how it was checked.
+
+Measured before the fix: `/api/hub/model-packages` → HTTP 500 with the real catalog in a live Hub.
+After: HTTP 200, 20 packages, all six engines present, the chat package carrying
+`worker_id: "chat"`.
+
 ## 0.6.57 — 2026-09-24 · a node and its controller can both see the group
 
 Owner report: after connecting nodes, a Mac did not show the pool it belonged to, and the
