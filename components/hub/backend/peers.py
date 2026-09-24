@@ -335,6 +335,30 @@ def cached(machine: str) -> dict | None:
     return entry[1] if entry and not entry[1].get(_DISPATCH_REJECTED) else None
 
 
+def fresh_snapshot(machine: str) -> dict | None:
+    """The cached peer snapshot for ``machine``, but only while it is still current.
+
+    A caller that gets a snapshot back is looking at the same evidence
+    :func:`dispatch_ready` would accept, so a roster read and a dispatch decision cannot
+    disagree about whether a machine is usable. ``None`` means "ask the machine directly":
+    nothing has been read yet, the last read is older than ``PEER_TTL_S``, or the entry is a
+    proxy-rejection tombstone rather than a snapshot.
+    """
+    entry = _cache.get(machine)
+    if not entry:
+        return None
+    try:
+        observed_at, snapshot = entry
+        age = time.time() - observed_at
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(snapshot, dict) or snapshot.get(_DISPATCH_REJECTED):
+        return None
+    if not 0 <= age < PEER_TTL_S:
+        return None
+    return snapshot
+
+
 def dispatch_ready(studio: dict, generation=None) -> bool:
     """Whether a Studio has authority to receive newly dispatched work."""
     if is_local_studio(studio):

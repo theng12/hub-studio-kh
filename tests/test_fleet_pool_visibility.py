@@ -12,9 +12,11 @@ than a node that was never in the group.
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 import json
 import sys
 import tempfile
+import time
 import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -114,6 +116,29 @@ class PoolCase(unittest.TestCase):
     def row(overview: dict, machine: str) -> dict:
         return next(row for row in overview["machines"] if row["machine"] == machine)
 
+    def wait_for_roster_state(self, machine: str, state: str, *,
+                              timeout: float = 45.0) -> tuple[dict, dict]:
+        """Wait out the peer poll for a node whose answer changed under the controller.
+
+        A roster read reuses the peer poll's snapshot while it is still current
+        (`peers.PEER_TTL_S`), so a node that has just changed is noticed by the next poll
+        rather than by the read that follows it. The wait is bounded, and it is this long on
+        purpose: the point of the dedupe is that the roster agrees with the snapshot the
+        dispatch path already trusts, and that snapshot has a TTL of its own.
+        """
+        deadline = time.time() + timeout
+        row: dict = {}
+        roster: dict = {}
+        while time.time() < deadline:
+            status, roster = self.request(self.controller, "/api/hub/fleet/nodes",
+                                          token=self.controller_fleet)
+            self.assertEqual(200, status, roster)
+            row = next((item for item in roster["nodes"] if item["id"] == machine), {})
+            if row.get("state") == state:
+                return row, roster
+            time.sleep(0.5)
+        self.fail(f"{machine} never read as {state}; the roster still says {row!r}")
+
 
 class FleetPoolVisibility(PoolCase):
     """One controller, one node."""
@@ -157,17 +182,107 @@ class FleetPoolVisibility(PoolCase):
         self.assertEqual(2, body["summary"]["total"],
                          "the summary counts the controller but not the node it took in")
 
+    def test_a_just_joined_node_is_reachable_on_the_first_read(self):
+        """0.6.57: a join makes a node visible now, not at the next peer poll.
+
+        The roster may reuse the peer poll's snapshot, but a Mac that just joined has no
+        snapshot yet - so the first read after the join must still dial it and find it.
+        """
+        node_id = self.join(self.add_node("node"))
+        status, roster = self.request(self.controller, "/api/hub/fleet/nodes",
+                                      token=self.controller_fleet)
+        self.assertEqual(200, status)
+        self.assertEqual("reachable", roster["nodes"][0]["state"],
+                         "a just-joined node waited for the peer poll to become visible")
+        self.assertEqual(1, roster["summary"]["reachable"])
+        body = self.overview(self.controller, "controller-hub-token")
+        self.assertTrue(self.row(body, node_id)["reachable"],
+                        "the overview lost a node the roster had just found")
+
+    def test_a_just_joined_nodes_host_facts_reach_the_controllers_overview(self):
+        """The chip and memory come from the same probe that proves the node is there.
+
+        The probe reads `/api/hub/resources`, whose whole purpose is to let a controller see a
+        node's host; taking the host facts from a second, later peer read left a freshly-joined
+        Mac with a blank memory and chip column until the poll happened to run.
+        """
+        node = self.add_node("node")
+        node_id = self.join(node)
+        status, roster = self.request(self.controller, "/api/hub/fleet/nodes",
+                                      token=self.controller_fleet)
+        self.assertEqual(200, status)
+        probe_row = roster["nodes"][0]
+        row = self.row(self.overview(self.controller, "controller-hub-token"), node_id)
+        self.assertTrue(row["chip"],
+                        f"the node's chip never reached the overview row: {row}")
+        self.assertIsNotNone(row["memory_gb"],
+                             f"the node's memory never reached the overview row: {row}")
+        self.assertGreater(row["memory_gb"], 0)
+        # What the overview shows is what the node itself answers with the Fleet Token - not a
+        # value inferred from this Mac, which happens to be the same machine here.
+        status, node_resources = self.request(node, "/api/hub/resources?local_only=true",
+                                              token=self.controller_fleet)
+        self.assertEqual(200, status, node_resources)
+        self.assertEqual(node_resources["host"]["chip"], row["chip"])
+        self.assertEqual(node_resources["host"]["total_gb"], row["memory_gb"])
+        # One pass feeds both routes: the roster row carries the probe's host snapshot.
+        self.assertEqual(node_resources["host"]["chip"], probe_row["host"]["chip"])
+
+    def test_a_node_that_adopts_another_credential_is_unauthorized_not_reachable(self):
+        """A node that takes a different Fleet Token still answers - and refuses this controller.
+
+        `/api/version` is in `auth.PUBLIC_PATHS`, so probing it returned a cheerful 200 from a
+        node whose credential this controller no longer holds: a green Mac that no dispatch
+        could reach. The probe has to read an authenticated route.
+        """
+        node = self.add_node("node")
+        node_id = self.join(node)
+        # A second Hub mints a credential of its own. A node that adopts it - the mistake of
+        # joining the wrong controller - answers this controller's Fleet Token with 401.
+        other_fleet = (self.add_node("other").data / ".fleet_token").read_text().strip()
+        self.assertNotEqual(self.controller_fleet, other_fleet,
+                            "the second Hub did not mint a credential of its own")
+        status, body = self.request(node, "/api/hub/fleet/adopt", token="node-hub-token",
+                                    method="POST", payload={"token": other_fleet})
+        self.assertEqual(200, status, body)
+
+        row, _ = self.wait_for_roster_state(node_id, "unauthorized")
+        self.assertIn("Fleet Token", row["detail"],
+                      "a refused credential must tell the operator what to fix")
+        overview = self.overview(self.controller, "controller-hub-token")
+        machine = self.row(overview, node_id)
+        self.assertFalse(machine["reachable"],
+                         f"a node refusing this controller's credential reads as reachable: {machine}")
+        self.assertEqual("unauthorized", machine["health"])
+        self.assertEqual(1, overview["summary"]["reachable"],
+                         "the summary counted the refusing node as an available Mac")
+
     def test_a_node_that_is_switched_off_still_belongs_to_the_pool(self):
-        """Belonging is a fact about the roster; being up is a fact about now."""
+        """Belonging is a fact about the roster; being up is a fact about now.
+
+        A roster read reuses the peer poll's snapshot while it is current, so a node that has
+        just gone off is noticed by the next poll rather than by this read. The node must end up
+        unreachable without ever leaving the pool - which is the difference between a Mac that
+        is off and a Mac that was never in the group.
+        """
         node_id = self.join(self.add_node("node"))
         self.nodes[0].stop()
-        body = self.overview(self.controller, "controller-hub-token")
-        row = self.row(body, node_id)
-        self.assertFalse(row["reachable"])
+        deadline = time.time() + 45.0
+        row: dict = {}
+        overview: dict = {}
+        while time.time() < deadline:
+            overview = self.overview(self.controller, "controller-hub-token")
+            self.assertEqual(2, overview["summary"]["total"],
+                             "a node that is off dropped out of its own pool")
+            row = self.row(overview, node_id)
+            if not row["reachable"]:
+                break
+            time.sleep(0.5)
+        self.assertFalse(row["reachable"], f"a switched-off node still reads as up: {row}")
         self.assertTrue(row["detail"], "an absent node must say why it reads as absent")
         self.assertEqual("agent", row["role"],
                          "a node that is off is still the node that joined")
-        self.assertEqual(2, body["summary"]["total"],
+        self.assertEqual(2, overview["summary"]["total"],
                          "a node that is off dropped out of its own pool")
 
     # ── the node's pool ────────────────────────────────────────────────────
@@ -277,6 +392,116 @@ class FleetPoolWithTwoNodes(PoolCase):
         self.assertEqual("controller", controller_row["role"])
         self.assertFalse(controller_row["reachable"],
                          "a controller that was switched off reads as reachable")
+
+
+class _Reply:
+    def __init__(self, status_code: int, payload: object):
+        self.status_code = status_code
+        self.is_success = 200 <= status_code < 300
+        self._payload = payload
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no body")
+        return self._payload
+
+
+class _AnsweringClient:
+    """A client that counts its calls, so a probe can be proved not to have dialled."""
+
+    def __init__(self, status_code: int = 200, payload: object = None):
+        self.status_code = status_code
+        self.payload = payload
+        self.calls = 0
+        self.urls: list[str] = []
+
+    async def get(self, url: str, timeout=None):
+        self.calls += 1
+        self.urls.append(url)
+        return _Reply(self.status_code, self.payload)
+
+    async def aclose(self):
+        return None
+
+
+class FleetProbeSourceTests(unittest.TestCase):
+    """The probe reads an authenticated route, and reuses the peer poll while it is current.
+
+    The live-Hub cases above prove the behaviour end to end; these pin the two mechanisms:
+    which route a direct probe asks, and that a machine with a current snapshot is not read
+    twice. `peers._cache` is saved and restored rather than assumed empty.
+    """
+
+    NODE = {"id": "node-1", "name": "Studio Mini 01", "address": "http://10.0.0.5:47873",
+            "role": "agent", "studios": [], "joined_at": 1.0}
+    CONNECTED = {"host": {"chip": "Apple M2", "total_gb": 16.0}, "studios": {},
+                 "reachable": True, "auth": True, "status": "connected", "version": "0.6.57"}
+
+    def setUp(self):
+        from components.hub.backend import peers
+        self.peers = peers
+        self.saved = dict(peers._cache)
+        peers._cache.clear()
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        self.peers._cache.clear()
+        self.peers._cache.update(self.saved)
+
+    def probe(self, client):
+        from components.hub.backend import fleet_nodes
+        return asyncio.run(fleet_nodes.probe(dict(self.NODE), client))
+
+    def test_the_probe_asks_an_authenticated_route(self):
+        client = _AnsweringClient(200, {**self.CONNECTED, "source": "studiohub-mac@abc"})
+        row = self.probe(client)
+        self.assertEqual(1, client.calls)
+        self.assertEqual("http://10.0.0.5:47873/api/hub/resources?local_only=true",
+                         client.urls[0],
+                         "the probe asked a route that can answer 401 to a bad credential")
+        self.assertEqual("reachable", row["state"])
+        self.assertEqual("Apple M2", row["host"]["chip"])
+        self.assertEqual("0.6.57", row["version"])
+
+    def test_a_machine_with_no_snapshot_is_asked_directly(self):
+        client = _AnsweringClient(200, dict(self.CONNECTED))
+        self.probe(client)
+        self.assertEqual(1, client.calls,
+                         "a node with no snapshot must be dialled, or a fresh join is invisible")
+
+    def test_a_current_snapshot_answers_without_a_second_read(self):
+        self.peers._cache["node-1"] = (time.time(), dict(self.CONNECTED))
+        client = _AnsweringClient(500, {"host": {}, "studios": {}})
+        row = self.probe(client)
+        self.assertEqual(0, client.calls, "the probe dialled a machine whose snapshot was current")
+        self.assertEqual("reachable", row["state"])
+        self.assertEqual("Apple M2", row["host"]["chip"])
+        self.assertEqual("0.6.57", row["version"])
+
+    def test_a_rejected_snapshot_is_unauthorized(self):
+        self.peers._cache["node-1"] = (time.time(), {
+            "host": None, "studios": {}, "reachable": True, "auth": False,
+            "status": "token_rejected"})
+        client = _AnsweringClient(500, {})
+        row = self.probe(client)
+        self.assertEqual(0, client.calls)
+        self.assertEqual("unauthorized", row["state"])
+        self.assertIn("Fleet Token", row["detail"])
+
+    def test_a_stale_snapshot_is_asked_again(self):
+        self.peers._cache["node-1"] = (time.time() - self.peers.PEER_TTL_S - 1,
+                                       dict(self.CONNECTED))
+        client = _AnsweringClient(500, {})
+        row = self.probe(client)
+        self.assertEqual(1, client.calls, "an expired snapshot must not decide the answer")
+        self.assertEqual("error", row["state"])
+
+    def test_a_dispatch_rejection_tombstone_is_not_a_snapshot(self):
+        self.peers._cache["node-1"] = (time.time(), {self.peers._DISPATCH_REJECTED: True})
+        client = _AnsweringClient(401, {})
+        row = self.probe(client)
+        self.assertEqual(1, client.calls, "a tombstone is not evidence about the machine")
+        self.assertEqual("unauthorized", row["state"])
 
 
 if __name__ == "__main__":

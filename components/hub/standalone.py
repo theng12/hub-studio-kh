@@ -842,20 +842,25 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 }
             else:
                 snapshot = peers.cached(machine) or {}
-                # The roster's live probe outranks the peer cache: it answers directly and it
-                # exists from the moment the join is accepted, so a node that has just been added
-                # reads as the machine it is instead of as one that "has not reported in yet".
+                # The roster's probe is the one read of this machine: it answers directly when no
+                # current snapshot exists and, when there is one, reuses the peer poll the dispatch
+                # path already trusts - so the page and the scheduler cannot disagree about a Mac.
+                # Its host facts are what this row shows; a roster member is not read a second time
+                # through the peer cache, which is what the separate `pool()` probe used to leave
+                # unpopulated until the next poll happened to run.
                 if member is not None:
                     reachable = member.get("state") == "reachable"
                     health = "up" if reachable else str(member.get("state") or "unknown")
                     detail = member.get("detail")
                     version = member.get("version")
+                    host = member.get("host") or {}
                 else:
                     reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
                     health = ("up" if snapshot.get("status") == "connected"
                               else str(snapshot.get("status") or "unknown"))
                     detail = None if snapshot else "this Mac has not reported in yet"
                     version = snapshot.get("version")
+                    host = snapshot.get("host") or {}
                 row = {
                     "machine": machine,
                     "label": str((member or {}).get("label")
@@ -866,7 +871,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "health": health,
                     "detail": detail,
                 }
-                host = snapshot.get("host") or {}
             stats = measured.get(machine) or {}
             rows.append({
                 **row,
@@ -895,6 +899,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 modality = str(entry.get("modality") or "")
                 if modality:
                     modalities[modality] = modalities.get(modality, 0) + 1
+            # A member this Mac probed carries its own host facts here; one learned from a
+            # controller's roster does not, and stays blank rather than borrowing this Mac's.
+            host = member.get("host") or {}
             rows.append({
                 "machine": machine,
                 "label": str(member.get("label") or machine),
@@ -904,8 +911,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "version": member.get("version"),
                 "health": "up" if reachable else str(member.get("state") or "unknown"),
                 "detail": member.get("detail"),
-                "memory_gb": None, "available_gb": None,
-                "disk_free_gb": None, "disk_total_gb": None, "chip": None,
+                "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
+                "disk_free_gb": host.get("disk_free_gb"),
+                "disk_total_gb": host.get("disk_total_gb"), "chip": host.get("chip"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,

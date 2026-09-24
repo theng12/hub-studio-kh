@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .registry import DATA_DIR
-from .peers import fleet_token
+from .peers import fleet_token, fresh_snapshot
 
 FILE_NAME = "fleet_nodes.json"
 MAX_NODES = 64
@@ -32,6 +32,14 @@ ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 # endpoint. The address is still validated: a controller must never be told to fetch an
 # arbitrary URL, which would turn a join into a request forgery against this Mac's network.
 PROBE_TIMEOUT = httpx.Timeout(6.0, connect=3.0)
+# How a controller asks a node about itself. `/api/version` is in `auth.PUBLIC_PATHS`, so it
+# answers 200 even to a credential the node rejects - which made a node that had taken a
+# different Fleet Token read as reachable while no dispatch could reach it. This is the route a
+# peer Hub reads for the same purpose, it is in `auth.FLEET_ALLOWED`, and its answer carries the
+# host facts a controller needs to decide where work fits.
+PROBE_PATH = "/api/hub/resources?local_only=true"
+_CREDENTIAL_DETAIL = ("the node answered but rejected this controller's credential ({why}) - "
+                      "re-join it with the current Fleet Token")
 
 
 def store_path() -> Path:
@@ -210,11 +218,50 @@ def remote_studios() -> list[dict[str, Any]]:
     return entries
 
 
+def _probe_client() -> httpx.AsyncClient:
+    """The client a probe owns, presenting the only credential a controller holds.
+
+    A node is somebody else's Mac: the Hub token stays on the Mac that owns it, so a controller
+    authenticates with the Fleet Token. A caller that injects its own client is responsible for
+    the credential that client carries - the peer poll and `remote_inventory` set the header per
+    request themselves.
+    """
+    token = fleet_token()
+    headers = {"X-Hub-Token": token} if token else {}
+    return httpx.AsyncClient(follow_redirects=False, headers=headers)
+
+
+def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    """A probe result derived from a peer poll's snapshot.
+
+    The poll reads the same route a direct probe reads, so the states line up one for one: a
+    rejected credential is `unauthorized` (the node answered and refused *this controller*), a
+    connected machine is `reachable`, and anything else is a machine that is not answering now.
+    The host facts travel with it, so a roster read still shows what the node is.
+    """
+    host = snapshot.get("host") if isinstance(snapshot.get("host"), dict) else {}
+    carried = {"host": host, "version": snapshot.get("version")}
+    if snapshot.get("auth") is False:
+        return {**row, **carried, "state": "unauthorized",
+                "detail": _CREDENTIAL_DETAIL.format(
+                    why=str(snapshot.get("status") or "the credential was refused"))}
+    if snapshot.get("reachable") and snapshot.get("auth", True):
+        return {**row, **carried, "state": "reachable", "detail": None}
+    return {**row, **carried, "state": "unreachable",
+            "detail": f"could not reach the node ({snapshot.get('status') or 'unreachable'})"}
+
+
 async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Ask one node whether it is there, and report what it says about itself.
 
     Reachability is asked for, never assumed: a node that was joined last week and has been
     switched off must read as unreachable rather than as available.
+
+    The machine is asked about itself on the route the peer poll already reads, and while that
+    poll's snapshot is still current this reuses it: the roster then reports the same evidence
+    the dispatch path acts on instead of paying for a second read of the same node. A machine
+    with no current snapshot - including one that has just joined - is dialled directly, so a
+    join is still visible immediately rather than at the next poll.
     """
     # What the node said about itself when it joined, alongside what it answers now.
     #
@@ -223,11 +270,14 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     # deciding where to send work needs both, and re-reading them from the node would mean the
     # roster depended on every node being awake.
     row = {key: node.get(key) for key in ("id", "name", "address", "role", "studios", "joined_at")}
+    snapshot = fresh_snapshot(str(node.get("id") or ""))
+    if snapshot is not None:
+        return _from_snapshot(row, snapshot)
     owned = client is None
     if owned:
-        client = httpx.AsyncClient(follow_redirects=False)
+        client = _probe_client()
     try:
-        response = await client.get(f"{node['address']}/api/version", timeout=PROBE_TIMEOUT)
+        response = await client.get(f"{node['address']}{PROBE_PATH}", timeout=PROBE_TIMEOUT)
         if response.status_code in (401, 403):
             # The node answered, so it is up - it refused *this controller*. Reported as plain
             # "unreachable", the operator goes looking at the network and at the wrong Mac, when the
@@ -235,9 +285,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
             # fleet token was replaced. The state is its own so the Fleet page can say so and the
             # counts do not hide it.
             return {**row, "state": "unauthorized",
-                    "detail": (f"the node answered but rejected this controller's credential "
-                               f"(HTTP {response.status_code}) - re-join it with the current "
-                               f"Fleet Token")}
+                    "detail": _CREDENTIAL_DETAIL.format(why=f"HTTP {response.status_code}")}
         if not response.is_success:
             return {**row, "state": "error", "detail": f"node answered HTTP {response.status_code}"}
         try:
@@ -246,7 +294,10 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
             return {**row, "state": "error", "detail": "node returned an invalid response"}
         if not isinstance(body, dict):
             return {**row, "state": "error", "detail": "node returned an invalid response"}
-        return {**row, "state": "reachable", "detail": None,
+        # The probe's answer is also the host snapshot the Fleet page shows for this machine, so
+        # one pass over the roster feeds both routes rather than the page waiting for the poll.
+        host = body.get("host") if isinstance(body.get("host"), dict) else {}
+        return {**row, "state": "reachable", "detail": None, "host": host,
                 "version": body.get("version"), "source": body.get("source")}
     except (httpx.HTTPError, OSError) as exc:
         return {**row, "state": "unreachable", "detail": f"could not reach the node: {exc}"}
@@ -367,6 +418,9 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "state": row.get("state"),
         "detail": row.get("detail"),
         "version": row.get("version"),
+        # The probe's host snapshot travels with the row: the overview shows one machine's chip
+        # and memory from the same read that decided it was reachable.
+        "host": row.get("host") or {},
         "studios": row.get("studios") or [],
     }
 
