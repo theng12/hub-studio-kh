@@ -41,7 +41,15 @@ EOF
   exit 1
 fi
 
-OUT="$HOME/Desktop/StudioHub Z-Image 8GB Run"
+# Where the record goes. Smoke mode is decided here, before anything is created: it exists to
+# prove the harness cheaply, so it must not touch the real output folder at all. It used to be
+# decided further down, after the Desktop folder had been created and `results.tsv` truncated -
+# which meant running the smoke check *after* a real run would have thrown the real results away.
+if [ "${ZIMAGE_SMOKE:-0}" = "1" ]; then
+  OUT="$(mktemp -d)/Z-Image Smoke"
+else
+  OUT="$HOME/Desktop/StudioHub Z-Image 8GB Run"
+fi
 LOGS="$OUT/logs"
 mkdir -p "$LOGS"
 RESULTS="$OUT/results.tsv"
@@ -63,8 +71,24 @@ if ! command -v mflux-generate-z-image-turbo >/dev/null 2>&1; then
 fi
 
 # ── the machine, stated plainly in the record ──────────────────────────────────────
-CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
-MEM_GB="$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%.1f", $1/1073741824}')"
+# Absolute paths: `sysctl` lives in /usr/sbin, which is not on PATH everywhere this runs. A bare
+# `sysctl` that silently fails made the swap sampler report a peak of 0 MB - the single number
+# that matters most on an 8 GB Mac - and made the host line read "unknown". Where a tool is
+# genuinely unavailable the record says so rather than printing a zero that looks like a reading.
+SYSCTL="$(command -v sysctl || echo /usr/sbin/sysctl)"
+VMSTAT="$(command -v vm_stat || echo /usr/bin/vm_stat)"
+command -v "$SYSCTL" >/dev/null 2>&1 || SYSCTL=""
+command -v "$VMSTAT" >/dev/null 2>&1 || VMSTAT=""
+
+if [ -n "$SYSCTL" ]; then
+  CHIP="$("$SYSCTL" -n machdep.cpu.brand_string 2>/dev/null)"
+  MEM_GB="$("$SYSCTL" -n hw.memsize 2>/dev/null | awk '{printf "%.1f", $1/1073741824}')"
+  MODEL="$("$SYSCTL" -n hw.model 2>/dev/null)"
+fi
+# Apple Silicon does not always publish machdep.cpu.brand_string; hw.model is the fallback.
+[ -n "${CHIP:-}" ] || CHIP="$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Chip/{print $2; exit}')"
+[ -n "${CHIP:-}" ] || CHIP="${MODEL:-unknown}"
+[ -n "${MEM_GB:-}" ] || MEM_GB="unknown"
 OSV="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
 # Report the version actually installed. Claiming "0.20.0" because the command exists would make
 # every number below incomparable with the 32 GB run while looking perfectly fine.
@@ -73,6 +97,9 @@ MFVER="$(uv tool list 2>/dev/null | awk '/^mflux /{print $2; exit}')"
 [ -z "$MFVER" ] && MFVER="unknown"
 {
   echo "Host: $CHIP · ${MEM_GB} GB · macOS $OSV · mflux ${MFVER#v}"
+  if [ -z "$SYSCTL" ] || [ -z "$VMSTAT" ]; then
+    echo "WARNING: sysctl/vm_stat unavailable - swap and compressor figures below are NOT readings."
+  fi
   echo "Pack: $PACK"
   echo "Pack bytes: $(du -sk "$PACK" 2>/dev/null | awk '{printf "%.2f GB", $1/1048576}')"
   echo "Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -95,8 +122,8 @@ SWAP_LIMIT_GB="${ZIMAGE_MAX_SWAP_GB:-6}"   # abort a run that starts thrashing t
 WALL_LIMIT="${ZIMAGE_TIMEOUT:-1800}"       # 30 min per run, so nothing hangs forever
 export PATH
 
-swap_used_mb() { sysctl -n vm.swapusage 2>/dev/null | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
-compressor_pages() { vm_stat 2>/dev/null | awk -F: '/Pages occupied by compressor/ {gsub(/[^0-9]/,"",$2); print $2}'; }
+swap_used_mb() { [ -n "$SYSCTL" ] && "$SYSCTL" -n vm.swapusage 2>/dev/null | sed -E 's/.*used = ([0-9.]+)M.*/\1/'; }
+compressor_pages() { [ -n "$VMSTAT" ] && "$VMSTAT" 2>/dev/null | awk -F: '/Pages occupied by compressor/ {gsub(/[^0-9]/,"",$2); print $2}'; }
 
 printf 'label\tscene\tresolution\tconfig\tsteps\tresult\twall_s\tpeak_mlx\tmax_rss_gb\tpeak_footprint_gb\tproc_swaps\tswap_before_mb\tswap_after_mb\tswap_peak_mb\tcompressor_delta_pages\n' >> "$RESULTS"
 
@@ -112,7 +139,11 @@ run() { # run <label> <scene> <resolution> <config> <prompt> <extra args...>
 
   # Sample swap while it runs, so an 8 GB machine's peak is recorded rather than only its
   # endpoints - the peak is the whole question at this tier. No `local` in here: this is a
-  # subshell, not the function body.
+  # subshell, not the function body. Both background jobs send their output to /dev/null, and
+  # that is load-bearing rather than tidiness: killing the subshell leaves its `sleep` child
+  # running, and a child that still holds this script's stdout keeps a pipe such as `| tail`
+  # open until the sleep expires - so the run finished in 20 s and the command appeared to hang
+  # for the full 30-minute wall limit.
   local peak_file="$LOGS/$label.swap-peak" ; echo 0 > "$peak_file"
   local killer="" pid now
   ( while :; do
@@ -127,7 +158,7 @@ run() { # run <label> <scene> <resolution> <config> <prompt> <extra args...>
         pkill -f 'mflux-generate-z-image-turbo' 2>/dev/null
         break
       fi
-    done ) & killer=$!
+    done ) >/dev/null 2>&1 & killer=$!
 
   /usr/bin/time -l mflux-generate-z-image-turbo \
       --model "$PACK" \
@@ -136,7 +167,7 @@ run() { # run <label> <scene> <resolution> <config> <prompt> <extra args...>
       --steps 9 --seed 42 \
       --output "$OUT/$label.png" "$@" >"$log" 2>&1 &
   pid=$!
-  ( sleep "$WALL_LIMIT"; kill -0 "$pid" 2>/dev/null && { echo "wall limit ${WALL_LIMIT}s reached - stopping" >> "$log"; kill "$pid" 2>/dev/null; } ) &
+  ( sleep "$WALL_LIMIT"; kill -0 "$pid" 2>/dev/null && { echo "wall limit ${WALL_LIMIT}s reached - stopping" >> "$log"; kill "$pid" 2>/dev/null; } ) >/dev/null 2>&1 &
   local watchdog=$!
   wait "$pid"; local rc=$?
   kill "$killer" "$watchdog" 2>/dev/null; wait "$killer" "$watchdog" 2>/dev/null
@@ -177,11 +208,9 @@ run() { # run <label> <scene> <resolution> <config> <prompt> <extra args...>
 if [ "${ZIMAGE_SMOKE:-0}" = "1" ]; then
   # Proves the plumbing - pack discovery, mflux, `time -l` parsing, the swap sampler, the TSV -
   # without spending 20 minutes of an 8 GB Mac's time. Small and few steps on purpose: this says
-  # nothing about whether Z-Image fits, only that the harness works.
+  # nothing about whether Z-Image fits, only that the harness works. The output folder was already
+  # redirected to a temporary directory above, so a smoke check never disturbs a real run.
   echo "SMOKE MODE: one 512x512, 2-step run into a temporary folder."
-  OUT="$(mktemp -d)/Z-Image Smoke"; LOGS="$OUT/logs"; mkdir -p "$LOGS"; RESULTS="$OUT/results.tsv"
-  : > "$RESULTS"
-  printf 'label\tscene\tresolution\tconfig\tsteps\tresult\twall_s\tpeak_mlx\tmax_rss_gb\tpeak_footprint_gb\tproc_swaps\tswap_before_mb\tswap_after_mb\tswap_peak_mb\tcompressor_delta_pages\n' >> "$RESULTS"
   run "smoke" smoke 512x512 "low-ram, 2 steps" "$BOOK_PROMPT" --low-ram --steps 2
   echo
   echo "Harness works if the row above says OK. Temporary output: $OUT"
