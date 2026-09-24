@@ -209,7 +209,31 @@ Evidence: [qualification/st14-chat-2026-09-24.md](../../qualification/st14-chat-
    the model, and each verifies 20 installed / 20 advertised with `RESULT: PASS`.
 2. **Per-tier throughput** (8/16/24 GB) is unmeasured; the manifest publishes a 16 GB floor that
    nothing has yet qualified.
-3. **ST-14.8 independent review** has not happened.
+3. **ST-14.8 independent review — DONE, and the verdict is NOT PASSABLE.**
+   [qualification/st14-review-2026-09-24.md](../../qualification/st14-review-2026-09-24.md), 10
+   findings, all reproduced. The feature cannot currently work from the app, for reasons that
+   have nothing to do with the engine:
+   - **F1 (fixed in 0.6.58)** — `chat-mlx` was missing from the Hub's engine→worker map, so
+     `GET /api/hub/model-packages` answered **HTTP 500** and the native `refresh()` read that as
+     "Hub unreachable", blanking **every** model picker. Shipped in 0.6.57; fixed, verified in
+     the installed bundle, and guarded by a new catalog test.
+   - **F2** — the model has **no install receipt** in `~/StudioHubModels/.studiohub/installed.json`.
+     All 11 files hash-match the manifest, so "imported" is true for the bytes and false for the
+     registration the app gates on: the Hub reports `not_installed` and **Send is disabled**.
+   - **F3** — `sendChat()` posts `model: ""`, so the Hub's paused/not-ready gates never run and
+     the model picker is decorative.
+   - **F4** — a streaming request whose client disconnects **wedges the model lock
+     indefinitely** (measured still held 120 s after disconnect); every later request blocks
+     forever.
+   - **F5** — an abandoned request leaks the local machine lease, so the next chat request gets
+     **409 MACHINE_BUSY** for up to the 6 h TTL.
+   - F6–F10: the fleet surface cannot carry chat though `HANDOFF.md` says it does; a latent
+     `activity` `KeyError: 'chat'`; input validation far weaker than the Image worker's (NaN and
+     negative sampling accepted, `thinking:"false"` turns thinking **ON**); the native chat tests
+     are nine source-text greps; and the default memory policy unloads the model between turns
+     (~2.4 s cold load per message).
+   Owner priority is image first, so the fixes are **deliberately not started**. F2 and F3 are
+   the two that must land before Chat can be relied on at all.
 4. **gateway-kh** is read-only here and does not serve chat on its `studio_hub` kind
    (`research/chat-studio-gateway-bridge.md`).
 **Shared-file edits made:** `components/model_packages.py` engine allowlist now includes
