@@ -2,6 +2,37 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-17 — Image text-rendering tests, 16:9 spec (owner, 2026-09-24)
+
+Owner's standing spec from 2026-09-24: **16:9 landscape, 1280x720**, two images —
+one with a 4-5 word golden magical title, one with titles plus a long body of text.
+Redo only what does not match, for **Z-Image-Turbo** and **FLUX.2 Klein**, with speeds.
+
+Runner: [`qualification/run-16x9-image-tests.sh`](../../qualification/run-16x9-image-tests.sh)
+(`golden` | `dense`). FLUX runs on the shipped runtime (mflux 0.17.5, 4 steps, guidance 1.0 —
+what the app submits today, per the R07 receipt); Z-Image on mflux 0.20.0 at 9 steps. Each model
+runs the schedule its own engine expects; one setting for both would misreport one of them.
+
+**Done — `golden` (1280x720, seed 42):**
+
+| Model | Steps | Wall (incl. load) | Title rendered | Peak MLX | Footprint |
+| --- | --- | --- | --- | --- | --- |
+| Z-Image-Turbo | 9 | 185.6 s | **THE GOLDEN LIGHT OF DREAMS** — correct | 9.84 GB | 17.67 GB |
+| FLUX.2 Klein | 4 | 79.3 s | THE **GOLEN** LIGHT OF DREAMS — wrong | n/a | 24.07 GB |
+| FLUX.2 Klein | 9 | 136.8 s | THE **GOLEN** LIGHT OF **DREEAMS** — wrong | n/a | 24.07 GB |
+
+FLUX drops a D in GOLDEN at 4 steps and drops it *and* doubles an E at 9 — so this is not a
+step-count problem, and raising steps costs 57 s and makes it worse. Z-Image is 2.3x slower at 4
+steps but right, and **lighter on the machine**: compressor delta 0.75 GB against FLUX's
+10-11.9 GB, with FLUX pushing system swap from 2.1 GB to 5.3 GB on a 32 GB Mac while Z-Image's
+swap fell. Same class as the "A Bediime Story" miss the model was chosen to fix.
+
+Images: `~/Desktop/StudioHub Image Text Review/10-12`.
+
+**Open:** the `dense` scene (titles plus a long body of text) is awaiting the owner's
+clarification of whether the 2000-3000 characters describe text *in the image* or the length of
+the *prompt*.
+
 ### ST-16 — Z-Image-Turbo into the app (the mflux 0.17.5 → 0.20.0 bump) — 2026-09-24
 
 Owner asked for this to start. The bump is the gate: Z-Image cannot be selected until the
