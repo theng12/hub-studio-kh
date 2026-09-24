@@ -3117,6 +3117,8 @@ struct StudioContent: View {
                 }
             }
             if let overview = workspace.fleetOverview {
+                Text(poolSummary(overview))
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text(pinSummary)
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(overview.machines) { machine in
@@ -3127,6 +3129,28 @@ struct StudioContent: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Whether this Mac chooses where work runs. A controller and a Mac on its own do; a Node does
+    /// not - its controller decides, and offering "Send here" on every row of a node's pool would
+    /// be offering a choice that is not this Mac's to make.
+    private var canPinWork: Bool {
+        guard let role = workspace.fleetOverview?.role else { return false }
+        return role != "agent"
+    }
+
+    /// Which pool this list is. The rows answer "how is each Mac doing", which is only half the
+    /// question on a Mac that joined somebody: it also has to know whose group it is looking at,
+    /// and be told plainly when the group is bigger than what it could read.
+    private func poolSummary(_ overview: NativeFleetOverview) -> String {
+        guard overview.belongsToGroup else {
+            return "This Mac is on its own. Nodes that join it appear here."
+        }
+        let head = overview.controller.map { "the group run by \($0.label)" } ?? "its group"
+        guard overview.rosterReadable != false else {
+            return "This Mac is part of \(head), but the controller is not answering, so the Macs below are only the ones this Mac knows about."
+        }
+        return "This Mac is part of \(head). Every Mac in the group is listed below."
     }
 
     @ViewBuilder private func fleetMachineRow(_ machine: NativeFleetMachine) -> some View {
@@ -3141,11 +3165,23 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(machine.isLocal ? "This Mac" : machine.label).fontWeight(.medium)
+                        if let role = fleetRoleTitle(machine) {
+                            Text(role).font(.caption)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.secondary.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
                         if let version = machine.version, !version.isEmpty {
                             Text(version).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Text(machineFacts(machine)).font(.caption).foregroundStyle(.secondary)
+                    // Where the Mac answers, so a row can be matched to the address the operator
+                    // wrote down. Absent for this Mac, whose addresses are listed above.
+                    if let address = machine.address, !address.isEmpty, !machine.isLocal {
+                        Text(address).font(.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
                 Spacer()
                 if !machine.modalities.isEmpty {
@@ -3154,19 +3190,36 @@ struct StudioContent: View {
                 }
                 Text(seconds(machine.averageSeconds)).font(.system(.caption, design: .monospaced))
                     .frame(minWidth: 78, alignment: .trailing)
-                Button(workspace.routingPin == "machine:\(machine.machine)" ? "Automatic" : "Send here") {
-                    // Pinning is a standing choice for every new job; pressing again clears it,
-                    // which keeps the way back to automatic on the same control that left it.
-                    workspace.routingPin = workspace.routingPin == "machine:\(machine.machine)"
-                        ? nil : "machine:\(machine.machine)"
+                // Pinning is a standing choice for every new job; pressing again clears it, which
+                // keeps the way back to automatic on the same control that left it. A Mac that is
+                // off keeps the control but cannot be pinned by accident - the label says so.
+                if !machine.reachable {
+                    Text("Offline").font(.caption).foregroundStyle(.orange)
                 }
-                .disabled(!connected)
-                .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
+                if canPinWork {
+                    Button(workspace.routingPin == "machine:\(machine.machine)" ? "Automatic" : "Send here") {
+                        workspace.routingPin = workspace.routingPin == "machine:\(machine.machine)"
+                            ? nil : "machine:\(machine.machine)"
+                    }
+                    .disabled(!connected)
+                    .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
+                }
             }
             if let detail = machine.detail {
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 3)
+    }
+
+    /// What this Mac's part in the group is, when the Hub says. Absent means an older Hub that
+    /// does not report a role, and an empty badge is better than a guessed one.
+    private func fleetRoleTitle(_ machine: NativeFleetMachine) -> String? {
+        switch machine.role {
+        case "controller": return "Controller"
+        case "agent": return "Node"
+        case "standalone": return machine.isLocal ? nil : "Standalone"
+        default: return nil
+        }
     }
 
     private var pinSummary: String {
@@ -3207,7 +3260,18 @@ struct StudioContent: View {
             }
             if let fleet = workspace.fleetNodes {
                 if fleet.nodes.isEmpty {
-                    Text("No Mac has joined this one yet.").font(.callout).foregroundStyle(.secondary)
+                    // "No Mac has joined this one yet" is true on a node and reads as "you are on
+                    // your own", which is the opposite of what a Mac that has joined a group is.
+                    // A node's answer to this section is the group it belongs to, from the top.
+                    if let overview = workspace.fleetOverview, overview.belongsToGroup {
+                        Text(nodeMembershipSummary(overview))
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("No Mac has joined this one yet. Macs that join this one appear here, with Remove to drop them.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("\(fleet.summary.reachable) of \(fleet.summary.total) reachable now.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -3234,6 +3298,20 @@ struct StudioContent: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// What a node should read where a controller reads its roster: whose group it is in, and how
+    /// to leave. A node has no nodes of its own, so the honest answer is the group above it.
+    private func nodeMembershipSummary(_ overview: NativeFleetOverview) -> String {
+        guard let controller = overview.controller else {
+            return "This Mac is set as a Node, but it has not been joined to a controller yet. Use Join a controller below."
+        }
+        let peers = overview.machines.filter { !$0.isLocal && $0.machine != controller.machine }.count
+        let reach = controller.isReachable ? "answering" : "not answering right now"
+        let beside = peers == 0 ? "" : " \(peers) other Mac\(peers == 1 ? "" : "s") share the group."
+        return "No Mac joins this one: this Mac is a Node in the group run by \(controller.label) at "
+            + "\(controller.address ?? "an address this Mac did not record"), which is \(reach)."
+            + "\(beside) The whole group is listed under Fleet overview above."
     }
 
     /// Join another Mac that is running as a controller.

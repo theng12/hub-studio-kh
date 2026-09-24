@@ -760,18 +760,36 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # Hub credential like the rest of the private surface: a join is not a public endpoint.
 
     @app.get("/api/hub/fleet/overview")
-    def fleet_overview() -> dict[str, Any]:
+    async def fleet_overview() -> dict[str, Any]:
         """One row per machine in the fleet: is it there, what is it running, how fast is it.
 
         The pieces existed in three places - the peer snapshot for remote host state, the fleet
         roster for joined nodes, and the ledger for measured speed - and none of them answered
         "how is my fleet doing". This puts them in one row per Mac so the app can show it.
+
+        The rows come from the *group*, not from whichever Macs happen to be in the dispatch
+        registry right now. That distinction is the whole answer to "show me my pool": a Mac that
+        has joined belongs in the list whether it is awake or asleep, and on a node the group
+        includes the controller and the Macs beside it - which this Mac can only know by reading
+        the roster back from the controller it joined.
         """
+        from .backend import fleet_nodes as fleet
         from .backend import ledger, peers
         from .backend import resources as resource_stats
         measured = ledger.stats().get("by_machine") or {}
+        local_role = str(control_plane.load_settings().get("role") or "standalone")
+        pool = await fleet.pool()
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
+
+        # Members of the group as this Mac knows it. A roster row is probed before it is reported,
+        # so `reachable` is a fact about now and `detail` says why not when it is not.
+        members: dict[str, dict[str, Any]] = {}
+        for entry in ([pool["controller"]] if pool.get("controller") else []) + pool["nodes"]:
+            machine = str(entry.get("machine") or "")
+            if machine and machine not in members:
+                members[machine] = entry
+
         for studio in monitor.registry:
             machine = str(studio.get("machine") or "local")
             if machine in seen:
@@ -779,6 +797,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             seen.add(machine)
             on_this_machine = [item for item in monitor.registry
                                if str(item.get("machine") or "local") == machine]
+            member = members.get(machine)
             if peers.is_local_studio(studio):
                 try:
                     host = resource_stats.host_stats()
@@ -792,6 +811,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 row = {
                     "machine": machine,
                     "label": "This Mac",
+                    "role": local_role,
                     "reachable": True,
                     "version": _app_version(),
                     "health": health,
@@ -802,19 +822,35 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 }
             else:
                 snapshot = peers.cached(machine) or {}
+                # The roster's live probe outranks the peer cache: it answers directly and it
+                # exists from the moment the join is accepted, so a node that has just been added
+                # reads as the machine it is instead of as one that "has not reported in yet".
+                if member is not None:
+                    reachable = member.get("state") == "reachable"
+                    health = "up" if reachable else str(member.get("state") or "unknown")
+                    detail = member.get("detail")
+                    version = member.get("version")
+                else:
+                    reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
+                    health = ("up" if snapshot.get("status") == "connected"
+                              else str(snapshot.get("status") or "unknown"))
+                    detail = None if snapshot else "this Mac has not reported in yet"
+                    version = snapshot.get("version")
                 row = {
                     "machine": machine,
-                    "label": (studio.get("title") or machine).split(" · ")[0],
-                    "reachable": bool(snapshot.get("reachable") and snapshot.get("auth")),
-                    "version": snapshot.get("version"),
-                    "health": ("up" if snapshot.get("status") == "connected"
-                               else str(snapshot.get("status") or "unknown")),
-                    "detail": None if snapshot else "this Mac has not reported in yet",
+                    "label": str((member or {}).get("label")
+                                 or (studio.get("title") or machine).split(" · ")[0]),
+                    "role": str((member or {}).get("role") or "agent"),
+                    "reachable": reachable,
+                    "version": version,
+                    "health": health,
+                    "detail": detail,
                 }
                 host = snapshot.get("host") or {}
             stats = measured.get(machine) or {}
             rows.append({
                 **row,
+                "address": (member or {}).get("address"),
                 "memory_gb": host.get("total_gb"),
                 "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
@@ -824,8 +860,43 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
             })
+
+        # A member this Mac runs no studio for. A node with no worker started, or a controller in a
+        # group whose roster this Mac read back, is still part of the pool and must be counted -
+        # leaving it out is how a group of four Macs reports itself as one.
+        for machine, member in members.items():
+            if machine in seen or machine == "local":
+                continue
+            seen.add(machine)
+            reachable = member.get("state") == "reachable"
+            studios = member.get("studios") or []
+            modalities: dict[str, int] = {}
+            for entry in studios:
+                modality = str(entry.get("modality") or "")
+                if modality:
+                    modalities[modality] = modalities.get(modality, 0) + 1
+            rows.append({
+                "machine": machine,
+                "label": str(member.get("label") or machine),
+                "role": str(member.get("role") or "agent"),
+                "address": member.get("address"),
+                "reachable": reachable,
+                "version": member.get("version"),
+                "health": "up" if reachable else str(member.get("state") or "unknown"),
+                "detail": member.get("detail"),
+                "memory_gb": None, "available_gb": None,
+                "disk_free_gb": None, "disk_total_gb": None, "chip": None,
+                "jobs": (measured.get(machine) or {}).get("count", 0),
+                "average_seconds": (measured.get(machine) or {}).get("avg_s"),
+                "modalities": modalities,
+            })
+
         return {
             "machines": rows,
+            "role": pool["role"],
+            "member": bool(pool.get("controller")),
+            "controller": pool.get("controller"),
+            "roster_readable": pool.get("readable", True),
             "summary": {
                 "total": len(rows),
                 "reachable": sum(row["reachable"] for row in rows),
@@ -846,21 +917,43 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         trust starts with the credential: every Hub mints its own, so a node that joined with a
         controller's token still answers 401 to that controller until it adopts the same one.
 
+        Adopting also records *which* controller this Mac joined, because taking the credential is
+        the moment the group becomes a fact about this Mac. Without it the Hub knew it was holding
+        somebody else's token but not whose, so nothing on this Mac could name its own pool - the
+        address lived only in the app's preferences, where a reinstall or a second app window
+        loses it while the credential stays.
+
         This is deliberately **not** in the fleet credential's allowlist. Adopting is how a Mac
         joins a fleet, so it must be the Mac owner's decision - requiring the Hub token, which
         never leaves this machine, keeps a fleet-token holder from moving a node between fleets
         or locking it out of its own.
         """
+        from .backend import fleet_nodes as fleet
         from .backend import peers
         value = str(body.get("token") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", value):
             raise HTTPException(400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
+        values: dict[str, Any] = {}
+        # Which controller was joined, recorded with the credential it came from. Always written,
+        # never left at its previous value: an adoption that does not name a controller leaves this
+        # Mac *not knowing* which one it answers to, and a stale address from a previous group would
+        # show the wrong Mac as the head of this one. Not knowing is recoverable - re-join with an
+        # address - and being confidently wrong is not.
+        address = body.get("controller_url")
+        if address is not None and str(address).strip():
+            try:
+                values["parent_controller_url"] = fleet.validate_address(address)
+            except ValueError as exc:
+                raise HTTPException(400, f"controller_url {exc}") from exc
+        else:
+            values["parent_controller_url"] = None
         peers.set_fleet_token(value)
         # Record that this credential is someone else's. Promotion to controller reads this and
         # mints a fresh one, so a machine that was a node never ends up running a group on the
         # credential of the group it used to belong to.
-        control_plane.save_settings({"fleet_credential_origin": "adopted"})
-        return {"ok": True, "adopted": True}
+        control_plane.save_settings({"fleet_credential_origin": "adopted", **values})
+        return {"ok": True, "adopted": True,
+                "controller_url": control_plane.load_settings().get("parent_controller_url")}
 
     @app.post("/api/hub/fleet/leave")
     def fleet_leave() -> dict[str, Any]:

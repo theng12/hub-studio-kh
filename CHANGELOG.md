@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.57 — 2026-09-24 · a node and its controller can both see the group
+
+Owner report: after connecting nodes, a Mac did not show the pool it belonged to, and the
+controller did not show the pool of connected nodes either. Both were true, and both came from
+the same gap — **the group was not a fact either end held.** The controller's Fleet overview was
+built from whatever was in its dispatch registry at that instant, and a node held a borrowed
+credential with no record of whose it was, so it could not name its own group at all.
+
+- **Adopting a Fleet token now records which controller it came from.** `POST
+  /api/hub/fleet/adopt` accepts an optional `controller_url`; the app sends the controller's
+  literal private address (resolving a name first, since the Hub stores an address it can dial).
+  This is the root fix: the address previously lived only in the app's preferences file, so a
+  reinstall or a second window left the Hub holding a borrowed token with no idea whose. An
+  adoption that does not name a controller **clears** the recorded one — a stale address shows the
+  wrong Mac as the head of the group.
+- **`parent_controller_url` survives an unrelated save.** It was cleared whenever the role was not
+  `"agent"`, so a Mac that had joined but had not yet been switched to Node lost the record on the
+  next rename or listen-address change. It now lasts exactly as long as the adopted credential.
+  Promotion to controller still mints a fresh token and clears it.
+- **The Fleet overview is built from the group, not the dispatch registry.** A freshly joined node
+  read as *"this Mac has not reported in yet"* for the four seconds until the peer poll caught up,
+  and a node with no studio running was missing entirely. Roster members are now probed directly:
+  a Mac that is off reads as off, with a reason, instead of as absent.
+- **A node's overview shows the whole pool** — the controller and the Macs beside it — by reading
+  the roster back from the controller it joined. An unreachable controller reports the group as
+  *unreadable* rather than showing an empty one.
+- **UI:** rows carry a Controller/Node badge and their address; the header names the group being
+  shown and says when the list is incomplete; a node's "Joined nodes" section names its group
+  instead of claiming the Mac is alone, and no longer offers "Send here" — a node does not choose
+  where work runs.
+- `tests/test_voice_bundle.py` staging fixture gained the Chat component, which it predated: the
+  fixture's file list was missing `packaging/chat_worker.py`, so both staging tests failed on a
+  `FileNotFoundError` rather than on anything they were written to check.
+
+Evidence: [qualification/fleet-pool-2026-09-24.md](qualification/fleet-pool-2026-09-24.md) —
+11/11 new tests driving two live Hubs, 126 passed across the fleet/settings/staging suites, native
+boundary + API + lifecycle suites pass, and `tests/native/pool-probe.sh` reads the pool back
+through the app's own workspace store from both ends.
+
 ## 0.6.56 — 2026-09-24 · 8 GB Macs can generate images again
 
 `7187d8d` (0.6.55) turned a model's *qualification tier* into a hard block, regressing

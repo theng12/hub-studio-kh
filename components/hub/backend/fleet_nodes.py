@@ -273,6 +273,9 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     from . import control_plane
     return {
         "role": control_plane.load_settings()["role"],
+        # Who is answering. A node reads this route to find out which group it is in, and a group
+        # with no name on its head is a list of addresses rather than a pool.
+        "machine": this_machine(),
         "nodes": rows,
         "summary": {
             "total": len(rows),
@@ -282,3 +285,135 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
             "error": sum(row["state"] == "error" for row in rows),
         },
     }
+
+
+def this_machine() -> dict[str, str]:
+    """How this Mac is named in any fleet listing: the key it routes by, and the name it shows.
+
+    `controller_id` is the identity a join registers and the rest of the Hub routes by, and
+    `machine_name` is what the operator renamed this Mac to. A pool listing needs both, because
+    a row has to be matched against routing by the key and recognised by a person by the name.
+    """
+    from . import control_plane
+    settings = control_plane.public_settings()
+    return {"id": str(settings.get("controller_id") or "local"),
+            "name": str(settings.get("machine_name") or "This Mac")}
+
+
+def membership() -> dict[str, Any]:
+    """Which group this Mac is in, from this Mac's own record rather than the app's.
+
+    Two things have to agree for this Mac to be a node: it holds a credential it did not mint,
+    and it recorded the controller it took that credential from. The credential is the test, not
+    the role - joining a controller and being switched to the Node role are separate decisions,
+    and a Mac that has done the first is already in the group whatever its role still says.
+    """
+    from . import control_plane
+    settings = control_plane.load_settings()
+    role = str(settings.get("role") or "standalone")
+    parent = settings.get("parent_controller_url")
+    adopted = str(settings.get("fleet_credential_origin") or "minted") == "adopted"
+    if not adopted or not parent:
+        return {"member": False, "role": role, "controller_url": None}
+    try:
+        address = validate_address(parent)
+    except ValueError:
+        # A stored address that no longer validates is not a reason to fail the page: it is a
+        # reason to say this Mac cannot name its controller, which the caller renders as such.
+        return {"member": False, "role": role, "controller_url": None}
+    return {"member": True, "role": role, "controller_url": address}
+
+
+async def remote_inventory(address: str, token: str,
+                           client: httpx.AsyncClient | None = None) -> dict[str, Any] | None:
+    """Read a controller's roster: the pool this Mac was joined into, as its head sees it.
+
+    Best-effort by design. A node whose controller is asleep is still a node, and it still has to
+    render its own state, so an unreachable or refusing controller answers ``None`` here and the
+    caller reports the group as unread rather than showing an empty one.
+    """
+    owned = client is None
+    if owned:
+        client = httpx.AsyncClient(follow_redirects=False)
+    try:
+        response = await client.get(f"{address}/api/hub/fleet/nodes", timeout=PROBE_TIMEOUT,
+                                    headers={"X-Hub-Token": token} if token else {})
+        if not response.is_success:
+            return None
+        body = response.json()
+    except (httpx.HTTPError, OSError, ValueError):
+        return None
+    finally:
+        if owned:
+            await client.aclose()
+    if not isinstance(body, dict) or not isinstance(body.get("nodes"), list):
+        return None
+    return body
+
+
+def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
+    """One machine in a pool, in the one shape every caller reads.
+
+    `probe` names a machine `id`/`name` because that is what the roster stores; the overview names
+    it `machine`/`label` because that is what a row shows. Converting in one place is what keeps a
+    controller from appearing in the pool as an entry with no name at all.
+    """
+    machine = str(row.get("id") or "")
+    return {
+        "machine": machine,
+        "label": str(row.get("name") or machine),
+        "role": role,
+        "address": row.get("address"),
+        "state": row.get("state"),
+        "detail": row.get("detail"),
+        "version": row.get("version"),
+        "studios": row.get("studios") or [],
+    }
+
+
+async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Every machine in the group this Mac belongs to, from whichever end of it this Mac is.
+
+    A controller knows its group because it holds the roster. A node does not - it holds a
+    credential and a controller address - so it reads the roster back from the controller it
+    joined. Both ends then answer the same list, which is what makes "my pool" mean the same
+    thing on the Mac doing the work and the Mac handing it out.
+
+    Every row is probed before it is reported, so a machine that is off reads as off rather than
+    as absent: belonging to a group is a fact about the roster, and being up is a fact about now.
+    """
+    mine = await inventory(client)
+    rows: list[dict[str, Any]] = [_member(row, role="agent") for row in mine["nodes"]]
+    known = {row["machine"] for row in rows}
+    result: dict[str, Any] = {
+        "machine": mine["machine"], "role": mine["role"], "nodes": rows,
+        "controller": None, "readable": True,
+    }
+    member = membership()
+    if not member["member"]:
+        # A controller's pool is exactly its roster. `readable` stays true: nothing failed.
+        return result
+    remote = await remote_inventory(member["controller_url"], fleet_token() or "", client)
+    if remote is None:
+        # The group is known but its head did not answer. The controller is still listed, as a
+        # machine that is not answering, which is the difference between a broken node and an
+        # empty group.
+        result["readable"] = False
+        result["controller"] = _member(await probe(
+            {"id": "controller", "name": "Controller", "address": member["controller_url"]},
+            client), role="controller")
+        return result
+    head = remote.get("machine") if isinstance(remote.get("machine"), dict) else {}
+    controller_id = str(head.get("id") or "controller")
+    result["controller"] = _member(await probe(
+        {"id": controller_id, "name": str(head.get("name") or "Controller"),
+         "address": member["controller_url"]}, client), role="controller")
+    known.add(controller_id)
+    for row in remote["nodes"]:
+        entry = _member(row, role="agent")
+        if not entry["machine"] or entry["machine"] == mine["machine"]["id"] \
+                or entry["machine"] in known:
+            continue
+        known.add(entry["machine"])
+        rows.append(entry)
+    return result

@@ -2,6 +2,29 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.57 — 2026-09-24
+
+### You can see your pool of Macs, from either end
+
+Connecting a node and then looking for it did not tell you much: the Mac you had just connected
+showed as "has not reported in yet" for a few seconds, and the node itself showed nothing about
+the group it had just joined — no controller, no other Macs, and a line saying no Mac had joined
+*it*, which is not the question a node is asking.
+
+Now both ends show the whole group.
+
+- **On the controller**, every Mac that has joined is listed the moment it joins, whether it is
+  awake or asleep. A Mac that is switched off stays in the list, marked as off with the reason,
+  instead of quietly disappearing — it is still part of your group.
+- **On a node**, Fleet overview lists the controller and every other Mac in the group beside it.
+  If the controller is not answering, it says so rather than showing you an empty group.
+- **Each row says what the Mac is** — Controller or Node — and where it answers.
+- **A node no longer offers "Send here".** A node does not choose where work runs; its controller
+  does. The button is still on a controller and on a Mac running on its own.
+
+Joining also records which controller you joined, on the Mac itself rather than only in the app's
+settings, so a node can still name its group after a reinstall.
+
 ## 0.6.56 — 2026-09-24
 
 ### Image generation works again on 8 GB Macs

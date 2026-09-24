@@ -423,6 +423,12 @@ struct NativeFleetSummary: Decodable, Equatable {
 struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     let machine: String
     let label: String
+    /// "controller", "agent" or "standalone" - what this Mac's part in the group is, so a row
+    /// says whether the machine hands work out or takes it.
+    let role: String?
+    /// Where this machine answers, when the Hub knows. Shown so a row can be recognised as the
+    /// Mac at a particular address rather than only as a name.
+    let address: String?
     let reachable: Bool
     let version: String?
     let health: String
@@ -438,11 +444,39 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
+    var isController: Bool { role == "controller" }
+}
+
+/// The controller this Mac joined, as its own Hub reports it.
+///
+/// A node reads its group back from its controller, so when the controller is asleep the row is
+/// still here with a state that says so - which is the difference between a Mac whose group is
+/// down and a Mac that was never in one.
+struct NativeFleetPoolMember: Decodable, Equatable {
+    let machine: String
+    let label: String
+    let role: String
+    let address: String?
+    let state: String?
+    let detail: String?
+    let version: String?
+
+    var isReachable: Bool { state == "reachable" }
 }
 
 struct NativeFleetOverview: Decodable, Equatable {
     let machines: [NativeFleetMachine]
     let summary: NativeFleetOverviewSummary
+    /// "controller", "agent" or "standalone" for this Mac.
+    let role: String?
+    /// The controller this Mac joined, present only on a node.
+    let controller: NativeFleetPoolMember?
+    /// False when this Mac knows it belongs to a group but could not read the group's roster, so
+    /// the pool is known to be incomplete rather than known to be this small.
+    let rosterReadable: Bool?
+
+    var isMember: Bool { controller != nil }
+    var belongsToGroup: Bool { (role ?? "") == "agent" || controller != nil }
 }
 
 struct NativeFleetOverviewSummary: Decodable, Equatable {
@@ -3044,7 +3078,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 // Registration first, adoption second: the controller has to accept the node before
                 // the node stops accepting its own credential.
                 do {
-                    try await adoptClusterCredential(secret)
+                    try await adoptClusterCredential(secret, controller: target)
                 } catch {
                     // A join without adoption is not a working join: the controller has this Mac
                     // on its roster and then gets 401 from it, which reads as "unreachable" with
@@ -3411,6 +3445,24 @@ final class NativeWorkspaceStore: ObservableObject {
         return url
     }
 
+    /// The controller's address as the Hub has to store it: a literal private IPv4, never a name.
+    ///
+    /// The Hub validates what it keeps, because on a node that value is what the Hub itself dials
+    /// to read its own group. A name is a reasonable thing to type - MagicDNS is the natural
+    /// address on a tailnet - so it is resolved here, where the lookup has already happened once
+    /// to check the address was private, rather than refusing a join the operator can see is
+    /// correct. Nil means "cannot be expressed as an address the Hub will accept", and the join
+    /// still succeeds: a node that cannot name its controller is worse than one that can, but far
+    /// better than one that refused to join.
+    static func literalControllerAddress(_ target: URL) -> String? {
+        guard let host = target.host, let port = target.port else { return nil }
+        if let literal = ipv4(host), isPrivate(literal) {
+            return "http://\(literal.map(String.init).joined(separator: ".")):\(port)"
+        }
+        guard let resolved = resolvedIPv4(host).first(where: isPrivate) else { return nil }
+        return "http://\(resolved.map(String.init).joined(separator: ".")):\(port)"
+    }
+
     /// Four decimal octets, or nil when the text is a name rather than an address.
     private static func ipv4(_ host: String) -> [Int]? {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)
@@ -3421,8 +3473,7 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// Private, link-local, or Tailscale's carrier-grade NAT range.
-    private static func isPrivate(_ parts: [Int]) -> Bool {
-        let first = parts[0], second = parts[1]
+    private static func isPrivate(_ parts: [Int]) -> Bool {        let first = parts[0], second = parts[1]
         return first == 10 || first == 127
             || (first == 192 && second == 168)
             || (first == 172 && (16...31).contains(second))
@@ -3906,16 +3957,24 @@ final class NativeWorkspaceStore: ObservableObject {
         error = "Hub model removal is unavailable until it can protect models with active readers."
     }
 
-    /// Fetch one completed voice clip, checked against the result the Hub recorded.
-    ///
     /// Take on the cluster credential, so this Mac accepts work from its controller.
     ///
     /// Best-effort by design: a failure here leaves the node registered but unable to take work,
     /// which the controller reports as unreachable, and re-joining fixes it. Failing the join
     /// instead would be worse - the controller would have a node it cannot reach and the operator
     /// would see only that registration failed, with the credential already half adopted.
-    private func adoptClusterCredential(_ token: String) async throws {
-        let body = try JSONEncoder().encode(["token": token])
+    ///
+    /// The controller's address goes with the token, because adopting is the moment this Mac
+    /// joins a group and the Hub has to be able to name the group afterwards. It is the Hub that
+    /// needs it, not the app: the app remembers the membership in its own preferences, so a
+    /// reinstall or a second window would leave the Hub holding a borrowed credential with no
+    /// idea whose it was, and no way to show this Mac the pool it is in.
+    private func adoptClusterCredential(_ token: String, controller: URL) async throws {
+        var payload = ["token": token]
+        if let address = Self.literalControllerAddress(controller) {
+            payload["controller_url"] = address
+        }
+        let body = try JSONEncoder().encode(payload)
         var request = try makeRequest(["api", "hub", "fleet", "adopt"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30

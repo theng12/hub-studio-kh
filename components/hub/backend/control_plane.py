@@ -223,8 +223,6 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             raise ValueError("Agent Hubs must not store PostgreSQL credentials")
         if updated["role"] == "agent":
             clear_database_url = True
-        if updated["role"] != "agent":
-            updated["parent_controller_url"] = None
         # A machine that was a node holds the credential of the controller it joined. Promoting it
         # to controller without minting its own would leave two independent groups sharing one
         # secret: the new controller, and the old controller plus every node under it. That is the
@@ -236,6 +234,14 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             from . import peers
             peers.set_fleet_token("")          # empty asks for a fresh one
             updated["fleet_credential_origin"] = "minted"
+        # Which controller this Mac joined is a fact about whose credential it is holding, so it
+        # lasts exactly as long as that credential does. It used to be cleared whenever the role was
+        # not "agent", which meant any later save on a Mac that had joined but not yet been switched
+        # to Node - a rename, a listen address, an unrelated write - silently erased the only record
+        # this Mac had of the group it belonged to. Reading it back now survives every save that
+        # does not actually leave the group.
+        if updated["fleet_credential_origin"] != "adopted":
+            updated["parent_controller_url"] = None
         elif updated["parent_controller_url"] is not None:
             updated["parent_controller_url"] = str(updated["parent_controller_url"]).strip() or None
 

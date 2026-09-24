@@ -3,7 +3,20 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.56 (+ ST-14 local Chat Studio scope change, 2026-09-24).
+Last updated: 0.6.57 (fleet pool visibility, 2026-09-24).
+
+**0.6.57 — a node and its controller can both see the group.** The owner connected nodes and
+neither end showed the pool. Two faults, one cause: the group was not a fact either end held.
+A controller's Fleet overview was built from its dispatch registry (so a just-joined node read
+as *"this Mac has not reported in yet"* until the 12 s peer poll caught up, and a node running
+no studio was missing); a node held a borrowed credential with **no record of whose** — the
+controller's address lived only in the app's preferences file, and `parent_controller_url` was
+cleared by any save made while the role was not `"agent"`. Fixed by recording the controller at
+adoption (`POST /api/hub/fleet/adopt` takes `controller_url`), tying `parent_controller_url` to
+`fleet_credential_origin == "adopted"`, and building the overview from `fleet_nodes.pool()` —
+which a node answers by reading the controller's roster back. Evidence:
+[qualification/fleet-pool-2026-09-24.md](../../qualification/fleet-pool-2026-09-24.md).
+**Not yet staged** — the app, DMG and the four drive kits are still 0.6.56.
 
 **0.6.56 (hotfix) — 8 GB Macs could not generate images.** `7187d8d` (0.6.55) made a
 model's RAM *qualification tier* the first `blockReason`, so the Image worker's advisory
@@ -17,16 +30,26 @@ Hub's admission — never in the app's `blockReason`.
 
 ## Where things stand
 
-- **The shared checkout is clean on `implementation/voice-runtime` (2026-09-24).** All four
+- **The shared checkout is on `implementation/voice-runtime` (2026-09-24).** All four
   parallel sessions' work is committed in dependency order: image fix + label (`2f2dabd`), TTS
   prune (`7f6e663`, `e60d194`), Chat Studio (`d4cefc8`, `02b81da`), video research (`258d6e6`),
   the Chat qualification (`4e87afd`, `66f2ce2`) and the Z-Image record (`94224d9`), plus the
-  coordinator docs. `git status` is empty. The image text-rendering qualification is recorded in
+  coordinator docs. **0.6.57 — fleet pool visibility — is the newest work and is committed but not
+  staged.** The image text-rendering qualification is recorded in
   `research/text-rendering-model-shortlist.md`, `research/image-memory-pressure.md` and
   `qualification/z-image-turbo-2026-09-24.md`: **Z-Image-Turbo is the owner-approved model and
   the only candidate that reaches the 16 GB fleet tier** — Ideogram 4 (22.5 GB peak) and
   Qwen-Image-2.1 both abort at their larger size on the 32 GB M2 Max `Mac14,13` with macOS's
   Metal "Impacting Interactivity" error.
+
+- **Two known-failing tests in the root Python suite, both pre-existing and neither a product
+  fault (measured 2026-09-24):** `tests/test_voice_product_suite.py` gives the voice product suite
+  a 300 s subprocess timeout, and that suite runs past 16 minutes on the 32 GB M2 Max under
+  parallel load — it is a timeout, not a failure. And
+  `test_subtitle_standalone.py::CatalogContractTests::test_a_small_mac_is_warned_about_not_refused`
+  passes in isolation and fails only in the full run: an ordering/isolation fault. The staging
+  tests in `test_voice_bundle.py` **were** genuinely broken and are fixed in 0.6.57 (their fixture
+  predated the Chat component and never copied `packaging/chat_worker.py`).
 
 - **The four SSD kits carry ~29 GB of optional image-model backup (2026-09-24).** Each drive's
   `Video Generation Kit/Studio Hub KH/optional-models/` holds `z-image-turbo-mflux-4bit`

@@ -498,7 +498,7 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"ok":true,"name":"Fixture User","type":"user","orgs":["fixture-org"]}"#.utf8))
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
+            result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","role":"agent","address":null,"reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","role":"agent","address":"http://192.168.1.20:47873","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"role":"agent","controller":{"machine":"controller-mac","label":"Control Mac","role":"controller","address":"http://192.168.1.21:47873","state":"reachable","detail":null,"version":"0.4.0"},"roster_readable":true,"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
         case ("DELETE", "/api/hub/fleet/nodes/studio-3"):
             Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
@@ -1043,6 +1043,11 @@ struct NativeAPITests {
                 "joining must also adopt the controller's credential: \(FixtureProtocol.fleetRequests())")
         require(FixtureProtocol.adoptPayload()?["token"] as? String == "fleet-token-value",
                 "adoption must hand over the controller's credential, got: \(String(describing: FixtureProtocol.adoptPayload()))")
+        // And which controller it was taken from. The app remembers the membership in its own
+        // preferences, so without this the Hub holds a borrowed credential and cannot say whose -
+        // which is the whole reason a node could not show the pool it belongs to.
+        require(FixtureProtocol.adoptPayload()?["controller_url"] as? String == "http://192.168.1.21:8080",
+                "adoption must record which controller this Mac joined, got: \(String(describing: FixtureProtocol.adoptPayload()))")
 
         // Joining has to be remembered, or the Mac cannot re-join by itself after a restart. The
         // app owns the preferences file, so the workspace reports the address and the app saves it.
@@ -1290,6 +1295,23 @@ struct NativeAPITests {
                 "a machine with no measured work must report no average, not zero")
         require(FixtureProtocol.fleetRequests().contains("overview"),
                 "the overview must be read from the Hub: \(FixtureProtocol.fleetRequests())")
+        // A Mac that joined a group has to be able to see the group. The pool is read back from
+        // the controller, so the screen can name the head of the group and say plainly whether
+        // what it is showing is all of it.
+        require(store.fleetOverview?.belongsToGroup == true,
+                "a Mac set as a Node belongs to a group")
+        require(store.fleetOverview?.controller?.label == "Control Mac",
+                "the node must know which controller it joined: \(String(describing: store.fleetOverview?.controller))")
+        require(store.fleetOverview?.controller?.isReachable == true,
+                "an answering controller must read as answering")
+        require(store.fleetOverview?.controller?.address == "http://192.168.1.21:47873",
+                "the controller's address is what makes the group reachable, so it must decode")
+        require(store.fleetOverview?.rosterReadable == true,
+                "a roster that was read must not read as unreadable")
+        require(store.fleetOverview?.machines.last?.role == "agent",
+                "a joined node must say what part it plays in the group")
+        require(store.fleetOverview?.machines.last?.address == "http://192.168.1.20:47873",
+                "a joined node's address must reach the row")
 
         await store.leaveNode(store.fleetNodes!.nodes.last!)
         require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
@@ -2756,6 +2778,27 @@ struct NativeAPITests {
         authStore.disconnect()
         FixtureProtocol.setJoinReject(nil)
         FixtureProtocol.setCredentialOrigin("minted")
+
+        // The address a node reports for its controller has to be one the Hub will store, and the
+        // Hub stores a literal private IPv4 because on a node that value is what the Hub itself
+        // dials. A literal is passed through; anything the Hub would refuse is omitted rather than
+        // sent, so a join by name still succeeds and only the group's name is lost.
+        require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://192.168.1.21:8080")!)
+                    == "http://192.168.1.21:8080",
+                "a private literal must be reported unchanged")
+        require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://100.101.102.103:47873")!)
+                    == "http://100.101.102.103:47873",
+                "a Tailscale literal must be reported unchanged")
+        require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://8.8.8.8:47873")!) == nil,
+                "a public address must never be recorded as this Mac's controller")
+        // A name is a reasonable thing to type - MagicDNS is the natural address on a tailnet - and
+        // `privateHTTPAddress` has already resolved it once to check it is private. Resolving it
+        // again here is what lets a join by name still record a controller the Hub can dial.
+        require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://localhost:8080")!)
+                    == "http://127.0.0.1:8080",
+                "a name that resolves to a private address must be recorded as that address")
+        require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://192.168.1.21")!) == nil,
+                "an address with no port cannot name a Hub, so it must not be reported")
 
         print("Native API contract checks passed")
     }

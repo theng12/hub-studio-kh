@@ -534,6 +534,12 @@ class StagingTests(unittest.TestCase):
                 'packaging/image_worker.py': '# image worker',
                 'components/subtitle/app/backend/main.py': '# subtitle fixture',
                 'packaging/subtitle_worker.py': '# subtitle worker',
+                # Chat is the fifth component, so a fixture that predates it stages nothing at
+                # all: `stage_voice.stage` copies every component it knows about, and a missing
+                # file failed the whole stage rather than the Chat part of it. Kept in the same
+                # list as the rest so a sixth component cannot repeat this.
+                'components/chat/app/backend/main.py': '# chat fixture',
+                'packaging/chat_worker.py': '# chat worker',
             }
             for name, content in files.items():
                 path = repo / name

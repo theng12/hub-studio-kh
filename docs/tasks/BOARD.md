@@ -2,6 +2,37 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-15 — Fleet pool visibility (0.6.57) — 2026-09-24
+
+Owner report: *"after connecting each of the nodes, it doesn't show its own pool. And also in
+the controller, I don't see the connected pool of nodes too. We need to have and show that."*
+
+Both were real, and both came from one gap: **the group was not a fact either end held.** The
+controller's Fleet overview was built from its dispatch registry, so a just-joined node read as
+*"this Mac has not reported in yet"* for the ~4 s until the 12 s peer poll caught up, and a member
+running no studio was missing entirely. A node had no record of *whose* credential it held — the
+controller's address lived only in the app's preferences file, and `parent_controller_url` was
+wiped by any save made while the role was not `"agent"`.
+
+**Implemented, tested, committed. Not staged.** Evidence:
+[qualification/fleet-pool-2026-09-24.md](../../qualification/fleet-pool-2026-09-24.md).
+
+- Adoption records the controller: `POST /api/hub/fleet/adopt` takes `controller_url`, and the app
+  sends the controller's literal private address (resolving a name first). An adoption that does
+  not name a controller clears the recorded one — stale is worse than unknown.
+- `parent_controller_url` now lasts exactly as long as `fleet_credential_origin == "adopted"`.
+- `fleet_nodes.pool()` answers the whole group from either end; a node reads the roster back from
+  the controller it joined. `/api/hub/fleet/overview` is built from it and probes every member.
+- Native: Controller/Node badge + address per row, a header naming the group, a node's "Joined
+  nodes" section naming its controller, and no "Send here" on a node (a node does not dispatch).
+
+**Next:** stage 0.6.57 (app → `/Applications` → DMG → the four drive kits), then the standing
+queue below.
+
+**Open follow-ups from this work:** collapse the two per-node probe passes on the Fleet page onto
+one shared read before the fleet reaches the 64-node cap; per-tier throughput and the 8 GB M1/M2
+Z-Image run are still unmeasured.
+
 ### ST-12 — Khmer VITS families, 0.6.55 cut locally — 2026-09-24
 
 Owner direction: add two surveyed Khmer TTS models to Voice Studio and the model library. Both
