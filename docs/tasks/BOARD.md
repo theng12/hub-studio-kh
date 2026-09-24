@@ -2,6 +2,42 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-19 — No model may need a code change (owner rule, 2026-09-24)
+
+Owner: *"my rule is never hardcoded — everything must be dynamic for all generators and models,
+because we always have a new model to add."* Recorded in `AGENTS.md`, and this is the workstream
+that makes it true rather than aspirational.
+
+**The reported symptom was khmer-tts not appearing. The cause is broader.** `native/StudioAPI.swift`
+decided voice-model support from a hardcoded family allowlist — `qwen3-tts`, `voxcpm*`,
+`omnivoice` — and the Audio picker lists only `supported` models. So four **shipped** families were
+invisible: `khmer-tts-mms`, `khmer-tts-onnx`, `chatterbox-mlx`, `fish-audio-mlx` — **six of the
+thirteen voice packages.** The catalog, Hub, manifests, Mac library and all four kits all offered
+them correctly; the app alone refused to list them. Verified against the packaged 0.6.60 Hub:
+khmer reports `runtime_ready: true`, `available: true`, `cache: cached`.
+
+A second bug sat behind it: `voiceMode` falls back to `.cloning`, so khmer — which declares no
+`voice-cloning` — would have demanded a reference clip it cannot use.
+
+**And a test asserted the broken behaviour.** The native suite required the Audio picker to contain
+exactly Qwen and VoxCPM2, and its fixture carried a `family: "other"` model to prove unknown
+families were rejected. Green by construction: it tested that the allowlist worked, never that
+every shipped family was on it.
+
+Third instance of one shape. `chat-mlx` missing from the Hub's engine→worker map did the same thing
+in 0.6.57 and was worse — an HTTP 500 that blanked **every** model picker on every Mac.
+
+| job | what | owner |
+| --- | --- | --- |
+| A | Voice support + mode derived from catalog data; test rewritten to assert the invariant | sub-agent |
+| B | `research/hardcoded-model-lists-audit.md` — every enumeration of models/families/engines/workers, classified trap vs contract, ranked silent-first | sub-agent |
+| C | ST-13.A `pocket-tts-4bit` adoption, including the tokenizer companion, plus the inert-wiring cleanup | sub-agent |
+| D | Integration, verification, release | coordinator |
+
+**Files are partitioned so no two writers touch one file:** A owns `native/**` and the native
+tests; B is read-only apart from its report; C owns `components/voice/**`, the capture tool, the
+two new manifests and the voice/catalog tests.
+
 ### ST-18 — Z-Image kit rollout: what has to move before it ships
 
 Recorded so the packaging side is not discovered during a 50-machine install. All of this is

@@ -57,6 +57,43 @@
   Do not trim it from UI copy either.
 - Where more than one quant exists, say which one ships and which do not.
 
+## New models must not need a code change — 2026-09-24
+
+**Owner rule: nothing about models is hardcoded. Registries are data; consumers read
+the data.** A new model, a new family or a new engine is added to the catalog and the
+manifests, and every screen, router and worker picks it up. If adding a model means
+editing a list in a second place, that list is a bug waiting for the next model.
+
+This has already cost us three times, all the same shape — something new reaching the
+catalog while a hardcoded list in a consumer did not learn about it:
+
+- **`chat-mlx` missing from the Hub's engine→worker map (0.6.57).** `GET
+  /api/hub/model-packages` raised `KeyError` and returned **HTTP 500**; the native
+  `refresh()` reads that route with a hard `try`, so it marked the Hub unreachable and
+  **blanked every model picker on every Mac.**
+- **A hardcoded voice family allowlist in `native/StudioAPI.swift`.** `formCompatible`
+  accepts only `qwen3-tts`, `voxcpm*` and `omnivoice`, so `khmer-tts-mms`,
+  `khmer-tts-onnx`, `chatterbox-mlx` and `fish-audio-mlx` — **six of thirteen voice
+  packages** — were invisible in the Audio picker while the catalog, Hub, manifests and
+  kits all offered them correctly.
+- **A test asserting the broken behaviour.** The native suite required the Audio picker
+  to contain exactly Qwen and VoxCPM2, and its fixture had a `family: "other"` model to
+  prove unknown families were rejected. It was green by construction.
+
+Rules that follow:
+
+- **A family, engine or model list in a consumer is a defect unless it is a genuine
+  contract.** Prefer what the producer publishes — `capabilities`, `musicConfiguration`,
+  `reference_audio.declared`, the engine name, the manifest — over a local enumeration.
+- **Where a list is unavoidable, it must fail loudly and name the missing entry**, the
+  way `_worker_for_engine` now raises a `ValueError` naming the engine and both files to
+  update, instead of a bare `KeyError` from inside a route.
+- **Test the invariant, not the membership.** "Every shipped family is selectable" is a
+  test that catches the next model. "The picker equals this list of two" is a test that
+  catches nothing and has to be edited by hand — which is how the voice bug survived.
+- When you add a model, search for every place that enumerates models and check it.
+  `research/hardcoded-model-lists-audit.md` is the standing inventory.
+
 ## Owner hardware fleet — 2026-09-24
 
 **Do not ask the owner to restate his machines.** The canonical list, the per-tier
