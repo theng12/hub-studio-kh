@@ -49,18 +49,25 @@ the honest ones.
 
 ## Z-Image-Turbo 4-bit (5.91 GB pack) — 32 GB M2 Max (Mac14,13)
 
-| Scene | Resolution | Peak MLX | Max RSS | Footprint | Process swaps |
-| --- | --- | --- | --- | --- | --- |
-| Sleep-story cover | 1280×720 | **9.84 GB** [M] | 3.72 GB [M] | 17.70 GB [M] | 0 [M] |
-| Storybook cover | 1024×1024 | **10.70 GB** [M] | 4.40 GB [M] | 20.38 GB [M] | 0 [M] |
+| Scene | Resolution | Config | Peak MLX | Max RSS | Footprint | Swaps | Wall |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Sleep-story cover | 1280×720 | default | **9.84 GB** [M] | 3.72 GB [M] | 17.70 GB [M] | 0 [M] | 166 s [M] |
+| Sleep-story cover | 1280×720 | `--low-ram` | **6.26 GB** [M] | 3.91 GB [M] | **7.12 GB** [M] | 0 [M] | 236 s [M] |
+| Storybook cover | 1024×1024 | default | **10.70 GB** [M] | 4.40 GB [M] | 20.38 GB [M] | 0 [M] | 176 s [M] |
+| Storybook cover | 1024×1024 | `--low-ram` | **6.26 GB** [M] | 3.91 GB [M] | **7.24 GB** [M] | 0 [M] | 196 s [M] |
+| Storybook cover | 1024×1024 | `--mlx-cache-limit-gb 2` | **10.70 GB** [M] | 3.97 GB [M] | 11.53 GB [M] | 0 [M] | 184 s [M] |
 
-Z-Image-Turbo (6B) is **slightly lighter than FLUX.2 Klein (4B)** in this engine and
-at these settings — about 1.3–1.7 GB less peak MLX. The extra parameters do not cost
-more memory here; the quantized pack and the text encoder dominate.
+All runs 9 steps, seed 42, fresh process, so the wall times **include model load**.
 
-Both models show 0 swaps on 32 GB, which says nothing about 8 GB: the cache is
-absorbing the slack. The 8 GB verdict still requires the constrained and on-device
-runs in "Open work" below.
+Z-Image-Turbo (6B) is **slightly lighter than FLUX.2 Klein (4B)** at default settings — about
+1.3–1.7 GB less peak MLX — and **`--low-ram` more than halves it**: 10.70 → 6.26 GB peak MLX and
+20.38 → 7.24 GB footprint, for roughly +11 % wall time at 1024². That is the flag the 16 GB tier
+should use: the default footprint (20.4 GB) does not fit 16 GB, the `--low-ram` footprint
+(7.2 GB) does.
+
+0 swaps everywhere on 32 GB, which still says nothing about 8 GB: the cache absorbs the slack.
+The 8 GB verdict needs an actual 8 GB M1/M2 [I]. Full table with generation times:
+`qualification/z-image-turbo-2026-09-24.md`.
 
 ## Ideogram 4 q4 (14.9 GB pack) — 32 GB M2 Max (Mac14,13)
 
