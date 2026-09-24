@@ -27,6 +27,31 @@ every shipped family was on it.
 Third instance of one shape. `chat-mlx` missing from the Hub's engine→worker map did the same thing
 in 0.6.57 and was worse — an HTTP 500 that blanked **every** model picker on every Mac.
 
+**A second, unrelated bug found by auditing the Hub catalog against the manifests** (the
+systematic "does every model show" check the owner asked for). `/api/hub/catalog` returns **three
+entries for the same repo** for three whisper models, because the Hub aggregates every studio's
+catalog plus a separate transcription read and the Voice worker also lists the whisper models it
+depends on:
+
+```
+mlx-community/whisper-base-mlx
+  label="Whisper Base"  family=whisper  engine=subtitle-mlx  caps=['transcribe','subtitles']  <- rich
+  label="Whisper base"  family=None     engine=whisper       caps=None
+  label="Whisper Base"  family=None     engine=subtitle-mlx  caps=None
+```
+
+`combineModels` concatenates without deduplicating, and `NativeModel` is `Identifiable` by `id`, so
+the Subtitle picker shows each of those three models **three times**. Fixed in the native consumer
+rather than in the Hub, whose aggregate is shared with gateway-kh and documented as pass-through.
+Assigned to job A with the invariant to assert: one row per repo, and it must be the rich entry.
+
+**Audit result for everything else:** all 21 shipped manifests are offered by the Hub catalog with
+`runtime_ready: true`. The only manifest with no catalog entry is `s3tokenizerv2`, which is a
+companion (Chatterbox's tokenizer dependency) and correctly not a user-facing model. Four catalog
+entries have no manifest — `whisper-large-v3-turbo-q4`, `whisper-large-v3-mlx`,
+`moonshine-ai/moonshine-base`, `nemotron-3.5-asr-streaming-0.6b-8bit` — which is the worker offering
+more than the app ships, and the package gate correctly hides them.
+
 | job | what | owner |
 | --- | --- | --- |
 | A | Voice support + mode derived from catalog data; test rewritten to assert the invariant | sub-agent |
