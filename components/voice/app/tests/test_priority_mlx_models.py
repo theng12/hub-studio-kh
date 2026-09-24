@@ -45,16 +45,15 @@ def no_cached_kokoro_snapshot(monkeypatch):
 
 def test_priority_catalog_is_focused_and_clone_capable() -> None:
     qwen = _repos("qwen3-tts")
-    assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit" in qwen
-    assert "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit" in qwen
-    # Both Base tiers are offered at 8-bit and at 4-bit: the 4-bit pair is the memory
-    # trade for a Mac that shares memory with other Studios, not a replacement.
-    assert "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit" in qwen
     assert "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit" in qwen
-    assert len(qwen) == 7
+    assert "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit" in qwen
+    # Pruned 2026-09-24 (ST-13.B) to the two tiers the owner kept after the
+    # listening review: the 1.7B 8-bit, the 0.6B 4-bit and both the CustomVoice
+    # and VoiceDesign tiers were cut.
+    assert len(qwen) == 2
 
     chatterbox = _repos("chatterbox-mlx")
-    assert len(chatterbox) == 3
+    assert len(chatterbox) == 2
     assert "mlx-community/chatterbox-fp16" not in chatterbox
     assert "mlx-community/chatterbox-turbo-8bit" not in chatterbox
 
@@ -87,27 +86,6 @@ def test_priority_catalog_is_focused_and_clone_capable() -> None:
     serialized = catalog.serialize_model(fish_model)
     assert serialized["min_unified_memory_gb"] == 24
     assert serialized["fit"]["state"] != "unqualified"
-
-
-def test_longcat_candidate_uses_the_shared_mlx_worker_and_16gb_floor() -> None:
-    model = catalog.get_model("mlx-community/LongCat-AudioDiT-1B-4bit")
-    assert model is not None
-    assert model.family == "longcat-audiodit"
-    assert model.min_unified_memory_gb == 16
-    assert model.capabilities == ("tts", "voice-cloning", "multilingual")
-    assert model.languages == ("en", "zh")
-
-    published = catalog.serialize_model(model)
-    assert published["apple_optimized"] is True
-    assert published["min_unified_memory_gb"] == 16
-    assert model_audits.candidate_summary(model.repo) is None
-    assert generation.MLX_AUDIO_FAMILIES["longcat-audiodit"]["mode"] == "longcat_clone"
-    assert "longcat-audiodit" in generation._WIRED_FAMILIES
-    assert generation._ENGINE_REQUIREMENTS["longcat-audiodit"] == [
-        "mlx", "mlx_audio", "transformers", "soundfile", "numpy",
-    ]
-
-
 def test_longcat_clone_requires_an_exact_reference_transcript(tmp_path: Path) -> None:
     reference = tmp_path / "reference.wav"
     reference.write_bytes(b"private")
@@ -191,26 +169,17 @@ def test_qwen_06b_base_is_the_8gb_production_voice_generator() -> None:
     )
 
 
-def test_qwen_17b_base_uses_the_official_language_roster_and_16gb_floor() -> None:
-    model = catalog.get_model(
-        "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-    )
+def test_qwen_17b_base_uses_the_official_language_roster_and_its_floor() -> None:
+    # The 1.7B Base 8-bit was cut on 2026-09-24 (ST-13.B); the kept 4-bit tier
+    # carries the same official ten-language roster at a 12 GB floor.
+    model = catalog.get_model("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit")
 
     assert model is not None
-    assert model.min_unified_memory_gb == 16
-    assert model.recommended_hardware == "Apple Silicon with 16 GB minimum; 24 GB preferred."
+    assert model.min_unified_memory_gb == 12
     assert model.languages == (
         "en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it",
     )
     assert all("11 languages" not in text for _kind, text in model.use_cases)
-    assert any(
-        kind == "avoid"
-        and "8 GB" in text
-        and "route" in text.lower()
-        and "16 GB or 24 GB" in text
-        for kind, text in model.use_cases
-    )
-    assert all("use 0.6b base" not in text.lower() for _kind, text in model.use_cases)
 
 
 def test_vibevoice_checkpoint_roster_is_exact_and_separates_experimental_languages() -> None:
@@ -315,7 +284,9 @@ def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     manager._mlx_audio_model_repo = None
     manager._f5_tts_model = None
     manager._f5_tts_model_repo = None
-    model = catalog.get_model("mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit")
+    # The 1.7B CustomVoice tier was cut on 2026-09-24 (ST-13.B); VoxCPM2 4-bit is
+    # a kept 16 GB-floor model, which is what this guard is about.
+    model = catalog.get_model("mlx-community/VoxCPM2-4bit")
     assert model is not None and model.min_unified_memory_gb == 16
     monkeypatch.setattr(
         generation,
@@ -334,36 +305,6 @@ def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     )
     with pytest.raises(generation.MemoryGuardError, match="Memory guard paused"):
         manager._memory_preflight(model)
-
-
-def test_the_4bit_base_pair_is_a_memory_trade_not_a_quality_claim() -> None:
-    """The 4-bit build is smaller and says so; it must not outrank the 8-bit tier."""
-    four = {entry.repo: entry for entry in catalog.CATALOG
-            if entry.repo.endswith("-Base-4bit")}
-    eight = {entry.repo: entry for entry in catalog.CATALOG
-             if entry.repo.endswith("-Base-8bit")}
-    assert set(four) == {"mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
-                         "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"}
-    for repo, entry in four.items():
-        smaller = repo.replace("-Base-4bit", "-Base-8bit")
-        assert entry.size_gb < eight[smaller].size_gb, repo
-        assert entry.min_unified_memory_gb <= eight[smaller].min_unified_memory_gb, repo
-        # Cloning is the point of a Base tier, and the quantization caveat is stated.
-        assert "voice-cloning" in entry.capabilities
-        assert any("4-bit" in text for _, text in entry.use_cases), repo
-    # The 1.7B 4-bit is the bigger checkpoint, so it cannot claim the smaller tier's floor.
-    assert four["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"].min_unified_memory_gb \
-        > four["mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"].min_unified_memory_gb
-
-
-def test_kokoro_catalog_is_single_mlx_multilingual_release() -> None:
-    kokoro = [entry for entry in catalog.CATALOG if "kokoro" in entry.family]
-    assert [entry.repo for entry in kokoro] == ["mlx-community/Kokoro-82M-bf16"]
-    assert "kokoro" not in catalog.FAMILIES
-    assert len(generation.KOKORO_VOICES) == 54
-    assert {voice["lang"] for voice in generation.KOKORO_VOICES} == set("abefhijpz")
-
-
 def test_kokoro_voice_picker_sets_language_and_validates_blends(
     no_cached_kokoro_snapshot,
 ) -> None:
@@ -499,31 +440,6 @@ def test_f5_tts_uses_saved_voice_transcript_and_honors_override(
         tmp_path / "override-output.wav",
     )
     assert captured["ref_text"] == "One-time corrected transcript"
-
-
-def test_bark_catalog_keeps_current_mlx_release_and_complete_presets() -> None:
-    bark = [entry for entry in catalog.CATALOG if entry.family == "bark"]
-    assert [entry.repo for entry in bark] == ["mlx-community/bark"]
-    assert bark[0].ignore_patterns == ("speaker_embeddings/*",)
-    assert len(generation.BARK_VOICE_PRESETS) == 130
-    assert {item["lang"] for item in generation.BARK_VOICE_PRESETS} == {
-        "en", "de", "es", "fr", "hi", "it", "ja", "ko", "pl", "pt", "ru", "tr", "zh",
-    }
-    assert all(
-        sum(item["lang"] == lang for item in generation.BARK_VOICE_PRESETS) == 10
-        for lang in {item["lang"] for item in generation.BARK_VOICE_PRESETS}
-    )
-
-
-def test_bark_companions_are_complete_without_unused_bert_weights() -> None:
-    companions = catalog.companions_for("mlx-community/bark")
-    assert companions[0]["repo"] == "mlx-community/encodec-24khz-float32"
-    assert companions[1]["repo"] == "bert-base-multilingual-cased"
-    assert companions[1]["allow_patterns"] == (
-        "tokenizer.json", "tokenizer_config.json", "vocab.txt",
-    )
-
-
 def test_bark_mlx_controls_and_local_voice_prompt(tmp_path: Path) -> None:
     preset = tmp_path / "v2" / "en_speaker_6.npz"
     preset.parent.mkdir()
@@ -821,11 +737,10 @@ def test_long_form_catalogs_do_not_ask_callers_to_manually_chunk() -> None:
         "qwen3-tts",
         "chatterbox-mlx",
         "voxcpm-mlx",
-        "kokoro-mlx",
-        "vibevoice",
         "omnivoice",
         "fish-audio-mlx",
-        "longcat-audiodit",
+        "khmer-tts-mms",
+        "khmer-tts-onnx",
     ):
         guidance = catalog.FAMILIES[family].text_guidance
         assert guidance.soft_max_chars is None
@@ -1420,13 +1335,14 @@ def test_omnivoice_speed_is_applied_to_the_finished_wav_not_passed_upstream() ->
     assert src.split('gen_kwargs["speed"] = speed', 1)[0].rstrip().endswith(
         'if _speed_delivery(family) == "native":'
     )
-    # Only the two engines that scale their own durations are native.
+    # The two native-speed engines (kokoro-mlx, kittentts) were cut on
+    # 2026-09-24 (ST-13.B), so no catalog family applies speed natively now.
     native = {
         family
         for family in catalog.FAMILIES
         if long_form_policy.speed_policy_for(family).delivery == "native"
     }
-    assert native == {"kokoro-mlx", "kittentts"}
+    assert native == set()
 
 
 def test_qwen_clone_long_form_renders_each_section_and_reports_progress(tmp_path: Path) -> None:

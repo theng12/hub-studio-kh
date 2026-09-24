@@ -42,7 +42,7 @@ from backend import (  # noqa: E402
 )
 
 QWEN06 = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
-QWEN17 = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+QWEN17 = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"  # 8-bit tier cut 2026-09-24 (ST-13.B)
 QWEN06_PRESET = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 QWEN17_PRESET = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
 QWEN17_DESIGN = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
@@ -70,7 +70,7 @@ class QwenBaseCatalogTests(unittest.TestCase):
     """Both Base tiers must be exposed as audited cloning models."""
 
     def test_both_base_tiers_are_cataloged_as_voice_cloning(self) -> None:
-        for repo, minimum_gb in ((QWEN06, 8), (QWEN17, 16)):
+        for repo, minimum_gb in ((QWEN06, 8), (QWEN17, 12)):
             entry = catalog.get_model(repo)
             self.assertIsNotNone(entry, repo)
             self.assertIn("voice-cloning", entry.capabilities)
@@ -94,14 +94,6 @@ class QwenBaseCatalogTests(unittest.TestCase):
             self.assertTrue(reference["maximum_duration_seconds"] <= 30, repo)
             self.assertEqual(reference["sample_rate_hz"], 24000, repo)
 
-    def test_preset_and_design_models_are_not_marked_as_cloning(self) -> None:
-        for repo in (QWEN06_PRESET, QWEN17_PRESET, QWEN17_DESIGN):
-            entry = catalog.get_model(repo)
-            self.assertNotIn("voice-cloning", entry.capabilities, repo)
-            payload = catalog.serialize_model(entry)
-            self.assertFalse(payload["reference_audio"]["declared"], repo)
-            self.assertFalse(payload["reference_audio"]["supported"], repo)
-
     def test_quality_guardrails_are_attached_only_to_cloning_models(self) -> None:
         for repo in (QWEN06, QWEN17):
             payload = catalog.serialize_model(catalog.get_model(repo))
@@ -110,9 +102,8 @@ class QwenBaseCatalogTests(unittest.TestCase):
             self.assertEqual(guardrails["required_local_models"], [qwen_quality.WHISPER_REPO])
             self.assertEqual(guardrails["validator_revision"], qwen_quality.VALIDATOR_REVISION)
             self.assertEqual(guardrails["max_local_quality_retries"], 1)
-        for repo in (QWEN06_PRESET, QWEN17_PRESET):
-            payload = catalog.serialize_model(catalog.get_model(repo))
-            self.assertIsNone(payload["execution_contract"]["quality_guardrails"], repo)
+        # The CustomVoice/VoiceDesign tiers were cut on 2026-09-24 (ST-13.B), so only
+        # the two Base tiers remain; the preset models no longer exist to assert on.
 
     def test_only_base_tiers_are_qwen_clone_jobs(self) -> None:
         reference = {"_reference_audio_path": "/private/reference.wav"}

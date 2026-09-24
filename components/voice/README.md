@@ -444,20 +444,21 @@ The worker-owned part of this boundary lives in
 `app/backend/voicestudio_genstudio_integration.py`; add future VoiceStudio
 evidence fields there with a regression test.
 
-### Qwen 1.7B Base section size
+### Section size
 
 The Generate tab exposes an optional **Long-form delivery → Section size**
-control only for the audited
-`mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit` checkpoint. Auto keeps the
-audited 280-character section size. Custom accepts whole numbers from 230
-through 400 and remembers the choice with that model's existing Generate
-settings. The safety maximum remains 400, while a rejected local Qwen output
-retry uses 230. Other models do not show this control and cannot receive a
-custom section-size override.
+control for every catalogued sectioning model. Auto keeps the model's audited
+or measured default — for example 288 characters for Qwen3-TTS 0.6B Base, 400
+for the 1.7B Base 4-bit tier, 500 for Chatterbox, 288 for OmniVoice, 300 for
+Fish Audio S2 Pro, and 280 for the two Khmer VITS voices. Custom accepts whole
+numbers from 40 through 3000 and remembers the choice with that model's
+existing Generate settings. No catalogued family has an engine input cliff any
+more, so the range is the derived control's, not an engine's hard cap.
 
 Voice Studio continues to choose and apply the 300/600/180 ms sentence,
 paragraph, and soft-split pauses automatically; those pacing safeguards are
-not user-adjustable. API callers omit `section_max_characters` for Auto, or
+not user-adjustable. A rejected local Qwen cloning output retries with a
+230-character section. API callers omit `section_max_characters` for Auto, or
 send an integer `section_max_characters` for Custom. Invalid, out-of-range, or
 unsupported values are rejected before generation is queued. This is a Voice
 Studio-local optional control and does not change the GenStudio contract.

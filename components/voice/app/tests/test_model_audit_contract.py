@@ -16,6 +16,10 @@ GROUP_A = {
 
 QWEN_BASE = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
 QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+# The 8-bit checkpoint the production-v3 audit names was cut with the menu. Its
+# audit record is retained as history; the kept 4-bit tier carries the published
+# contract and is what the catalogue must now reflect.
+QWEN_17B_4BIT = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
 QWEN_17B_BOOTSTRAP = (
     Path(__file__).resolve().parents[2]
     / "model-audits"
@@ -492,7 +496,7 @@ def test_qwen_17b_passed_production_audit_is_latest_and_drives_catalog_limits() 
         "commercial_decision": "production-acceptable",
     }
     assert evidence["paid_cloud_provider_calls"] == 0
-    model = catalog.get_model(QWEN_17B_BASE)
+    model = catalog.get_model(QWEN_17B_4BIT)
     assert model is not None
     published = catalog.serialize_model(model)
     assert published["execution_contract"]["qualification_source"] == "audit"
@@ -629,7 +633,7 @@ def test_kokoro_adapter_preserves_suffix_for_huggingface_voicepack_symlink(
 def test_catalog_omits_unqualified_candidate_evidence_in_standalone(
     monkeypatch,
 ) -> None:
-    target = "mlx-community/Kokoro-82M-bf16"
+    target = "mlx-community/chatterbox-8bit"
     monkeypatch.setattr(
         main,
         "_cache_with_companions",

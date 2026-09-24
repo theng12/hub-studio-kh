@@ -149,7 +149,7 @@ class FleetAuthTests(unittest.TestCase):
         start.assert_called_once_with(repo, token=None, revision="b" * 40)
 
     def test_unversioned_cache_is_reconciled_instead_of_reused(self):
-        repo = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+        repo = "mlx-community/chatterbox-4bit"
         unversioned = {
             "repo": repo,
             "state": "partial",
@@ -173,7 +173,7 @@ class FleetAuthTests(unittest.TestCase):
         start.assert_called_once_with(repo, token=None, revision=None)
 
     def test_unversioned_cache_is_not_advertised_available(self):
-        repo = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+        repo = "mlx-community/chatterbox-4bit"
         runtime = {
             "loaded": False,
             "runtime_ready": True,

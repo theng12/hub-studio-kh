@@ -118,7 +118,7 @@ class SpeedDeliveryTests(unittest.TestCase):
         self.assertIn("applied pitch-preserving", parent)
 
     def test_the_policy_is_published_with_the_section_control(self) -> None:
-        row = catalog.serialize_model(catalog.get_model("mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"))
+        row = catalog.serialize_model(catalog.get_model("mlx-community/chatterbox-4bit"))
         published = row["long_form_delivery"]
         self.assertEqual(published["speed"]["delivery"], "tempo")
         self.assertEqual(published["speed"]["minimum"], long_form_policy.SPEED_MINIMUM)
@@ -142,11 +142,13 @@ class SectionSizeControlTests(unittest.TestCase):
             self.assertEqual(control["runtime_default"], published["section_max_characters"],
                              f"{entry.repo} shows one section size and renders another")
 
-    def test_a_caller_can_tighten_a_section_but_not_exceed_an_engine_cliff(self) -> None:
-        repo = "mlx-community/orpheus-3b-0.1-ft-4bit"
-        self.assertEqual(catalog.resolve_section_budget("orpheus", repo, 120)["section_max_characters"], 120)
+    def test_a_caller_can_tighten_a_section_but_not_leave_the_published_range(self) -> None:
+        # The engine-cliff families (orpheus, bark) were cut on 2026-09-24; the kept families
+        # bound the control by the published minimum/maximum instead.
+        repo = "mlx-community/chatterbox-4bit"
+        self.assertEqual(catalog.resolve_section_budget("chatterbox-mlx", repo, 120)["section_max_characters"], 120)
         with self.assertRaises(catalog.SectionSizeControlError) as caught:
-            catalog.resolve_section_budget("orpheus", repo, 900)
+            catalog.resolve_section_budget("chatterbox-mlx", repo, 10)
         self.assertEqual(caught.exception.code, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE")
 
     def test_an_undeclared_section_size_uses_the_family_budget(self) -> None:
@@ -168,9 +170,16 @@ class SectionSizeControlTests(unittest.TestCase):
         self.assertLess(policy["section_max_characters"], 1162)
 
     def test_the_hand_declared_qwen_control_still_wins(self) -> None:
-        control = catalog.section_size_control_for("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")
-        self.assertEqual(control["source"], "qwen3-17b-production-v2-audit")
-        self.assertEqual((control["minimum"], control["maximum"]), (230, 400))
+        # The 1.7B Base 8-bit production-v2 audit was cut on 2026-09-24; the kept 4-bit tier
+        # carries its own model audit, and it must still override the family default.
+        repo = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
+        control = catalog.section_size_control_for(repo)
+        self.assertEqual(control["source"], "model_audit")
+        self.assertEqual((control["minimum"], control["maximum"]), (40, 3000))
+        self.assertEqual(control["runtime_default"], 400)
+        self.assertEqual(
+            long_form_policy.policy_for("qwen3-tts", repo)["section_max_characters"], 288
+        )
 
 
 if __name__ == "__main__":

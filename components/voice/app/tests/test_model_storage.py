@@ -31,14 +31,14 @@ def _item(payload: dict, repo: str) -> dict:
 
 
 def test_existing_cache_is_indexed_in_place_and_notice_is_written(tmp_path, monkeypatch) -> None:
-    repo = "mlx-community/Kokoro-82M-bf16"
+    repo = "mlx-community/chatterbox-8bit"
     root = _cached_repo(tmp_path, monkeypatch, repo)
 
     payload = model_storage.inventory()
     item = _item(payload, repo)
 
     assert item["type"] == "model"
-    assert item["family"] == "kokoro-mlx"
+    assert item["family"] == "chatterbox-mlx"
     assert item["cache"]["path"] == str(root)
     assert root.exists()
     notice = Path(payload["notice_path"])
@@ -63,8 +63,8 @@ def test_installed_companion_is_grouped_and_protected(tmp_path, monkeypatch) -> 
 
 
 def test_missing_companion_stays_visible_beneath_its_installed_parent(tmp_path, monkeypatch) -> None:
-    parent = "mlx-community/orpheus-3b-0.1-ft-4bit"
-    companion = "mlx-community/snac_24khz"
+    parent = "mlx-community/chatterbox-8bit"
+    companion = "mlx-community/S3TokenizerV2"
     _cached_repo(tmp_path, monkeypatch, parent)
 
     item = _item(model_storage.inventory(), companion)

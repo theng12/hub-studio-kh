@@ -58,7 +58,6 @@ def test_group_b_language_support_truth_is_structured_and_non_selectable_when_cl
     chatterbox_contracts = {
         "mlx-community/chatterbox-4bit": list(catalog.CHATTERBOX_LANGUAGE_CODES),
         "mlx-community/chatterbox-8bit": list(catalog.CHATTERBOX_LANGUAGE_CODES),
-        "mlx-community/chatterbox-turbo-4bit": ["en"],
     }
     for repo, expected_codes in chatterbox_contracts.items():
         chatterbox = _model(repo)["language_support"]
@@ -105,13 +104,6 @@ def test_chatterbox_requires_and_forwards_an_allowlisted_language(tmp_path: Path
     with pytest.raises(ValueError, match="Unsupported Chatterbox language code"):
         manager._mlx_kwargs_clone_with_intensity(
             entry, {"voice_library_id": "voice-1", "language": "xx"}, {}, voices
-        )
-
-    turbo = catalog.get_model("mlx-community/chatterbox-turbo-4bit")
-    assert turbo is not None
-    with pytest.raises(ValueError, match="Unsupported Chatterbox language code"):
-        manager._mlx_kwargs_clone_with_intensity(
-            turbo, {"voice_library_id": "voice-1", "language": "pt"}, {}, voices
         )
 
 

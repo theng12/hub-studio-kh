@@ -9,21 +9,18 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import catalog, generation, long_form_policy, main, model_audits, qwen_quality
+from backend import catalog, generation, main, qwen_quality
 from backend.main import FLEET_TOKEN
 
 
-QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+# The kept Qwen cloning tiers. The 1.7B 8-bit tier and the CustomVoice/VoiceDesign
+# rows were cut with the menu, so these tests target the 4-bit tier that replaced
+# the 8-bit as the quality-cloning option.
+QWEN_17B_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
 QWEN_06B_BASE = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
-F5_TTS = "SWivid/F5-TTS"
-BARK = "mlx-community/bark"
+VOXCPM_4BIT = "mlx-community/VoxCPM2-4bit"
+CHATTERBOX_8BIT = "mlx-community/chatterbox-8bit"
 ROOT = Path(__file__).resolve().parents[2]
-QWEN_17B_V2 = (
-    ROOT
-    / "model-audits"
-    / "2026-08-15-qwen3-17b-production-v2"
-    / "mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json"
-)
 
 
 @pytest.fixture
@@ -44,24 +41,24 @@ def _client() -> TestClient:
     return TestClient(main.app, headers={"X-Studio-Token": FLEET_TOKEN})
 
 
-@pytest.mark.parametrize(
-    ("requested", "include_control"),
-    [(230, True), (280, True), (400, True), (None, True), (None, False)],
-)
+@pytest.mark.parametrize("requested", [230, 280, 400])
 def test_txt2speech_endpoint_canonicalizes_section_budget_before_queueing(
-    queued_txt2speech_params: list[dict], requested: int | None, include_control: bool,
+    queued_txt2speech_params: list[dict], requested: int,
 ) -> None:
-    payload = {"repo": QWEN_17B_BASE, "text": "A bounded request."}
-    if include_control:
-        payload["section_max_characters"] = requested
+    """An explicit override is canonicalized before queueing.
+
+    Auto omits the field entirely, so the endpoint leaves `_resolved` unset and the
+    runtime uses the published policy default; that path is covered by
+    ``test_omitted_control_for_a_non_qwen_model_keeps_the_normal_queue_path``.
+    """
+    payload = {"repo": QWEN_17B_BASE, "text": "A bounded request.",
+               "section_max_characters": requested}
 
     response = _client().post("/api/generate/txt2speech", json=payload)
 
     assert response.status_code == 200
     assert len(queued_txt2speech_params) == 1
-    assert queued_txt2speech_params[0]["_resolved_section_max_characters"] == (
-        280 if requested is None else requested
-    )
+    assert queued_txt2speech_params[0]["_resolved_section_max_characters"] == requested
     assert "section_max_characters" not in queued_txt2speech_params[0]
 
 
@@ -69,9 +66,9 @@ def test_txt2speech_endpoint_canonicalizes_section_budget_before_queueing(
     ("repo", "requested", "code"),
     [
         (QWEN_06B_BASE, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (QWEN_17B_BASE, 229, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (QWEN_17B_BASE, 401, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (BARK, 280, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (QWEN_17B_BASE, 39, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (QWEN_17B_BASE, 3_001, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (VOXCPM_4BIT, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
     ],
 )
 def test_txt2speech_endpoint_rejects_out_of_range_section_budget(
@@ -99,8 +96,9 @@ def test_txt2speech_endpoint_rejects_out_of_range_section_budget(
     ("repo", "requested"),
     [
         (QWEN_06B_BASE, 280),
-        (F5_TTS, 280),
-        (BARK, 150),
+        (QWEN_17B_BASE, 400),
+        (VOXCPM_4BIT, 400),
+        (CHATTERBOX_8BIT, 500),
     ],
 )
 def test_txt2speech_endpoint_accepts_an_override_inside_the_published_control(
@@ -122,9 +120,9 @@ def test_txt2speech_endpoint_accepts_an_override_inside_the_published_control(
     ("repo", "requested", "code"),
     [
         (QWEN_06B_BASE, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (QWEN_17B_BASE, 229, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (QWEN_17B_BASE, 401, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (F5_TTS, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (QWEN_17B_BASE, 39, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (QWEN_17B_BASE, 3_001, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (VOXCPM_4BIT, 5_000, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
     ],
 )
 def test_reference_endpoint_rejects_section_budget_before_preparing_audio(
@@ -241,7 +239,7 @@ def test_internal_queueing_rejects_an_out_of_range_qwen_section_budget(
         manager.start_txt2speech({
             "repo": QWEN_17B_BASE,
             "text": "An invalid internal request.",
-            "section_max_characters": 401,
+            "section_max_characters": 3_001,
         })
 
     assert error.value.code == "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"
@@ -278,7 +276,7 @@ def test_omitted_control_for_a_non_qwen_model_keeps_the_normal_queue_path(
     queued_txt2speech_params: list[dict],
 ) -> None:
     response = _client().post("/api/generate/txt2speech", json={
-        "repo": BARK,
+        "repo": VOXCPM_4BIT,
         "text": "A normal non-Qwen request.",
     })
 
@@ -310,7 +308,7 @@ def test_omitted_control_for_a_non_qwen_model_prepares_reference_audio(
     response = _client().post(
         "/api/generate/txt2speech/reference",
         data={"request_json": json.dumps({
-            "repo": F5_TTS,
+            "repo": VOXCPM_4BIT,
             "text": "A normal reference request.",
         })},
         files={"audio": ("reference.wav", b"RIFF", "audio/wav")},
@@ -327,10 +325,10 @@ def test_omitted_control_for_a_non_qwen_model_prepares_reference_audio(
     [
         # Every sectioning model publishes a control now, and the control's range is
         # the guarantee: inside it the caller's number is honoured, past it the
-        # request is refused. Bark's 150 is the point where the engine stops, not a
-        # quality preference, so 280 is out of range rather than unsupported.
-        (BARK, 280, "rejected"),
-        (F5_TTS, 280, "accepted"),
+        # request is refused. No catalogued family has an engine input cliff any more
+        # (Bark and Orpheus were cut), so out-of-range means past the derived 3000.
+        (VOXCPM_4BIT, 5_000, "rejected"),
+        (CHATTERBOX_8BIT, 500, "accepted"),
     ],
 )
 def test_section_override_is_bounded_by_each_models_published_control(
@@ -364,8 +362,8 @@ def test_internal_queueing_without_a_non_qwen_override_stays_accepted(
     monkeypatch.setattr(generation.threading, "Thread", _InertThread)
 
     job = manager.start_txt2speech({
-        "repo": F5_TTS,
-        "text": "An ordinary internal F5 request.",
+        "repo": VOXCPM_4BIT,
+        "text": "An ordinary internal non-Qwen request.",
     })
 
     assert "section_max_characters" not in job.params
@@ -378,216 +376,23 @@ def test_internal_queueing_without_a_non_qwen_override_stays_accepted(
     ) == repository_history_before
 
 
-def test_auto_budget_fails_closed_when_audit_capability_mismatches(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    queued_txt2speech_params: list[dict],
-) -> None:
-    original_policy_for = long_form_policy.policy_for
-
-    def mismatched_policy_for(
-        family: str,
-        repo: str,
-        *,
-        audited_section_max_characters: object = None,
-        audited_default_section_max_characters: object = None,
-    ) -> dict | None:
-        policy = original_policy_for(
-            family,
-            repo,
-            audited_section_max_characters=audited_section_max_characters,
-            audited_default_section_max_characters=audited_default_section_max_characters,
-        )
-        if repo == QWEN_17B_BASE and policy is not None:
-            return {**policy, "section_max_characters": 399}
-        return policy
-
-    monkeypatch.setattr(catalog.long_form_policy, "policy_for", mismatched_policy_for)
-    response = _client().post("/api/generate/txt2speech", json={
-        "repo": QWEN_17B_BASE,
-        "text": "A mismatch-safe Auto request.",
-    })
-    manager = _inert_generation_manager(monkeypatch, tmp_path)
-    monkeypatch.setattr(generation.threading, "Thread", _InertThread)
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert queued_txt2speech_params == []
-    with pytest.raises(catalog.SectionSizeControlError) as error:
-        manager.start_txt2speech({
-            "repo": QWEN_17B_BASE,
-            "text": "A mismatch-safe internal request.",
-            "_resolved_section_max_characters": 399,
-        })
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-
-
-def test_missing_v2_rejects_auto_across_endpoint_and_manager(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    queued_txt2speech_params: list[dict],
-) -> None:
-    monkeypatch.setattr(
-        catalog.model_audits, "qwen_17b_production_v2_limits", lambda _repo: {}
-    )
-    response = _client().post("/api/generate/txt2speech", json={
-        "repo": QWEN_17B_BASE,
-        "text": "A missing-audit Auto request.",
-    })
-    manager = _inert_generation_manager(monkeypatch, tmp_path)
-    monkeypatch.setattr(generation.threading, "Thread", _InertThread)
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert queued_txt2speech_params == []
-    with pytest.raises(catalog.SectionSizeControlError) as error:
-        manager.start_txt2speech({
-            "repo": QWEN_17B_BASE,
-            "text": "A missing-audit internal request.",
-            "_resolved_section_max_characters": 280,
-        })
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-
-
-@pytest.mark.parametrize(
-    ("audit_status", "candidate_for_genstudio"),
-    [
-        ("passed", False),
-        ("conditional", True),
-        ("failed", True),
-        ("revoked", True),
-    ],
-)
-def test_non_production_v2_evidence_cannot_publish_or_queue_section_budgets(
-    audit_status: str,
-    candidate_for_genstudio: bool,
-    monkeypatch: pytest.MonkeyPatch,
-    queued_txt2speech_params: list[dict],
-    tmp_path: Path,
-) -> None:
-    """Only passed, GenStudio-candidate v2 evidence authorizes this control."""
-    record = json.loads(QWEN_17B_V2.read_text(encoding="utf-8"))
-    record["genstudio_candidate"]["audit_status"] = audit_status
-    record["genstudio_candidate"]["candidate_for_genstudio"] = candidate_for_genstudio
-    root = tmp_path / "2026-08-15-qwen3-17b-production-v2"
-    root.mkdir()
-    (root / QWEN_17B_V2.name).write_text(json.dumps(record), encoding="utf-8")
-    monkeypatch.setattr(model_audits, "AUDIT_ROOT", tmp_path)
-
-    assert model_audits.qwen_17b_production_v2_limits(QWEN_17B_BASE) == {}
-    assert catalog.section_size_control_for(QWEN_17B_BASE) is None
-
-    auto = _client().post("/api/generate/txt2speech", json={
-        "repo": QWEN_17B_BASE,
-        "text": "An unauthorized Auto request.",
-    })
-    custom = _client().post("/api/generate/txt2speech", json={
-        "repo": QWEN_17B_BASE,
-        "text": "An unauthorized Custom request.",
-        "section_max_characters": 280,
-    })
-
-    assert auto.status_code == 422
-    assert auto.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert custom.status_code == 422
-    assert custom.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert queued_txt2speech_params == []
-
-
-def test_manager_rejects_a_forged_private_auto_budget_when_capability_disagrees(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    original_policy_for = long_form_policy.policy_for
-
-    def mismatched_policy_for(
-        family: str,
-        repo: str,
-        *,
-        audited_section_max_characters: object = None,
-        audited_default_section_max_characters: object = None,
-    ) -> dict | None:
-        policy = original_policy_for(
-            family,
-            repo,
-            audited_section_max_characters=audited_section_max_characters,
-            audited_default_section_max_characters=audited_default_section_max_characters,
-        )
-        if repo == QWEN_17B_BASE and policy is not None:
-            return {**policy, "section_max_characters": 399}
-        return policy
-
-    monkeypatch.setattr(catalog.long_form_policy, "policy_for", mismatched_policy_for)
-    manager = _inert_generation_manager(monkeypatch, tmp_path)
-    monkeypatch.setattr(generation.threading, "Thread", _InertThread)
-
-    with pytest.raises(catalog.SectionSizeControlError) as error:
-        manager.start_txt2speech({
-            "repo": QWEN_17B_BASE,
-            "text": "A forged private request.",
-            "_resolved_section_max_characters": 400,
-        })
-
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-
-
-def test_custom_budget_stays_capability_gated_when_audit_and_capability_disagree(
-    monkeypatch: pytest.MonkeyPatch,
-    queued_txt2speech_params: list[dict],
-) -> None:
-    original_policy_for = long_form_policy.policy_for
-
-    def mismatched_policy_for(
-        family: str,
-        repo: str,
-        *,
-        audited_section_max_characters: object = None,
-        audited_default_section_max_characters: object = None,
-    ) -> dict | None:
-        policy = original_policy_for(
-            family,
-            repo,
-            audited_section_max_characters=audited_section_max_characters,
-            audited_default_section_max_characters=audited_default_section_max_characters,
-        )
-        if repo == QWEN_17B_BASE and policy is not None:
-            return {**policy, "section_max_characters": 399}
-        return policy
-
-    monkeypatch.setattr(catalog.long_form_policy, "policy_for", mismatched_policy_for)
-    response = _client().post("/api/generate/txt2speech", json={
-        "repo": QWEN_17B_BASE,
-        "text": "A capability-gated Custom request.",
-        "section_max_characters": 280,
-    })
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-    assert queued_txt2speech_params == []
-
-
-def test_catalog_publishes_the_hand_declared_qwen_control_and_derived_controls_for_the_rest() -> None:
-    """Only Qwen 1.7B Base is hand-declared; every other model gets a derived one."""
-    payload = catalog.serialize_model(catalog.get_model(QWEN_17B_BASE))
-    assert payload["long_form_delivery"]["section_size_control"] == {
-        "minimum": 230,
-        "maximum": 400,
-        "step": 1,
-        "default_custom": 280,
-        "runtime_default": 280,
-        "source": "qwen3-17b-production-v2-audit",
-    }
-    other = catalog.serialize_model(catalog.get_model(QWEN_06B_BASE))
-    control = other["long_form_delivery"]["section_size_control"]
-    assert control == {
-        "minimum": 40,
-        "maximum": 3000,
-        "step": 10,
-        "default_custom": 288,
-        "runtime_default": 288,
-        "source": "model_audit",
-    }
-    assert control == catalog.section_size_control_for(QWEN_06B_BASE)
+def test_catalog_publishes_a_derived_section_control_for_every_sectioning_model() -> None:
+    """The hand-declared Qwen 8-bit control went with its model; every kept model derives one."""
+    for entry in catalog.CATALOG:
+        published = catalog.serialize_model(entry)["long_form_delivery"]
+        control = published["section_size_control"]
+        assert control == catalog.section_size_control_for(entry.repo), entry.repo
+        assert control == {
+            "minimum": 40,
+            "maximum": published["hard_cap_characters"] or 3000,
+            "step": 10,
+            "default_custom": published["section_max_characters"],
+            "runtime_default": published["section_max_characters"],
+            "source": published["source"],
+        }, entry.repo
+    qwen4 = catalog.serialize_model(catalog.get_model(QWEN_17B_BASE))["long_form_delivery"]
+    assert qwen4["section_max_characters"] == 400
+    assert qwen4["source"] == "model_audit"
 
 
 def test_frontend_custom_400_is_valid_and_auto_omits_the_override() -> None:
@@ -604,18 +409,18 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
 
 (async () => {
   const app = studio();
-  const repo = 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit';
+  const repo = 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit';
   app.models = [{
     repo,
     family: 'qwen3-tts',
     cache: { state: 'cached' },
     long_form_delivery: {
       section_size_control: {
-        minimum: 230,
-        maximum: 400,
-        step: 1,
-        default_custom: 280,
-        runtime_default: 280,
+        minimum: 40,
+        maximum: 3000,
+        step: 10,
+        default_custom: 400,
+        runtime_default: 400,
       },
     },
   }];
@@ -652,16 +457,13 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
     assert observed["submitted"][1]["section_max_characters"] == 400
 
 
-def test_readme_documents_the_audited_section_size_control_contract() -> None:
+def test_readme_documents_the_section_size_control_contract() -> None:
     readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
 
-    assert "### Qwen 1.7B Base section size" in readme
-    assert "`mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`" in readme
-    assert "Auto keeps the audited 280-character section size" in readme
-    assert "Custom accepts whole numbers from 230 through 400" in readme
-    assert "safety maximum remains 400" in readme
-    assert "retry uses 230" in readme
+    assert "### Section size" in readme
+    assert "whole numbers from 40 through 3000" in readme
     assert "300/600/180 ms" in readme
+    assert "retries with a 230-character section" in readme
     assert "omit `section_max_characters` for Auto" in readme
     assert "send an integer `section_max_characters` for Custom" in readme
 
@@ -669,13 +471,13 @@ def test_readme_documents_the_audited_section_size_control_contract() -> None:
 @pytest.mark.parametrize(
     ("requested", "expected", "source"),
     [
-        (None, 280, "audit"),
+        (None, 400, "audit"),
         (230, 230, "caller_override"),
         (280, 280, "caller_override"),
         (400, 400, "caller_override"),
     ],
 )
-def test_qwen_v2_resolves_auto_and_custom(
+def test_qwen_section_control_resolves_auto_and_custom(
     requested: int | None, expected: int, source: str,
 ) -> None:
     result = catalog.resolve_section_budget("qwen3-tts", QWEN_17B_BASE, requested)
@@ -683,22 +485,11 @@ def test_qwen_v2_resolves_auto_and_custom(
     assert result["source"] == source
 
 
-def test_missing_v2_never_falls_back_to_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        catalog.model_audits, "qwen_17b_production_v2_limits", lambda _repo: {}
-    )
-
-    assert catalog.section_size_control_for(QWEN_17B_BASE) is None
-    with pytest.raises(catalog.SectionSizeControlError) as error:
-        catalog.resolve_section_budget("qwen3-tts", QWEN_17B_BASE, 280)
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-
-
 @pytest.mark.parametrize(
     ("requested", "code"),
     [
-        (229, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
-        (401, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (39, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
+        (3_001, "SECTION_MAX_CHARACTERS_OUT_OF_RANGE"),
         (True, "SECTION_MAX_CHARACTERS_INVALID"),
         (280.0, "SECTION_MAX_CHARACTERS_INVALID"),
         ("280", "SECTION_MAX_CHARACTERS_INVALID"),
@@ -735,41 +526,11 @@ def test_resolve_section_budget_rejects_capability_from_another_model() -> None:
     assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
 
 
-def test_catalog_fails_closed_when_the_audit_and_capability_disagree(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    original_policy_for = long_form_policy.policy_for
-
-    def mismatched_policy_for(
-        family: str,
-        repo: str,
-        *,
-        audited_section_max_characters: object = None,
-        audited_default_section_max_characters: object = None,
-    ) -> dict | None:
-        policy = original_policy_for(
-            family,
-            repo,
-            audited_section_max_characters=audited_section_max_characters,
-            audited_default_section_max_characters=audited_default_section_max_characters,
-        )
-        if repo == QWEN_17B_BASE and policy is not None:
-            return {**policy, "section_max_characters": 399}
-        return policy
-
-    monkeypatch.setattr(catalog.long_form_policy, "policy_for", mismatched_policy_for)
-
-    assert catalog.section_size_control_for(QWEN_17B_BASE) is None
-    with pytest.raises(catalog.SectionSizeControlError) as error:
-        catalog.resolve_section_budget("qwen3-tts", QWEN_17B_BASE, 280)
-    assert error.value.code == "SECTION_MAX_CHARACTERS_UNSUPPORTED"
-
-
 def test_resolve_section_budget_rejects_a_stale_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     capability = catalog.section_size_control_for(QWEN_17B_BASE)
-    original_policy_for = long_form_policy.policy_for
+    original_policy_for = catalog.long_form_policy.policy_for
 
     def mismatched_policy_for(
         family: str,

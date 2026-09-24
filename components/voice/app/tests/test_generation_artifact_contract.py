@@ -486,11 +486,11 @@ def test_catalog_reports_runtime_cache_load_and_memory_truth(monkeypatch) -> Non
     # half is actually applied rather than shadowed by the free-memory check.
     assert vox["memory_eligible"] is False
 
-    # Kokoro's floor is 8 GB and it needs 2.75 GB loaded, so it clears both
-    # halves on this machine. Without a True case the assertions above would
-    # still pass if `memory_eligible` were hardwired to False.
-    kokoro = models["mlx-community/Kokoro-82M-bf16"]
-    assert kokoro["memory_eligible"] is True
+    # The Khmer MMS voice has an 8 GB floor and a sub-2 GB cold-load requirement,
+    # so it clears both halves on this machine. Without a True case the assertions
+    # above would still pass if `memory_eligible` were hardwired to False.
+    khmer = models["khmerttsopensource/khmer-tts"]
+    assert khmer["memory_eligible"] is True
 
     # Fish is 24 GB now, so it fails on total memory by a wide margin. This
     # assertion used to read `is None`, back when Fish carried no floor at all;
