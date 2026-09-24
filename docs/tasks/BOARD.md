@@ -35,6 +35,13 @@ the kit stops being able to over-promise, because the model becomes a real one.
 has no adapter yet, so the kit must not advertise it. Moving it early would put a model in the
 advertised list that no Mac can run.
 
+**The manifest is in the catalog while the adapter is still being written, and that is safe.**
+`native/StudioAPI.swift` builds every model list from the **worker's** `/api/catalog` and uses the
+Hub's packages only as a lookup (`packages[item.repo]`); nothing synthesises a row from a package.
+So Z-Image is currently a downloadable package with no picker entry, which is exactly the
+intended order — it becomes selectable when the worker advertises it and not before. Checked by
+grepping for any `packages.map` / `packages.values` construction: there is none.
+
 **Ship path needs no code change.** `packaging/stage_voice.py --image-runtime <dir>` accepts any
 runtime, calls `validate_runtime` on it and records its own `tree_digest` as
 `components.image.runtime_sha256`. Nothing pins the old runtime's digest, so shipping the bump is
