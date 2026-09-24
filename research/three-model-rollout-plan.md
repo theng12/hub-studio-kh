@@ -33,7 +33,7 @@ single-machine (24/32 GB) capabilities, not fleet ones.
 
 ## Phase 0 — standalone evidence (no app changes)
 
-Run on one capable Mac (this dev machine is the 32 GB M1 Max) before any integration. Every
+Run on one capable Mac (this dev machine is the 32 GB M2 Max (Mac14,13)) before any integration. Every
 model here is a compatibility target until it produces a legible-text image here.
 
 1. **Z-Image-Turbo** (smallest, do first):

@@ -6,7 +6,7 @@ Research note, not a qualification. All sizes are from Hugging Face metadata or 
 model/mflux cards; peak-memory figures are labelled by their source.
 
 Owner machines: see the canonical fleet in [`research/owner-hardware.md`](owner-hardware.md)
-(8 GB M1/M2; 16 GB M1/M2/M4; 24 GB M4; 32 GB M1 Max).
+(8 GB M1/M2; 16 GB M1/M2/M4; 24 GB M4; 32 GB M2 Max (Mac14,13)).
 
 ## Shortlist
 
@@ -34,7 +34,7 @@ Owner machines: see the canonical fleet in [`research/owner-hardware.md`](owner-
    just accuracy.
 
 On the bigger machines:
-- **M4 24 GB / 32 GB M1 Max:** Ideogram 4 is the pure-typography specialist, but its
+- **M4 24 GB / 32 GB M2 Max (Mac14,13):** Ideogram 4 is the pure-typography specialist, but its
   measured 22 GB peak means 32 GB+ is the comfortable tier — treat 24 GB as tight.
 - **Any of them:** Qwen-Image-2.1 is the best text renderer of the group, but on Apple
   Silicon it needs either a 32 GB+ mflux machine or the mlx-serve 4-bit route.
@@ -60,14 +60,14 @@ several under `mflux-community/*` and `filipstrand/Z-Image-Turbo-mflux-4bit`.
 ## First measured result — 2026-09-24
 
 FLUX.2 Klein 4-bit (the model the fleet ships today), run locally on the 32 GB
-M1 Max with mflux 0.20.0, against the two owner scenes:
+M2 Max (Mac14,13) with mflux 0.20.0, against the two owner scenes:
 
 | Scene | Resolution / steps | Wall | Peak | Text result |
 | --- | --- | --- | --- | --- |
 | Sleep-story cover, title "GOLDEN SLUMBER" | 1280×720 / 4 | 57.2 s | 2.37 GB | **correct** |
 | Storybook cover, title + subtitle | 1024×1024 / 4 | 73.3 s | 3.28 GB | title correct; subtitle asked "A Bedtime Story", rendered **"A Bediime Story"** |
 
-Evidence class: **[M]** measured on the owner's 32 GB M1 Max.
+Evidence class: **[M]** measured on the owner's 32 GB M2 Max (Mac14,13).
 
 Conclusion: the shipped model renders a large title cleanly but drops characters in
 smaller secondary text. That single misspelling is the concrete failure the

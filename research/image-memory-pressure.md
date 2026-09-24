@@ -36,7 +36,7 @@ Run every generation through `.build/text-tests/measure-image-memory.sh`, which 
 The decisive 8 GB signal is **swaps**, not peak GB. A model that fits shows 0 swaps;
 one that does not will swap and slow to a crawl or be killed.
 
-## Baseline: FLUX.2 Klein 4-bit (current fleet model) — 32 GB M1 Max
+## Baseline: FLUX.2 Klein 4-bit (current fleet model) — 32 GB M2 Max (Mac14,13)
 
 | Scene | Resolution | Peak MLX | Max RSS | Footprint | Process swaps |
 | --- | --- | --- | --- | --- | --- |
@@ -47,7 +47,7 @@ Note the earlier "2.37 GB peak" figure in `text-rendering-model-shortlist.md` wa
 **max RSS only** and understates pressure; the MLX and footprint figures above are
 the honest ones.
 
-## Z-Image-Turbo 4-bit (5.91 GB pack) — 32 GB M1 Max
+## Z-Image-Turbo 4-bit (5.91 GB pack) — 32 GB M2 Max (Mac14,13)
 
 | Scene | Resolution | Peak MLX | Max RSS | Footprint | Process swaps |
 | --- | --- | --- | --- | --- | --- |
@@ -62,7 +62,7 @@ Both models show 0 swaps on 32 GB, which says nothing about 8 GB: the cache is
 absorbing the slack. The 8 GB verdict still requires the constrained and on-device
 runs in "Open work" below.
 
-## Ideogram 4 q4 (14.9 GB pack) — 32 GB M1 Max
+## Ideogram 4 q4 (14.9 GB pack) — 32 GB M2 Max (Mac14,13)
 
 | Scene | Resolution | Peak MLX | Max RSS | Footprint | Compressor delta | Result |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ compression** and pushed system swap from 2.3 GB to 3.7 GB.
 1024² under heavy compression. Its typography was the best of the three models, at
 roughly 24 minutes per 1024² image.
 
-## Qwen-Image-2.1 4-bit via mlx-serve (10.7 GB pack) — 32 GB M1 Max
+## Qwen-Image-2.1 4-bit via mlx-serve (10.7 GB pack) — 32 GB M2 Max (Mac14,13)
 
 | Scene | Resolution | Resident | Result |
 | --- | --- | --- | --- |
