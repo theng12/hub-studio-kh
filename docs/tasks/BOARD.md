@@ -2,6 +2,48 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-16 — Z-Image-Turbo into the app (the mflux 0.17.5 → 0.20.0 bump) — 2026-09-24
+
+Owner asked for this to start. The bump is the gate: Z-Image cannot be selected until the
+`image-mflux` engine runs 0.20.0, and FLUX.2 Klein must be re-qualified on it first.
+
+Read-only research is **done and verified**: [`research/mflux-020-upgrade-findings.md`](../../research/mflux-020-upgrade-findings.md).
+Three findings change the plan, and the coordinator re-checked each against the repo rather than
+taking them on trust:
+
+- **The image runtime cannot be rebuilt right now.** `packaging/image-runtime/build.sh` builds
+  strictly offline from `.build/downloads` and exits if the pinned CPython archive is absent.
+  `.build/downloads`, `.build/uv-cache` and `Developer/.build/downloads` are all gone, and nothing
+  matching them is in `_trash/`. **Repopulating the cache is step 1**, not a detail — the first
+  person to edit `requirements.in` and run `build.sh` will otherwise hit "Pinned CPython archive
+  is unavailable" and think the bump is broken.
+- **`mlx` is a hard conflict.** The lock pins 0.31.2; mflux 0.20.0 requires `mlx>=0.32.0,<0.33.0`.
+  Re-pin **0.32.2** (0.32.1 has a recorded matmul regression) and move the lock hash in
+  `build.sh:44` with it.
+- **FLUX.2 Klein's pixels change, silently**, `67a27847…` → `16a5535f…` on decoded pixels. The
+  coordinator looked at both: same picture, one extra rock on the left bank. Numeric drift, not a
+  quality change. The engine cannot be blamed specifically — mflux and MLX moved together.
+- **The planned re-qualification oracle is broken and must be fixed before it is used.** The R07
+  plan says to compare the PNG *hash*, but the PNG carries EXIF with `generation_time_seconds`
+  and `mflux_version`, so a whole-file hash can never match — which is why both R07 receipts
+  already say `"matches_historical": false`. Compare **decoded pixels** instead; they are
+  run-to-run deterministic, and they are host-class specific.
+
+Good news that shrinks the risk: source compatibility is **total** — zero entry points removed,
+`Flux2Klein`/`generate_image`/`GeneratedImage.save` signatures compatible,
+`flux2_weight_definition.py` byte-identical across the bump, and the shipped FLUX pack was
+**measured loading and generating** on 0.20.0 through the worker's own code path.
+
+**Sequencing:** repopulate caches → re-pin mlx 0.32.2 + lock + build.sh hash → build into a fresh
+directory → `smoke_imports` → real FLUX load + generate comparing **decoded pixels**, and
+re-check the two **owner text scenes** (R07 is a landscape and says nothing about typography) →
+then the Z-Image adapter (import the pack, write the manifest, handle that its root has **no
+`model/` subdir** unlike FLUX, and never pass the bare `z-image-turbo` alias, which pulls ~31 GB
+of bf16 weights).
+
+**Not started:** nothing has been rebuilt. Also open from the same work — the 8 GB tier run, which
+the owner is running himself with `qualification/eight-gb-z-image-run.sh`.
+
 ### ST-15 — Fleet pool visibility (0.6.57) — 2026-09-24
 
 Owner report: *"after connecting each of the nodes, it doesn't show its own pool. And also in
