@@ -3,7 +3,7 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.56.
+Last updated: 0.6.56 (+ ST-14 local Chat Studio scope change, 2026-09-24).
 
 **0.6.56 (hotfix) — 8 GB Macs could not generate images.** `7187d8d` (0.6.55) made a
 model's RAM *qualification tier* the first `blockReason`, so the Image worker's advisory
@@ -13,8 +13,7 @@ in `native/StudioAPI.swift` (`blockReason` no longer returns the warning; the wo
 `memoryEligible == false` still blocks). Image label also restored to
 `FLUX.2 Klein 4B MLX 4-bit`. Native boundary/API/lifecycle suites and 14/14 Image tests
 pass. If a future change wants the tier to gate dispatch, it must do it in the worker or the
-Hub's admission — never in the app's `blockReason`. This hotfix was cut from `9756528` in a
-clean worktree, deliberately excluding uncommitted work in the main checkout.
+Hub's admission — never in the app's `blockReason`.
 
 ## Where things stand
 
@@ -139,9 +138,49 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   written, and the implementation committed locally at `3ab8984`. **Not pushed.** The owner runs
   the two pushes (step 8) and updates `main`. The Khmer adoption is written up in
   `research/khmer-tts-adoption-2026-09-24.md` and tracked by `docs/tasks/ST-12.md`.
-- **Khmer quality is ear-only and not yet judged by the owner.** Generated clips are in
+- **ST-13 TTS menu pruning — source and libraries done, NOT yet shipped.** The owner cut the
+  Voice menu to 12 entries after a full listening review
+  (`research/tts-archive-walkthrough-2026-09-24.md`, `research/tts-offer-review-2026-09-24.md`).
+  `catalog.py` is 7 families / 12 entries; 18 manifests moved to `_trash/manifests-2026-09-24/`;
+  all four kit libraries and the Mac library pruned (each kit now 20 entries, 19 packages,
+  ~58.6 GB); the capture tool's cut rows removed. **The test suite is not green**: ~58 failures
+  remain in tests built around cut models, concentrated in `test_section_size_control.py` (37,
+  the Qwen 1.7B 8-bit v2 audit suite) and `test_long_form_policy.py` (16). See `ST-13.md` for
+  the measured list and what was already fixed. **Do not stage or refresh the drives until those
+  are green**, and note ST-14 is serialized behind this. **The drives' 0.6.55 app bundle still
+  advertises the cut models**, so the kits must be re-staged before `release_kit.py` or
+  `verify-kit.sh` is trusted — expect advertised-but-missing until then. `generation.py` still
+  carries inert per-family wiring for the cut families. ST-13.A (pocket-tts adoption) is planned
+  but not started.
+- **ST-14 local Chat Studio — scope change; app-side structure DONE, distribution BLOCKED
+  (2026-09-24).** The owner directed that Chat is no longer deferred. Built and verified: a
+  packaged MLX chat worker (`components/chat/`, `packaging/chat_worker.py`) with JSON mode and
+  seed support; Hub wiring (`POST /api/hub/chat/completions`, the `/studio/chat/...` peer
+  proxy, the `chat-mlx → chat` engine map, `chat` in `WORKER_FOR_MODALITY`,
+  `activity.VALID_STUDIOS` and `standalone_config._REQUIRED_WORKERS`); and the native Chat page
+  moved from "Coming later" into Create. **49 chat tests pass**, `native/build.sh` exits 0, and
+  the full root suite (710 tests) has **no Chat failure** — its one error is the Voice product
+  subprocess timeout that ST-13 is fixing. Chosen model: `mlx-community/Qwen3.5-9B-4bit` @
+  `8b2b98c0…`, 5.98 GB (revised from OptiQ, whose index requires an 8.22 GB complete snapshot).
+  **Blocked on two remaining external conditions:** the shared `model-manifests/`/staging/kit
+  paths are owned by another session (the tree changed under this work on 2026-09-24 15:19–15:20
+  — 0.6.56 released and the manifest prune no longer appears in the working tree — so re-confirm
+  ownership before integrating); and gateway-kh is read-only here and does not serve chat on its
+  `studio_hub` kind (`research/chat-studio-gateway-bridge.md`). **The weights are now local** —
+  the 5.98 GB snapshot downloaded to `.build/chat-model/qwen3.5-9b-4bit` and the first real
+  generation ran: load 2.3 s, peak 5.72 GB, ~2.7–2.9 tok/s on an M2 Max, context 262144. **A
+  thinking toggle is required**: without `enable_thinking=False` the model emits a
+  `Thinking Process:` trace and JSON mode fails. The exact single-change unblock list is in
+  `ST-14.md`; the implementation record is
+  `research/chat-studio-adoption-2026-09-24.md`. Note: streaming through the Hub is buffered by
+  `studio_proxy`, so the app uses non-streaming.
+- **The VibeVoice offer is dead in 0.6.55** (loader remap bug, see the board's cautions). It is
+  one of the families ST-13 cuts, so it disappears with the re-stage; the bug is still worth
+  fixing upstream.
+- **Khmer quality was accepted by ear by the owner (2026-09-24):** both voices judged good and
+  all four generated clips (short + long-form for each) accepted. Clips are in
   `.build/khmer-adoption/audio/`. Whisper cannot score Khmer (it labels even the purpose-built
-  MMS model Vietnamese), so a passing test is not a quality claim.
+  MMS model Vietnamese), so the ear judgement — not the tests — is the quality evidence.
 - **Remote update**: built on both sides (Hub controller routes + node UI), **never exercised
   across a real fleet**. GatewayKH publishes → controllers mirror → nodes pull. Trust is the
   publisher key pinned on the node; `POST /api/hub/release/trust` is Hub-token only and now has a
