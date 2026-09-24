@@ -168,7 +168,7 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
         return {"code": "MODEL_NOT_PACKAGED", "detail": "model is not in the packaged catalog"}
     expected_modality = {
         "image-mflux": "image", "voice-mlx": "voice", "voice-vits": "voice",
-        "subtitle-mlx": "transcription", "music-mlx": "music",
+        "subtitle-mlx": "transcription", "music-mlx": "music", "chat-mlx": "chat",
     }.get(manifest["engine"])
     if expected_modality != envelope.get("modality"):
         return {"code": "MODEL_MODALITY_MISMATCH", "detail": "model is not available for this job modality"}
@@ -339,7 +339,9 @@ def _peer_work_request(method: str, path: str) -> bool:
     if method != "POST":
         return False
     cleaned = path.strip("/")
-    return cleaned.startswith("api/generate/") or cleaned == "api/transcribe"
+    return (cleaned.startswith("api/generate/")
+            or cleaned == "api/transcribe"
+            or cleaned == "v1/chat/completions")
 
 
 async def _request_model(request: Request, body: bytes, content_type: str) -> str:
@@ -1511,6 +1513,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # only ever needed somewhere to point.
     WORKER_FOR_MODALITY = {
         "image": "image", "voice": "voice", "transcription": "subtitle", "music": "music",
+        "chat": "chat",
     }
 
     def _proxy_target(path: str) -> tuple[str, str]:
@@ -1584,6 +1587,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 passthrough[name] = upstream.headers[name]
         return Response(content=upstream.content, status_code=upstream.status_code,
                         headers=passthrough)
+
+    @app.post("/api/hub/chat/completions")
+    async def hub_chat_completions(request: Request) -> Response:
+        """Local Chat completion for this app's own Chat page.
+
+        Reuses the peer surface's worker lookup, admission reservation and lease settlement:
+        the app talks to its own Hub, and the Hub re-signs the request with the worker token.
+        """
+        return await studio_proxy("chat", "v1/chat/completions", request)
 
     from . import delivery, operator_controls, statistics
     delivery.register_routes(app, monitor)

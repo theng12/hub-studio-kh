@@ -28,13 +28,13 @@ enum StudioPage: String, CaseIterable, Identifiable {
     /// lookup key and is persisted in saved state.
     var title: String { self == .transcription ? "Subtitle" : rawValue }
     /// Sidebar sections, in the order the owner asked for. "Create" is where work is made, and
-    /// Video and Chat sit last and quieter because neither has an engine yet. The raw values stay
+    /// Video sits last and quieter because it has no engine yet. The raw values stay
     /// stable, so moving a page between sections never invalidates saved state.
-    static let create: [Self] = [.image, .audio, .transcription, .music]
+    static let create: [Self] = [.image, .audio, .transcription, .music, .chat]
     static let library: [Self] = [.models, .voices, .jobs]
     static let fleet: [Self] = [.connections]
     static let app: [Self] = [.whatsNew, .settings]
-    static let comingLater: [Self] = [.video, .chat]
+    static let comingLater: [Self] = [.video]
     static let sidebarSections: [(title: String, pages: [Self])] = [
         ("Create", create),
         ("Library", library),

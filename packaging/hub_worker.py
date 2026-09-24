@@ -140,6 +140,19 @@ def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> l
             'runtime_id': music_id, 'outputs': data / 'music/outputs',
             'extra_args': ['--engine-root', str(engine)],
         })
+    if 'chat' in release.get('components', {}):
+        # The chat worker reuses the base runtime (mlx-lm lives there), so its staged identity
+        # is expected to equal the base runtime digest unless a dedicated runtimes/chat is added.
+        chat_id = release['components']['chat'].get('runtime_sha256')
+        if (not (resources / 'chat_worker.py').is_file()
+                or not (resources / 'components/chat/app/backend/main.py').is_file()
+                or not (resources / 'model-manifests/qwen3-5-9b-4bit.json').is_file()
+                or not _runtime_id(chat_id)):
+            raise ValueError('Incomplete Chat worker or release identity')
+        specs.append({
+            'id': 'chat', 'modality': 'chat', 'python': runtime / 'bin/python3',
+            'runtime_id': chat_id, 'outputs': data / 'chat/outputs', 'extra_args': [],
+        })
     return specs
 
 

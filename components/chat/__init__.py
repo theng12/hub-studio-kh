@@ -1,0 +1,1 @@
+"""Standalone Chat Studio component."""

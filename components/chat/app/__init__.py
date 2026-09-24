@@ -1,0 +1,1 @@
+"""Chat Studio application package."""

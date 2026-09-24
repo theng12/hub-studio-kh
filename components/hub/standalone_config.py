@@ -21,6 +21,7 @@ _REQUIRED_WORKERS = {
     "voice": "voice",
     "subtitle": "transcription",
     "music": "music",
+    "chat": "chat",
 }
 _SETTINGS_FILE = "device_settings.json"
 

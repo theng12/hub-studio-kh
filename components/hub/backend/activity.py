@@ -30,7 +30,7 @@ VALID_ORIGINS = frozenset({"hub", "local_ui", "api", "unknown"})
 # A worker names itself with the modality the Hub registers it under, so the
 # Subtitle worker reports "transcription" (its registry modality) and Music
 # reports "music".  ``expected_studio`` in validate_snapshot is that modality.
-VALID_STUDIOS = frozenset({"image", "voice", "transcription", "music"})
+VALID_STUDIOS = frozenset({"image", "voice", "transcription", "music", "chat"})
 VALID_OPERATIONS = frozenset({"image", "speech", "transcription", "music"})
 _ALLOWED_OPERATIONS = {
     "image": frozenset({"image"}),

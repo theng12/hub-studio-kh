@@ -54,7 +54,7 @@ def validate_manifest(manifest):
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('revision', ''))):
         raise PackageError('A full immutable model revision is required')
     if manifest.get('engine') not in ('image-mflux', 'voice-mlx', 'voice-vits',
-                                      'subtitle-mlx', 'music-mlx'):
+                                      'subtitle-mlx', 'music-mlx', 'chat-mlx'):
         raise PackageError('Unsupported model engine')
     if not isinstance(manifest.get('model_id'), str) or not manifest['model_id']:
         raise PackageError('Missing model_id')

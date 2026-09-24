@@ -47,6 +47,10 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # needed for inference and would multiply the kit size for no benefit.
     {"package_id": "khmer-tts-mms", "model_id": "khmerttsopensource/khmer-tts", "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5", "engine": "voice-vits", "exclude": ("eval/*", "training/*", "UPLOAD.md")},
     {"package_id": "khmer-tts-female-onnx", "model_id": "sengtha/khmer-tts-female-v2", "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2", "engine": "voice-vits", "exclude": ("*.pth", "khmer_tts.onnx", "khmer_tts_ls100.onnx", "khmer_tts_ls115.onnx", "config.json")},
+    # ── ST-14: the local Chat Studio's MLX text model ──
+    # Owner-selected Qwen3.5-9B, uniform 4-bit, text-only accepted. The OptiQ build was
+    # rejected: its index requires an `optiq_vision` shard, making the snapshot 8.22 GB.
+    {"package_id": "qwen3-5-9b-4bit", "model_id": "mlx-community/Qwen3.5-9B-4bit", "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53", "engine": "chat-mlx"},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -62,6 +66,7 @@ DETAILS: dict[str, dict[str, Any]] = {
     "whisper-base": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
     "khmer-tts-mms": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "An 83M-parameter VITS on torch; the Voice catalogue publishes an 8 GB floor and local inference measured a sub-1 GB footprint.")},
     "khmer-tts-female-onnx": {"defaults": {"parameters_source": "model/tts_meta.json"}, "memory": (8, 16, "A ~115 MB VITS ONNX graph on CPU; the Voice catalogue publishes an 8 GB floor.")},
+    "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (16, 16, "ST-14 owner decision: the common local text model on the 16 GB tier. Measured 5.72 GB peak on an M2 Max; unqualified on the fleet tiers.")},
 }
 
 

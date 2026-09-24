@@ -476,6 +476,13 @@ struct NativeStatsGroup: Decodable, Equatable {
     let modalities: [String: Int]?
 }
 
+/// One turn in the local Chat Studio transcript.
+struct NativeChatTurn: Identifiable, Equatable {
+    let id: String
+    let role: String
+    var content: String
+}
+
 struct NativeModelStats: Decodable, Equatable, Identifiable {
     let model: String
     let count: Int
@@ -1010,6 +1017,14 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var routingPin: String? { didSet { scheduleSave() } }
     @Published private(set) var submittingImage = false
     var imageConfiguration: NativeImageConfiguration? { imageConfigurations[imageModel] }
+
+    /// Local Chat Studio: one transcript, one local text model. The page talks to the Hub's
+    /// `/api/hub/chat/completions`, which proxies to the packaged Chat worker with the same
+    /// admission and worker signing as every other Studio.
+    @Published var chatModel = "" { didSet { scheduleSave() } }
+    @Published var chatPrompt = "" { didSet { scheduleSave() } }
+    @Published private(set) var chatTurns: [NativeChatTurn] = []
+    @Published private(set) var submittingChat = false
 
     @Published private(set) var downloads: [NativeDownload] = []
     @Published private(set) var audioSpeakers: [String] = []
@@ -1637,6 +1652,36 @@ final class NativeWorkspaceStore: ObservableObject {
 
     func restoreImageDefaults() {
         imageSettings = imageConfiguration?.defaults
+    }
+
+    /// Send the current message to the local Chat worker and append the reply.
+    func sendChat() async {
+        guard !submittingChat, let requestConnection = connectionID else { return }
+        let prompt = chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { error = "Enter a message."; return }
+        do {
+            submittingChat = true
+            defer { if connectionID == requestConnection { submittingChat = false } }
+            var messages = chatTurns.map { HubChatMessage(role: $0.role, content: $0.content) }
+            messages.append(HubChatMessage(role: "user", content: prompt))
+            let reply: HubChatCompletion = try await sendHubJSON(
+                ["api", "hub", "chat", "completions"],
+                body: HubChatRequest(model: "", messages: messages, stream: false))
+            guard connectionID == requestConnection else { return }
+            guard let content = reply.choices.first?.message.content, !content.isEmpty else {
+                throw NativeAPIError.message("The local Chat worker returned no message.")
+            }
+            chatTurns.append(NativeChatTurn(id: UUID().uuidString, role: "user", content: prompt))
+            chatTurns.append(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content))
+            chatPrompt = ""
+            error = nil
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Chat") }
+        }
+    }
+
+    func clearChat() {
+        chatTurns.removeAll()
     }
 
     func generateImage() async {
@@ -4045,6 +4090,11 @@ final class NativeWorkspaceStore: ObservableObject {
         if !models.contains(where: { $0.repo == musicModel && $0.function == .music && $0.supported }) {
             musicModel = models.first { $0.function == .music && $0.supported }?.repo ?? ""
         }
+        // Chat is the same rule: never keep a selected model the catalogue no longer lists as
+        // supported, or the page submits work the Hub refuses.
+        if !models.contains(where: { $0.repo == chatModel && $0.function == .chat && $0.supported }) {
+            chatModel = models.first { $0.function == .chat && $0.supported }?.repo ?? ""
+        }
     }
 
     /// Which way a model is told what to sound like.
@@ -4189,7 +4239,28 @@ final class NativeWorkspaceStore: ObservableObject {
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
                 pausedStudio: package?.pausedStudio)
         }
-        return audioModels + transcriptionModels + imageModels
+        let chatModels = audio.filter { item in
+            let capabilities = item.capabilities ?? []
+            return capabilities.contains("chat.completion") || capabilities.contains("chat")
+        }.map { item in
+            let package = packages[item.repo]
+            let block = Self.blockReason(memoryWarning: item.memoryWarning,
+                                         memoryEligible: item.memoryEligible, package: package)
+            let cached = item.cache?.state == "cached"
+            let ready = item.runtimeReady == true && block == nil && cached
+            let note = ready
+                ? "Ready for local chat."
+                : "Install the Chat model and ensure the local Chat worker is running."
+            return NativeModel(
+                id: "chat:\(item.repo)", repo: item.repo, label: item.label,
+                family: item.family ?? "Chat", function: .chat, cached: cached,
+                supported: package != nil, supportNote: note, sizeGB: item.sizeGb,
+                capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
+                supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
+                blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
+                pausedStudio: package?.pausedStudio)
+        }
+        return audioModels + transcriptionModels + imageModels + chatModels
             + Self.musicModels(audio, packages: packages)
     }
 
@@ -4960,6 +5031,15 @@ private struct GenerationAvailability: Decodable { let qwen3PresetSpeakers: [Gen
 private struct GenerationSpeaker: Decodable { let id: String }
 private struct JobsResponse: Decodable { let jobs: [JobWire] }
 private struct HubJobsResponse: Decodable { let batches: [HubJobSummary] }
+private struct HubChatMessage: Codable { let role: String; let content: String }
+private struct HubChatRequest: Encodable { let model: String; let messages: [HubChatMessage]; let stream: Bool }
+private struct HubChatCompletion: Decodable {
+    struct Choice: Decodable {
+        struct Message: Decodable { let content: String }
+        let message: Message
+    }
+    let choices: [Choice]
+}
 private struct HubJobSummary: Decodable { let id: String; let modality: String }
 private struct HubJobDetail: Decodable {
     let id: String

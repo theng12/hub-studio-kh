@@ -1,0 +1,139 @@
+{
+  "defaults": {
+    "parameters_source": "model/generation_config.json"
+  },
+  "engine": "chat-mlx",
+  "files": [
+    {
+      "path": "model/chat_template.jinja",
+      "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+      "size": 7756,
+      "source_path": "chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "a96942cb6a8a1d3f1d17514d81a1925d04362a6a3233b389d13012211baaa9f8",
+      "size": 3331,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/config.json"
+      ]
+    },
+    {
+      "path": "model/model-00001-of-00002.safetensors",
+      "sha256": "a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd",
+      "size": 5349771222,
+      "source_path": "model-00001-of-00002.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/model-00001-of-00002.safetensors"
+      ]
+    },
+    {
+      "path": "model/model-00002-of-00002.safetensors",
+      "sha256": "b0a770bf8469c7f3f18756a0e0283f1c1174344a83e059a4e483f6af4907352d",
+      "size": 600449850,
+      "source_path": "model-00002-of-00002.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/model-00002-of-00002.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "dd023913fb87cfdae27fb11dcf695117c925833796ccac3c64117d6652d8ff1e",
+      "size": 123592,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+      "size": 390,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/processor_config.json",
+      "sha256": "14932921ca485d458a04dafd8069fbb0a4505622a48208d19ed247115801385b",
+      "size": 1300,
+      "source_path": "processor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/processor_config.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+      "size": 19989343,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "e98f1901ac6f0adff67b1d540bfa0c36ac1a0cf59eb72ed78146ef89aafa1182",
+      "size": 1139,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/video_preprocessor_config.json",
+      "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+      "size": 385,
+      "source_path": "video_preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/video_preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+      "size": 6722759,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/resolve/8b2b98c00a6b4d291155e4890773ca8f769aee53/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/Qwen3.5-9B-4bit",
+  "package_id": "qwen3-5-9b-4bit",
+  "qualification": {
+    "memory_evidence": "Owner-chosen common fleet model, uniform 4-bit MLX: 5.98 GB of weights loads inside the 16 GB tier with room for context. 8 GB is not viable. Local import and inference qualification remain required. See research/story-text-llm-shortlist.md.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/Qwen3.5-9B-4bit",
+        "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/Qwen3.5-9B-4bit",
+        "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/revision/8b2b98c00a6b4d291155e4890773ca8f769aee53",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

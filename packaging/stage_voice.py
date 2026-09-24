@@ -266,6 +266,15 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             'source_sha256': tree_digest(subtitle_source), 'runtime': 'voice',
             'runtime_sha256': release['runtime_sha256'],
         }
+        # ST-14: the local Chat Studio. Its own process and state root, reusing the shared
+        # (already staged) Voice runtime bytes, which carry mlx-lm.
+        chat_source = resources / 'components/chat'
+        copy_tracked_tree(ROOT / 'components/chat', chat_source)
+        shutil.copyfile(ROOT / 'packaging/chat_worker.py', resources / 'chat_worker.py')
+        release['components']['chat'] = {
+            'source_sha256': tree_digest(chat_source), 'runtime': 'voice',
+            'runtime_sha256': release['runtime_sha256'],
+        }
         if music_runtime is not None:
             music_source = resources / 'components/music'
             copy_tracked_tree(ROOT / 'components/music', music_source)

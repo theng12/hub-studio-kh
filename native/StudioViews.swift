@@ -635,6 +635,7 @@ struct StudioContent: View {
                 case .audio: audioWorkspace
                 case .image: imageWorkspace
                 case .music: musicWorkspace
+                case .chat: chatWorkspace
                 case .transcription: transcriptionWorkspace
                 case .models: modelsWorkspace
                 case .voices: voicesWorkspace
@@ -888,7 +889,7 @@ struct StudioContent: View {
         return value >= 60 ? String(format: "%.1f min", value / 60) : String(format: "%.1f s", value)
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
-        guard page == .audio || page == .transcription || page == .image || page == .music else { return "Engine not installed" }
+        guard page == .audio || page == .transcription || page == .image || page == .music || page == .chat else { return "Engine not installed" }
         guard connected else { return "Services stopped" }
         if workspace.refreshing && workspace.models.isEmpty { return "Checking models…" }
         return workspace.models.contains { $0.function == page.function && $0.supported && $0.cached && $0.runtimeReady } ? "Ready to create" : "Needs a model"
@@ -902,6 +903,75 @@ struct StudioContent: View {
         case .video: return "Generate video clips."
         case .chat: return "Work with local language models."
         default: return ""
+        }
+    }
+
+    private var selectedChatModel: NativeModel? { workspace.models.first { $0.repo == workspace.chatModel && $0.function == .chat } }
+
+    private var chatWorkspace: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            heading("Chat Studio", "Work with a language model running on this Mac.")
+            if !connected { setup }
+            HSplitView {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack {
+                            Text("Message").font(.headline)
+                            Spacer()
+                            Button("Clear") { workspace.clearChat() }
+                                .disabled(workspace.chatTurns.isEmpty || workspace.submittingChat)
+                        }
+                        TextEditor(text: $workspace.chatPrompt)
+                            .font(.body).padding(8).frame(height: 155)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            .accessibilityLabel("Chat message")
+                        HStack {
+                            if workspace.submittingChat { ProgressView().controlSize(.small) }
+                            Spacer()
+                            Button("Send") { Task { await workspace.sendChat() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!connected || workspace.submittingChat
+                                          || workspace.chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                          || selectedChatModel?.supported != true
+                                          || selectedChatModel?.cached != true
+                                          || selectedChatModel?.runtimeReady != true)
+                        }
+                        if selectedChatModel?.supported != true || selectedChatModel?.cached != true
+                            || selectedChatModel?.runtimeReady != true {
+                            Text("No ready Chat model. Install the local Chat model and start its worker; the page sends to Qwen3.5-9B through the Hub.")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let warning = selectedChatModel?.memoryWarning {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }.padding(.trailing, 20).padding(.bottom, 20)
+                }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Conversation").font(.headline)
+                        if workspace.chatTurns.isEmpty {
+                            Text("No messages yet. The first prompt starts the conversation.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        ForEach(workspace.chatTurns) { turn in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(turn.role == "user" ? "You" : "Model")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text(turn.content).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color(nsColor: .controlBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }.padding(20)
+                }.frame(minWidth: 380)
+            }
         }
     }
 

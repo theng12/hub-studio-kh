@@ -192,15 +192,15 @@ require(ShellConfiguration.preparedLibrary(
 require(StudioFunction.allCases.map(\.rawValue) == ["Audio", "Transcription", "Image", "Music", "Video", "Chat"], "owner navigation order")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 // The sidebar is grouped by what a page is for: work is created, libraries are maintained, the
-// fleet is connected, app pages are settings, and the two engine-less studios wait at the end.
+// fleet is connected, app pages are settings, and the engine-less Video studio waits at the end.
 require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet", "App", "Coming later"],
         "the sidebar sections are named and ordered as the owner asked")
-require(StudioPage.create == [.image, .audio, .transcription, .music],
+require(StudioPage.create == [.image, .audio, .transcription, .music, .chat],
         "Create holds every workspace that can make something today")
 require(StudioPage.library == [.models, .voices, .jobs], "Library holds the things the operator maintains")
 require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
 require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")
-require(StudioPage.comingLater == [.video, .chat], "Video and Chat stay reachable but last")
+require(StudioPage.comingLater == [.video], "Video stays reachable but last")
 // The notes are reachable from the App section, and the page must not pretend to be a workspace:
 // it creates nothing.
 require(StudioPage.whatsNew.function == nil, "What's New is a page, not a studio function")
