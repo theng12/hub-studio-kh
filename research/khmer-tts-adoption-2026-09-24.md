@@ -67,9 +67,10 @@ alone and is unrelated to this work. New manifest + engine tests pass (10 + 8).
 ## Not done / open
 
 - **Not pushed** to `main` or `implementation/voice-runtime` — the owner runs the two pushes.
-- Khmer quality of both voices has not been judged by the owner's ear. Generated clips are under
-  `.build/khmer-adoption/audio/`. Whisper cannot score Khmer, so the passing tests are not a
-  quality claim.
+- **Khmer quality was accepted by ear by the owner (2026-09-24):** both voices judged good, and
+  all four generated clips (short + long-form for each) accepted. Clips are under
+  `.build/khmer-adoption/audio/`. Whisper cannot score Khmer, so this ear judgement — not the
+  passing tests — is the quality evidence.
 - Independent review not performed.
 - The capture-tool pagination fix means any *other* manifest captured from a >50-file repo may
   have been silently truncated in the past. Only the two new packages were recaptured; the
