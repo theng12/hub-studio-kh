@@ -156,14 +156,23 @@ Z_IMAGE_TURBO = ImageModel(
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
     memory=MemoryPolicy(low_ram_below_bytes=Z_IMAGE_LOW_RAM_BELOW_BYTES),
-    # The Hub's live-free floor, from the measurement it actually has: the bounded low-RAM
-    # configuration peaks at 7.12-7.24 GB [M, 32 GiB M2 Max], so a Mac with 8 GB free can
-    # hold it and a Mac with 3 GB free cannot. This is the bounded configuration's number.
-    # It is deliberately *not* 16 GB total: the default configuration's requirement on a
-    # 16 GB host is unmeasured (its 17.67 GB figure is cache-inflated on a 32 GB host), and
-    # the 8 GB tier is still being measured. On a host large enough to choose the default
-    # mode this floor is a lower bound, not a promise about MLX's cache growth.
-    min_free_memory_gb=8.0,
+    # The Hub's live-free floor. It stops a job being started into a nearly-full Mac, which is
+    # what turns a slow generation into a killed worker — and nothing more than that.
+    #
+    # It was 8.0, taken from the bounded low-RAM footprint (7.12-7.24 GB measured on a 32 GiB
+    # M2 Max). That was a mistake worth naming: a *footprint* is not a *free-memory*
+    # requirement, and on an 8 GB Mac — the very tier this model has no measurement for — a
+    # floor of 8 GB can never be met. Worse, the Hub answers an unmet free floor with "wait",
+    # not "skip" (broker._memory_gate), so the job would have waited for memory that was never
+    # going to arrive rather than failing or running. The floor is now a guard against starting
+    # into a full machine — a little above FLUX's 2.0 because this model's weights are 28 %
+    # larger — and it leaves an 8 GB Mac free to attempt the model in low-RAM mode, which is
+    # exactly the measurement that is outstanding.
+    #
+    # What decides "this machine class is unqualified" is the published *tier*
+    # (min_unified_memory_gb = 16): reported to the operator with a below-tier warning, and
+    # deliberately never a wall, per memory_admission's own doctrine.
+    min_free_memory_gb=3.0,
     qualification={
         'measured_on': '32 GiB M2 Max (Mac14,13), mflux 0.20.0, 4-bit pack',
         'measured_resolutions': ['1280x720', '1024x1024'],

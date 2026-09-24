@@ -267,12 +267,21 @@ class MemoryCatalogTests(unittest.TestCase):
 
         entries = self.catalog(16 * GiB)
         z_admission = memory_admission.describe(Z_IMAGE_TURBO.repo, entries[Z_IMAGE_TURBO.repo])
-        self.assertEqual(z_admission['effective_min_free_memory_gb'], 8.0)
-        self.assertEqual(z_admission['catalog_min_free_memory_gb'], 8.0)
+        self.assertEqual(z_admission['effective_min_free_memory_gb'], 3.0)
+        self.assertEqual(z_admission['catalog_min_free_memory_gb'], 3.0)
         self.assertEqual(z_admission['effective_min_total_memory_gb'], 0.0)
-        # Not a 16 GB total requirement claimed as measured: only the bounded footprint is.
-        self.assertGreater(8.0, Z_IMAGE_TURBO.qualification['measured_peak_gb']['low_ram'])
-        self.assertLess(8.0, 16.0)
+        # The invariant, not the number, because the number was wrong once in a way that cost a
+        # measurement. The floor guards against starting into a nearly-full Mac; it must not
+        # become a tier in disguise. A free floor at or above the smallest machine's *total* RAM
+        # can never be satisfied there, and the Hub answers an unmet free floor with "wait"
+        # rather than "skip" (broker._memory_gate) - so the job waits for memory that is never
+        # coming instead of running or failing. It was 8.0, which did exactly that on the 8 GB
+        # tier: the one tier with no measurement, and the one that needed to run.
+        SMALLEST_FLEET_TOTAL_GB = 8.0
+        self.assertLess(z_admission['effective_min_free_memory_gb'], SMALLEST_FLEET_TOTAL_GB)
+        # Still a real guard rather than drifting to nothing: above FLUX's 2.0, since this
+        # model's weights are the larger of the two.
+        self.assertGreater(z_admission['effective_min_free_memory_gb'], 2.0)
 
         flux_admission = memory_admission.describe(MODEL_ID, entries[MODEL_ID])
         self.assertEqual(flux_admission['effective_min_free_memory_gb'], 2.0)

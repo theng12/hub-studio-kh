@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.60 — 2026-09-24 · Z-Image-Turbo 4-bit can be tried on an 8 GB Mac
+
+A one-line fix with an outsized effect, and it was mine. When Z-Image-Turbo 4-bit was added it
+published a **live-free-memory floor of 8.0 GB**, taken from its measured low-RAM footprint
+(7.12-7.24 GB on a 32 GiB M2 Max). That conflated two different things: a *footprint* is not a
+*free-memory* requirement.
+
+On an 8 GB Mac a floor of 8 GB can never be met — and the Hub answers an unmet free floor with
+**"wait"**, not "skip" (`broker._memory_gate`), so the job would have sat waiting for memory that
+was never going to arrive. The one tier with no measurement was the one tier that could not run to
+produce it.
+
+- The floor is now **3.0 GB**: a real guard against starting into a nearly-full Mac, a little above
+  FLUX's 2.0 because Z-Image's weights are 28 % larger, and satisfiable on an 8 GB Mac.
+- Verified against the gate itself: an 8 GB Mac with 3.0-5.0 GB free now returns `run`; with 2.0 GB
+  free it correctly returns `wait`.
+- The test now asserts the **invariant** rather than the number — the free floor must stay below the
+  smallest fleet machine's total RAM, or it silently becomes a tier in disguise and stalls instead
+  of refusing. The old test pinned 8.0 and passed while the bug was live.
+
+What decides "this machine class is unqualified" remains the published **tier**
+(`min_unified_memory_gb = 16`), reported with a below-tier warning and deliberately never a wall —
+per `memory_admission`'s own doctrine that a RAM floor is a qualification tier, not a wall. So an
+8 GB Mac is offered Z-Image-Turbo 4-bit, warned that it is below tier, and runs it in low-RAM mode.
+The 8 GB measurement is what turns that into a qualified tier or a documented exclusion.
+
 ## 0.6.59 — 2026-09-24 · Z-Image-Turbo, and the engine it needed
 
 Image gains a second model. **Z-Image-Turbo** is selectable beside FLUX.2 Klein, and it renders

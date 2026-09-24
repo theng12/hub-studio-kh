@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.60 — 2026-09-24
+
+### Z-Image-Turbo on an 8 GB Mac
+
+A fix so the 8 GB Macs can actually try Z-Image-Turbo 4-bit. When it shipped in 0.6.59 it asked
+for 8 GB of *free* memory before starting — which an 8 GB Mac can never have, so the job would
+have queued forever instead of running. It now asks for 3 GB free, which is a guard against
+starting into a nearly-full Mac rather than a disguised "this machine is too small".
+
+8 GB Macs are told the model is above their tier, and it runs in its low-memory mode. Whether it
+belongs there is being measured; this release is what makes the measurement possible.
+
 ## 0.6.59 — 2026-09-24
 
 ### A second image model, and it spells properly
