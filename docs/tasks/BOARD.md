@@ -26,9 +26,11 @@ wiped by any save made while the role was not `"agent"`.
 - Native: Controller/Node badge + address per row, a header naming the group, a node's "Joined
   nodes" section naming its controller, and no "Send here" on a node (a node does not dispatch).
 
-**Released locally:** `/Applications` = 0.6.57 / `12e377f`, DMG `dist/StudioHub-0.6.57-12e377f.dmg`,
-all four `KH-STUDIO-*` kits refreshed and verifying PASS. Not pushed — the owner runs the two
-pushes in [`HANDOFF.md`](HANDOFF.md) step 8.
+**Released and pushed:** `/Applications` = 0.6.57 / `12e377f`, DMG
+`dist/StudioHub-0.6.57-12e377f.dmg`, all four `KH-STUDIO-*` kits refreshed and verifying PASS.
+Both `implementation/voice-runtime` and `main` are on `origin` at `34014d5`; the remote had been
+at `46e5d89` (0.6.54), so 0.6.55–0.6.57 were all unpublished until then. `main` moved by
+fast-forward — no history rewritten.
 
 **Open follow-ups from this work:** collapse the two per-node probe passes on the Fleet page onto
 one shared read before the fleet reaches the 64-node cap; per-tier throughput and the 8 GB M1/M2

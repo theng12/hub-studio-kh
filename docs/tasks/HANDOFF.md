@@ -60,14 +60,17 @@ Hub's admission — never in the app's `blockReason`.
   0.17.5 → 0.20.0 bump plus a per-model adapter before the app can use it
   (`research/three-model-rollout-plan.md`).
 
-- **0.6.57 is cut locally and installed; not pushed.** Staged (`.build/StudioHub-0657/`), installed
-  to `/Applications` (`0.6.57 / 12e377f`, all six components), DMG built and verified
+- **0.6.57 is released and pushed.** Staged (`.build/StudioHub-0657/`), installed to `/Applications`
+  (`0.6.57 / 12e377f`, all six components), DMG built and verified
   (`dist/StudioHub-0.6.57-12e377f.dmg` — mounted, read back 0.6.57 with chat+hub+image+music+
   subtitle+voice), all four `KH-STUDIO-*` kits refreshed to 0.6.57 (60,630 files each) and each
   verified `RESULT: PASS`. The displaced `Studio Hub.app-0.6.56` was preserved into each drive's
   own `_trash/` — `.build/prepare-kit.sh` now moves it there instead of `rm -rf`, and points at
-  `StudioHub-0657`. Kit readmes updated and copied. **The pushing owner still has to run the two
-  pushes in step 8.**
+  `StudioHub-0657`. Kit readmes updated and copied. **Step 8 is done:** both
+  `implementation/voice-runtime` and `main` are pushed and `origin` now carries `34014d5` — the
+  remote had been sitting at `46e5d89` ("Kit readmes to 0.6.54"), so 0.6.55, 0.6.56 and 0.6.57
+  were all unpublished until 2026-09-24. Pre-publish scan found no secrets, no token files and no
+  model weights in the 22 commits; `main` moved by fast-forward, so nothing was rewritten.
 
 - Release **0.6.56** is superseded. The 8 GB `blockReason` fix from it is carried forward.
 - **0.6.55 adds two Khmer voice families** — `khmer-tts-mms` (`khmerttsopensource/khmer-tts`,
