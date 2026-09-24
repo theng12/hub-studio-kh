@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.56 — 2026-09-24
+
+### Image generation works again on 8 GB Macs
+
+An 8 GB Mac was showing that FLUX.2 Klein needs a 16 GB Mac and refusing to generate. The
+model still runs there — the app was treating the model's *recommended* memory tier as a hard
+requirement. It now warns instead of refusing, the same way it already did for every other
+below-tier model. 16 GB, 24 GB and 32 GB Macs were never affected.
+
+### The model is named in full again
+
+The Image model reads **FLUX.2 Klein 4B MLX 4-bit** — so you can see the size and the
+quantization at a glance in the model list, instead of just "FLUX.2 Klein".
+
 ## 0.6.55 — 2026-09-24
 
 ### Two Khmer voices, on your Mac

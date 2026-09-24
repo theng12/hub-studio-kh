@@ -3,7 +3,18 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.55.
+Last updated: 0.6.56.
+
+**0.6.56 (hotfix) — 8 GB Macs could not generate images.** `7187d8d` (0.6.55) made a
+model's RAM *qualification tier* the first `blockReason`, so the Image worker's advisory
+`memory_warning` set `runtimeReady=false` and `usableModel` refused every submit. FLUX.2
+Klein was unusable on the whole 8 GB tier (Chat too); 16/24/32 GB were never affected. Fixed
+in `native/StudioAPI.swift` (`blockReason` no longer returns the warning; the worker's
+`memoryEligible == false` still blocks). Image label also restored to
+`FLUX.2 Klein 4B MLX 4-bit`. Native boundary/API/lifecycle suites and 14/14 Image tests
+pass. If a future change wants the tier to gate dispatch, it must do it in the worker or the
+Hub's admission — never in the app's `blockReason`. This hotfix was cut from `9756528` in a
+clean worktree, deliberately excluding uncommitted work in the main checkout.
 
 ## Where things stand
 

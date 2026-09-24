@@ -90,7 +90,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         ready = state['ready']
         files = state['files']
         return {'models': [{
-            'label': 'FLUX.2 Klein', 'name': 'FLUX.2 Klein', 'repo': MODEL_ID,
+            'label': 'FLUX.2 Klein 4B MLX 4-bit', 'name': 'FLUX.2 Klein 4B MLX 4-bit', 'repo': MODEL_ID,
             'model_id': MODEL_ID, 'family': 'flux2-klein', 'modality': 'image',
             'capabilities': ['txt2img'], 'hub_operation': 'image.text_to_image',
             'model_revision': MODEL_REVISION, 'qualified_revision': MODEL_REVISION,

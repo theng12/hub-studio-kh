@@ -4241,8 +4241,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// the chip, the studio process - and each has a different fix, so each gets its own sentence.
     private static func blockReason(memoryWarning: String?, memoryEligible: Bool?,
                                     package: HubModelPackage?) -> String? {
-        // The one an operator cannot fix by clicking anything: this Mac is below the model's tier.
-        if let warning = memoryWarning, !warning.isEmpty { return warning }
+        // `memoryWarning` is the published RAM *tier*, and a tier is advice, not a gate. The
+        // worker still owns the live free-memory guard, and the owner runs FLUX.2 Klein on
+        // 8 GB Macs. The tier is surfaced through `NativeModel.memoryWarning`; returning it
+        // here is what made an 8 GB Mac read "needs 16 GB" and refuse to generate. Only the
+        // worker's own hard eligibility gate blocks.
+        _ = memoryWarning
         if memoryEligible == false { return "This Mac does not have enough memory for this model." }
         guard let package else { return "This model is not part of the packaged catalog." }
         // A pause outranks the other gates: while it is set the Hub refuses every job, whatever the

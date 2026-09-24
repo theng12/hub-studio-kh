@@ -35,10 +35,13 @@ class ModelReasonTests(unittest.TestCase):
                        "Studio is not running", "cannot run this model right now",
                        "not have enough memory"):
             self.assertIn(phrase, builder, f"no sentence for the {phrase!r} gate")
-        # The memory tier wins when the catalog knows it: it is the one gate an operator cannot fix
-        # by clicking anything, so it must not be buried under a generic "ineligible".
-        self.assertLess(builder.index("memoryWarning"), builder.index("runtimeState"),
-                        "the memory reason must be checked before the generic gates")
+        # A published RAM tier is advice, not a gate. The worker still enforces the live
+        # free-memory guard, and the owner runs FLUX.2 Klein on 8 GB Macs; returning the
+        # tier as a block reason made an 8 GB Mac read "needs 16 GB" and refuse to run.
+        self.assertNotIn("if let warning = memoryWarning", builder,
+                         "the RAM tier must be shown, not turned into a block")
+        self.assertIn("memoryEligible == false", builder,
+                      "the worker's own hard memory gate must still block")
 
     def test_an_unusable_model_is_marked_and_explained_where_it_is_chosen(self) -> None:
         picker = VIEWS[VIEWS.index("private func modelPicker("):]

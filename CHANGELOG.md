@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.56 — 2026-09-24 · 8 GB Macs can generate images again
+
+`7187d8d` (0.6.55) turned a model's *qualification tier* into a hard block, regressing
+`f9feca5` ("a RAM floor is a qualification tier, not a wall") three days later. The Image
+worker publishes `memory_warning` on any Mac below the 16 GB tier; the new `blockReason`
+returned that warning as the model's reason, which set `runtimeReady` to false, and
+`usableModel` then refused every submit. FLUX.2 Klein image generation was dead on every
+8 GB Mac even though the worker itself would have accepted the job.
+
+- **`blockReason` no longer returns `memoryWarning`.** The tier is still surfaced through
+  `NativeModel.memoryWarning` and shown in the Image workspace; only the worker's own hard
+  gate (`memoryEligible == false`) blocks. Voice's `memory_eligible` gate is unchanged.
+- **Image label restored to `FLUX.2 Klein 4B MLX 4-bit`.** It had been reduced to
+  `FLUX.2 Klein`, dropping the bits/weight/quantization the picker is designed to keep;
+  `pickerName` still drops only the "recommended" and runtime-marker suffix.
+- `tests/test_model_reasons.py` now pins the advisory-not-blocking behaviour instead of the
+  regression.
+
+Affected: every 8 GB Mac, Image (and Chat). 16/24/32 GB machines were never affected.
+Evidence: native boundary, API and lifecycle suites pass; 14/14 Image tests pass.
+
 ## 0.6.55 — 2026-09-24 · two Khmer voices, and a manifest capture that no longer truncates
 
 Voice Studio gains two single-speaker Khmer families (ST-12, owner request). Every other TTS
