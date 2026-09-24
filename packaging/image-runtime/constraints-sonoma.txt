@@ -1,4 +1,4 @@
 # MLX publishes macOS-specific wheels.  Keep the Sonoma/arm64 artifacts
 # explicit so a resolver on a newer build host cannot silently raise the floor.
-mlx @ https://files.pythonhosted.org/packages/c3/47/5f33906cb03d6a378a697cd2d2641a26b37dea17ee3d9124d7e39e8eca01/mlx-0.31.2-cp312-cp312-macosx_14_0_arm64.whl#sha256=e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f
-mlx-metal @ https://files.pythonhosted.org/packages/3f/69/fe3b783ebe999f3118234e1e940feb622518bfb1dea6ac5d13b1d36a8449/mlx_metal-0.31.2-py3-none-macosx_14_0_arm64.whl#sha256=b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc
+mlx @ https://files.pythonhosted.org/packages/38/f7/5664e13821491559c953494e6705c818203d6880d713a0c22e12bead9564/mlx-0.32.2-cp312-cp312-macosx_14_0_arm64.whl#sha256=77217798a2b036bae9f213b851d4cde4581893787c9964458b7d471f86036bd6
+mlx-metal @ https://files.pythonhosted.org/packages/f7/ab/ba1952908c5d2a5070cf1cfbfea0161c4751ea62299e2776819810917483/mlx_metal-0.32.2-py3-none-macosx_14_0_arm64.whl#sha256=3825fff379dbc107dd3413e564a06caeaa24819910ec49c0439e454c06a1b9b8

@@ -1,6 +1,6 @@
 # ST-03 Image runtime: pinned FLUX.2 Klein MLX/mflux plus its private HTTP server.
 # Source: imagestudio-mac app/requirements-generation.lock.txt at the exact
 # read-only source commit recorded in research/st01-runtime-contracts.json.
-mflux==0.17.5
+mflux==0.20.0
 fastapi==0.141.1
 uvicorn==0.52.4
