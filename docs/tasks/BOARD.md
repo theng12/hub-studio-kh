@@ -16,6 +16,41 @@ pushed**; the owner runs the two pushes in `HANDOFF.md` step 8. Local commit `3a
 suite 716/2; root suite 659/11/1 pre-existing Subtitle failure. Owner ear check of the two
 voices is the remaining open item.
 
+### ST-14 — Local Chat Studio (MLX text model) — 2026-09-24
+
+Owner request: stock a local LLM and add a real **Chat** Studio, taking it out of
+"Coming later". Owner-selected shape: **MLX-first**, local Chat Studio + stocking first,
+`Qwen3.5-9B` only — stocked build `mlx-community/Qwen3.5-9B-4bit` @ `8b2b98c0…` (5.98 GB;
+revised from OptiQ, whose index requires an 8.22 GB complete snapshot), text-only accepted.
+Card: [ST-14](ST-14.md); implementation record
+[chat-studio-adoption-2026-09-24.md](../../research/chat-studio-adoption-2026-09-24.md).
+**App-side structure is DONE and verified:** worker, Hub routing/admission/memory, native Chat
+page in `Create`, packaging spec and CLI, 49 chat tests, `native/build.sh` exit 0, and the full
+root suite with no Chat failures.
+**BLOCKED on three external conditions** (unchanged since 2026-09-24):
+1. **ST-13** (another session, uncommitted/IN PROGRESS) owns `model-manifests/`,
+   `capture_model_manifests.py`, shared staging and the four kit libraries, and says "do not
+   stage a release" until its Voice tests are green. The Chat manifest stays staged at
+   `.build/chat-stage/`.
+2. ~~**Bandwidth.**~~ **Cleared 2026-09-24:** the 5.98 GB snapshot downloaded locally
+   (`.build/chat-model/qwen3.5-9b-4bit`). First real generation: load 2.3 s, peak 5.72 GB,
+   ~2.7–2.9 tok/s on an M2 Max, context 262144. **New required step:** the worker must pass
+   `enable_thinking=False` (or offer a toggle) — the model otherwise emits a thinking trace and
+   JSON fails. Still needed: import into the library and stocking the four kits.
+3. **gateway-kh is read-only here.** Its `studio_hub` kind does not serve chat
+   (`StudioHubBackend.generate` raises `MODEL_MODALITY_MISMATCH`); the change belongs to the
+   gateway session, handed off in `research/chat-studio-gateway-bridge.md`.
+**Unblock = one ST-13-gated change** (exact list in ST-14): `git add` the new files, copy the
+staged manifest, add the capture/catalog rows, add the `stage_voice.py` chat block, then stock
+the library and kits.
+**Shared-file edits made:** `components/model_packages.py` engine allowlist now includes
+`chat-mlx`; the `chat` modality is registered in `components/hub/backend/activity.py`,
+`components/hub/standalone.py` (engine map, worker map, peer-work predicate, native route) and
+`components/hub/standalone_config.py` (`_REQUIRED_WORKERS`); `packaging/hub_worker.py` now builds
+a guarded chat worker spec, inert until `stage_voice.py` records the component. The peer-path
+contract test and the Swift API fixture were updated for the new modality; all affected suites
+re-run green.
+
 ### Local verification and GatewayKH continuation — 2026-09-21
 
 Owner direction: continue work runnable/testable on this Mac. **GatewayKH replaces
@@ -466,6 +501,7 @@ evidence does not complete these cards.
 | [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | DONE | st09_startup (Luna/high), root integrated `7aa7775` |
 | [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | IN_PROGRESS | coordinator; Connections, the independent-client proof, credential rotation and the clone contract are in; 10.4/10.6/DATA partial, no second machine, needs review |
 | [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | IN_PROGRESS | coordinator; 11.1/11.2/11.7 done, kit + measurement tooling proven, hardware checkpoints open, needs review |
+| [ST-14](ST-14.md) | G · Local Chat Studio | ST-01, ST-02 | IN_PROGRESS | owner-directed; worker + Hub wiring + native Chat page done, suites green; model revised to plain 5.98 GB build; gateway bridge handed off; stocking blocked on bandwidth + ST-13 |
 
 ## Status rules
 
@@ -583,3 +619,14 @@ the contract end to end. Undo point for all of it: branch `backup/pre-handoff-7a
 - **Pixel screenshots need Screen Recording permission** for the agent host;
   `screencapture` otherwise fails with `could not create image from display`. The
   Accessibility tree is available and was used instead.
+- **DEFECT — `vibevoice-realtime-0-5b-4bit` cannot load, so the VibeVoice offer is dead.**
+  Found 2026-09-24 while sampling the kit. The kit checkpoint's `config.json` has
+  `model_type: vibevoice_streaming`, which `mlx_audio` 0.4.7 remaps to `vibevoice` in
+  `MODEL_REMAPPING` — but `get_model_class()` only applies the remap inside
+  `if model_name is not None and model_type_mapped != model_type:`, and the checkpoint carries
+  no `model_name`, so the loader passes an **empty list**. `[] is not None` is true, the
+  `for part in []` loop never runs, the `elif` that would apply the remap is skipped, and the
+  import is attempted as `mlx_audio.tts.models.vibevoice_streaming`, which does not exist. The
+  app calls the same `load_model`, so the offer fails for every user. Fix is a one-line
+  `"model_name": "vibevoice"` in the model's `config.json`, or an upstream patch to treat an
+  empty list like `None`. Evidence: [tts-archive-walkthrough-2026-09-24.md](../../research/tts-archive-walkthrough-2026-09-24.md).

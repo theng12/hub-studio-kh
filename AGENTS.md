@@ -31,3 +31,37 @@
   keep it current: the version and build, anything newly learned, anything newly
   forbidden, and what is still open. A stale handoff is worse than none, because it is
   trusted — if it disagrees with the code, the code wins and the file gets fixed.
+
+## Model use scope — 2026-09-22
+
+- **The owner runs these models locally, on his own Macs, for himself. Do not raise
+  commercial or non-commercial licensing.** That question is settled and out of
+  scope: do not ask it, do not list it as a blocker, and do not repeat it in plans,
+  reviews, model notes or recommendations. Where a license must be recorded at all,
+  state the license name once as a fact and move on.
+- The single exception is a task that actually changes shape: shipping a model's
+  weights inside a distributed product, or running it as a paid service for other
+  people. That is a different task, and it would be raised then — not now.
+
+## Owner hardware fleet — 2026-09-24
+
+**Do not ask the owner to restate his machines.** The canonical list, the per-tier
+notes and the standing brief for text/LLM research are in
+[`research/owner-hardware.md`](research/owner-hardware.md). Read it before any
+model-fit, memory-tier or hardware question.
+
+| Unified memory | Chip(s) | Machines |
+| --- | --- | ---: |
+| 8 GB | M1, M2 | 2 |
+| 16 GB | M1, M2, M4 | 3 |
+| 24 GB | M4 | 1 |
+| 32 GB | M1 Max | 1 |
+
+Size every recommendation to the smallest machine that must run it, and label each
+memory claim as measured, vendor claim or inference. He runs these models himself, on
+his own Macs, so a fit that only works on the 32 GB machine is not a fleet answer.
+
+**Standing model decision (2026-09-24):** the owner's common local text model is
+**Qwen3.5-9B** (4-bit), text-only accepted, running on the 16 GB machines; the single
+vision call stays on the cloud. Do not re-open the model choice or re-survey candidates
+unless he asks — see [`research/owner-hardware.md`](research/owner-hardware.md).
