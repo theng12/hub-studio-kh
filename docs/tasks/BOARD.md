@@ -14,7 +14,7 @@ running no studio was missing entirely. A node had no record of *whose* credenti
 controller's address lived only in the app's preferences file, and `parent_controller_url` was
 wiped by any save made while the role was not `"agent"`.
 
-**Implemented, tested, committed. Not staged.** Evidence:
+**Implemented, tested, committed, staged and installed.** Evidence:
 [qualification/fleet-pool-2026-09-24.md](../../qualification/fleet-pool-2026-09-24.md).
 
 - Adoption records the controller: `POST /api/hub/fleet/adopt` takes `controller_url`, and the app
@@ -26,8 +26,9 @@ wiped by any save made while the role was not `"agent"`.
 - Native: Controller/Node badge + address per row, a header naming the group, a node's "Joined
   nodes" section naming its controller, and no "Send here" on a node (a node does not dispatch).
 
-**Next:** stage 0.6.57 (app → `/Applications` → DMG → the four drive kits), then the standing
-queue below.
+**Released locally:** `/Applications` = 0.6.57 / `12e377f`, DMG `dist/StudioHub-0.6.57-12e377f.dmg`,
+all four `KH-STUDIO-*` kits refreshed and verifying PASS. Not pushed — the owner runs the two
+pushes in [`HANDOFF.md`](HANDOFF.md) step 8.
 
 **Open follow-ups from this work:** collapse the two per-node probe passes on the Fleet page onto
 one shared read before the fleet reaches the 64-node cap; per-tier throughput and the 8 GB M1/M2

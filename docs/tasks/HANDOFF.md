@@ -60,10 +60,16 @@ Hub's admission — never in the app's `blockReason`.
   0.17.5 → 0.20.0 bump plus a per-model adapter before the app can use it
   (`research/three-model-rollout-plan.md`).
 
-- Release **0.6.55**. Every release is pushed to `main` and to
-  `implementation/voice-runtime`; `main` is the release branch. **0.6.55 is cut locally but not
-  yet pushed**: staged, installed to `/Applications`, DMG built, and all four drive kits
-  refreshed. The pushing owner still has to run the two pushes in step 8.
+- **0.6.57 is cut locally and installed; not pushed.** Staged (`.build/StudioHub-0657/`), installed
+  to `/Applications` (`0.6.57 / 12e377f`, all six components), DMG built and verified
+  (`dist/StudioHub-0.6.57-12e377f.dmg` — mounted, read back 0.6.57 with chat+hub+image+music+
+  subtitle+voice), all four `KH-STUDIO-*` kits refreshed to 0.6.57 (60,630 files each) and each
+  verified `RESULT: PASS`. The displaced `Studio Hub.app-0.6.56` was preserved into each drive's
+  own `_trash/` — `.build/prepare-kit.sh` now moves it there instead of `rm -rf`, and points at
+  `StudioHub-0657`. Kit readmes updated and copied. **The pushing owner still has to run the two
+  pushes in step 8.**
+
+- Release **0.6.56** is superseded. The 8 GB `blockReason` fix from it is carried forward.
 - **0.6.55 adds two Khmer voice families** — `khmer-tts-mms` (`khmerttsopensource/khmer-tts`,
   MMS VITS via transformers/torch) and `khmer-tts-onnx` (`sengtha/khmer-tts-female-v2`, Coqui
   VITS via ONNX Runtime). Both are single-speaker, Khmer-only, non-MLX, under the new

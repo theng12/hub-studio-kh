@@ -1,6 +1,6 @@
 # Studio Hub KH — the Macs that run the models
 
-**Version 0.6.55** (build `3ab8984`).
+**Version 0.6.57** (build `12e377f`).
 
 This folder is the whole Studio Hub kit: the app, the model library, your saved voices,
 and the two installers. Everything here is meant to be copied to each Mac as-is.
@@ -39,7 +39,7 @@ what you should see.
    **Local services ready**.
 
 The app shows its mode, what it offers, its services and its version and build under the sidebar — for example
-`0.6.55 · 3ab8984`. That is how you tell whether an update landed.
+`0.6.57 · 12e377f`. That is how you tell whether an update landed.
 
 ## Setting up a controller
 
@@ -57,6 +57,22 @@ The Hub's port is fixed at **47873** so a node can name this Mac again after a r
 On the **joining** Mac's own app: **Connections → Join a controller**, then enter the
 controller's address (`100.x.y.z`, or a name like `mac.tailnet.ts.net` - the port is optional) and the **controller's Fleet token**. The
 controller's Fleet overview will then show whether this Mac is reachable.
+
+## Seeing your pool
+
+**Connections → Fleet overview** lists every Mac in the group, and it reads the same on
+both ends — the controller and a node show the same list.
+
+- On the **controller**: every Mac that has joined, with a **Controller** or **Node** badge
+  and the address it answers at. A Mac that is switched off stays in the list, marked
+  offline with the reason. It is still part of the group.
+- On a **node**: the controller and every other Mac in the group, beside this Mac. If the
+  controller is not answering, the page says so instead of showing an empty group.
+- **Send here** pins new work to one Mac. It appears on a controller and on a Mac running
+  on its own; a node does not choose where work runs, so the button is not offered there.
+
+A node records which controller it joined, on the Mac itself, so it can still name its
+group after the app is reinstalled.
 
 ## The two tokens — which is which
 

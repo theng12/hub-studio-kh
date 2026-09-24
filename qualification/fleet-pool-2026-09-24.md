@@ -115,3 +115,10 @@ above is the same view model the page binds to, and it is reproducible.
   machine (the 32 GB M2 Max). Multi-Mac behaviour over a tailnet is the same code path — the peer
   path already runs in production between studios — but it has not been re-measured across two
   physical Macs since this change.
+
+## Release state
+
+`0.6.57 / 12e377f` — staged to `.build/StudioHub-0657/`, installed to `/Applications`, DMG
+`dist/StudioHub-0.6.57-12e377f.dmg` (mounted and read back as 0.6.57 with all six components), and
+all four `KH-STUDIO-*` kits refreshed to 0.6.57 with `verify-kit.sh` reporting `RESULT: PASS` on
+each. Not pushed.
