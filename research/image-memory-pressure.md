@@ -62,12 +62,52 @@ Both models show 0 swaps on 32 GB, which says nothing about 8 GB: the cache is
 absorbing the slack. The 8 GB verdict still requires the constrained and on-device
 runs in "Open work" below.
 
+## Ideogram 4 q4 (14.9 GB pack) — 32 GB M1 Max
+
+| Scene | Resolution | Peak MLX | Max RSS | Footprint | Compressor delta | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| Sleep-story cover | 1280×720 | **17.70 GB** [M] | 5.40 GB [M] | 19.43 GB [M] | −0.05 GB | **FAILED** after 673 s |
+| Storybook cover | 1024×1024 | **22.49 GB** [M] | 11.04 GB [M] | 24.06 GB [M] | **+9.33 GB** | OK, 1440 s [M] |
+
+The failure is a Metal command-buffer abort —
+`RuntimeError: [METAL] Command buffer execution failed: Impacting Interactivity
+(kIOGPUCommandBufferCallbackErrorImpactingInteractivity)` — macOS refusing the work
+under memory pressure, not a code bug. The successful run drove **9.3 GB of memory
+compression** and pushed system swap from 2.3 GB to 3.7 GB.
+
+**Ideogram 4 is not a fleet model.** It peaks ~22.5 GB MLX / 24 GB footprint, so the
+16 GB and 24 GB tiers cannot run it at all, and the 32 GB machine only survives at
+1024² under heavy compression. Its typography was the best of the three models, at
+roughly 24 minutes per 1024² image.
+
+## Qwen-Image-2.1 4-bit via mlx-serve (10.7 GB pack) — 32 GB M1 Max
+
+| Scene | Resolution | Resident | Result |
+| --- | --- | --- | --- |
+| Sleep-story cover | 1280×720 | 13.94 GB | OK, 826 s [M]; text correct but the title ran off the right edge |
+| Storybook cover | 1024×1024 | 13.94 GB | **FAILED** after 793 s [M] |
+
+Same Metal abort as Ideogram: `[mlx] [METAL] Command buffer execution failed:
+Impacting Interactivity`. mlx-serve reported the pack at **13.94 GB resident** with a
+wired limit of 25,559 MB, and the 1024² run exceeded the budget.
+
+**Qwen-Image-2.1 is a 32 GB-only capability at 4-bit under mlx-serve** — 1280×720
+fits, 1024² does not. It is not credible for the 16 GB tier despite the pack card
+being documented "for 16 GB Macs". [M]
+
+Two setup notes, both [M]: `mlx-serve pull` fetched only the two manifest files
+(0 MB) for this pack — the weights had to be downloaded directly into
+`~/.mlx-serve/models/`; and the documented Homebrew tap install fails
+(`ddalcu/homebrew-mlx-serve` does not exist), so the release tarball was used.
+
 ## Open work
 
 1. Measure Z-Image-Turbo (4-bit, 5.91 GB pack) at 1024² on the 32 GB machine:
    default, then `--mlx-cache-limit-gb 2`, then `--low-ram`. Record all metrics.
-2. The same runs on an **actual 8 GB M1 and M2**. Until that exists, any 8 GB
+2. Retry Ideogram 4 scene 1 at 1280×720 with `--low-ram` (the 1280×720 attempt died
+   under memory pressure while other work was running on the machine).
+3. The same runs on an **actual 8 GB M1 and M2**. Until that exists, any 8 GB
    statement is **[I]** inference, not measurement.
-3. If 4-bit still swaps on 8 GB, test the smaller `mflux-community/z-image-turbo-mflux-q3`
+4. If 4-bit still swaps on 8 GB, test the smaller `mflux-community/z-image-turbo-mflux-q3`
    pack.
-4. Record results as rows in `.build/text-tests/memory-results.tsv`.
+5. Record results as rows in `.build/text-tests/memory-results.tsv`.
