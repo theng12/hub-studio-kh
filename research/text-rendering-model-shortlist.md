@@ -87,3 +87,24 @@ This is the decisive result: Z-Image-Turbo renders the exact secondary text FLUX
 Klein misspelled ("A Bediime Story"). It also peaks ~1.3–1.7 GB *lower* than FLUX in
 the same engine. Matches the owner's online observation that Z-Image's text quality
 far exceeds FLUX.2 Klein.
+
+## Final qualification summary — 2026-09-24
+
+All four models, both scenes, on the 32 GB M2 Max (`Mac14,13`). Full memory detail is
+in `research/image-memory-pressure.md`; the images and the review README are in
+`~/Desktop/StudioHub Image Text Review/`.
+
+| Model | Scene 1 | Scene 2 | Wall | Peak MLX | Fleet fit |
+| --- | --- | --- | --- | --- | --- |
+| FLUX.2 Klein 4-bit | OK | **"A Bediime Story"** | 57–73 s | 11–12 GB | 8 GB+ (shipped today) |
+| **Z-Image-Turbo 4-bit** | OK | **OK** | 166–176 s | 9.8–10.7 GB | **16 GB — the fleet answer** |
+| Ideogram 4 q4 | OK (`--low-ram`) | OK — best typography | ~24 min | 21–22.5 GB | 32 GB only |
+| Qwen-Image-2.1 4-bit (mlx-serve) | OK, title overflowed | **FAILED (Metal)** | ~14 min | 13.9 GB resident | 32 GB only |
+
+**Recommendation: adopt Z-Image-Turbo as the fleet text-rendering model.** It is the
+only candidate whose text is correct on both scenes *and* whose memory fits the 16 GB
+tier — it peaks below the shipped FLUX.2 Klein. Ideogram 4 is the strongest typographer
+but is a single-machine, 32 GB-only capability; Qwen-Image-2.1 is likewise 32 GB-only
+and failed outright at 1024².
+
+Still open: the real Z-Image run on an actual 8 GB M1/M2.

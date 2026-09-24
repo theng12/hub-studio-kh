@@ -66,19 +66,21 @@ runs in "Open work" below.
 
 | Scene | Resolution | Peak MLX | Max RSS | Footprint | Compressor delta | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| Sleep-story cover | 1280×720 | **17.70 GB** [M] | 5.40 GB [M] | 19.43 GB [M] | −0.05 GB | **FAILED** after 673 s |
+| Sleep-story cover, attempt 1 | 1280×720 | **17.70 GB** [M] | 5.40 GB [M] | 19.43 GB [M] | −0.05 GB | **FAILED** after 673 s |
+| Sleep-story cover, `--low-ram` retry | 1280×720 | **21.05 GB** [M] | 5.50 GB [M] | 18.82 GB [M] | −0.12 GB | OK, 1466 s [M] |
 | Storybook cover | 1024×1024 | **22.49 GB** [M] | 11.04 GB [M] | 24.06 GB [M] | **+9.33 GB** | OK, 1440 s [M] |
 
-The failure is a Metal command-buffer abort —
+Attempt 1 died with a Metal command-buffer abort —
 `RuntimeError: [METAL] Command buffer execution failed: Impacting Interactivity
-(kIOGPUCommandBufferCallbackErrorImpactingInteractivity)` — macOS refusing the work
-under memory pressure, not a code bug. The successful run drove **9.3 GB of memory
-compression** and pushed system swap from 2.3 GB to 3.7 GB.
+(kIOGPUCommandBufferCallbackErrorImpactingInteractivity)` — macOS refusing the work under
+memory pressure (a large model download and other work were running on the machine), not
+a code bug. The `--low-ram` retry on a quiet machine completed; the 1024² run drove
+**9.3 GB of memory compression** and pushed system swap from 2.3 GB to 3.7 GB.
 
-**Ideogram 4 is not a fleet model.** It peaks ~22.5 GB MLX / 24 GB footprint, so the
-16 GB and 24 GB tiers cannot run it at all, and the 32 GB machine only survives at
-1024² under heavy compression. Its typography was the best of the three models, at
-roughly 24 minutes per 1024² image.
+**Ideogram 4 is not a fleet model.** Even the successful runs peak ~21–22.5 GB MLX /
+19–24 GB footprint, so the 16 GB and 24 GB tiers cannot run it at all, and the 32 GB
+machine only survives under heavy compression. Its typography was the best of the four
+models, at roughly 24 minutes per image.
 
 ## Qwen-Image-2.1 4-bit via mlx-serve (10.7 GB pack) — 32 GB M2 Max (Mac14,13)
 
@@ -102,12 +104,10 @@ Two setup notes, both [M]: `mlx-serve pull` fetched only the two manifest files
 
 ## Open work
 
-1. Measure Z-Image-Turbo (4-bit, 5.91 GB pack) at 1024² on the 32 GB machine:
-   default, then `--mlx-cache-limit-gb 2`, then `--low-ram`. Record all metrics.
-2. Retry Ideogram 4 scene 1 at 1280×720 with `--low-ram` (the 1280×720 attempt died
-   under memory pressure while other work was running on the machine).
-3. The same runs on an **actual 8 GB M1 and M2**. Until that exists, any 8 GB
+1. Measure Z-Image-Turbo (4-bit, 5.91 GB pack) with `--mlx-cache-limit-gb 2` and
+   `--low-ram` on the 32 GB machine, to bound its real floor.
+2. The same runs on an **actual 8 GB M1 and M2**. Until that exists, any 8 GB
    statement is **[I]** inference, not measurement.
-4. If 4-bit still swaps on 8 GB, test the smaller `mflux-community/z-image-turbo-mflux-q3`
+3. If 4-bit still swaps on 8 GB, test the smaller `mflux-community/z-image-turbo-mflux-q3`
    pack.
-5. Record results as rows in `.build/text-tests/memory-results.tsv`.
+4. Record results as rows in `.build/text-tests/memory-results.tsv`.
