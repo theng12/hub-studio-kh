@@ -43,6 +43,20 @@
   weights inside a distributed product, or running it as a paid service for other
   people. That is a different task, and it would be raised then — not now.
 
+## Always name the quantization — 2026-09-24
+
+- **Every mention of a model names its quantization.** Not "FLUX.2 Klein" but
+  "FLUX.2 Klein **4-bit**"; not "Z-Image-Turbo" but "Z-Image-Turbo **4-bit**". This
+  covers plans, findings, commits, model lists, recommendations and replies alike.
+- The owner validated specific quants on his 8 GB machines, so a model named without
+  its quantization cannot be checked against what he has actually run. That is the
+  difference between "the model you approved" and "a model of the same name".
+- The shipped labels already carry it (`FLUX.2 Klein 4B MLX 4-bit`,
+  `Z-Image-Turbo 6B MLX 4-bit`), and the Image picker is designed to keep the
+  bits/weight marker visible — only "recommended" and the runtime marker are dropped.
+  Do not trim it from UI copy either.
+- Where more than one quant exists, say which one ships and which do not.
+
 ## Owner hardware fleet — 2026-09-24
 
 **Do not ask the owner to restate his machines.** The canonical list, the per-tier
