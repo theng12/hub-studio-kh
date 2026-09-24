@@ -34,17 +34,17 @@ _PROCESS_STARTED_AT = time.time()
 
 
 def machine_bytes() -> int:
-    import os
-    try:
-        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-    except (ValueError, OSError, AttributeError):
-        return 0
+    """This Mac's physical memory, through the worker's one implementation."""
+    from .generation import host_memory_bytes
+    return host_memory_bytes()
 
 
 def status(manager) -> dict:
     """Residency right now, derived from the jobs the manager is actually running."""
     running = [job for job in manager.list() if job.get('state') == 'running']
-    loaded = [[MODEL_ID]] if running else []
+    # The resident model is the one the running job asked for; a job receipt with no recorded
+    # params (an older shape) falls back to the worker's default model.
+    loaded = [[(job.get('params') or {}).get('repo') or MODEL_ID] for job in running[:1]]
     return {
         'mode': 'immediate',
         'default_mode': 'immediate',

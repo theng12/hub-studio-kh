@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from components import model_packages
-from components.image.app.backend.generation import GenerationManager, MODEL_ID, MODEL_REVISION
+from components.image.app.backend.generation import (FLUX2_KLEIN, MODEL_ID, MODEL_REVISION,
+                                                     MODELS, Z_IMAGE_TURBO, GenerationManager)
 from components.image.app.backend.generation import validate_request
 from components.image.app.backend.main import create_app
 
@@ -25,10 +26,14 @@ ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL = json.loads((ROOT / 'model-manifests/flux2-klein-4b-mlx-4bit.json').read_text())
 TOKEN = 'imageownercred_' * 3
 RUNTIME_ID = 'a' * 64
+# A fixed host size, so the memory policy a test observes never depends on the machine
+# running the suite. 32 GiB keeps Z-Image on its default configuration, as on the 32 GB
+# development Mac.
+HOST_BYTES = 32 * 1024 ** 3
 
 
-def tiny_manifest() -> tuple[dict, dict[str, bytes]]:
-    manifest = json.loads(json.dumps(ORIGINAL))
+def tiny_manifest(source: dict | None = None) -> tuple[dict, dict[str, bytes]]:
+    manifest = json.loads(json.dumps(source if source is not None else ORIGINAL))
     contents = {}
     for entry in manifest['files']:
         value = (entry['path'] + '\n').encode()
@@ -39,10 +44,39 @@ def tiny_manifest() -> tuple[dict, dict[str, bytes]]:
     return manifest, contents
 
 
-def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float = 1.0):
+def z_image_manifest() -> dict:
+    """The Z-Image package as the manifest job will describe it.
+
+    The pack root is the model directory, so `source_path` is pack-relative and `path`
+    carries the one `model/` prefix every installed Image package has.
+    """
+    files = []
+    for relative in ('transformer/model.safetensors.index.json',
+                     'tokenizer/tokenizer.json', 'vae/model.safetensors.index.json'):
+        value = (relative + '\n').encode()
+        files.append({'path': f'model/{relative}', 'source_path': relative,
+                      'size': len(value), 'sha256': sha256(value).hexdigest(),
+                      'urls': [f'https://huggingface.co/{Z_IMAGE_TURBO.repo}/resolve/'
+                               f'{Z_IMAGE_TURBO.revision}/{relative}']})
+    return {
+        'schema_version': 1, 'package_id': Z_IMAGE_TURBO.package_id,
+        'model_id': Z_IMAGE_TURBO.repo, 'revision': Z_IMAGE_TURBO.revision,
+        'engine': 'image-mflux', 'minimum_macos': '14.0', 'files': files,
+    }
+
+
+def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float = 1.0,
+               z_steps: int | None = None, z_ignores_guidance: bool = True):
+    """Stand-in for mflux 0.20.0, with both registered model classes.
+
+    The FLUX fake keeps the original assertions; the Z-Image fake records every construction
+    and call on the module so a test can prove which class a job actually loaded.
+    """
     names = ('mflux', 'mflux.models', 'mflux.models.flux2',
              'mflux.models.flux2.variants', 'mflux.models.flux2.variants.txt2img',
-             'mflux.models.flux2.variants.txt2img.flux2_klein')
+             'mflux.models.flux2.variants.txt2img.flux2_klein',
+             'mflux.models.z_image', 'mflux.models.z_image.variants',
+             'mflux.models.z_image.variants.z_image')
     modules = {name: types.ModuleType(name) for name in names}
 
     class Flux2Klein:
@@ -63,7 +97,37 @@ def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float
                     Image.new('RGB', (width, height), (17, 31, 47)).save(path, format='PNG')
             return Result()
 
-    modules[names[-1]].Flux2Klein = Flux2Klein
+    calls: list[dict] = []
+
+    class ZImage:
+        def __init__(self, *, model_path, quantize, lora_paths, lora_scales):
+            # The installed package has exactly one model/ prefix for every publisher.
+            assert Path(model_path).name == 'model'
+            assert (Path(model_path) / 'transformer/model.safetensors.index.json').is_file()
+            assert quantize is None and lora_paths is None and lora_scales is None
+            calls.append({'event': 'init', 'model_path': str(model_path)})
+
+        def generate_image(self, *, seed, prompt, num_inference_steps, height, width, guidance):
+            if z_steps is not None:
+                assert num_inference_steps == z_steps
+            if z_ignores_guidance:
+                # What mflux does: CFG is disabled, so the value must not reach the schedule.
+                assert guidance is not None
+            calls.append({'event': 'generate', 'seed': seed, 'steps': num_inference_steps,
+                          'guidance': guidance, 'width': width, 'height': height,
+                          'prompt': prompt})
+
+            class Result:
+                def save(self, path, overwrite):
+                    assert overwrite
+                    if save_delay:
+                        time.sleep(save_delay)
+                    Image.new('RGB', (width, height), (47, 31, 17)).save(path, format='PNG')
+            return Result()
+
+    modules[names[5]].Flux2Klein = Flux2Klein
+    modules[names[-1]].ZImage = ZImage
+    modules[names[-1]].calls = calls
     return modules
 
 
@@ -77,24 +141,42 @@ class ImageStandaloneTests(unittest.TestCase):
         self.data = root / 'data' / 'image'
         self.data.mkdir(parents=True)
         self.manifest, contents = tiny_manifest()
+        self.z_manifest, z_contents = tiny_manifest(z_image_manifest())
         source = root / 'source'
         for relative, content in contents.items():
             target = source / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         self.folder = model_packages.import_folder(self.manifest, source, self.library)
-        self.manager = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID)
+        z_source = root / 'z-source'
+        for relative, content in z_contents.items():
+            target = z_source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        self.z_folder = model_packages.import_folder(self.z_manifest, z_source, self.library)
+        self.manager = self.manager_for()
         self.client = TestClient(create_app(self.manager, TOKEN))
         self.headers = {'X-Studio-Token': TOKEN}
+
+    def manager_for(self, **kwargs):
+        """A manager over both installed packages, with a fixed host size."""
+        return GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID,
+                                 manifests=[self.manifest, self.z_manifest],
+                                 total_memory_bytes=HOST_BYTES, **kwargs)
 
     def request(self, **changes):
         return {'repo': MODEL_ID, 'model_revision': MODEL_REVISION, 'prompt': 'A river at dawn',
                 'aspect_ratio': '1:1', 'width': 1024, 'height': 1024,
                 'steps': 4, 'guidance': 1.0, 'seed': -1, **changes}
 
-    def wait(self, job_id):
+    def z_request(self, **changes):
+        return {'repo': Z_IMAGE_TURBO.repo, 'prompt': 'A river at dawn',
+                'aspect_ratio': '16:9', 'width': 1280, 'height': 720, 'seed': 42, **changes}
+
+    def wait(self, job_id, client=None):
+        client = client or self.client
         for _ in range(200):
-            job = self.client.get(f'/api/generate/jobs/{job_id}', headers=self.headers).json()['job']
+            job = client.get(f'/api/generate/jobs/{job_id}', headers=self.headers).json()['job']
             if job['state'] in ('done', 'error', 'cancelled'):
                 return job
             time.sleep(0.02)
@@ -366,6 +448,127 @@ class ImageStandaloneTests(unittest.TestCase):
                 response = self.client.post('/api/generate/txt2img', json=self.request(**changes),
                                             headers=self.headers)
                 self.assertEqual(response.status_code, 422, changes)
+
+    # ── the model registry ─────────────────────────────────────────────────────────────
+    # One worker, two models. These pin the dispatch: the catalog lists each registered model
+    # with its own numbers, a request is validated against the entry it names, and the job
+    # loads that entry's class from that entry's installed package.
+
+    def test_catalog_lists_every_registered_model_with_its_own_numbers(self):
+        with patch('components.image.app.backend.main._host_eligibility',
+                   return_value={'eligible': True, 'macos': '26.6.2'}):
+            entries = self.client.get('/api/catalog', headers=self.headers).json()['models']
+        listed = {entry['repo']: entry for entry in entries}
+        self.assertEqual(set(listed), set(MODELS))
+        flux, z_image = listed[MODEL_ID], listed[Z_IMAGE_TURBO.repo]
+
+        # FLUX.2 Klein is unchanged: same label, family, defaults, limits and qualification.
+        self.assertEqual(flux['label'], 'FLUX.2 Klein 4B MLX 4-bit')
+        self.assertEqual(flux['family'], 'flux2-klein')
+        self.assertEqual(flux['generation_defaults']['steps'], 4)
+        self.assertEqual(flux['generation_defaults']['guidance'], 1.0)
+        self.assertEqual((flux['generation_defaults']['width'],
+                          flux['generation_defaults']['height']), (1280, 720))
+        self.assertEqual(flux['generation_limits']['max_steps'], 100)
+        self.assertEqual(flux['qualification'],
+                         {'historical_source_workload':
+                          '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
+                          'packaged_inference': 'pending'})
+        self.assertFalse(flux['guidance_ignored'])
+
+        # Z-Image-Turbo is its own entry, with its own nine steps and its own pin.
+        self.assertEqual(z_image['label'], 'Z-Image-Turbo 6B MLX 4-bit')
+        self.assertEqual(z_image['family'], 'z-image-turbo')
+        self.assertEqual(z_image['generation_defaults']['steps'], 9)
+        self.assertEqual(z_image['model_revision'], Z_IMAGE_TURBO.revision)
+        self.assertTrue(z_image['guidance_ignored'])
+        self.assertEqual(z_image['generation_limits']['min_steps'], 2)
+        self.assertEqual(z_image['max_prompt_characters'], 4000)
+        # Both entries carry the geometry the picker needs, and both are dispatchable here.
+        for entry in entries:
+            self.assertEqual(len(entry['image_sizes']), 12)
+            self.assertEqual(len(entry['sizes']), 12)
+            self.assertTrue(entry['execution_ready'], entry['readiness'])
+            self.assertEqual(entry['cache']['state'], 'cached')
+        # Z-Image's qualification publishes what is measured and what is not.
+        self.assertEqual(z_image['qualification']['fleet_8gb'].split(':')[0], 'pending')
+        self.assertEqual(z_image['qualification']['measured_peak_gb']['low_ram'], 7.12)
+        self.assertNotIn('fleet_8gb', flux['qualification'])
+
+    def test_a_request_is_validated_against_the_entry_it_names(self):
+        # Defaults come from the selected model, not from a module constant.
+        self.assertEqual(validate_request(self.request())['steps'], 4)
+        z_params = validate_request(self.z_request())
+        self.assertEqual((z_params['repo'], z_params['steps'], z_params['model_revision']),
+                         (Z_IMAGE_TURBO.repo, 9, Z_IMAGE_TURBO.revision))
+        self.assertEqual((z_params['width'], z_params['height']), (1280, 720))
+        # The pin still only accepts the registered revision for that repo.
+        with self.assertRaises(ValueError):
+            validate_request(self.z_request(model_revision='0' * 40))
+        with self.assertRaises(ValueError):
+            validate_request(self.request(repo=Z_IMAGE_TURBO.repo, model_revision=MODEL_REVISION))
+        # And the FLUX answer is unchanged, explicitly requested or not.
+        explicit = validate_request(self.request(model_revision=MODEL_REVISION))
+        self.assertEqual(explicit['steps'], 4)
+        self.assertEqual(explicit['guidance'], 1.0)
+
+    def test_z_image_job_loads_its_own_class_and_records_its_own_revision(self):
+        modules = fake_mflux(z_steps=9)
+        with (patch.dict(sys.modules, modules),
+              patch('components.image.app.backend.main._host_eligibility',
+                    return_value={'eligible': True, 'macos': '26.6.2'})):
+            response = self.client.post('/api/generate/txt2img', json=self.z_request(),
+                                        headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            job = self.wait(response.json()['job']['id'])
+        self.assertEqual(job['state'], 'done', job.get('error'))
+        self.assertEqual(job['model_revision'], Z_IMAGE_TURBO.revision)
+        self.assertEqual(job['params']['repo'], Z_IMAGE_TURBO.repo)
+        self.assertEqual((job['width'], job['height']), (1280, 720))
+        self.assertEqual(job['steps'], 9)
+        self.assertEqual(job['resolved_seed'], 42)
+        # The loaded class was the registered one, out of the installed package's model/ dir.
+        calls = modules['mflux.models.z_image.variants.z_image'].calls
+        self.assertEqual([call['event'] for call in calls], ['init', 'generate'])
+        self.assertEqual(calls[1]['steps'], 9)
+        self.assertEqual(calls[1]['guidance'], 1.0)   # passed through, then ignored by the model
+        self.assertTrue(Path(calls[0]['model_path']).is_dir())
+
+    def test_a_model_without_a_manifest_is_unavailable_without_blocking_the_other(self):
+        """A build that ships only FLUX must not lose FLUX because Z-Image is registered."""
+        manager = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID,
+                                    total_memory_bytes=HOST_BYTES)
+        client = TestClient(create_app(manager, TOKEN))
+        with (patch.dict(sys.modules, fake_mflux(z_steps=9)),
+              patch('components.image.app.backend.main._host_eligibility',
+                    return_value={'eligible': True, 'macos': '26.6.2'})):
+            entries = {entry['repo']: entry for entry
+                       in client.get('/api/catalog', headers=self.headers).json()['models']}
+            self.assertEqual(set(entries), set(MODELS))
+            self.assertTrue(entries[MODEL_ID]['execution_ready'])
+            self.assertFalse(entries[Z_IMAGE_TURBO.repo]['execution_ready'])
+            self.assertIn('No model manifest', entries[Z_IMAGE_TURBO.repo]['readiness']['reason'])
+            refused = client.post('/api/generate/txt2img', json=self.z_request(),
+                                  headers=self.headers)
+            self.assertEqual(refused.status_code, 409)
+            self.assertIn('MODEL_FILES_UNAVAILABLE', refused.json()['detail'])
+            accepted = client.post('/api/generate/txt2img', json=self.request(),
+                                   headers=self.headers)
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            job = self.wait(accepted.json()['job']['id'], client=client)
+            self.assertEqual(job['state'], 'done', job.get('error'))
+            self.assertEqual(job['params']['repo'], MODEL_ID)
+
+    def test_a_manifest_that_pins_another_revision_is_refused_for_that_model_only(self):
+        drifted = json.loads(json.dumps(self.z_manifest))
+        drifted['revision'] = 'c' * 40
+        manager = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID,
+                                    manifests=[self.manifest, drifted],
+                                    total_memory_bytes=HOST_BYTES)
+        files = manager.preflight(Z_IMAGE_TURBO.repo)
+        self.assertEqual(files['state'], 'pin_mismatch')
+        self.assertIn(Z_IMAGE_TURBO.revision, files['reason'])
+        self.assertEqual(manager.preflight(MODEL_ID)['state'], 'files_verified')
 
 
 if __name__ == '__main__':

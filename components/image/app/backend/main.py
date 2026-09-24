@@ -1,4 +1,4 @@
-"""Private standalone Image API for one pinned, qualified FLUX.2 Klein mode."""
+"""Private standalone Image API for the registered, qualified mflux image models."""
 from __future__ import annotations
 
 import hmac
@@ -11,19 +11,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import memory_policy
-from .generation import (DEFAULTS, MODEL_ID, MODEL_REVISION, SIZE_PRESETS,
-                         GenerationManager, final_matches)
+from .generation import (MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES, SIZE_PRESETS,
+                         GenerationManager, final_matches, memory_plan)
 
 
-# FLUX.2 Klein 4B has completed thousands of generations on the owner's 8 GB
-# Apple-silicon Macs, so the 16 GB figure the catalog records is a qualification
-# tier rather than a requirement. The floor is therefore a warning: this worker
-# refuses only what cannot work at all, and the Hub's admission governor decides
-# whether this host has room right now.
-QUALIFIED_MINIMUM_MEMORY_BYTES = 16_000_000_000
+DEFAULT_MODEL = MODELS[MODEL_ID]
 
 
-def _host_eligibility() -> dict:
+def _host_facts() -> dict:
+    """What this Mac is, before any model is considered."""
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         return {'eligible': False, 'reason': 'Apple Silicon macOS is required'}
     try:
@@ -36,16 +32,34 @@ def _host_eligibility() -> dict:
         return {'eligible': False, 'reason': 'macOS version could not be measured'}
     if int(version.split('.')[0]) < 14:
         return {'eligible': False, 'reason': 'macOS 14 or later is required'}
-    state = {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
-             'qualified_minimum_memory_bytes': QUALIFIED_MINIMUM_MEMORY_BYTES,
-             'memory_warning': None,
-             'qualification': '16 GB 1K txt2img historical source receipt; this host still needs packaged proof'}
-    if memory < QUALIFIED_MINIMUM_MEMORY_BYTES:
-        state['memory_warning'] = (
-            f'This Mac has {memory / 1024**3:.0f} GB of unified memory. FLUX is qualified on 16 GB '
-            'and has run on 8 GB in production, but Image work here is below the qualified tier '
-            'and may be slow or fail if other Studios are holding models.')
-    return state
+    return {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
+            'qualified_minimum_memory_bytes': QUALIFIED_MINIMUM_MEMORY_BYTES,
+            'qualification': '16 GB 1K txt2img historical source receipt; this host still needs packaged proof'}
+
+
+def memory_warning(model, host: dict) -> str | None:
+    """The tier warning for one model on one host.
+
+    A published RAM floor is a tier, not a wall: the worker warns and the Hub's admission
+    governor owns the live decision. FLUX.2 Klein is qualified at 16 GB and has run thousands
+    of generations on the owner's 8 GB Macs. Z-Image-Turbo's warning says what is actually
+    known — its 8 GB tier is being measured — rather than refusing the machine.
+    """
+    memory = host.get('unified_memory_bytes') or 0
+    if (not host.get('eligible') or not memory or not model.below_tier_warning
+            or memory >= model.qualified_minimum_memory_gb * 1e9):
+        return None
+    return model.below_tier_warning.format(memory_gb=memory / 1024**3)
+
+
+def _host_eligibility() -> dict:
+    """Host capability plus the default model's tier warning.
+
+    Kept as the one host-reading entry point the API and the tests use; each catalog entry
+    carries the warning for its own model.
+    """
+    host = _host_facts()
+    return {**host, 'memory_warning': memory_warning(DEFAULT_MODEL, host)}
 
 
 def create_app(manager: GenerationManager, token: str) -> FastAPI:
@@ -61,12 +75,17 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             return JSONResponse({'detail': 'Owner credential required'}, status_code=401)
         return await call_next(request)
 
-    def readiness() -> dict:
-        files = manager.preflight()
-        host = _host_eligibility()
+    def model_state(model) -> dict:
+        """One model's readiness: its own installed files, on this host."""
+        files = manager.preflight(model.repo)
+        host = _host_facts()
         ready = files['state'] == 'files_verified' and host['eligible']
         return {'ready': ready, 'files': files, 'host': host,
                 'runtime_identity': {'id': manager.runtime_sha256, 'compatible': True}}
+
+    def readiness() -> dict:
+        """The default model's readiness, for the worker-level paths that predate the table."""
+        return model_state(DEFAULT_MODEL)
 
     @app.get('/api/health')
     def health() -> dict:
@@ -81,50 +100,80 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         """The optional private activity contract the Hub polls after health."""
         return manager.activity_snapshot()
 
-    @app.get('/api/catalog')
-    def catalog() -> dict:
-        state = readiness()
-        default_width, default_height = SIZE_PRESETS[DEFAULTS['aspect_ratio']]
+    def catalog_entry(model) -> dict:
+        """One registered model, described entirely by its own registry entry.
+
+        The app merges this list with the Hub's model packages and keys on `repo`, so a
+        registered model appears in the picker with its own defaults, sizes and limits.
+        """
+        state = model_state(model)
+        host = state['host']
+        warning = memory_warning(model, host)
+        default_width, default_height = SIZE_PRESETS[model.defaults['aspect_ratio']]
         sizes = [{'id': ratio, 'label': ratio, 'width': width, 'height': height}
                  for ratio, (width, height) in SIZE_PRESETS.items()]
         ready = state['ready']
         files = state['files']
-        return {'models': [{
-            'label': 'FLUX.2 Klein 4B MLX 4-bit', 'name': 'FLUX.2 Klein 4B MLX 4-bit', 'repo': MODEL_ID,
-            'model_id': MODEL_ID, 'family': 'flux2-klein', 'modality': 'image',
+        plan = memory_plan(model, manager.total_memory_bytes)
+        return {
+            'label': model.label, 'name': model.label, 'repo': model.repo,
+            'model_id': model.repo, 'family': model.family, 'modality': 'image',
+            'package_id': model.package_id,
             'capabilities': ['txt2img'], 'hub_operation': 'image.text_to_image',
-            'model_revision': MODEL_REVISION, 'qualified_revision': MODEL_REVISION,
+            'model_revision': model.revision, 'qualified_revision': model.revision,
             'qualified_revision_match': True, 'runtime_revision': manager.runtime_sha256,
             'runtime_compatible': True, 'runtime_ready': True,
-            # `min_total_memory_gb` is the tier FLUX is qualified at, not a dispatch floor:
-            # the Hub's admission governor owns the live decision, and it carries the
-            # fleet-qualified 8 GB default for this model. `memory_warning` is what tells the
-            # operator their Mac is below the qualified tier while the work still runs.
-            'memory_eligible': state['host']['eligible'],
-            'min_total_memory_gb': QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
-            'qualified_minimum_memory_gb': QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
-            'memory_warning': state['host'].get('memory_warning'),
+            # `min_total_memory_gb` is the tier the model is qualified at, not a dispatch floor:
+            # the Hub's admission governor owns the live decision, and `memory_warning` is what
+            # tells the operator their Mac is below the qualified tier while the work still runs.
+            'memory_eligible': host['eligible'],
+            'min_total_memory_gb': model.qualified_minimum_memory_gb,
+            'qualified_minimum_memory_gb': model.qualified_minimum_memory_gb,
+            # The key the Hub's own policy reads (`workload_policy.required_total_memory_gb`).
+            # Its total-memory floor is published for the operator and is not enforced: unless
+            # an operator override names one, the live guard is free memory, so a smaller Mac
+            # is warned here rather than refused.
+            'min_unified_memory_gb': model.qualified_minimum_memory_gb,
+            # The floors the Hub's governor reads per model: `min_free_memory_gb` is enforced
+            # before dispatch, while `min_total_memory_gb`/`min_unified_memory_gb` are
+            # published for the operator and are not enforced without an operator override.
+            'min_free_memory_gb': model.min_free_memory_gb,
+            'memory_warning': warning,
+            # What this host will actually do with the model, and the bound it is choosing.
+            # Bytes, not rounded GB, so the app can format it the way the rest of the fleet
+            # contract does.
+            'memory_policy': {
+                'mode_for_this_host': plan['mode'],
+                'total_memory_bytes': plan['total_memory_bytes'],
+                'low_ram_below_bytes': plan['low_ram_below_bytes'],
+                'measured_peak_gb': model.qualification.get('measured_peak_gb'),
+            },
             'cache': {'state': 'cached' if files['state'] == 'files_verified' else files['state']},
-            'readiness': {'ready': ready, 'files': files, 'host': state['host'],
-                          'reason': None if ready else files.get('reason') or state['host'].get('reason')},
+            'readiness': {'ready': ready, 'files': files, 'host': host,
+                          'reason': None if ready else files.get('reason') or host.get('reason')},
             'execution_ready': ready, 'available': ready,
-            'generation_defaults': {**DEFAULTS, 'width': default_width, 'height': default_height},
+            'generation_defaults': {**model.defaults, 'width': default_width,
+                                    'height': default_height},
+            'guidance_ignored': model.guidance_ignored,
             'image_sizes': sizes,
-            'generation_limits': {'min_steps': 2, 'max_steps': 100,
-                                  'min_guidance': 0.0, 'max_guidance': 30.0,
-                                  'min_seed': -1, 'max_seed': 2**32-1},
+            'generation_limits': {key: value for key, value in model.limits.items()
+                                  if key != 'max_prompt'},
+            'max_prompt_characters': model.limits['max_prompt'],
             'sizes': [{'aspect_ratio': item['id'], 'width': item['width'],
                        'height': item['height'], 'tier': '1K',
-                       'default': item['id'] == DEFAULTS['aspect_ratio']} for item in sizes],
-            'qualification': {'historical_source_workload': '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
-                              'packaged_inference': 'pending'},
-        }]}
+                       'default': item['id'] == model.defaults['aspect_ratio']} for item in sizes],
+            'qualification': dict(model.qualification),
+        }
+
+    @app.get('/api/catalog')
+    def catalog() -> dict:
+        return {'models': [catalog_entry(model) for model in MODELS.values()]}
 
     @app.post('/api/generate/txt2img')
     def submit(body: dict) -> dict:
-        state = readiness()
-        if not state['host']['eligible']:
-            raise HTTPException(409, state['host']['reason'])
+        state = _host_eligibility()
+        if not state['eligible']:
+            raise HTTPException(409, state['reason'])
         try:
             return {'job': manager.submit(body)}
         except ValueError as exc:
@@ -197,15 +246,22 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
 
 def from_environment() -> FastAPI:
     from components import model_packages
+    from .generation import load_image_manifests
     import json
     data = Path(os.environ['STUDIOHUB_IMAGE_DATA_DIR'])
     library = Path(os.environ['STUDIOHUB_MODELS_DIR'])
     manifest_path = Path(os.environ['STUDIOHUB_IMAGE_MANIFEST'])
     manifest = json.loads(manifest_path.read_text())
     model_packages.validate_manifest(manifest)
+    # The bundle names one Image manifest explicitly and ships the whole model-manifests
+    # directory beside it (`packaging/stage_voice.py:252`), so every registered model's
+    # manifest is read from there. A sibling that fails to load is reported per model in the
+    # catalog; only the named manifest is fatal.
+    manifests, errors = load_image_manifests(manifest_path.parent, manifest_path)
     release = json.loads(Path(os.environ['STUDIOHUB_RELEASE_MANIFEST']).read_text())
     identity = release['components']['image']['runtime_sha256']
     if not isinstance(identity, str) or len(identity) != 64:
         raise ValueError('Release manifest lacks exact Image runtime identity')
-    return create_app(GenerationManager(data, library, manifest, identity),
+    return create_app(GenerationManager(data, library, manifest, identity,
+                                        manifests=manifests, manifest_errors=errors),
                       os.environ['STUDIOHUB_FLEET_TOKEN'])
