@@ -88,8 +88,25 @@ Same host, same pack, same seed/prompt/params, comparing SHA-256 of the **decode
 | mflux 0.17.5 + mlx 0.31.2 (the shipped runtime) | `67a27847…` | ~55 s |
 | mflux 0.20.0 + mlx 0.32.2 | `16a5535f…` | ~58 s |
 
+Pixel distance, measured on the 0.20.0 runtime against 0.17.5: **94.2 %** of pixels differ on the
+golden scene (mean |delta| 4.25/255, PSNR 25.7 dB, SSIM 0.9723) and **95.7 %** on the garden
+scene (mean 3.71, PSNR 30.4 dB, SSIM 0.9937). The diff energy sits on glyph outlines and on
+sparkle and foliage edges; flat interiors are near zero. On the golden scene the title is
+identical in wording, typeface, size and line breaks — including the model's pre-existing
+"GOLEN" typo, which the bump neither fixed nor worsened.
+
 `67a27847…` is the repo's own R07 baseline PNG, so the 0.17.5 harness reproduced the shipped
-output exactly and 0.20.0 genuinely differs. Two 0.20.0 runs produced identical pixels, so the
+output exactly and 0.20.0 genuinely differs.
+
+**Naming the scene, because this was ambiguous and it matters:** `67a27847…` is the **garden**
+prompt — the riverside sunrise recorded in
+`qualification/evidence/r07-2026-09-21/flux-2-klein-4bit.json`. The golden-light typography scene
+in `qualification/run-16x9-image-tests.sh` is a *different* prompt and hashes differently:
+`769479ae…` on 0.17.5 and `67b6c56c…` on 0.20.0. Earlier revisions of this note called
+`67a27847…` "the R07 baseline" without naming the scene, which invited exactly the confusion of
+assuming the typography test shared its hash. Both prompts were run in the bump's re-qualification;
+every figure is deterministic across repeats, and the mflux CLI and the worker's Python API agree
+byte for byte. Two 0.20.0 runs produced identical pixels, so the
 new output is deterministic too.
 
 **Coordinator's visual check [M]:** the two 1280×720 R07 images are the same picture — same
