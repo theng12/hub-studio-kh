@@ -25,6 +25,13 @@ themselves are the snapshot and their `file:line` citations are deliberately not
   `docs/runtime-contract.md`, so a stale number in a document fails a test instead of misleading the
   next reader.
 
+**Shipped state:** implementation commit `f20fd1a` (the docs-only commit after it does not change
+the code), installed to `/Applications` and staged into all four kits; DMG
+`dist/StudioHub-0.6.61-f20fd1a.dmg`. Each kit verifies **24 installed / 24 advertised, zero drift**,
+208 model files checked by size (70.5 GB), app identity `0.6.61 f20fd1a`, `development_build: False`.
+`verify-kit.sh` reports **PASS** on ATLAS, NOVA, ORICO and UGREEN. **The commit is local: nothing was
+pushed to either remote** — the two pushes are the owner's, per this project's standing note.
+
 **Verification for this release** (all on the frozen tree before the commit): `tests/` **935
 passed, 11 skipped**; `tests/hub_regression/cases` **172 passed** — that suite is excluded from root
 collection by its own `collect_ignore`, so **run it explicitly**; `bash native/build.sh` and
