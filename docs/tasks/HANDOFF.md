@@ -17,14 +17,25 @@ Hub's admission — never in the app's `blockReason`.
 
 ## Where things stand
 
-- **The shared checkout is reconciled and clean at `928ebd4` on `implementation/voice-runtime`
-  (2026-09-24).** All four parallel sessions' work is committed in dependency order: image fix +
-  label (`2f2dabd`), TTS prune (`7f6e663`, `e60d194`), Chat Studio (`d4cefc8`, `02b81da`), video
-  research (`258d6e6`), plus the coordinator docs. `git status` is empty. The image
-  text-rendering qualification is recorded in `research/text-rendering-model-shortlist.md` and
-  `research/image-memory-pressure.md`: **Z-Image-Turbo is the only candidate that reaches the
-  16 GB fleet tier** — Ideogram 4 (22.5 GB peak) and Qwen-Image-2.1 both abort at their larger
-  size on the 32 GB M2 Max `Mac14,13` with macOS's Metal "Impacting Interactivity" error.
+- **The shared checkout is clean on `implementation/voice-runtime` (2026-09-24).** All four
+  parallel sessions' work is committed in dependency order: image fix + label (`2f2dabd`), TTS
+  prune (`7f6e663`, `e60d194`), Chat Studio (`d4cefc8`, `02b81da`), video research (`258d6e6`),
+  the Chat qualification (`4e87afd`, `66f2ce2`) and the Z-Image record (`94224d9`), plus the
+  coordinator docs. `git status` is empty. The image text-rendering qualification is recorded in
+  `research/text-rendering-model-shortlist.md`, `research/image-memory-pressure.md` and
+  `qualification/z-image-turbo-2026-09-24.md`: **Z-Image-Turbo is the owner-approved model and
+  the only candidate that reaches the 16 GB fleet tier** — Ideogram 4 (22.5 GB peak) and
+  Qwen-Image-2.1 both abort at their larger size on the 32 GB M2 Max `Mac14,13` with macOS's
+  Metal "Impacting Interactivity" error.
+
+- **The four SSD kits carry ~29 GB of optional image-model backup (2026-09-24).** Each drive's
+  `Video Generation Kit/Studio Hub KH/optional-models/` holds `z-image-turbo-mflux-4bit`
+  (5.91 GB), `ideogram-4-mflux-q4` (14.88 GB) and `qwen-image-2.1-mlx-serve-4bit` (10.69 GB),
+  plus a README. They sit **outside** `model-library/` deliberately: the app has no adapter for
+  any of them, so it must not advertise them, and `verify-kit.sh` still reports PASS on all four
+  drives. Copy integrity was checked file-for-file against the sources. Z-Image needs the mflux
+  0.17.5 → 0.20.0 bump plus a per-model adapter before the app can use it
+  (`research/three-model-rollout-plan.md`).
 
 - Release **0.6.55**. Every release is pushed to `main` and to
   `implementation/voice-runtime`; `main` is the release branch. **0.6.55 is cut locally but not
