@@ -2,6 +2,37 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.59 — 2026-09-24
+
+### A second image model, and it spells properly
+
+**Z-Image-Turbo** is now in the Image model list beside FLUX.2 Klein. The reason it is there is
+text: asked for the title "THE GOLDEN LIGHT OF DREAMS", FLUX writes **"THE GOLEN LIGHT OF
+DREAMS"** — and at more steps it gets worse, adding an extra E to DREAMS. Z-Image gets all five
+words right.
+
+It is the slower of the two — roughly 3 minutes an image against FLUX's 80 seconds — and it is
+much easier on the machine, using about a third of the memory. On a 16 GB Mac the app
+automatically runs it in its low-memory mode, which is the configuration that has been measured
+to fit.
+
+### What to expect
+
+- Z-Image appears in the Image model list and can be chosen like any other model. Nothing else
+  about the Image page changes.
+- It runs in a lower-memory mode on smaller Macs automatically. That mode is slower; the speed
+  difference is the price of fitting.
+- **The 8 GB Macs are not yet measured for this model.** It may work there and it may not — the
+  app does not claim either way, and it will tell you if a Mac is below the tier this model has
+  been qualified on.
+
+### FLUX.2 Klein under the hood
+
+The image engine was updated to run Z-Image, and FLUX.2 Klein was re-checked on the new version
+rather than assumed to be fine. Its pictures are marginally different in the way any engine
+update changes them — same scene, same composition, same text — and nothing about how you use it
+has changed.
+
 ## 0.6.58 — 2026-09-24
 
 ### Do not install 0.6.57

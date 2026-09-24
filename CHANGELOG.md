@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.59 — 2026-09-24 · Z-Image-Turbo, and the engine it needed
+
+Image gains a second model. **Z-Image-Turbo** is selectable beside FLUX.2 Klein, and it renders
+text FLUX gets wrong — the title "THE GOLDEN LIGHT OF DREAMS" comes out correct where FLUX writes
+"THE GOLEN LIGHT OF DREAMS" at 4 steps and worsens at 9.
+
+**The engine moved for it.** mflux 0.17.5 → **0.20.0**, mlx 0.31.2 → **0.32.2** — 0.17.5 pins
+`mlx<0.32.0` and 0.20.0 requires `>=0.32.0`, so the two had to move together. The re-lock held
+every other package: **75 → 63 packages**, of which 12 are the `twine` subtree that mflux 0.20.0
+no longer requires. Nothing unrelated moved, proved by a byte-identical second compile.
+
+**FLUX.2 Klein is re-qualified, not assumed.** Its output pixels do change between engines —
+94.2 % differ, SSIM 0.972 — but the distance sits on glyph outlines and sparkle edges with flat
+interiors near zero. Visually the same picture: on the typography scene the title is identical in
+wording, typeface, size and line breaks, including the pre-existing "GOLEN" typo, which the bump
+neither fixed nor worsened. It cannot be attributed to mflux alone: mflux and MLX moved together.
+
+- The Image worker ran exactly one model — repo, revision, class import and defaults were module
+  constants. It is now a registry, and the catalog advertises both models with their own steps,
+  limits, memory policy and qualification block. FLUX's row is unchanged.
+- **Z-Image's memory is chosen from the Mac, not fixed.** `low_ram` is not a constructor
+  parameter, so the plan is applied through `CallbackManager._register_memory_saver` — the CLI's
+  own mapping — and raises if mflux ever renames it rather than silently not applying. Below the
+  tier the default was measured on, the worker takes the configuration with the known bound
+  (7.1-7.2 GB measured) and pays the measured time cost.
+- **It does not claim the default fails on 16 GB.** That figure is cache-inflated from a 32 GB
+  host, and the same reasoning would wrongly rule out FLUX, which ships on 16 GB. The default's
+  requirement there is unmeasured and said so.
+- **The 8 GB tier is unclaimed** pending the owner's measurement. Two named constants are the
+  only knobs to move when it returns.
+- Z-Image publishes a live-free-memory floor of 8 GB. The Hub enforces only that floor and
+  defaults to 2 GB, which would dispatch onto a Mac with 3 GB free and let it thrash rather than
+  refusing. FLUX keeps its existing behaviour deliberately.
+- `validate_request` now rejects non-finite guidance — the same NaN-acceptance class the
+  independent review found in the chat worker.
+
+Evidence: 34 image tests, native boundary/API/lifecycle suites, and a live catalog read showing
+both models `execution_ready`. FLUX was run through both the legacy path and the new registry and
+all three outputs are pixel-identical (`16a5535f…`), a value that independently reproduces the
+0.20.0 re-qualification record.
+
 ## 0.6.58 — 2026-09-24 · hotfix: 0.6.57 left every model picker empty
 
 **0.6.57 shipped a broken build and this fixes it.** Do not install 0.6.57.
