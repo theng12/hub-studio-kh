@@ -567,10 +567,17 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   model for the gateway. The chat model is visible in `GET /api/hub/capabilities` as a direct
   observable (`chat.completion`, audit and exposure `null`). Whether this is needed depends on
   which path GatewayKH actually uses — see the handoff doc.
-- **Chat's memory tier is still unmeasured** (8/16/24 GB throughput), harness ready in
-  `qualification/README-chat-tiers.md`. 0.6.63 changed the default so a 16 GB+ Mac holds the model,
-  which makes the first reply fast and every later one faster — but the tier measurement is what
-  turns "warn on 8 GB" into a qualified tier or a documented exclusion.
+- **Chat's memory tier is still unmeasured** (16 GB first, then one 8 GB; a 24 GB Mac is not tier
+  evidence), harness ready in `qualification/README-chat-tiers.md`. 0.6.63 changed the default so a
+  16 GB+ Mac holds the model, which makes the first reply fast and every later one faster — but the
+  tier measurement is what turns "warn on 8 GB" into a qualified tier or a documented exclusion.
+  **It is on every kit drive now** (`Technical/chat-tier-run.sh`, and a double-clickable
+  `Technical/RUN-CHAT-TIER.command` beside it), because the two Macs that have to run it are the
+  ones the drives travel to, and it previously lived only in this repo — so the instruction "run
+  `chat-tier-run.sh`" pointed at a file the machine did not have. **A `.sh` is not double-clickable
+  on macOS**: Finder has no application bound to it, so a double-click opens TextEdit and looks
+  broken. The `.command` wrapper is the fix, and it is the convention the drive already used for
+  `install_app.command` and `verify-this-app.command`.
 - **The 8 GB Z-Image-Turbo run is now more valuable, not less.** The copy step carries the model on
   8 GB Macs from `CARRY_BELOW_TIER` in `qualification/copy_models_for_this_mac.py` — "the owner
   asked to try it there", explicitly *not* the proof table. One command,
@@ -621,7 +628,7 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   passable*, 10 findings, commit `40453b9`) which was never recorded on the card, and a second on
   2026-09-25 that closed ST-14.1/14.3/14.4 and corrected the card. See
   [`ST-14-review.md`](ST-14-review.md). **What that review leaves open is now the honest list:**
-  8/16/24 GB throughput is unmeasured (harness ready: `qualification/README-chat-tiers.md`), no
+  chat's 16 GB tier and then an 8 GB run are unmeasured (harness ready: `qualification/README-chat-tiers.md`, carried on every kit drive as `Technical/RUN-CHAT-TIER.command`), no
   human has typed in the packaged Chat page, streaming-end-to-end through the Hub is unexercised,
   and **nothing in the product refuses on memory tier** — the worker publishes the manifest's 16 GB
   as a *warning* and stays eligible, the Hub's `effective_min_total_memory_gb` is deliberately 0,
