@@ -127,26 +127,23 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `4badc84`, installed to `/Applications`; DMG
-`dist/StudioHub-0.6.68-4badc84.dmg`. `development_build: false`, and the image component records
-`runtime_qualified: true`.
-**The one that mattered: the installed app and all four drives now carry mflux 0.20.0**, verified by
-listing the staged and installed `runtimes/image/lib/python*/site-packages` — the first build since
-0.6.62 to contain the engine Z-Image-Turbo 6B MLX 4-bit was qualified on.
-**Kits:** all four at `0.6.68`, `files 60435`, `"problems": []`, each `RESULT: PASS` from its own
-`verify-kit.sh`, libraries still **24 installed / 24 advertised**.
-**`Technical/` is now 10 files on every drive, down from 29.** `prepare-kit.sh` treats it as a
-managed set and retired **21 leftovers** to `/Volumes/<volume>/_trash/Technical-retired` — including
-three exact duplicates (two copies of the Z-Image runner, two of its readme, two of the launch
-checker).
-**A latent bug the prune exposed, and fixed:** `verify-kit.sh` runs `$HERE/verify-launch.sh`, and
-`prepare-kit.sh` had **never copied that file**. It worked only because older kits left a stale copy
-in `Technical/`; a freshly prepared drive had a verifier that could not run. Both travel together
-now, and `verify-launch.sh` is in the managed set.
-**Gate on this commit:** `tests/` **1322 passed, 11 skipped, 997 subtests**; `bash native/build.sh`
-green.
+**Shipped state:** implementation commit `49792c4`, installed to `/Applications`; DMG
+`dist/StudioHub-0.6.69-49792c4.dmg`. `development_build: false`, `runtime_qualified: true`.
+**Kits:** all four at `0.6.69`, `files 60435`, `"problems": []`, each `RESULT: PASS`, libraries
+**24 installed / 24 advertised**, still carrying **mflux 0.20.0**.
+**Gate on this commit:** `tests/` **1322 passed, 11 skipped, 998 subtests**; `bash native/build.sh`
+green; `components/voice/app/tests` green (including the new `test_system_info.py`).
 **Pushed:** `main` and `implementation/voice-runtime`.
-**Superseded:** `f49966e` (0.6.67), `c0fa6c6` (0.6.66) and the rest in `_trash/dist/`.
+**Superseded:** `4badc84` (0.6.68) and the rest in `_trash/dist/`.
+
+**`.build` is a managed set too, and it filled the volume.** It held 99 GB — twelve superseded
+staged bundles at 2.9 GB each plus audit trees — and the root volume fell to **2.1 GB free**, where
+one DMG build failed. 35 GB was moved to
+`/Volumes/KH-STUDIO-NOVA/_trash/build-archive` (moved, not deleted), taking the volume to 26 GB.
+**Moving into this project's `_trash` would have freed nothing: it is on the same volume.** Only
+emptying `_trash` returns the space, and that is the owner's. Keep one or two recent bundles locally
+and archive the rest.
+
 **Watch the root volume:** it had **6.5 GB free** during this release, and one DMG attempt failed on
 it before succeeding on the retry. `.build/` holds nine staged bundles at ~3 GB each.
 
