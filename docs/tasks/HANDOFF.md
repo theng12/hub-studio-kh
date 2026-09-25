@@ -127,20 +127,28 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `f49966e`, installed to `/Applications`; DMG
-`dist/StudioHub-0.6.67-f49966e.dmg`. `development_build: false` on the stage, read from
-`release-manifest.json` **before** installing, on a tree confirmed clean first.
-**Verified in the installed bundle, not the checkout:** version `0.6.67`, commit `f49966e`, and the
-running installed Hub answers `version: 0.6.67`, **5 of 5 studios up**, bound on
-`100.75.85.116` (tailnet), `192.168.1.243` (LAN) and loopback.
-**Kits:** all four (`NOVA`, `UGREEN`, `ATLAS`, `ORICO`) at `0.6.67`, `files 60641`, `"problems": []`,
-each library still **24 installed / 24 advertised** with all 208 recorded model files checked by size
-(70.5 GB), and each ran its own `verify-kit.sh` → `RESULT: PASS`.
+**Shipped state:** implementation commit `4badc84`, installed to `/Applications`; DMG
+`dist/StudioHub-0.6.68-4badc84.dmg`. `development_build: false`, and the image component records
+`runtime_qualified: true`.
+**The one that mattered: the installed app and all four drives now carry mflux 0.20.0**, verified by
+listing the staged and installed `runtimes/image/lib/python*/site-packages` — the first build since
+0.6.62 to contain the engine Z-Image-Turbo 6B MLX 4-bit was qualified on.
+**Kits:** all four at `0.6.68`, `files 60435`, `"problems": []`, each `RESULT: PASS` from its own
+`verify-kit.sh`, libraries still **24 installed / 24 advertised**.
+**`Technical/` is now 10 files on every drive, down from 29.** `prepare-kit.sh` treats it as a
+managed set and retired **21 leftovers** to `/Volumes/<volume>/_trash/Technical-retired` — including
+three exact duplicates (two copies of the Z-Image runner, two of its readme, two of the launch
+checker).
+**A latent bug the prune exposed, and fixed:** `verify-kit.sh` runs `$HERE/verify-launch.sh`, and
+`prepare-kit.sh` had **never copied that file**. It worked only because older kits left a stale copy
+in `Technical/`; a freshly prepared drive had a verifier that could not run. Both travel together
+now, and `verify-launch.sh` is in the managed set.
 **Gate on this commit:** `tests/` **1322 passed, 11 skipped, 997 subtests**; `bash native/build.sh`
-green; `components/voice/app/tests` green inside the bridge.
+green.
 **Pushed:** `main` and `implementation/voice-runtime`.
-**Superseded:** `c0fa6c6` (0.6.66), `37cb07b` (0.6.65), `fabe498` (0.6.64) and `a4a78dc` (0.6.63) in
-`_trash/dist/`.
+**Superseded:** `f49966e` (0.6.67), `c0fa6c6` (0.6.66) and the rest in `_trash/dist/`.
+**Watch the root volume:** it had **6.5 GB free** during this release, and one DMG attempt failed on
+it before succeeding on the retry. `.build/` holds nine staged bundles at ~3 GB each.
 
 **A flaky native test, seen once:** `bash native/build.sh` failed with *"the in-flight read must
 have been torn down by the cancellation"* and passed on an immediate re-run with `native/` provably
