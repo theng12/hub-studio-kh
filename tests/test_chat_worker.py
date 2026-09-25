@@ -17,9 +17,11 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+from components import model_defaults
 from components.chat.app.backend import memory_policy as memory_policy_module
 from components.chat.app.backend.llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P,
-                                                    ChatBusy, ChatContextExceeded, ChatEngine,
+                                                    FALLBACK_MAX_OUTPUT_TOKENS, ChatBusy,
+                                                    ChatContextExceeded, ChatEngine,
                                                     ChatModelUnavailable,
                                                     engine_from_environment,
                                                     resolve_model_dir)
@@ -1547,6 +1549,354 @@ class ChatLaneContractTests(unittest.TestCase):
                 "/v1/chat/completions", headers={"x-studio-token": TOKEN},
                 json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 0})
             self.assertEqual(negative.status_code, 422)
+
+
+class _StatedLimitEngine(_RecordingEngine):
+    """A model that states an output ceiling of its own, above this worker's fallback.
+
+    The shipped Qwen3.5-9B 4-bit ships no `generation_config.json`, so its ceiling and this
+    worker's fallback are both 4096 and the two are indistinguishable. A model that states 8192
+    is what tells them apart, and the owner's rule is exactly that the default must not be
+    borrowed from whichever model happens to be loaded.
+    """
+
+    max_output_tokens = 8192
+
+    def model_limits(self) -> dict:
+        return {
+            "context_window_tokens": {
+                "value": 262144,
+                "source": "model/config.json text_config.max_position_embeddings"},
+            "max_output_tokens": {
+                "value": 8192,
+                "source": "model/generation_config.json max_new_tokens"},
+        }
+
+
+class ModelDefaultsRouteTests(unittest.TestCase):
+    """Per-model defaults: stored per machine, offered from the lane's own surface, never an override.
+
+    The owner's rule is *"it has to be per model because each model is weight differently"*, so
+    every assertion here is about one model's own numbers: the surface offered is the lane
+    contract's parameter list (minus what is required per request), the bounds are the bounds the
+    route enforces, and the value published as a `default` is the value the route serves with.
+    """
+
+    MESSAGE = {"messages": [{"role": "user", "content": "hi"}]}
+
+    def _fixture(self, engine=None):
+        engine = engine or _StatedLimitEngine()
+        self.engine = engine
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        data = Path(temporary.name)
+        policy = memory_policy_module.MemoryPolicy(data, engine)
+        return TestClient(create_app(engine, policy, TOKEN, "a" * 64)), engine, data
+
+    def _headers(self) -> dict:
+        return {"x-studio-token": TOKEN}
+
+    def _stored(self, client) -> dict:
+        response = client.get("/api/model-defaults", headers=self._headers())
+        self.assertEqual(response.status_code, 200, response.text)
+        models = response.json()["models"]
+        self.assertEqual(len(models), 1, "this worker serves one model")
+        return models[0]
+
+    def _put(self, client, values: dict, *, repo: str | None = None):
+        return client.put("/api/model-defaults", headers=self._headers(),
+                          json={"repo": repo if repo is not None else self.engine.model_id,
+                                "values": values})
+
+    def _post(self, client, body: dict):
+        return client.post("/v1/chat/completions", headers=self._headers(),
+                           json={**self.MESSAGE, **body})
+
+    def _catalog_contract(self, client) -> dict:
+        return client.get("/api/catalog", headers=self._headers()).json()[
+            "models"][0]["lane_contract"]
+
+    def test_the_route_round_trips_and_returns_to_the_lanes_own(self) -> None:
+        client, engine, data = self._fixture()
+        lane = _StatedLimitEngine.model_id
+
+        before = self._stored(client)
+        self.assertEqual(before["repo"], lane)
+        # GET before anything is set is the lane's own answer, and reading wrote nothing.
+        self.assertEqual(before["chosen"], {})
+        self.assertEqual(before["defaults"], before["stated"],
+                         "a fresh worker does not answer with the lane's own defaults")
+        self.assertFalse(model_defaults.settings_file(data).exists(),
+                         "reading the defaults wrote a settings file")
+
+        # The distinction the owner asked for, with a negative control: this model states 8192, and
+        # the default this lane serves with is still the worker's own 4096 fallback - not the
+        # model's ceiling.
+        self.assertEqual(engine.max_output_tokens, 8192)
+        self.assertEqual(before["defaults"]["max_tokens"], FALLBACK_MAX_OUTPUT_TOKENS)
+        self.assertNotEqual(before["defaults"]["max_tokens"], engine.max_output_tokens)
+        published = {parameter["name"]: parameter for parameter in before["parameters"]}
+        self.assertEqual(published["max_tokens"]["maximum"], engine.max_output_tokens)
+
+        # The offered surface is derived from the lane contract, never restated: it is exactly what
+        # `model_defaults.editable` derives from the lane's own list, and every lane parameter that
+        # is *not* offered is excluded for one of the two stated reasons. Set equality against the
+        # non-required list alone would be wrong in both directions — `model` is not required but
+        # has one possible value, so it is not a control, and the moment this worker serves a second
+        # model that enum grows and the control appears with no code change here.
+        lane_parameters = self._catalog_contract(client)["parameters"]
+        self.assertEqual(
+            set(published),
+            {parameter["name"] for parameter in model_defaults.editable(lane_parameters)},
+            "the defaults surface restates the lane's parameters instead of using it")
+        self.assertTrue(set(published) <= {parameter["name"] for parameter in lane_parameters},
+                        "a control was offered for a parameter this lane does not publish")
+        for parameter in lane_parameters:
+            if parameter["name"] in published:
+                continue
+            options = parameter.get("enum")
+            reason = ("a request must supply it" if parameter.get("required")
+                      else "it has exactly one possible value" if isinstance(options, list)
+                      and len(options) == 1 else "neither reason applies")
+            self.assertNotEqual(reason, "neither reason applies",
+                                f"{parameter['name']} is not offered and not for a stated reason")
+
+        saved = self._put(client, {"max_tokens": 2048})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["models"][0]["defaults"]["max_tokens"], 2048)
+        self.assertEqual(saved.json()["models"][0]["chosen"], {"max_tokens": 2048})
+        self.assertTrue(model_defaults.settings_file(data).exists(),
+                        "the default was not stored beside memory_policy.json")
+        self.assertEqual(self._stored(client)["defaults"]["max_tokens"], 2048)
+
+        cleared = client.request("DELETE", "/api/model-defaults", headers=self._headers(),
+                                 json={"repo": lane})
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(cleared.json()["models"][0]["defaults"],
+                         cleared.json()["models"][0]["stated"],
+                         "delete did not return the model to what the lane itself states")
+        self.assertEqual(cleared.json()["models"][0]["chosen"], {})
+
+        # The repo may arrive as a query parameter too, and that spelling clears as well.
+        self.assertEqual(self._put(client, {"max_tokens": 1024}).status_code, 200)
+        by_query = client.request("DELETE", "/api/model-defaults", headers=self._headers(),
+                                  params={"repo": lane})
+        self.assertEqual(by_query.status_code, 200, by_query.text)
+        self.assertEqual(by_query.json()["models"][0]["defaults"]["max_tokens"],
+                         FALLBACK_MAX_OUTPUT_TOKENS)
+
+    def test_a_value_outside_the_bound_is_refused_by_name_and_not_stored(self) -> None:
+        client, engine, data = self._fixture()
+        # One entry per bound this lane enforces: its own maximum and minimums (including
+        # top_p's exclusive one), a wrong type, a JSON mode this engine cannot serve, a parameter
+        # this lane does not publish, and a model this worker does not serve.
+        for values, name, expected in (
+            ({"max_tokens": engine.max_output_tokens + 1}, "max_tokens",
+             "above the lane's maximum"),
+            ({"max_tokens": 0}, "max_tokens", "below the lane's minimum"),
+            ({"max_tokens": "4096"}, "max_tokens", "expected integer, got str"),
+            ({"temperature": -0.1}, "temperature", "below the lane's minimum"),
+            ({"top_p": 0}, "top_p", "greater than 0"),
+            ({"top_p": 1.5}, "top_p", "above the lane's maximum"),
+            ({"response_format": {"type": "xml"}}, "response_format", "json_object"),
+            ({"seed": 4.5}, "seed", "expected integer, got float"),
+            ({"cfg_scale": 3.5}, "cfg_scale", "publishes no such settable parameter"),
+            # `model` has one possible value, so it is not a settable parameter at all and is
+            # refused for that reason rather than for the value. The route still 404s a request
+            # naming another model (pinned above); this is the store refusing to hold one.
+            ({"model": "org/another-model"}, "model", "publishes no such settable parameter"),
+        ):
+            with self.subTest(values=values):
+                response = self._put(client, values)
+                self.assertEqual(response.status_code, 422,
+                                 f"{values} was accepted: {response.text}")
+                detail = response.json()["detail"]
+                self.assertIsInstance(detail, dict, "the refusal is not per-parameter")
+                self.assertIn(name, detail, f"{values} was refused without naming the parameter")
+                self.assertIn(expected, detail[name])
+                self.assertFalse(model_defaults.settings_file(data).exists(),
+                                 f"{values} was stored despite being refused")
+        self.assertEqual(self._stored(client)["defaults"]["max_tokens"],
+                         FALLBACK_MAX_OUTPUT_TOKENS)
+
+    def test_every_problem_is_reported_at_once_and_nothing_is_half_stored(self) -> None:
+        client, engine, data = self._fixture()
+        self.assertEqual(self._put(client, {"max_tokens": 2048}).status_code, 200)
+        response = self._put(client, {"max_tokens": engine.max_output_tokens + 1,
+                                      "temperature": -1, "cfg_scale": 1})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(sorted(response.json()["detail"]),
+                         ["cfg_scale", "max_tokens", "temperature"],
+                         "an operator who typed three bad values should not have to save three "
+                         "times to find out")
+        # The previous save survives intact: a refused save half-applies nothing.
+        self.assertEqual(self._stored(client)["defaults"]["max_tokens"], 2048)
+
+    def test_a_non_finite_number_is_refused_rather_than_stored(self) -> None:
+        # Python's JSON parser accepts the bare tokens NaN/Infinity, so they have to be caught
+        # after parsing: a stored `Infinity` would turn every later request that omitted
+        # temperature into a 422 the operator could only clear by hand-editing the file.
+        client, engine, data = self._fixture()
+        raw = '{"repo": %s, "values": {"temperature": Infinity}}' % json.dumps(engine.model_id)
+        response = client.request(
+            "PUT", "/api/model-defaults",
+            headers={**self._headers(), "content-type": "application/json"}, content=raw)
+        self.assertEqual(response.status_code, 422, response.text)
+        detail = response.json()["detail"]
+        self.assertIn("temperature", detail)
+        self.assertIn("finite", detail["temperature"])
+        self.assertFalse(model_defaults.settings_file(data).exists())
+
+    def test_an_explicit_request_still_wins_and_an_omitted_one_takes_the_default(self) -> None:
+        client, engine, _data = self._fixture()
+        self.assertEqual(self._put(client, {"max_tokens": 2048, "temperature": 0.1}).status_code,
+                         200)
+
+        # Negative control: with 2048 stored, an omitted max_tokens reaches the engine as 2048
+        # rather than the lane's 4096 fallback.
+        engine.seen = []
+        self.assertEqual(self._post(client, {}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], 2048)
+        self.assertEqual(engine.seen[-1]["temperature"], 0.1)
+
+        # And what the request states always wins, over the stored default and the fallback.
+        engine.seen = []
+        self.assertEqual(self._post(client, {"max_tokens": 512, "temperature": 0.9}).status_code,
+                         200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], 512)
+        self.assertEqual(engine.seen[-1]["temperature"], 0.9)
+
+        # The alias the lane honours is a supplied value too, not an omission.
+        engine.seen = []
+        self.assertEqual(self._post(client, {"max_completion_tokens": 256}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], 256)
+
+    def test_the_catalogs_published_default_is_the_value_the_route_uses(self) -> None:
+        client, engine, _data = self._fixture()
+
+        # Read the catalog before anything is stored: its `default` is the lane's own, and the
+        # route uses exactly that when the request omits the parameter.
+        published = {parameter["name"]: parameter for parameter in
+                     self._catalog_contract(client)["parameters"]}
+        self.assertEqual(published["max_tokens"]["default"], FALLBACK_MAX_OUTPUT_TOKENS)
+        engine.seen = []
+        self.assertEqual(self._post(client, {}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], published["max_tokens"]["default"])
+
+        self.assertEqual(self._put(client, {"max_tokens": 3000, "temperature": 0.25}).status_code,
+                         200)
+        contract = self._catalog_contract(client)
+        published = {parameter["name"]: parameter for parameter in contract["parameters"]}
+        self.assertEqual(published["max_tokens"]["default"], 3000)
+        self.assertEqual(published["temperature"]["default"], 0.25)
+        engine.seen = []
+        self.assertEqual(self._post(client, {}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], published["max_tokens"]["default"],
+                         "the catalog advertises a default the route does not use")
+        self.assertEqual(engine.seen[-1]["temperature"], published["temperature"]["default"])
+        # The row's other published defaults are the same resolution, not a second copy.
+        catalog = client.get("/api/catalog", headers=self._headers()).json()["models"][0]
+        self.assertEqual(catalog["generation_defaults"],
+                         {"temperature": published["temperature"]["default"],
+                          "top_p": published["top_p"]["default"]})
+
+    def test_an_unknown_repo_is_a_named_refusal_rather_than_a_silent_no_op(self) -> None:
+        client, engine, data = self._fixture()
+        for response in (
+            self._put(client, {"max_tokens": 16}, repo="org/another-model"),
+            client.request("DELETE", "/api/model-defaults", headers=self._headers(),
+                           json={"repo": "org/another-model"}),
+        ):
+            self.assertEqual(response.status_code, 404, response.text)
+            detail = response.json()["detail"]
+            self.assertIn("org/another-model", detail,
+                          "the refusal does not name the repo that was sent")
+            self.assertIn(engine.model_id, detail,
+                          "the refusal does not name the one model this worker serves")
+        self.assertFalse(model_defaults.settings_file(data).exists(),
+                         "a write for an unknown repo stored something anyway")
+        # Naming no repo at all is refused too, rather than quietly meaning "the only model".
+        missing = client.put("/api/model-defaults", headers=self._headers(), json={"values": {}})
+        self.assertEqual(missing.status_code, 422)
+        self.assertIn("repo", missing.json()["detail"])
+
+    def test_the_existing_refusals_are_unmoved_by_a_stored_default(self) -> None:
+        client, engine, _data = self._fixture()
+        self.assertEqual(self._put(client, {"max_tokens": 1024, "thinking": True}).status_code,
+                         200)
+
+        # max_tokens is still bounded by the ceiling this model states, whatever is stored.
+        above = self._post(client, {"max_tokens": engine.max_output_tokens + 1})
+        self.assertEqual(above.status_code, 422)
+        detail = above.json()["detail"]
+        self.assertIn(str(engine.max_output_tokens), detail)
+        self.assertIn("max_tokens", detail)
+
+        # thinking is still a real JSON boolean: a stored `true` does not turn "false" into true
+        # and does not excuse a string.
+        for value in ("false", "no", 0, 1, None):
+            with self.subTest(thinking=value):
+                refused = self._post(client, {"thinking": value})
+                self.assertEqual(refused.status_code, 422, f"thinking={value!r} was accepted")
+                self.assertIn("thinking", refused.json()["detail"])
+        self.assertEqual(engine.seen, [], "a refused request reached the engine")
+
+    def test_a_prompt_past_the_models_context_is_still_refused_by_the_measured_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(
+                json.dumps({"text_config": {"max_position_embeddings": 100}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                                revision="r" * 40)
+            self.engine = engine
+            policy = memory_policy_module.MemoryPolicy(root, engine)
+            client = TestClient(create_app(engine, policy, TOKEN, "a" * 64))
+            # A stored output budget does not buy room past the context the model states.
+            self.assertEqual(self._put(client, {"max_tokens": 500}).status_code, 200)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))):
+                for body in ({}, {"max_tokens": 20}):
+                    with self.subTest(body=body):
+                        response = self._post(client, body)
+                        self.assertEqual(response.status_code, 422)
+                        detail = response.json()["detail"]
+                        self.assertIn("messages", detail)
+                        self.assertIn("90", detail, "the refusal does not name the measured count")
+                        self.assertIn("100", detail, "the refusal does not name the model's number")
+
+    def test_a_second_model_cannot_be_served_defaults_under_this_workers_repo(self) -> None:
+        # The repo a default is stored under is the one model this worker serves, so a second
+        # chat model in the same fleet cannot inherit the first one's numbers.
+        client, engine, data = self._fixture()
+        self.assertEqual(self._put(client, {"max_tokens": 2048}).status_code, 200)
+        stored = json.loads(model_defaults.settings_file(data).read_text())
+        self.assertEqual(list(stored), [engine.model_id])
+        self.assertEqual(stored[engine.model_id], {"max_tokens": 2048})
+
+    def test_a_stored_value_the_lane_now_refuses_is_never_applied_or_published(self) -> None:
+        """A model update that tightens a bound must not turn a stored number into a refused one.
+
+        The file is written directly because the route refuses to store this value now: it stands
+        for a default stored while the bound was looser, which is the only way it can exist.
+        """
+        client, engine, data = self._fixture()
+        model_defaults.settings_file(data).write_text(json.dumps(
+            {engine.model_id: {"max_tokens": engine.max_output_tokens + 1}}))
+        status = self._stored(client)
+        self.assertEqual(status["defaults"]["max_tokens"], FALLBACK_MAX_OUTPUT_TOKENS,
+                         "a stored value the lane refuses was applied anyway")
+        self.assertIn("max_tokens", status["not_used"],
+                      "the stored value is silently ignored rather than named")
+        published = {parameter["name"]: parameter for parameter
+                     in self._catalog_contract(client)["parameters"]}
+        self.assertEqual(published["max_tokens"]["default"], FALLBACK_MAX_OUTPUT_TOKENS,
+                         "the catalog advertises a default the route would refuse")
+        engine.seen = []
+        self.assertEqual(self._post(client, {}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], FALLBACK_MAX_OUTPUT_TOKENS)
 
 
 if __name__ == "__main__":

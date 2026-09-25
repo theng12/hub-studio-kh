@@ -63,7 +63,11 @@ def default_mode() -> str:
 class MemoryPolicy:
     def __init__(self, data_dir: Path, engine) -> None:
         self._engine = engine
-        self._settings = Path(data_dir) / "memory_policy.json"
+        # This worker's own state directory, public because it is more than the policy's: the
+        # per-model defaults file lives beside this one, and the API layer needs the same answer
+        # to "where does this worker keep its settings" rather than a second copy of the path.
+        self.data_dir = Path(data_dir)
+        self._settings = self.data_dir / "memory_policy.json"
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

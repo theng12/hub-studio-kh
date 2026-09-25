@@ -24,11 +24,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.datastructures import Headers
 
-from components import app_version
+from components import app_version, model_defaults
 
 from . import memory_policy as memory_policy_module
-from .llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P, ChatBusy, ChatContextExceeded,
-                         ChatEngine, ChatModelUnavailable, engine_from_environment)
+from .llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P, FALLBACK_MAX_OUTPUT_TOKENS,
+                         ChatBusy, ChatContextExceeded, ChatEngine, ChatModelUnavailable,
+                         engine_from_environment)
 
 # One stable creation stamp for the OpenAI model listing.
 _MODELS_CREATED = int(time.time())
@@ -232,6 +233,20 @@ class ChatActivity:
         }
 
 
+def _lane_output_budget(output_limit: int | None) -> int:
+    """The output budget this lane uses when a request omits ``max_tokens``.
+
+    **The worker's own fallback, not the model's ceiling.** A ceiling is the largest generation a
+    model allows, not a preference, and publishing it as the default would hand every caller that
+    omitted the field the biggest window the model has — one blanket number applied to every model
+    that happens to share this worker. Clamped to the model's ceiling where a model states less
+    than the fallback, so the contract can never advertise a default the route would refuse.
+    """
+    if output_limit is None:
+        return FALLBACK_MAX_OUTPUT_TOKENS
+    return min(FALLBACK_MAX_OUTPUT_TOKENS, output_limit)
+
+
 def _parameter_surface(engine) -> list[dict]:
     """The parameters this lane actually honours, with the bounds it enforces.
 
@@ -243,6 +258,7 @@ def _parameter_surface(engine) -> list[dict]:
     limits = engine.model_limits() if hasattr(engine, "model_limits") else {}
     limits = limits if isinstance(limits, dict) else {}
     output_limit, output_source = _published_max_output_tokens(engine)
+    output_default = _lane_output_budget(output_limit)
     context = limits.get("context_window_tokens") or {}
     context_value = context.get("value")
     context_source = context.get("source")
@@ -257,13 +273,32 @@ def _parameter_surface(engine) -> list[dict]:
         prompt_note += (
             "; nothing states a context window for this model, so no prompt length is refused")
 
+    # Where the lane's own output budget comes from, said in the contract rather than left for a
+    # reader to guess: it is this worker's fallback unless a model states a smaller ceiling.
+    if output_limit is not None and output_limit < FALLBACK_MAX_OUTPUT_TOKENS:
+        budget_origin = (f"the ceiling this model states, which is below this worker's own "
+                         f"{FALLBACK_MAX_OUTPUT_TOKENS}-token fallback budget "
+                         f"(llm_engine.FALLBACK_MAX_OUTPUT_TOKENS)")
+    else:
+        budget_origin = (f"this worker's own fallback output budget "
+                         f"(llm_engine.FALLBACK_MAX_OUTPUT_TOKENS = "
+                         f"{FALLBACK_MAX_OUTPUT_TOKENS}), which is not a number the model states")
+
     parameters = [
+        # The one value this worker serves. Published as an `enum` bound as well as a default so
+        # a stored default cannot name a model the route would refuse: this parameter is in the
+        # defaults surface (it is not `required` - a caller may omit it and be served the model
+        # this worker runs), and a free string there would let the catalog advertise a `model`
+        # whose every request is a 404.
         {"name": "model", "type": "string", "required": False, "default": engine.model_id,
+         "enum": [engine.model_id],
          "note": "the one model this worker serves; any other value is refused by name"},
         {"name": "messages", "type": "array", "required": True, "note": prompt_note},
         {"name": "max_tokens", "type": "integer", "required": False, "minimum": 1,
+         "default": output_default,
          "note": ("max_completion_tokens is accepted as an alias; a value above the published "
-                  "maximum is refused by name")},
+                  f"maximum is refused by name. Omitted, this lane uses {output_default}: "
+                  f"{budget_origin}.")},
         {"name": "temperature", "type": "number", "required": False,
          "default": DEFAULT_TEMPERATURE, "minimum": 0.0,
          "note": ("no maximum is published: neither the model nor this worker states one. A "
@@ -284,13 +319,47 @@ def _parameter_surface(engine) -> list[dict]:
     if output_limit is not None:
         entry = next(item for item in parameters if item["name"] == "max_tokens")
         entry["maximum"] = output_limit
-        entry["default"] = output_limit
-        entry["note"] += f". This model's ceiling is {output_limit} ({output_source})"
+        entry["note"] += f" This model's ceiling is {output_limit} ({output_source})."
     return parameters
 
 
-def _lane_contract(engine) -> dict:
+def _resolved_parameters(data_dir, engine) -> tuple[list[dict], dict]:
+    """``(parameters, values in force)`` for one model, from one ``resolved()`` call.
+
+    Shared by the completion route and the catalog on purpose: the value the catalog publishes in
+    a parameter's ``default`` is read from the same resolution the route serves with, so the
+    Models tab cannot be shown a default the worker would refuse or ignore. A stored value is
+    validated on the way out by :mod:`components.model_defaults`, so a model update that tightens
+    a bound drops the stored number rather than turning it into a refused request.
+    """
+    parameters = _parameter_surface(engine)
+    in_force, _not_used = model_defaults.resolved(data_dir, engine.model_id, parameters)
+    published = [{**parameter, "default": in_force[str(parameter["name"])]}
+                 if str(parameter["name"]) in in_force else parameter
+                 for parameter in parameters]
+    return published, in_force
+
+
+def _refusals_from_save(exc: ValueError):
+    """The per-parameter reasons ``model_defaults.save`` refused with.
+
+    ``save`` raises ``ValueError`` carrying a JSON object of them, so the route answers with every
+    problem at once instead of the first one. A message that is not that object is passed through
+    as the detail rather than swallowed, because a refusal nobody can read is worse than none.
+    """
+    try:
+        detail = json.loads(str(exc))
+    except ValueError:
+        return str(exc)
+    return detail if isinstance(detail, dict) else str(exc)
+
+
+def _lane_contract(engine, parameters: list[dict]) -> dict:
     """This lane's dispatch contract: what to send, what comes back, what a cancel promises.
+
+    ``parameters`` is the lane's own published surface with the value in force in each
+    ``default`` (``_resolved_parameters``), passed in rather than rebuilt here so this contract
+    and the completion route cannot answer the same question twice.
 
     `runtime_seconds` is deliberately absent: nothing has measured what one pack of this lane
     costs on this fleet, and a guessed runtime is how a scheduler sets a deadline that fails in
@@ -302,7 +371,7 @@ def _lane_contract(engine) -> dict:
         "schema": LANE_CONTRACT_SCHEMA,
         "modality": "chat",
         "operation": "chat.completion",
-        "parameters": _parameter_surface(engine),
+        "parameters": parameters,
         "artifact": {
             "modality": "chat",
             "media_type": "application/json",
@@ -335,9 +404,15 @@ def _lane_contract(engine) -> dict:
 
 
 def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
-               token: str, runtime_sha256: str) -> FastAPI:
+               token: str, runtime_sha256: str,
+               data_dir: str | os.PathLike[str] | None = None) -> FastAPI:
     if not token:
         raise ValueError("Private Chat worker requires its owning Hub credential")
+    # This worker's own state directory: `memory_policy.json` already lives there, and a
+    # per-model default belongs beside it - per machine, because a default is a statement about
+    # how this operator wants this Mac to work. The policy is the one place the directory is
+    # configured, so the fallback is the policy's own answer rather than a second path.
+    settings_dir = Path(data_dir) if data_dir is not None else Path(policy.data_dir)
     app = FastAPI(title="Studio Hub Chat", version="1")
     app.add_middleware(_OwnerCredentialMiddleware, token=token)
     activity = ChatActivity()
@@ -375,6 +450,9 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         files = state["files"]
         qualified_bytes = _qualified_minimum_memory_bytes(engine)
         qualified_gb = qualified_bytes / 1e9 if qualified_bytes else None
+        # The lane's own surface, with the operator's stored defaults resolved into each
+        # `default` from the same call the completion route serves with.
+        parameters, in_force = _resolved_parameters(settings_dir, engine)
         return {"models": [{
             # The model's own label, read from its manifest/repo id - never a literal here, so
             # a second chat model cannot be published under the first one's name. It carries the
@@ -403,12 +481,17 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             # Every limit with the source that states it, so a reader can label its own fallback
             # instead of inheriting this worker's number as the model's fact.
             "model_limits": engine.model_limits() if hasattr(engine, "model_limits") else None,
-            # The defaults the route actually serves with, from the same constants the route
-            # and the lane contract use - not a second copy free to disagree with them.
-            "generation_defaults": {"temperature": DEFAULT_TEMPERATURE, "top_p": DEFAULT_TOP_P},
+            # The defaults the route actually serves with: the model's own stated default for a
+            # parameter nobody has chosen, the operator's stored value where one exists, and the
+            # engine's constant where the lane states none. Read from the same resolution as the
+            # lane contract below, so the two cannot disagree.
+            "generation_defaults": {
+                "temperature": in_force.get("temperature", DEFAULT_TEMPERATURE),
+                "top_p": in_force.get("top_p", DEFAULT_TOP_P),
+            },
             # The dispatch contract, published by the only party that knows this API. The Hub
             # passes it through verbatim and adds its own `deadline_seconds`.
-            "lane_contract": _lane_contract(engine),
+            "lane_contract": _lane_contract(engine, parameters),
             "qualification": {
                 "owner_decision": f"{_model_label(engine)}, MLX, text-only",
                 # This string used to read "pending measured proof" long after the proof existed.
@@ -466,12 +549,20 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 f"sampler as {number!r} and produces meaningless output"))
         return number
 
-    def _completion_parameters(body: dict) -> dict:
-        """Validate the asked-for surface, refusing rather than silently dropping a value."""
+    def _completion_parameters(body: dict, defaults: dict) -> dict:
+        """Validate the asked-for surface, refusing rather than silently dropping a value.
+
+        ``defaults`` is what is in force for this model - the operator's stored values over the
+        lane's own - and it is applied **only where the request omits the parameter**. A value
+        the request supplies always wins: a default is where a request starts, never an override
+        of one, or a saved number would quietly outrank the caller that asked for something else.
+        """
         _refuse_unsupported_fields(body)
         max_tokens = body.get("max_tokens")
         if max_tokens is None:
             max_tokens = body.get("max_completion_tokens")
+        if max_tokens is None:
+            max_tokens = defaults.get("max_tokens")
         if max_tokens is not None:
             if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
                 raise HTTPException(
@@ -482,15 +573,16 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 raise HTTPException(422, (
                     f"max_tokens: {max_tokens} is above the maximum this lane publishes "
                     f"({limit}, {source}). Send at most {limit}."))
-        temperature = _number(body, "temperature", DEFAULT_TEMPERATURE)
+        temperature = _number(body, "temperature",
+                              defaults.get("temperature", DEFAULT_TEMPERATURE))
         if temperature < 0:
             raise HTTPException(
                 422, f"temperature: must not be negative; received {temperature!r}")
-        top_p = _number(body, "top_p", DEFAULT_TOP_P)
+        top_p = _number(body, "top_p", defaults.get("top_p", DEFAULT_TOP_P))
         if not 0.0 < top_p <= 1.0:
             raise HTTPException(
                 422, f"top_p: must be greater than 0 and at most 1; received {top_p!r}")
-        response_format = body.get("response_format")
+        response_format = body.get("response_format", defaults.get("response_format"))
         if response_format is not None:
             if not isinstance(response_format, dict):
                 raise HTTPException(
@@ -501,11 +593,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 raise HTTPException(
                     422, f"response_format.type: must be json_object or json_schema; received "
                          f"{_describe(response_format.get('type'))}")
-        seed = body.get("seed")
+        seed = body.get("seed", defaults.get("seed"))
         if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
             raise HTTPException(
                 422, f"seed: must be an integer or omitted; received {_describe(seed)}")
-        thinking = body.get("thinking", False)
+        thinking = body.get("thinking", defaults.get("thinking", False))
         if not isinstance(thinking, bool):
             # `bool("false")` is True in Python, so the old coercion turned thinking ON for a
             # caller that asked for it off. Only a real JSON boolean is accepted.
@@ -516,18 +608,66 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         return {"max_tokens": max_tokens, "temperature": temperature, "top_p": top_p,
                 "response_format": response_format, "seed": seed, "thinking": thinking}
 
-    def _stream_requested(body: dict) -> bool:
+    def _stream_requested(body: dict, defaults: dict) -> bool:
         """`stream` is a real JSON boolean too, for the same reason `thinking` is.
 
         A truthy string such as ``"false"`` would otherwise start an SSE response for a caller
         that asked for one JSON completion.
         """
-        value = body.get("stream", False)
+        value = body.get("stream", defaults.get("stream", False))
         if not isinstance(value, bool):
             raise HTTPException(422, (
                 f"stream: must be a JSON boolean (true or false); received {_describe(value)}. "
                 f"A non-boolean is refused rather than coerced."))
         return value
+
+    def _route_refusals(values: dict) -> dict[str, str]:
+        """The proposed values this lane's own completion route would refuse, by parameter.
+
+        :mod:`components.model_defaults` checks a value against the bound the lane *publishes*;
+        this checks it against the code that *enforces* it, which is the rule that module exists
+        to apply. Three of this lane's refusals are not numeric bounds and would otherwise reach
+        the defaults file: ``top_p``'s minimum is exclusive (0 is refused although the published
+        minimum is 0.0), a non-finite number reaches the sampler as NaN/Infinity, and
+        ``response_format.type`` must be a JSON mode this engine can serve. A stored value of any
+        of them would turn every later request that omitted that parameter into a 422.
+        """
+        refusals: dict[str, str] = {}
+        for name, value in values.items():
+            try:
+                if name == "stream":
+                    _stream_requested({name: value}, {})
+                else:
+                    _completion_parameters({name: value, "messages": []}, {})
+            except HTTPException as exc:
+                refusals[str(name)] = str(exc.detail)
+        return refusals
+
+    def _defaults_repo(payload: dict, query_repo: str | None) -> str:
+        """The model a defaults write names, refused by name when it is not the one served.
+
+        A write for a model this worker does not serve is a refusal rather than a silent no-op:
+        stored under a repo nothing will ever read, it would look exactly like a setting that
+        took effect.
+        """
+        offered = payload.get("repo")
+        if isinstance(offered, str) and offered.strip():
+            repo = offered.strip()
+        elif isinstance(query_repo, str) and query_repo.strip():
+            repo = query_repo.strip()
+        else:
+            raise HTTPException(422, (
+                f"repo: this route needs the model the defaults are for; received "
+                f"{_describe(offered)}. This worker serves {engine.model_id}."))
+        if repo != engine.model_id:
+            raise HTTPException(404, (
+                f"repo: this worker serves only {engine.model_id}; it has no defaults for "
+                f"{repo!r}, and storing them under a name nothing reads would look like a "
+                f"setting that took effect."))
+        return repo
+
+    def _defaults_status(parameters: list[dict]) -> dict:
+        return model_defaults.status(settings_dir, [(engine.model_id, parameters)])
 
     @app.post("/v1/chat/completions")
     def chat_completions(body: dict):
@@ -544,8 +684,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         for message in messages:
             if not isinstance(message, dict) or not isinstance(message.get("content"), str):
                 raise HTTPException(422, "every message needs string content")
-        parameters = _completion_parameters(body)
-        stream = _stream_requested(body)
+        # The same `resolved()` call the catalog publishes its `default` fields from: a parameter
+        # the request omits takes the value in force here, and one the request supplies wins.
+        _published, defaults = _resolved_parameters(settings_dir, engine)
+        parameters = _completion_parameters(body, defaults)
+        stream = _stream_requested(body, defaults)
         completion_id = _job_identifier(body)
         created = int(time.time())
 
@@ -718,6 +861,65 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         except Exception as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    # ── per-model operator defaults ────────────────────────────────────────
+    # The owner's rule: a default belongs to one model, because each model is weighted
+    # differently and a blanket default meant for one model applied to all of them is how a
+    # 4096-token chat budget ends up standing in for a model that states 262144.
+    @app.get("/api/model-defaults")
+    def model_defaults_status() -> dict:
+        """What this model accepts, what the lane itself states, and what the operator chose.
+
+        The offered surface is the lane contract's own `parameters` list, so a Models tab renders
+        controls from the bounds the route enforces and a parameter this lane refuses is absent
+        rather than offered. `defaults` is what a request that omits the parameter is served
+        with; `chosen` is only what the operator actually set.
+        """
+        return _defaults_status(_parameter_surface(engine))
+
+    @app.put("/api/model-defaults")
+    def model_defaults_save(body: dict | None = None) -> dict:
+        """Store this model's defaults, replaced wholesale, refusing every value by name.
+
+        Nothing is written while any value stands refused, so a save that answers 422 leaves the
+        previous defaults exactly as they were instead of half-applying.
+        """
+        payload = body if isinstance(body, dict) else {}
+        repo = _defaults_repo(payload, None)
+        values = payload.get("values")
+        if values is None:
+            values = {}
+        if not isinstance(values, dict):
+            raise HTTPException(422, (
+                f"values: must be an object of parameter names to values; received "
+                f"{_describe(values)}"))
+        parameters = _parameter_surface(engine)
+        offered = {str(parameter["name"]) for parameter in model_defaults.editable(parameters)}
+        # The lane's published bound first, then the lane's own enforcement: every refusal is
+        # reported at once, by parameter, and the published-bound wording wins where both refuse
+        # the same value, because that is the number the caller can read in the contract.
+        _accepted, refusals = model_defaults.validate(parameters, values)
+        for name, reason in _route_refusals(
+                {name: value for name, value in values.items() if name in offered}).items():
+            refusals.setdefault(name, reason)
+        if refusals:
+            raise HTTPException(422, refusals)
+        try:
+            model_defaults.save(settings_dir, repo, values, parameters)
+        except ValueError as exc:
+            raise HTTPException(422, _refusals_from_save(exc)) from exc
+        return _defaults_status(parameters)
+
+    @app.delete("/api/model-defaults")
+    def model_defaults_clear(body: dict | None = None, repo: str | None = None) -> dict:
+        """Forget one model's defaults, returning it to what the lane itself states.
+
+        The repo may arrive in the body or as a query parameter; either way an unknown one is a
+        refusal rather than a silent no-op.
+        """
+        named = _defaults_repo(body if isinstance(body, dict) else {}, repo)
+        model_defaults.clear(settings_dir, named)
+        return _defaults_status(_parameter_surface(engine))
+
     return app
 
 
@@ -730,4 +932,5 @@ def from_environment() -> FastAPI:
         raise ValueError("Release manifest lacks exact Chat runtime identity")
     policy = memory_policy_module.MemoryPolicy(data, engine)
     policy.start()
-    return create_app(engine, policy, os.environ["STUDIOHUB_FLEET_TOKEN"], identity)
+    return create_app(engine, policy, os.environ["STUDIOHUB_FLEET_TOKEN"], identity,
+                      data_dir=data)
