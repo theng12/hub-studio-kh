@@ -127,31 +127,20 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `c0fa6c6`, installed to `/Applications`; DMG
-`dist/StudioHub-0.6.66-c0fa6c6.dmg`. `development_build: false` on the stage, read from
+**Shipped state:** implementation commit `f49966e`, installed to `/Applications`; DMG
+`dist/StudioHub-0.6.67-f49966e.dmg`. `development_build: false` on the stage, read from
 `release-manifest.json` **before** installing, on a tree confirmed clean first.
-**Verified in the installed bundle, not the checkout** (the rule 0.6.64 cost us): version `0.6.66`,
-commit `c0fa6c6`, and the new UI copy is present in
-`/Applications/Studio Hub.app/Contents/MacOS/StudioHub` (the binary is `StudioHub`, not `Studio Hub`).
-**Verified live from the running installed Hub**, which is the check that matters for the errno fix:
-`/api/hub/resources` answers `version: 0.6.66`, **5 of 5 studios up**, and `/api/hub/model-packages`
-publishes **zero** reasons containing `[Errno` — the six packages that carried
-`[Errno 2] No such file or directory: '<package-id>'` on the previous build now read
-`state: not_installed` with a sentence ("… has no files in this library: neither
-`<library>/<package>/<revision>` nor the folder its receipt records is present. Install it in Models
-(or copy its folder in) and verify again…").
-**Kits: NOT at 0.6.66 — the four SSD drives are unmounted.** `/Volumes` held only `Macintosh HD` and
-`Recovery` at release time, and `.build/prepare-kit.sh` correctly answered `no kit at …` for each. They
-were last written at **0.6.65** and are byte-for-byte that release until someone re-runs one command
-per drive with the drive attached:
-`bash .build/prepare-kit.sh <VOLUME>` then
-`sh "/Volumes/<VOLUME>/Video Generation Kit/Studio Hub KH/Technical/verify-kit.sh"`.
-`.build/prepare-kit.sh` already points at `.build/StudioHub-0666`, so nothing needs editing first.
-**Gate on this commit:** `tests/` **1315 passed, 11 skipped, 990 subtests**; `tests/hub_regression/cases`
-**175 passed**; `components/voice/app/tests` **758 passed, 19 skipped**; `bash native/build.sh` green.
-**Pushed:** `main` and `implementation/voice-runtime`, both `37cb07b..c0fa6c6`.
-**Superseded:** `37cb07b` (0.6.65), `fabe498` (0.6.64), `a4a78dc` (0.6.63) and `16b4a80` (0.6.64's first
-cut), all in `_trash/dist/`.
+**Verified in the installed bundle, not the checkout:** version `0.6.67`, commit `f49966e`, and the
+running installed Hub answers `version: 0.6.67`, **5 of 5 studios up**, bound on
+`100.75.85.116` (tailnet), `192.168.1.243` (LAN) and loopback.
+**Kits:** all four (`NOVA`, `UGREEN`, `ATLAS`, `ORICO`) at `0.6.67`, `files 60641`, `"problems": []`,
+each library still **24 installed / 24 advertised** with all 208 recorded model files checked by size
+(70.5 GB), and each ran its own `verify-kit.sh` → `RESULT: PASS`.
+**Gate on this commit:** `tests/` **1322 passed, 11 skipped, 997 subtests**; `bash native/build.sh`
+green; `components/voice/app/tests` green inside the bridge.
+**Pushed:** `main` and `implementation/voice-runtime`.
+**Superseded:** `c0fa6c6` (0.6.66), `37cb07b` (0.6.65), `fabe498` (0.6.64) and `a4a78dc` (0.6.63) in
+`_trash/dist/`.
 
 **A flaky native test, seen once:** `bash native/build.sh` failed with *"the in-flight read must
 have been torn down by the cancellation"* and passed on an immediate re-run with `native/` provably
