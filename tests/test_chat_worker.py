@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -17,7 +18,8 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from components.chat.app.backend import memory_policy as memory_policy_module
-from components.chat.app.backend.llm_engine import (ChatBusy, ChatEngine,
+from components.chat.app.backend.llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P,
+                                                    ChatBusy, ChatContextExceeded, ChatEngine,
                                                     ChatModelUnavailable,
                                                     engine_from_environment,
                                                     resolve_model_dir)
@@ -195,6 +197,21 @@ class ChatApiTests(unittest.TestCase):
         response = client.get("/api/health")
         self.assertEqual(response.status_code, 401)
 
+    def test_the_owner_gate_answers_before_the_body_or_the_route(self) -> None:
+        # The gate is a pass-through ASGI middleware now (BaseHTTPMiddleware swallowed the
+        # stream disconnect), so pin the behaviour it must keep: 401 for every path, before the
+        # body is parsed and before any route is matched.
+        client = self._client(_FakeEngine(verified=True))
+        self.assertEqual(client.get("/api/health").status_code, 401)
+        self.assertEqual(
+            client.post("/definitely/not/a/route",
+                        headers={"x-studio-token": "wrong"}).status_code, 401)
+        self.assertEqual(
+            client.post("/v1/chat/completions",
+                        headers={"x-studio-token": "wrong",
+                                 "content-type": "application/json"},
+                        content=b"{not json").status_code, 401)
+
     def test_health_and_catalog_report_chat_modality(self) -> None:
         client = self._client(_FakeEngine(verified=True))
         headers = {"x-studio-token": TOKEN}
@@ -251,6 +268,311 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(saved.json()["mode"], "balanced")
         refused = client.put("/api/memory-policy", headers=headers, json={"mode": "nope"})
         self.assertEqual(refused.status_code, 422)
+
+
+class _RecordingEngine:
+    """Records what the route passed to the engine; generates nothing.
+
+    Shaped like the shipped engine's published surface, without weights. `check_prompt_fits` is
+    deliberately absent: these tests are about the route's own refusals, and a double that
+    measured prompts would refuse on its own behalf.
+    """
+
+    model_id = "mlx-community/Qwen3.5-9B-4bit"
+    revision = REVISION
+    label = "Qwen3.5-9B-4bit"
+    family = "qwen3_5"
+    context_window_tokens = 262144
+    max_output_tokens = 4096
+    minimum_unified_memory_gb = 16.0
+
+    def __init__(self, *, verified: bool = True) -> None:
+        self._verified = verified
+        self.seen: list[dict] = []
+
+    def preflight(self) -> dict:
+        return {"state": "files_verified" if self._verified else "missing"}
+
+    def loaded(self) -> bool:
+        return False
+
+    def last_activity_at(self):
+        return None
+
+    def status(self) -> dict:
+        return {"model_id": self.model_id, "revision": self.revision, "loaded": False,
+                "busy": False, "loaded_at": None, "active_memory_bytes": None,
+                "peak_memory_bytes": None, "context_window_tokens": self.context_window_tokens,
+                "max_output_tokens": self.max_output_tokens, "last_release_at": None,
+                "last_release_reason": None, "streams_started": 0, "streams_finished": 0}
+
+    def model_limits(self) -> dict:
+        return {
+            "context_window_tokens": {
+                "value": 262144,
+                "source": "model/config.json text_config.max_position_embeddings"},
+            "max_output_tokens": {
+                "value": 4096,
+                "source": "worker default: the checkpoint ships no generation_config.json"},
+        }
+
+    def count_tokens(self, text: str) -> int:
+        return 1
+
+    def prompt_length(self, messages) -> int:
+        return 1
+
+    def complete(self, messages, **kwargs) -> dict:
+        self.seen.append(kwargs)
+        return {"text": "ok", "elapsed_seconds": 0.01,
+                "max_tokens": kwargs.get("max_tokens") or self.max_output_tokens,
+                "prompt_tokens": 1, "json_valid": None, "repairs": 0}
+
+    def stream(self, messages, **kwargs):
+        self.seen.append(kwargs)
+        yield "ok"
+
+    def release(self, **kwargs) -> dict:
+        return {"released": False}
+
+
+class ChatParameterSurfaceTests(unittest.TestCase):
+    """The route refuses what the lane does not honour, and names the field.
+
+    Every case here was measured as accepted — and silently dropped, or accepted with the
+    opposite meaning — by the 2026-09-25 review against the shipped 0.62 worker. The point of
+    each assertion is that the *refusal* names the field, because a parameter accepted and then
+    discarded is a lie the caller cannot see.
+    """
+
+    MESSAGE = {"messages": [{"role": "user", "content": "hi"}]}
+
+    def _client(self, engine=None):
+        engine = engine or _RecordingEngine()
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            app = create_app(engine, policy, TOKEN, "a" * 64)
+        return TestClient(app), engine
+
+    def _post(self, client, body, **kwargs):
+        return client.post("/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                           json=body, **kwargs)
+
+    def test_thinking_accepts_only_a_real_json_boolean(self) -> None:
+        client, engine = self._client()
+        for value in ("false", "no", "0", 0, 1, None, [], {}):
+            response = self._post(client, {**self.MESSAGE, "thinking": value})
+            self.assertEqual(response.status_code, 422,
+                             f"thinking={value!r} was accepted; it must be refused")
+            detail = response.json()["detail"]
+            self.assertIn("thinking", detail)
+            self.assertIn(type(value).__name__, detail,
+                          "the refusal does not say what type was received")
+            self.assertIn(repr(value), detail,
+                          "the refusal does not say what value was received")
+        self.assertEqual(engine.seen, [], "a refused request must never reach the engine")
+
+    def test_thinking_reaches_the_engine_as_the_boolean_the_caller_sent(self) -> None:
+        # The old code did `bool(body.get("thinking", False))`, so the string "false" turned
+        # thinking ON. These three are the contract: a real boolean, in both directions.
+        client, engine = self._client()
+        for sent, expected in ((True, True), (False, False), (None, False)):
+            body = dict(self.MESSAGE)
+            if sent is not None:
+                body["thinking"] = sent
+            engine.seen = []
+            response = self._post(client, body)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIs(engine.seen[-1]["thinking"], expected)
+
+    def test_stream_accepts_only_a_real_json_boolean(self) -> None:
+        # Same class of defect as `thinking`: a truthy "false" would start an SSE response for a
+        # caller that asked for one JSON completion.
+        client, engine = self._client()
+        for value in ("false", "true", 0, 1):
+            response = self._post(client, {**self.MESSAGE, "stream": value})
+            self.assertEqual(response.status_code, 422, f"stream={value!r} was accepted")
+            self.assertIn("stream", response.json()["detail"])
+        self.assertEqual(engine.seen, [])
+
+    def test_a_non_finite_temperature_is_refused_by_name(self) -> None:
+        # Python's JSON parser accepts the bare tokens NaN/Infinity, so they have to be caught
+        # after parsing: the old route passed NaN through to `make_sampler(temp=nan)`.
+        client, engine = self._client()
+        for token in ("NaN", "Infinity", "-Infinity"):
+            raw = ('{"messages":[{"role":"user","content":"hi"}],"temperature":%s}' % token)
+            response = client.post(
+                "/v1/chat/completions",
+                headers={"x-studio-token": TOKEN, "content-type": "application/json"},
+                content=raw)
+            self.assertEqual(response.status_code, 422, f"temperature:{token} was accepted")
+            detail = response.json()["detail"]
+            self.assertIn("temperature", detail)
+            self.assertIn("finite", detail)
+        self.assertEqual(engine.seen, [], "a non-finite number reached the engine")
+
+    def test_temperature_is_bounded_where_a_bound_is_published(self) -> None:
+        client, engine = self._client()
+        self.assertEqual(self._post(client, {**self.MESSAGE, "temperature": -0.1}).status_code,
+                         422)
+        # Nothing states a maximum, so no maximum is invented: a high-but-finite temperature is
+        # served, not refused on a number this worker made up.
+        engine.seen = []
+        self.assertEqual(self._post(client, {**self.MESSAGE, "temperature": 1.5}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["temperature"], 1.5)
+
+    def test_top_p_is_bounded_exactly_as_the_contract_publishes(self) -> None:
+        client, engine = self._client()
+        for value in (0, 0.0, -0.5, 1.5):
+            response = self._post(client, {**self.MESSAGE, "top_p": value})
+            self.assertEqual(response.status_code, 422, f"top_p={value!r} was accepted")
+            self.assertIn("top_p", response.json()["detail"])
+        engine.seen = []
+        self.assertEqual(self._post(client, {**self.MESSAGE, "top_p": 1.0}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["top_p"], 1.0)
+
+    def test_max_tokens_is_bounded_by_the_maximum_the_lane_publishes(self) -> None:
+        client, engine = self._client()
+        response = self._post(client, {**self.MESSAGE, "max_tokens": 100_000_000_000})
+        self.assertEqual(response.status_code, 422)
+        detail = response.json()["detail"]
+        self.assertIn("100000000000", detail, "the refusal does not name the value received")
+        self.assertIn("4096", detail, "the refusal does not name the published maximum")
+        self.assertEqual(self._post(client, {**self.MESSAGE, "max_tokens": 4097}).status_code, 422)
+        engine.seen = []
+        self.assertEqual(self._post(client, {**self.MESSAGE, "max_tokens": 4096}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], 4096)
+        self.assertEqual(
+            self._post(client, {**self.MESSAGE, "max_completion_tokens": 4096}).status_code, 200)
+
+    def test_a_seed_that_is_not_an_integer_is_refused_rather_than_dropped(self) -> None:
+        client, engine = self._client()
+        for value in ("not-a-number", 42.5, True, [42]):
+            response = self._post(client, {**self.MESSAGE, "seed": value})
+            self.assertEqual(response.status_code, 422, f"seed={value!r} was accepted")
+            detail = response.json()["detail"]
+            self.assertIn("seed", detail)
+            self.assertIn(repr(value), detail)
+        engine.seen = []
+        self.assertEqual(self._post(client, {**self.MESSAGE, "seed": 42}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["seed"], 42)
+
+    def test_parameters_this_worker_does_not_honour_are_refused_by_name(self) -> None:
+        client, engine = self._client()
+        for name, value in (("tools", [{"type": "function"}]),
+                            ("n", 3),
+                            ("logit_bias", {"1": 1}),
+                            ("frequency_penalty", 0.5),
+                            ("stop", ["\n"])):
+            response = self._post(client, {**self.MESSAGE, name: value})
+            self.assertEqual(response.status_code, 422, f"{name} was silently discarded")
+            detail = response.json()["detail"]
+            self.assertIn(name, detail)
+            self.assertIn("not supported by this worker", detail)
+        self.assertEqual(engine.seen, [], "a refused request must never reach the engine")
+
+    def test_all_of_them_together_are_named_in_one_refusal(self) -> None:
+        client, _ = self._client()
+        response = self._post(client, {**self.MESSAGE, "tools": [1], "n": 5,
+                                       "logit_bias": {"a": 1}})
+        self.assertEqual(response.status_code, 422)
+        detail = response.json()["detail"]
+        for name in ("tools", "n", "logit_bias"):
+            self.assertIn(name, detail)
+
+
+class _CountedTokenizer:
+    """A tokenizer that reports a fixed token count, so a context bound can be exercised."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True,
+                            enable_thinking=None):
+        return "<prompt>"
+
+    def encode(self, text: str):
+        return _TokenCount(self._count)
+
+
+class _TokenCount:
+    """Only `len()` is read, so a count can be promised without encoding anything."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def __len__(self) -> int:
+        return self._count
+
+
+class PromptBudgetTests(unittest.TestCase):
+    """A prompt past the model's own context is refused by name, never truncated.
+
+    The bound is the model's, not this worker's: `model/config.json
+    text_config.max_position_embeddings` for the shipped Qwen3.5-9B 4-bit states 262144. Where
+    nothing states a context window, nothing is refused.
+    """
+
+    MESSAGE = [{"role": "user", "content": "hi"}]
+
+    def _engine(self, root: Path, *, context: int | None, tokens: int) -> ChatEngine:
+        model_dir = root / "model"
+        model_dir.mkdir(parents=True)
+        config = {} if context is None else {"text_config": {"max_position_embeddings": context}}
+        (model_dir / "config.json").write_text(json.dumps(config))
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "tokenizer.json").write_text("{}")
+        return ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                          revision="r" * 40)
+
+    def test_a_prompt_that_cannot_fit_is_refused_with_the_measured_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), context=100, tokens=90)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "never reached"):
+                with self.assertRaises(ChatContextExceeded) as caught:
+                    engine.complete(self.MESSAGE, max_tokens=20)
+        detail = str(caught.exception)
+        self.assertIn("messages", detail, "the refusal does not name the field")
+        self.assertIn("90", detail, "the refusal does not name the measured prompt tokens")
+        self.assertIn("20", detail, "the refusal does not name the asked-for output budget")
+        self.assertIn("100", detail, "the refusal does not name the model's stated context")
+        self.assertIn("model/config.json text_config.max_position_embeddings", detail,
+                      "the refusal does not name where the limit comes from")
+
+    def test_a_prompt_that_fits_exactly_is_served(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), context=100, tokens=80)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(80))), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                outcome = engine.complete(self.MESSAGE, max_tokens=20)
+        self.assertEqual(outcome["text"], "served")
+
+    def test_nothing_is_refused_when_nothing_states_a_context_window(self) -> None:
+        # 4 million tokens with no stated window: the worker must not invent a limit.
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), context=None, tokens=4_000_000)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(4_000_000))), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                outcome = engine.complete(self.MESSAGE, max_tokens=20)
+        self.assertEqual(outcome["text"], "served")
+        self.assertIsNone(engine.context_window_tokens)
+
+    def test_the_route_refuses_a_prompt_past_the_context_before_streaming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), context=100, tokens=90)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))):
+                policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+                client = TestClient(create_app(engine, policy, TOKEN, "a" * 64))
+                for stream in (False, True):
+                    response = client.post(
+                        "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                        json={"messages": self.MESSAGE, "stream": stream})
+                    self.assertEqual(response.status_code, 422,
+                                     f"stream={stream} did not refuse a prompt past the context")
+                    detail = response.json()["detail"]
+                    self.assertIn("messages", detail)
+                    self.assertIn("100", detail)
 
 
 class _FakeTokenizer:
@@ -370,8 +692,10 @@ class RealEngineIntegrationTests(unittest.TestCase):
     def _model_dir(self, root: Path) -> Path:
         model_dir = root / "model"
         model_dir.mkdir()
+        # 8192, not 4096: the request below asks for the worker's default output budget, and a
+        # prompt plus that budget has to fit the context the model states.
         (model_dir / "config.json").write_text(
-            json.dumps({"text_config": {"max_position_embeddings": 4096}}))
+            json.dumps({"text_config": {"max_position_embeddings": 8192}}))
         (model_dir / "model.safetensors").write_bytes(b"weights")
         (model_dir / "tokenizer.json").write_text("{}")
         return model_dir
@@ -404,7 +728,7 @@ class RealEngineIntegrationTests(unittest.TestCase):
             self.assertNotIn("temp", captured["kwargs"])
             self.assertEqual(body["usage"], {"prompt_tokens": 1, "completion_tokens": 2,
                                              "total_tokens": 3})
-            self.assertEqual(engine.context_window_tokens, 4096)
+            self.assertEqual(engine.context_window_tokens, 8192)
 
     def test_engine_from_environment_resolves_the_library_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -423,6 +747,236 @@ class RealEngineIntegrationTests(unittest.TestCase):
         self.assertEqual(engine.model_dir, models / "qwen3-5-9b-4bit" / ("c" * 40) / "model")
         self.assertEqual(engine.context_window_tokens, 8192)
         self.assertEqual(engine.max_output_tokens, 4096)
+
+
+class StreamLockTests(unittest.TestCase):
+    """F4: however a stream ends, the model lock comes back and the counters balance.
+
+    Reproduced on the shipped 0.62 worker before the fix: a client that disconnected mid-SSE
+    left `lock.locked()=True` with `streams started=1 finished=0` twenty seconds later (a full
+    stream took six), so the next `complete()` blocked. The counters are the engine's own, and
+    a starting/finishing mismatch is exactly that wedge.
+    """
+
+    def _engine(self, root: Path) -> ChatEngine:
+        model_dir = root / "model"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps({"text_config": {"max_position_embeddings": 262144}}))
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "tokenizer.json").write_text("{}")
+        return ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                          revision="r" * 40)
+
+    @staticmethod
+    def _stream_generate(chunks: int = 4):
+        def fake(model, tokenizer, prompt, **kwargs):
+            for index in range(chunks):
+                time.sleep(0.02)
+                yield type("R", (), {"text": f"chunk{index} "})()
+        return fake
+
+    def _complete_within(self, engine: ChatEngine, *, seconds: float) -> dict | None:
+        """Run a completion on its own thread; fail loudly instead of hanging on a held lock."""
+        outcome: dict = {}
+
+        def run() -> None:
+            try:
+                outcome["value"] = engine.complete(
+                    [{"role": "user", "content": "hi"}], max_tokens=4)
+            except BaseException as exc:  # pragma: no cover - surfaced by the caller
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=seconds)
+        self.assertFalse(worker.is_alive(),
+                         "complete() blocked: the model lock was never released")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
+    def test_an_abandoned_stream_releases_the_lock_and_balances_the_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", self._stream_generate()):
+                stream = engine.stream([{"role": "user", "content": "hi"}], max_tokens=8)
+                self.assertEqual(next(stream), "chunk0 ")
+                self.assertTrue(engine.status()["busy"], "a live stream must report busy")
+                stream.close()
+                stream.close()  # idempotent: a second close must not release a second time
+            status = engine.status()
+            self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
+            self.assertFalse(status["busy"])
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                outcome = self._complete_within(engine, seconds=5)
+        self.assertEqual(outcome["text"], "served")
+        self.assertEqual(engine.status()["streams_finished"], 1,
+                         "the completion must not be counted as a stream")
+
+    def test_a_completed_stream_balances_and_frees_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", self._stream_generate()):
+                chunks = list(engine.stream([{"role": "user", "content": "hi"}], max_tokens=8))
+            self.assertEqual(chunks, ["chunk0 ", "chunk1 ", "chunk2 ", "chunk3 "])
+            status = engine.status()
+            self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                self.assertIsNotNone(self._complete_within(engine, seconds=5))
+
+    def test_an_errored_stream_balances_and_frees_the_lock(self) -> None:
+        def exploding(model, tokenizer, prompt, **kwargs):
+            yield type("R", (), {"text": "half "})()
+            raise RuntimeError("mlx failed mid-stream")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", exploding):
+                with self.assertRaises(RuntimeError):
+                    list(engine.stream([{"role": "user", "content": "hi"}], max_tokens=8))
+            status = engine.status()
+            self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                self.assertIsNotNone(self._complete_within(engine, seconds=5))
+
+    def test_a_stream_that_never_started_takes_and_releases_nothing(self) -> None:
+        # Closing a generator that was never resumed must not release a lock this request never
+        # took: the acquire happens inside the generator body, on the first `next()`.
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            stream = engine.stream([{"role": "user", "content": "hi"}], max_tokens=8)
+            stream.close()
+            status = engine.status()
+            self.assertEqual((status["streams_started"], status["streams_finished"]), (0, 0))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                self.assertIsNotNone(self._complete_within(engine, seconds=5))
+            self.assertEqual(engine.status()["streams_started"], 0)
+
+    def test_a_second_stream_waits_and_each_release_is_its_own(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", self._stream_generate()):
+                first = engine.stream([{"role": "user", "content": "hi"}], max_tokens=8)
+                self.assertEqual(next(first), "chunk0 ")
+                second_chunks: list[str] = []
+
+                def consume_second() -> None:
+                    second_chunks.extend(
+                        engine.stream([{"role": "user", "content": "hi"}], max_tokens=8))
+
+                worker = threading.Thread(target=consume_second, daemon=True)
+                worker.start()
+                time.sleep(0.3)
+                self.assertTrue(worker.is_alive(),
+                                "the second stream must wait for the first to finish")
+                self.assertEqual(engine.status()["streams_started"], 1,
+                                 "the waiting stream must not count as started")
+                self.assertEqual(engine.status()["streams_finished"], 0)
+                first.close()
+                worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(second_chunks, ["chunk0 ", "chunk1 ", "chunk2 ", "chunk3 "])
+            status = engine.status()
+            self.assertEqual((status["streams_started"], status["streams_finished"]), (2, 2),
+                             "the two streams did not each release their own hold exactly once")
+
+
+class StreamDisconnectRouteTests(unittest.TestCase):
+    """The measured F4 reproduction, against real uvicorn and the real route.
+
+    The client reads one chunk of a stream that would run for ~4 s and goes away. Before the
+    fix, twenty seconds later the engine still held `started=1 finished=0` and the next
+    `complete()` never returned.
+    """
+
+    def _engine(self, root: Path) -> ChatEngine:
+        model_dir = root / "model"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps({"text_config": {"max_position_embeddings": 262144}}))
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "tokenizer.json").write_text("{}")
+        return ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                          revision="r" * 40)
+
+    @staticmethod
+    def _stream_generate(chunks: int = 40, delay: float = 0.1):
+        def fake(model, tokenizer, prompt, **kwargs):
+            for index in range(chunks):
+                time.sleep(delay)
+                yield type("R", (), {"text": f"chunk{index:02d} "})()
+        return fake
+
+    def test_a_client_that_disconnects_mid_stream_does_not_wedge_the_model_lock(self) -> None:
+        try:
+            import httpx
+            import uvicorn
+        except ImportError as exc:  # pragma: no cover - the app runtime ships both
+            self.skipTest(f"uvicorn/httpx unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            app = create_app(engine, policy, TOKEN, "a" * 64)
+            server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0,
+                                                   log_level="warning"))
+            thread = threading.Thread(target=server.run, daemon=True)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate",
+                               self._stream_generate(chunks=40, delay=0.1)), \
+                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                thread.start()
+                try:
+                    for _ in range(200):
+                        if server.started:
+                            break
+                        time.sleep(0.05)
+                    else:  # pragma: no cover - a server that never starts is a broken host
+                        self.skipTest("uvicorn did not start")
+                    port = server.servers[0].sockets[0].getsockname()[1]
+                    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+                    headers = {"x-studio-token": TOKEN}
+                    with httpx.stream("POST", url, headers=headers, timeout=10.0,
+                                      json={"messages": [{"role": "user", "content": "hi"}],
+                                            "stream": True}) as response:
+                        for line in response.iter_lines():
+                            if line:
+                                break
+                    # The client is gone. The stream would have taken 4 s; the lock must come
+                    # back without waiting for it.
+                    deadline = time.time() + 10.0
+                    while time.time() < deadline and engine.status()["streams_finished"] < 1:
+                        time.sleep(0.05)
+                    status = engine.status()
+                    self.assertEqual(status["streams_started"], 1)
+                    self.assertEqual(status["streams_finished"], 1,
+                                     "the abandoned stream never finished: the model lock is held")
+                    # The activity contract says cancelled, not done: nothing was delivered.
+                    activity = httpx.get(f"http://127.0.0.1:{port}/api/fleet/activity",
+                                         headers=headers, timeout=5.0).json()
+                    self.assertEqual(activity["latest"]["state"], "cancelled")
+                    # And the next request is actually served rather than blocked forever.
+                    try:
+                        second = httpx.post(url, headers=headers, timeout=10.0,
+                                            json={"messages": [{"role": "user",
+                                                                "content": "again"}]})
+                    except httpx.TimeoutException:
+                        self.fail("the next completion blocked: the abandoned stream still "
+                                  "holds the model lock")
+                    self.assertEqual(second.status_code, 200, second.text)
+                    self.assertEqual(second.json()["choices"][0]["message"]["content"], "served")
+                finally:
+                    server.should_exit = True
+                    thread.join(timeout=10)
 
 
 class _TemplateTokenizer:
@@ -645,6 +1199,78 @@ class ChatLaneContractTests(unittest.TestCase):
             accepted <= names,
             f"the Hub accepts {sorted(accepted - names)} but the lane contract omits it",
         )
+
+    def test_the_lane_contract_advertises_exactly_what_the_route_enforces(self) -> None:
+        """F12: the published surface and the enforced surface are the same set.
+
+        Both directions are asserted: every parameter the contract offers is honoured when sent
+        with a valid value, and every field the route accepts is either offered or is one of the
+        two documented aliases (the Hub's `job_id` correlation id and `max_tokens`' OpenAI
+        spelling `max_completion_tokens`). A bound in the contract is then checked against the
+        route that enforces it.
+        """
+        from components.chat.app.backend import main as chat_main
+
+        engine = _RecordingEngine()
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            client = TestClient(create_app(engine, policy, TOKEN, "a" * 64))
+        catalog = client.get("/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+        surface = {entry["name"]: entry for entry in catalog["lane_contract"]["parameters"]}
+        valid = {"model": engine.model_id, "max_tokens": 16, "temperature": 0.5, "top_p": 0.9,
+                 "stream": False, "response_format": {"type": "json_object"}, "seed": 42,
+                 "thinking": True}
+        self.assertEqual(set(valid) | {"messages"}, set(surface),
+                         "the contract offers a parameter the test does not exercise")
+        for name, value in valid.items():
+            engine.seen = []
+            response = client.post("/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                                   json={"messages": [{"role": "user", "content": "hi"}],
+                                         name: value})
+            self.assertEqual(response.status_code, 200,
+                             f"the contract advertises {name}, but the route refused it: "
+                             f"{response.text}")
+
+        # Nothing enforced goes unpublished, except the two documented aliases.
+        self.assertEqual(chat_main.SUPPORTED_FIELDS,
+                         set(surface) | {"job_id", "max_completion_tokens"},
+                         "the route accepts a field the lane contract does not publish")
+        self.assertIn("max_completion_tokens", surface["max_tokens"]["note"])
+
+        # The published bounds are the enforced ones.
+        self.assertEqual(surface["max_tokens"]["minimum"], 1)
+        self.assertEqual(surface["max_tokens"]["maximum"], engine.max_output_tokens)
+        self.assertEqual(surface["temperature"]["minimum"], 0.0)
+        self.assertNotIn("maximum", surface["temperature"],
+                         "temperature publishes a maximum this worker does not enforce")
+        self.assertEqual(surface["top_p"]["minimum"], 0.0)
+        self.assertTrue(surface["top_p"]["minimum_exclusive"],
+                        "the contract's minimum is inclusive while the route refuses 0")
+        self.assertEqual(surface["top_p"]["maximum"], 1.0)
+        self.assertEqual(surface["thinking"], {**surface["thinking"], "type": "boolean",
+                                               "default": False})
+        self.assertEqual(surface["stream"], {**surface["stream"], "type": "boolean",
+                                             "default": False})
+        # The prompt bound is published from the model's own number and source, not a literal.
+        self.assertIn("262144", surface["messages"]["note"])
+        self.assertIn("model/config.json text_config.max_position_embeddings",
+                      surface["messages"]["note"])
+        # The published generation defaults are the ones the route serves with.
+        self.assertEqual(catalog["generation_defaults"],
+                         {"temperature": DEFAULT_TEMPERATURE, "top_p": DEFAULT_TOP_P})
+
+    def test_the_catalog_states_packaged_inference_was_proven(self) -> None:
+        # F11: the row read "pending measured proof" long after the proof existed
+        # (qualification/st14-chat-2026-09-24.md), so it named a state the worker was not in.
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            qualification = self._client(engine).get(
+                "/api/catalog", headers={"x-studio-token": TOKEN}).json()[
+                    "models"][0]["qualification"]
+        self.assertNotIn("pending", qualification["packaged_inference"])
+        self.assertIn("proven", qualification["packaged_inference"])
+        self.assertIn("st14-chat-2026-09-24.md", qualification["packaged_inference"],
+                      "the claim does not name the evidence a reader can check")
 
     def test_the_activity_route_is_honest_when_idle_and_reports_a_real_completion(self) -> None:
         from components.hub.backend import activity as hub_activity

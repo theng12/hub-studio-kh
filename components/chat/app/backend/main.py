@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import platform
 import re
@@ -18,13 +19,16 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.datastructures import Headers
 
 from components import app_version
 
 from . import memory_policy as memory_policy_module
-from .llm_engine import ChatBusy, ChatEngine, ChatModelUnavailable, engine_from_environment
+from .llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P, ChatBusy, ChatContextExceeded,
+                         ChatEngine, ChatModelUnavailable, engine_from_environment)
 
 # One stable creation stamp for the OpenAI model listing.
 _MODELS_CREATED = int(time.time())
@@ -39,6 +43,66 @@ _JOB_ID = re.compile(r"[A-Za-z0-9._:-]{1,160}")
 # The lane contract's schema name.
 LANE_CONTRACT_SCHEMA = "studiohub.lane-contract.v1"
 
+# Every top-level field this route consumes, and therefore everything a request may carry. A
+# field outside this set is refused by name: a parameter accepted and then discarded is worse
+# than one refused, because the caller believes it took effect. `job_id` is the Hub's own
+# correlation id; `max_completion_tokens` is the one alias the lane honours for `max_tokens`.
+SUPPORTED_FIELDS = frozenset({
+    "model", "messages", "stream", "job_id",
+    "max_tokens", "max_completion_tokens",
+    "temperature", "top_p", "response_format", "seed", "thinking",
+})
+
+
+def _describe(value: object) -> str:
+    """What was received, in the caller's own terms: its type and its value."""
+    return f"{type(value).__name__} {value!r}"
+
+
+class _StreamDone:
+    """Sentinel for the end of a stream: `StopIteration` cannot cross a thread boundary."""
+
+
+_STREAM_DONE = _StreamDone()
+
+
+def _next_or_done(iterator):
+    """One step of a sync generator, run in a worker thread by the streaming route."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _STREAM_DONE
+
+
+class _OwnerCredentialMiddleware:
+    """The owner-credential gate, as a pass-through ASGI middleware.
+
+    Deliberately **not** ``BaseHTTPMiddleware``: that relays the response through an anyio
+    memory stream and does not deliver the client-disconnect cancellation to the route body,
+    which is how an abandoned SSE request kept the model lock held until the process exited
+    (measured: the engine's generator was closed only at loop shutdown). This middleware reads
+    headers, answers 401 itself before the body is parsed or any route is matched, and
+    otherwise forwards the same ``receive``/``send`` untouched, so the streaming response path
+    stays direct and a disconnect reaches the generator that holds the model.
+    """
+
+    def __init__(self, app, *, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        offered = (headers.get("x-studio-token") or headers.get("x-hub-token")
+                   or (headers.get("authorization") or "").removeprefix("Bearer "))
+        if not hmac.compare_digest(offered, self.token):
+            response = JSONResponse({"detail": "Owner credential required"}, status_code=401)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
 
 def _model_label(engine) -> str:
     """The model's own label, tolerant of a stub engine in tests."""
@@ -46,6 +110,17 @@ def _model_label(engine) -> str:
     if isinstance(label, str) and label.strip():
         return label.strip()
     return str(engine.model_id)
+
+
+def _published_max_output_tokens(engine) -> tuple[int | None, str | None]:
+    """The output ceiling the lane publishes, with the source that states it."""
+    limits = engine.model_limits() if hasattr(engine, "model_limits") else {}
+    entry = limits.get("max_output_tokens") if isinstance(limits, dict) else None
+    entry = entry if isinstance(entry, dict) else {}
+    value = entry.get("value")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None, entry.get("source")
+    return value, entry.get("source")
 
 
 def _usage(engine: ChatEngine, prompt_tokens: int | None, text: str) -> dict:
@@ -155,34 +230,56 @@ def _parameter_surface(engine) -> list[dict]:
     """The parameters this lane actually honours, with the bounds it enforces.
 
     Built from the model's own limits and this worker's defaults - not from a literal - so the
-    contract cannot go stale against the code. A parameter this worker ignores is deliberately
-    absent: a caller that sends one and sees it silently dropped has been lied to.
+    contract cannot go stale against the code. A parameter this worker refuses is deliberately
+    absent, and a bound published here is the bound the route enforces: the two are asserted
+    equal by ``tests/test_chat_worker.py``.
     """
     limits = engine.model_limits() if hasattr(engine, "model_limits") else {}
-    max_output = (limits.get("max_output_tokens") or {}).get("value")
+    limits = limits if isinstance(limits, dict) else {}
+    output_limit, output_source = _published_max_output_tokens(engine)
+    context = limits.get("context_window_tokens") or {}
+    context_value = context.get("value")
+    context_source = context.get("source")
+
+    prompt_note = "OpenAI-shaped messages, each with a string content field"
+    if isinstance(context_value, int) and not isinstance(context_value, bool) and context_value > 0:
+        prompt_note += (
+            f"; the rendered prompt is measured and the request is refused by name when prompt "
+            f"tokens + max_tokens exceed the {context_value} tokens this model states "
+            f"({context_source})")
+    else:
+        prompt_note += (
+            "; nothing states a context window for this model, so no prompt length is refused")
+
     parameters = [
         {"name": "model", "type": "string", "required": False, "default": engine.model_id,
          "note": "the one model this worker serves; any other value is refused by name"},
-        {"name": "messages", "type": "array", "required": True,
-         "note": "OpenAI-shaped messages, each with a string content field"},
-        {"name": "max_tokens", "type": "integer", "required": False,
-         "minimum": 1,
-         "note": "max_completion_tokens is accepted as an alias"},
-    ]
-    if isinstance(max_output, int) and max_output > 0:
-        parameters[-1]["maximum"] = max_output
-        parameters[-1]["default"] = max_output
-    parameters += [
-        {"name": "temperature", "type": "number", "required": False, "default": 0.7,
-         "minimum": 0.0},
-        {"name": "top_p", "type": "number", "required": False, "default": 0.95,
-         "minimum": 0.0, "maximum": 1.0},
-        {"name": "stream", "type": "boolean", "required": False, "default": False},
+        {"name": "messages", "type": "array", "required": True, "note": prompt_note},
+        {"name": "max_tokens", "type": "integer", "required": False, "minimum": 1,
+         "note": ("max_completion_tokens is accepted as an alias; a value above the published "
+                  "maximum is refused by name")},
+        {"name": "temperature", "type": "number", "required": False,
+         "default": DEFAULT_TEMPERATURE, "minimum": 0.0,
+         "note": ("no maximum is published: neither the model nor this worker states one. A "
+                  "non-finite value (NaN, Infinity) is refused by name")},
+        {"name": "top_p", "type": "number", "required": False, "default": DEFAULT_TOP_P,
+         "minimum": 0.0, "minimum_exclusive": True, "maximum": 1.0},
+        {"name": "stream", "type": "boolean", "required": False, "default": False,
+         "note": ("true answers text/event-stream; the Hub's dispatch path asks for one JSON "
+                  "completion per pack")},
         {"name": "response_format", "type": "object", "required": False,
          "note": "type must be json_object or json_schema; anything else is refused"},
-        {"name": "seed", "type": "integer", "required": False},
-        {"name": "thinking", "type": "boolean", "required": False, "default": False},
+        {"name": "seed", "type": "integer", "required": False,
+         "note": "a real integer; a non-integer is refused rather than silently dropped"},
+        {"name": "thinking", "type": "boolean", "required": False, "default": False,
+         "note": ("must be a real JSON boolean; a string such as \"false\" is refused rather "
+                  "than coerced, because bool(\"false\") is true")},
     ]
+    if output_limit is not None:
+        entry = next(item for item in parameters if item["name"] == "max_tokens")
+        entry["maximum"] = output_limit
+        entry["default"] = output_limit
+        entry["note"] += f". This model's ceiling is {output_limit} ({output_source})"
     return parameters
 
 
@@ -236,15 +333,8 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
     if not token:
         raise ValueError("Private Chat worker requires its owning Hub credential")
     app = FastAPI(title="Studio Hub Chat", version="1")
+    app.add_middleware(_OwnerCredentialMiddleware, token=token)
     activity = ChatActivity()
-
-    @app.middleware("http")
-    async def require_owner(request: Request, call_next):
-        offered = (request.headers.get("x-studio-token") or request.headers.get("x-hub-token")
-                   or request.headers.get("authorization", "").removeprefix("Bearer "))
-        if not hmac.compare_digest(offered, token):
-            return JSONResponse({"detail": "Owner credential required"}, status_code=401)
-        return await call_next(request)
 
     def readiness() -> dict:
         files = engine.preflight()
@@ -307,12 +397,22 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             # Every limit with the source that states it, so a reader can label its own fallback
             # instead of inheriting this worker's number as the model's fact.
             "model_limits": engine.model_limits() if hasattr(engine, "model_limits") else None,
-            "generation_defaults": {"temperature": 0.7, "top_p": 0.8},
+            # The defaults the route actually serves with, from the same constants the route
+            # and the lane contract use - not a second copy free to disagree with them.
+            "generation_defaults": {"temperature": DEFAULT_TEMPERATURE, "top_p": DEFAULT_TOP_P},
             # The dispatch contract, published by the only party that knows this API. The Hub
             # passes it through verbatim and adds its own `deadline_seconds`.
             "lane_contract": _lane_contract(engine),
-            "qualification": {"owner_decision": f"{_model_label(engine)}, MLX, text-only",
-                              "packaged_inference": "pending measured proof"},
+            "qualification": {
+                "owner_decision": f"{_model_label(engine)}, MLX, text-only",
+                # This string used to read "pending measured proof" long after the proof existed.
+                # It now names the evidence and its dates instead of a byte count this worker
+                # cannot re-measure at publish time.
+                "packaged_inference": (
+                    "proven: the packaged worker loaded this 4-bit snapshot and produced real "
+                    "completions, measured 2026-09-24 and re-checked 2026-09-25 "
+                    "(qualification/st14-chat-2026-09-24.md)"),
+            },
         }]}
 
     def _job_identifier(body: dict) -> str:
@@ -333,32 +433,95 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 f"serve another model, add its manifest to {directory} and start this worker "
                 f"with STUDIOHUB_CHAT_MANIFEST pointing at that file."))
 
-    def _completion_parameters(body: dict) -> tuple[int | None, float, float]:
+    def _refuse_unsupported_fields(body: dict) -> None:
+        """Refuse, by name, every field this worker does not honour.
+
+        An OpenAI client that sends `tools`, `n` or `logit_bias` here must learn that this lane
+        serves one synchronous completion and has none of them. Accepting the request and
+        dropping the parameter is the lie the caller cannot see.
+        """
+        unsupported = sorted(set(body) - SUPPORTED_FIELDS)
+        if not unsupported:
+            return
+        named = "; ".join(f"{name} = {_describe(body[name])}" for name in unsupported)
+        raise HTTPException(422, (
+            f"{', '.join(unsupported)}: not supported by this worker (received {named}). This "
+            f"lane accepts {', '.join(sorted(SUPPORTED_FIELDS))}; a parameter it does not honour "
+            f"is refused rather than silently dropped."))
+
+    def _number(body: dict, name: str, default: float) -> float:
+        value = body.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise HTTPException(422, f"{name}: must be a number; received {_describe(value)}")
+        number = float(value)
+        if not math.isfinite(number):
+            raise HTTPException(422, (
+                f"{name}: must be a finite number; received {_describe(value)}, which reaches the "
+                f"sampler as {number!r} and produces meaningless output"))
+        return number
+
+    def _completion_parameters(body: dict) -> dict:
         """Validate the asked-for surface, refusing rather than silently dropping a value."""
+        _refuse_unsupported_fields(body)
         max_tokens = body.get("max_tokens")
         if max_tokens is None:
             max_tokens = body.get("max_completion_tokens")
         if max_tokens is not None:
             if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
-                raise HTTPException(422, "max_tokens must be a positive integer")
-        try:
-            temperature = float(body.get("temperature", 0.7))
-            top_p = float(body.get("top_p", 0.95))
-        except (TypeError, ValueError):
-            raise HTTPException(422, "temperature and top_p must be numbers") from None
+                raise HTTPException(
+                    422, f"max_tokens: must be an integer of at least 1; received "
+                         f"{_describe(max_tokens)}")
+            limit, source = _published_max_output_tokens(engine)
+            if limit is not None and max_tokens > limit:
+                raise HTTPException(422, (
+                    f"max_tokens: {max_tokens} is above the maximum this lane publishes "
+                    f"({limit}, {source}). Send at most {limit}."))
+        temperature = _number(body, "temperature", DEFAULT_TEMPERATURE)
         if temperature < 0:
-            raise HTTPException(422, "temperature must not be negative")
+            raise HTTPException(
+                422, f"temperature: must not be negative; received {temperature!r}")
+        top_p = _number(body, "top_p", DEFAULT_TOP_P)
         if not 0.0 < top_p <= 1.0:
-            raise HTTPException(422, "top_p must be greater than 0 and at most 1")
+            raise HTTPException(
+                422, f"top_p: must be greater than 0 and at most 1; received {top_p!r}")
         response_format = body.get("response_format")
         if response_format is not None:
             if not isinstance(response_format, dict):
-                raise HTTPException(422, "response_format must be an object")
+                raise HTTPException(
+                    422, f"response_format: must be an object; received "
+                         f"{_describe(response_format)}")
             kind = str(response_format.get("type") or "")
             if kind not in {"json_object", "json_schema"}:
                 raise HTTPException(
-                    422, "response_format.type must be json_object or json_schema")
-        return max_tokens, temperature, top_p
+                    422, f"response_format.type: must be json_object or json_schema; received "
+                         f"{_describe(response_format.get('type'))}")
+        seed = body.get("seed")
+        if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+            raise HTTPException(
+                422, f"seed: must be an integer or omitted; received {_describe(seed)}")
+        thinking = body.get("thinking", False)
+        if not isinstance(thinking, bool):
+            # `bool("false")` is True in Python, so the old coercion turned thinking ON for a
+            # caller that asked for it off. Only a real JSON boolean is accepted.
+            raise HTTPException(422, (
+                f"thinking: must be a JSON boolean (true or false); received "
+                f"{_describe(thinking)}. A string is refused rather than coerced, because "
+                f"bool(\"false\") is true and would turn thinking ON."))
+        return {"max_tokens": max_tokens, "temperature": temperature, "top_p": top_p,
+                "response_format": response_format, "seed": seed, "thinking": thinking}
+
+    def _stream_requested(body: dict) -> bool:
+        """`stream` is a real JSON boolean too, for the same reason `thinking` is.
+
+        A truthy string such as ``"false"`` would otherwise start an SSE response for a caller
+        that asked for one JSON completion.
+        """
+        value = body.get("stream", False)
+        if not isinstance(value, bool):
+            raise HTTPException(422, (
+                f"stream: must be a JSON boolean (true or false); received {_describe(value)}. "
+                f"A non-boolean is refused rather than coerced."))
+        return value
 
     @app.post("/v1/chat/completions")
     def chat_completions(body: dict):
@@ -375,24 +538,24 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         for message in messages:
             if not isinstance(message, dict) or not isinstance(message.get("content"), str):
                 raise HTTPException(422, "every message needs string content")
-        max_tokens, temperature, top_p = _completion_parameters(body)
+        parameters = _completion_parameters(body)
+        stream = _stream_requested(body)
         completion_id = _job_identifier(body)
         created = int(time.time())
 
-        if not body.get("stream"):
+        if not stream:
             activity.begin(job_id=completion_id, model=engine.model_id)
             try:
-                outcome = engine.complete(messages, max_tokens=max_tokens,
-                                          temperature=temperature, top_p=top_p,
-                                          response_format=body.get("response_format"),
-                                          seed=body.get("seed"),
-                                          thinking=bool(body.get("thinking", False)))
+                outcome = engine.complete(messages, **parameters)
             except ChatModelUnavailable as exc:
                 activity.finish(state="error", error_code="model_unavailable")
                 raise HTTPException(409, str(exc)) from exc
             except ChatBusy as exc:
                 activity.finish(state="error", error_code="worker_busy")
                 raise HTTPException(409, str(exc)) from exc
+            except ChatContextExceeded as exc:
+                activity.finish(state="error", error_code="context_exceeded")
+                raise HTTPException(422, str(exc)) from exc
             except Exception:
                 activity.finish(state="error", error_code="generation_failed")
                 raise
@@ -411,18 +574,43 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
 
         activity.begin(job_id=completion_id, model=engine.model_id)
 
-        def events():
+        # A streaming response has already committed its 200 by the time the engine produces a
+        # token, so a prompt that cannot fit the model's stated context is refused here, before
+        # the SSE response starts.
+        check_prompt_fits = getattr(engine, "check_prompt_fits", None)
+        if callable(check_prompt_fits):
+            try:
+                check_prompt_fits(messages, max_tokens=parameters["max_tokens"],
+                                  response_format=parameters["response_format"],
+                                  thinking=parameters["thinking"])
+            except ChatContextExceeded as exc:
+                activity.finish(state="error", error_code="context_exceeded")
+                raise HTTPException(422, str(exc)) from exc
+            except ChatModelUnavailable as exc:
+                activity.finish(state="error", error_code="model_unavailable")
+                raise HTTPException(409, str(exc)) from exc
+            except ChatBusy as exc:
+                activity.finish(state="error", error_code="worker_busy")
+                raise HTTPException(409, str(exc)) from exc
+
+        async def events():
             collected: list[str] = []
             # The terminal state this request reports, unless a branch below changes it. The
             # `finally` is what handles a client that disconnects mid-stream: the generation was
             # never delivered, so it is cancelled rather than claimed as a completion.
             final_state, final_error = "cancelled", "client_disconnected"
+            # This generator is async on purpose. Starlette never closes a route generator
+            # itself, so a *sync* generator abandoned by a disconnecting client stays suspended
+            # holding the engine's model lock for the life of the process - every later request
+            # then blocks. Driving the engine in a worker thread keeps the task-group
+            # cancellation Starlette already performs on `http.disconnect` inside this body,
+            # where the `finally` closes the engine's generator and releases the model.
+            stream = engine.stream(messages, **parameters)
             try:
-                for delta in engine.stream(messages, max_tokens=max_tokens,
-                                           temperature=temperature, top_p=top_p,
-                                           response_format=body.get("response_format"),
-                                           seed=body.get("seed"),
-                                           thinking=bool(body.get("thinking", False))):
+                while True:
+                    delta = await run_in_threadpool(_next_or_done, stream)
+                    if delta is _STREAM_DONE:
+                        break
                     if not delta:
                         continue
                     collected.append(delta)
@@ -432,7 +620,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                                           "finish_reason": None}]}
                     yield f"data: {json.dumps(chunk)}\n\n"
                 final_state, final_error = "done", None
-            except (ChatModelUnavailable, ChatBusy) as exc:
+            except (ChatModelUnavailable, ChatBusy, ChatContextExceeded) as exc:
                 final_state, final_error = "error", "chat_error"
                 error = {"error": {"message": str(exc), "type": "chat_error"}}
                 yield f"data: {json.dumps(error)}\n\n"
@@ -442,6 +630,9 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 final_state, final_error = "error", "stream_failed"
                 raise
             finally:
+                # Closing the engine's generator is the lock release. Without it the model
+                # stays reserved by a client that is no longer there.
+                stream.close()
                 activity.finish(state=final_state, error_code=final_error)
             prompt_tokens = engine.prompt_length(messages)
             final = {"id": completion_id, "object": "chat.completion.chunk", "created": created,

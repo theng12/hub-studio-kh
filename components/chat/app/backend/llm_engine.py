@@ -25,6 +25,11 @@ from typing import Iterator
 # long-form budgeting already assumes, not a claim about this model.
 FALLBACK_MAX_OUTPUT_TOKENS = 4096
 
+# This worker's sampling defaults. They live here, not in a route literal, so the value the
+# lane contract publishes and the value a request is served with cannot drift apart.
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TOP_P = 0.95
+
 
 def _mlx():
     import mlx.core as mx
@@ -65,6 +70,15 @@ class ChatBusy(RuntimeError):
     """A generation is in flight; the request cannot be served or the model released."""
 
 
+class ChatContextExceeded(ValueError):
+    """The prompt plus the requested output does not fit the context the model states.
+
+    A refusal, never a truncation: the message names the field (``messages``), the measured
+    prompt tokens, the asked-for output budget and the model's own stated context with its
+    source.
+    """
+
+
 def resolve_model_dir(models_dir: Path, package_id: str, revision: str) -> Path:
     """The library layout every Studio uses: <models>/<package_id>/<revision>/model."""
     return Path(models_dir).expanduser() / package_id / revision / "model"
@@ -100,7 +114,12 @@ class ChatEngine:
             if minimum_unified_memory_gb is not None
             else self._manifest_memory_tier()
         )
-        self._lock = threading.RLock()
+        # A plain lock, not an RLock: a stream may be closed by whichever thread finalises its
+        # generator (Starlette runs a route generator in a worker thread, and cancellation can
+        # land on the event loop), and an RLock can only be released by the thread that took it.
+        # Nothing here nests an acquire: the helpers that count tokens while a caller holds the
+        # lock take the tokenizer reference rather than the lock.
+        self._lock = threading.Lock()
         self._model = None
         self._tokenizer = None
         self._loaded_at: float | None = None
@@ -109,6 +128,11 @@ class ChatEngine:
         self._busy = False
         self._generating = False
         self._last_activity_at: float | None = None
+        # Streams that began and streams that ended, counted under the lock. They balance for
+        # every ending - completed, errored, cancelled, client gone - and a mismatch is how a
+        # wedged model lock is detected from outside the engine.
+        self._streams_started = 0
+        self._streams_finished = 0
 
         config = _read_json(self.model_dir / "config.json")
         generation_path = self.model_dir / "generation_config.json"
@@ -298,24 +322,69 @@ class ChatEngine:
             "max_output_tokens": self.max_output_tokens,
             "last_release_at": self._last_release_at,
             "last_release_reason": self._last_release_reason,
+            # Balanced for every ending. `started > finished` means a stream is still holding
+            # the model, which is a fact an operator can read rather than guess.
+            "streams_started": self._streams_started,
+            "streams_finished": self._streams_finished,
         }
 
     # ---- generation ------------------------------------------------------
+    def _count_tokens_unlocked(self, text: str) -> int | None:
+        """Count tokens with the loaded tokenizer. The caller holds ``self._lock``."""
+        tokenizer = self._tokenizer
+        if tokenizer is None:
+            return None
+        try:
+            return len(tokenizer.encode(text))
+        except Exception:
+            return None
+
     def count_tokens(self, text: str) -> int | None:
         """Tokenizer count for the loaded model, or ``None`` when nothing is loaded."""
         with self._lock:
-            if self._tokenizer is None:
-                return None
-            try:
-                return len(self._tokenizer.encode(text))
-            except Exception:
-                return None
+            return self._count_tokens_unlocked(text)
 
     def prompt_length(self, messages: list[dict]) -> int | None:
         with self._lock:
             if self._tokenizer is None:
                 return None
-            return self.count_tokens(self._prompt(messages))
+            return self._count_tokens_unlocked(self._prompt(messages))
+
+    def _budget(self, max_tokens: int | None) -> int:
+        return min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
+
+    def _refuse_over_context(self, prompt_tokens: int | None, budget: int) -> None:
+        """Refuse a prompt that cannot fit the context the model states.
+
+        Written as a refusal, not a truncation: a caller that sends more than the model can hold
+        is told the measured count and the model's own number. Where nothing states a context
+        window the check refuses nothing - this worker does not invent a limit.
+        """
+        limit = self.context_window_tokens
+        if limit is None or prompt_tokens is None:
+            return
+        if prompt_tokens + budget > limit:
+            raise ChatContextExceeded(
+                f"messages: the prompt is {prompt_tokens} tokens and max_tokens asks for "
+                f"{budget} more, {prompt_tokens + budget} together, above the {limit} tokens "
+                f"this model states ({self.context_window_source}). Send a shorter prompt or a "
+                f"smaller max_tokens; this worker refuses rather than truncating.")
+
+    def check_prompt_fits(self, messages: list[dict], *, max_tokens: int | None = None,
+                          response_format=None, thinking: bool = False) -> int | None:
+        """Measure a request against the model's stated context before anything is streamed.
+
+        A streaming response has already committed its status line by the time the engine
+        produces its first token, so the refusal has to happen here, before the SSE response
+        starts. The non-streaming path is refused inside ``complete()`` by the same check.
+        """
+        with self._lock:
+            self._load_locked()
+            working = self._with_instruction(messages, self.json_instruction(response_format))
+            budget = self._budget(max_tokens)
+            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            self._refuse_over_context(prompt_tokens, budget)
+            return prompt_tokens
 
     def _prompt(self, messages: list[dict], *, thinking: bool = False) -> str:
         tokenizer = self._tokenizer
@@ -384,14 +453,15 @@ class ChatEngine:
             pass
 
     def complete(self, messages: list[dict], *, max_tokens: int | None = None,
-                 temperature: float = 0.7, top_p: float = 0.95,
+                 temperature: float = DEFAULT_TEMPERATURE, top_p: float = DEFAULT_TOP_P,
                  response_format=None, seed=None, thinking: bool = False) -> dict:
         with self._lock:
             model, tokenizer = self._load_locked()
-            budget = min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
+            budget = self._budget(max_tokens)
             instruction = self.json_instruction(response_format)
             working = self._with_instruction(messages, instruction)
-            prompt_tokens = self.count_tokens(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            self._refuse_over_context(prompt_tokens, budget)
             self._generating = True
             started = time.time()
             try:
@@ -432,12 +502,32 @@ class ChatEngine:
             }
 
     def stream(self, messages: list[dict], *, max_tokens: int | None = None,
-               temperature: float = 0.7, top_p: float = 0.95,
+               temperature: float = DEFAULT_TEMPERATURE, top_p: float = DEFAULT_TOP_P,
                response_format=None, seed=None, thinking: bool = False) -> Iterator[str]:
-        with self._lock:
+        # The lock is taken and released explicitly rather than with `with`, because this is a
+        # generator: its consumer may abandon it (a client that disconnects mid-SSE), and an
+        # abandoned generator is finalised at an arbitrary later moment, on whatever thread drops
+        # the last reference. `with` would release only on finalisation, and it would release
+        # from the finalising thread, which a `threading.RLock` refuses. One explicit release,
+        # owned by this call and performed at most once, is what returns the model to the next
+        # request however this stream ends - completed, errored, cancelled, or client gone.
+        self._lock.acquire()
+        released = False
+
+        def release_lock() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            self._lock.release()
+
+        self._streams_started += 1
+        try:
             model, tokenizer = self._load_locked()
-            budget = min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
+            budget = self._budget(max_tokens)
             working = self._with_instruction(messages, self.json_instruction(response_format))
+            self._refuse_over_context(
+                self._count_tokens_unlocked(self._prompt(working, thinking=thinking)), budget)
             self._generating = True
             self._last_activity_at = time.time()
             try:
@@ -453,6 +543,11 @@ class ChatEngine:
             finally:
                 self._generating = False
                 self._last_activity_at = time.time()
+        finally:
+            # Count the ending before the lock is free, so a reader that sees the lock released
+            # also sees the counters balanced.
+            self._streams_finished += 1
+            release_lock()
 
 
 def engine_from_environment() -> ChatEngine:
