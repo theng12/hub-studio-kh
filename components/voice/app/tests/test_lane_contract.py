@@ -8,14 +8,19 @@ failure appears as a silently ignored field.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from backend import catalog, lane_contract, long_form_policy
+from backend import catalog, generation, lane_contract, long_form_policy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from components import model_defaults  # noqa: E402
 
 
 def _rows() -> list[dict]:
@@ -72,6 +77,123 @@ def test_a_model_that_cannot_clone_never_advertises_a_reference_parameter() -> N
             assert "voice_library_id" in names, row["repo"]
         else:
             assert "voice_library_id" not in names, row["repo"]
+
+
+# The roster-publishing preset model: Qwen3-TTS CustomVoice. No *shipped* row both offers a
+# preset and publishes a roster today — ST-13.B pruned the CustomVoice tier on 2026-09-24 and
+# the owner left Pocket TTS 4-bit's roster unbuilt (docs/tasks/ST-20.md) — so the row is built
+# from the catalogue's own family here. It is the model this roster belongs to, and a
+# CustomVoice tier returning to the catalogue lands on the same contract with no code change.
+CUSTOM_VOICE = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+
+
+def _custom_voice_model() -> catalog.ModelEntry:
+    return catalog.ModelEntry(
+        repo=CUSTOM_VOICE,
+        label="Qwen3-TTS 0.6B CustomVoice",
+        family="qwen3-tts",
+        size_gb=1.9,
+        gated=False,
+        capabilities=("tts", "multilingual", "expressive"),
+    )
+
+
+def _parameter(parameters: list[dict], name: str) -> dict:
+    return next(parameter for parameter in parameters if parameter["name"] == name)
+
+
+def test_a_preset_model_with_a_roster_publishes_the_roster_as_its_enum() -> None:
+    """SH-16: how a speaking voice is chosen is answerable from the contract alone."""
+    model = _custom_voice_model()
+    assert catalog.voice_modes(model) == ["preset"], "the fixture must be the preset form"
+    roster = catalog.family_for(model).preset_roster
+    assert roster is not None
+    parameter = _parameter(lane_contract.parameters_for(model), "preset_speaker")
+    assert parameter["type"] == "string"
+    assert parameter["required"] is False
+    assert parameter["enum"] == [speaker["id"] for speaker in roster.speakers]
+    # The note says where the roster comes from, read from the roster's own record rather than
+    # a second sentence here.
+    assert roster.source in parameter["note"]
+
+
+def test_the_roster_the_picker_reads_is_the_one_the_contract_publishes() -> None:
+    """One roster, two producers. A second copy is free to disagree with the picker."""
+    assert generation.QWEN3_PRESET_SPEAKERS is catalog.QWEN3_PRESET_SPEAKERS, (
+        "generation must re-export the roster, not restate it"
+    )
+    roster = catalog.FAMILIES["qwen3-tts"].preset_roster
+    payload = generation.availability()
+    assert payload[f"{roster.key}_preset_speakers"] is catalog.QWEN3_PRESET_SPEAKERS
+    # And the ids themselves are written down in exactly one producer module.
+    backend = REPO_ROOT / "components" / "voice" / "app" / "backend"
+    holders = [
+        name for name in ("catalog.py", "generation.py", "lane_contract.py")
+        if "Uncle_Fu" in (backend / name).read_text(encoding="utf-8")
+    ]
+    assert holders == ["catalog.py"], holders
+
+
+def test_a_single_speaker_preset_model_publishes_no_preset_speaker() -> None:
+    """The key this lane discards is not advertised: Khmer's voice is built in."""
+    model = catalog.get_model("khmerttsopensource/khmer-tts")
+    assert catalog.voice_modes(model) == ["preset"], "the fixture must be the preset form"
+    assert catalog.family_for(model).preset_roster is None
+    names = {parameter["name"] for parameter in lane_contract.parameters_for(model)}
+    assert "preset_speaker" not in names
+
+
+def test_a_cloning_only_model_publishes_no_preset_speaker() -> None:
+    """The sharp case: the family publishes a roster, this tier offers no preset."""
+    model = catalog.get_model("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit")
+    assert catalog.voice_modes(model) == ["cloning"]
+    assert catalog.family_for(model).preset_roster is not None, (
+        "the fixture is only sharp while its family publishes a roster"
+    )
+    names = {parameter["name"] for parameter in lane_contract.parameters_for(model)}
+    assert "preset_speaker" not in names
+
+
+def test_preset_speaker_is_offered_exactly_where_a_roster_can_be_chosen() -> None:
+    """The invariant, not today's membership: the rule catches the next model."""
+    for model in (*catalog.CATALOG, _custom_voice_model()):
+        names = {parameter["name"] for parameter in lane_contract.parameters_for(model)}
+        expected = (
+            "preset" in catalog.voice_modes(model)
+            and catalog.family_for(model).preset_roster is not None
+        )
+        assert ("preset_speaker" in names) is expected, model.repo
+        if expected:
+            assert _parameter(lane_contract.parameters_for(model), "preset_speaker")["enum"]
+
+
+def test_the_published_default_is_the_value_in_force(tmp_path) -> None:
+    """A stored default is what a scheduler reads, and no default is invented without one."""
+    model = _custom_voice_model()
+    parameters = lane_contract.parameters_for(model)
+    assert "default" not in _parameter(parameters, "preset_speaker"), (
+        "no value is in force, so the lane states none rather than guessing a first entry"
+    )
+
+    chosen = catalog.QWEN3_PRESET_SPEAKERS[-1]["id"]
+    model_defaults.save(tmp_path, model.repo, {"preset_speaker": chosen}, parameters)
+    in_force, not_used = model_defaults.resolved(tmp_path, model.repo, parameters)
+    assert not_used == {}
+    assert in_force["preset_speaker"] == chosen
+    published = _parameter(lane_contract.parameters_for(model, in_force), "preset_speaker")
+    assert published["default"] == chosen
+
+    # The enum is what the stored value was checked against: a name the family does not
+    # publish is refused rather than stored (the two phantom speakers this roster once had).
+    with pytest.raises(ValueError) as refused:
+        model_defaults.save(tmp_path, model.repo, {"preset_speaker": "Ethan"}, parameters)
+    assert "Ethan" in str(refused.value)
+
+    # And with nothing stored the key is absent again, not frozen at a stale value.
+    model_defaults.clear(tmp_path, model.repo)
+    in_force, _ = model_defaults.resolved(tmp_path, model.repo, parameters)
+    assert "default" not in _parameter(
+        lane_contract.parameters_for(model, in_force), "preset_speaker")
 
 
 def test_every_published_parameter_is_a_real_request_field_with_its_enforced_bound() -> None:

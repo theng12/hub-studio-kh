@@ -370,7 +370,9 @@ def availability() -> dict:
     edit here. The bark / voxtral / marvis / orpheus / vibevoice / kokoro
     rosters went with their families on 2026-09-24 (ST-13.B); the frontend reads
     each key with `|| []`, so a key that is no longer sent cannot break the
-    picker.
+    picker. The preset rosters come from the same place (see
+    `_published_preset_rosters`), so the picker and the lane contract a scheduler
+    reads cannot disagree about which voices exist.
     """
     mlx_audio_ok = _have_mlx_audio()
     wired = [family for family in _WIRED_FAMILIES if runtime_ready_for_family(family)]
@@ -382,12 +384,28 @@ def availability() -> dict:
         "diffusers_available": _have_diffusers(),
         "error": TTS_IMPORT_ERROR,
         "device": _detect_device() if TTS_AVAILABLE else None,
-        "qwen3_preset_speakers": QWEN3_PRESET_SPEAKERS,
+        **_published_preset_rosters(),
         "qwen3_voice_design_examples": QWEN3_VOICE_DESIGN_EXAMPLES,
         "voxcpm_emotion_examples": VOXCPM_EMOTION_EXAMPLES,
         "phase": 2,
         "wired_families": wired,
         "media": media_tools.availability(),
+    }
+
+
+def _published_preset_rosters() -> dict:
+    """Every roster a catalog family publishes, under the key that family names it.
+
+    Built from `catalog.FAMILIES` rather than a key literal here: the app joins a model to its
+    family's roster by the key's shape (`<family>_preset_speakers`), so a second family that
+    publishes a roster reaches the picker with no edit in this file. The roster object itself is
+    the one the lane contract publishes as `preset_speaker`'s enum, so the two producers cannot
+    disagree about which voices exist.
+    """
+    return {
+        f"{family.preset_roster.key}_preset_speakers": family.preset_roster.speakers
+        for family in catalog.FAMILIES.values()
+        if family.preset_roster is not None
     }
 
 
@@ -645,33 +663,12 @@ _validate_family_wiring()
 
 # ───────────── Qwen3-TTS preset metadata ─────────────
 
-# Surfaced via /api/generate/availability so the frontend can populate the
-# preset-speaker picker without re-querying mlx-audio.
-#
-# SOURCE OF TRUTH: the CustomVoice model's own config.json `spk_id` map. The
-# installed mlx-community/Qwen3-TTS-12Hz-*-CustomVoice models ship EXACTLY these
-# 9 speakers (verified against config.json):
-#     aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian
-# mlx-audio matches speaker names case-insensitively and lowercases them before
-# the spk_id lookup (qwen3_tts.py: `config.spk_id[speaker.lower()]`), so the
-# capitalised display ids below resolve correctly.
-#
-# DO NOT add speakers that aren't in the model's spk_id map. Earlier this list
-# carried two phantom speakers ("Ethan", "Chelsie") copied from an older Qwen
-# roster — picking them passed the app's own validation but mlx-audio rejected
-# them with `ValueError: Speaker 'Ethan' not supported`, which surfaced only as
-# the generic "mlx-audio didn't produce a wav file" wall. Removed in v1.4.4.
-QWEN3_PRESET_SPEAKERS = [
-    {"id": "Ryan",     "lang": "en", "gender": "m", "description": "Dynamic male, strong rhythmic drive"},
-    {"id": "Aiden",    "lang": "en", "gender": "m", "description": "Sunny American male, clear midrange"},
-    {"id": "Serena",   "lang": "en", "gender": "f", "description": "Warm, gentle young female"},
-    {"id": "Vivian",   "lang": "en", "gender": "f", "description": "Bright, slightly edgy young female"},
-    {"id": "Uncle_Fu", "lang": "zh", "gender": "m", "description": "Seasoned male, low mellow timbre"},
-    {"id": "Dylan",    "lang": "zh", "gender": "m", "description": "Youthful Beijing male, clear natural timbre"},
-    {"id": "Eric",     "lang": "zh", "gender": "m", "description": "Lively Chengdu male, slightly husky"},
-    {"id": "Ono_Anna", "lang": "ja", "gender": "f", "description": "Playful Japanese female, light timbre"},
-    {"id": "Sohee",    "lang": "ko", "gender": "f", "description": "Warm Korean female, rich emotion"},
-]
+# The roster itself lives with the family that publishes it (`catalog.QWEN3_PRESET_ROSTER`),
+# where `availability()` reads it for the app's picker and `lane_contract` reads its ids as
+# `preset_speaker`'s enum for a scheduler - one list, so the two cannot disagree. The name is
+# re-exported here because this module's Qwen3-TTS resolver validates a requested speaker
+# against exactly the roster the app offers.
+QWEN3_PRESET_SPEAKERS = catalog.QWEN3_PRESET_SPEAKERS
 
 QWEN3_VOICE_DESIGN_EXAMPLES = [
     "Calm narrator, slow and contemplative",

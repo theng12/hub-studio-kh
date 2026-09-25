@@ -234,6 +234,7 @@ folder with no receipt - the owner's `mlx-community/Qwen3.5-9B-4bit` (4-bit) - a
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -270,7 +271,8 @@ def lay(package_id, contents):
 
 
 catalog = {package_id: manifest(package_id, FILES)
-           for package_id in ("tiny-model", "broken-model", "stale-model", "absent-model")}
+           for package_id in ("tiny-model", "broken-model", "stale-model", "absent-model",
+                              "gone-model")}
 for package_id, value in catalog.items():
     (manifests / (package_id + ".json")).write_text(json.dumps(value))
 lay("tiny-model", FILES)
@@ -282,10 +284,18 @@ lay("stale-model", FILES)
 moved = json.loads(json.dumps(catalog["stale-model"]))
 moved["requires_packages"] = ["companion"]
 model_packages._register(moved, library / "stale-model" / REVISION, library)
+# A receipt whose folder was deleted afterwards: the owner's six packages, where the cheap
+# receipt path read `invalid` and published `[Errno 2] No such file or directory: 'gone-model'`.
+model_packages._register(catalog["gone-model"], lay("gone-model", FILES), library)
+shutil.rmtree(library / "gone-model")
 
 token = auth.load_token()
 app = standalone.create_app(start_background=False)
 with TestClient(app) as client:
+    # The row the Mac renders on refresh, read before anyone presses Verify.
+    response = client.get("/api/hub/model-packages", headers={"X-Hub-Token": token})
+    gone_row = next((row for row in response.json().get("models", [])
+                     if row.get("package_id") == "gone-model"), None)
     routes = {}
     for package_id in ("tiny-model", "broken-model", "stale-model", "absent-model"):
         response = client.post("/api/hub/model-packages/%s/verify" % package_id,
@@ -294,6 +304,7 @@ with TestClient(app) as client:
 installed = json.loads((library / ".studiohub" / "installed.json").read_text())
 print("RESULT:" + json.dumps({
     "routes": routes,
+    "gone_row": gone_row,
     "receipts": {key: value.get("manifest_sha256") for key, value in installed.items()},
     "digests": {key: model_packages.manifest_digest(value) for key, value in catalog.items()},
 }))
@@ -389,6 +400,25 @@ class VerifyRouteTests(unittest.TestCase):
         self.assertEqual(row["dispatch_state"], "ineligible", row)
         self.assertIn("absent-model", row["reason"])
         self.assertIn("<library>/absent-model/" + "a" * 40, row["reason"])
+
+    def test_a_receipt_whose_folder_is_gone_is_published_not_installed(self) -> None:
+        """The row the Mac renders on refresh: absence, in a sentence, not invalid+errno.
+
+        `gone-model` was registered and then its folder was deleted - the owner's six packages.
+        The GET route republishes the cheap receipt path's row verbatim, so that path's
+        `[Errno 2] No such file or directory: 'gone-model'` reached the model name in the app.
+        """
+        payload = self._verify()
+        row = payload["gone_row"]
+        self.assertIsNotNone(row, "the route published no row for the deleted package")
+        self.assertEqual(row["state"], "not_installed", row)
+        self.assertEqual(row["files_state"], "not_installed", row)
+        self.assertEqual(row["dispatch_state"], "ineligible", row)
+        self.assertNotIn("Errno", row["reason"])
+        self.assertNotIn("No such file or directory", row["reason"])
+        self.assertIn("gone-model", row["reason"])
+        self.assertIn("<library>/gone-model/" + "a" * 40, row["reason"])
+        self.assertIn("gone-model.json", row["reason"])
 
 
 class LaneContractRouteTests(unittest.TestCase):

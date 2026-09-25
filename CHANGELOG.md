@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.6.66 — 2026-09-25 · the tab was filtering the models that could reach the tab
+
+The owner, on the Audio page: *"i can't see a 'preset model' like the khmer tts if i'm on the clone
+which is the default, i need to first switch the model to not selecting anything before i can switch
+to voice design or ready-made or sth… i'm not sure what the actual bug here is but it's dodgy to
+me."* It was a closed loop between two controls, and it hid every preset voice on his machine.
+
+**The loop.** The voice tabs were exactly the **selected model's** modes
+(`voiceModeTabs` read `model.voiceModes`), and the model picker listed only the models that
+published **the current tab's** mode (`audioModels(for:)`). So the tab decided which models you
+could see, and the selected model decided which tabs existed. With a cloning-capable model selected
+there was no Ready-Made tab — and therefore no way to see that a preset model existed, including
+Khmer TTS, which was installed. The only escape was to pick some other model that happened to
+publish preset, which is exactly the fiddling he described. Repairing his selection was not a fix;
+the two controls had to stop reading each other.
+
+**The tabs are now the machine's modes.** `audioModes` is the union of what this Mac's Audio models
+publish, taken over models that can actually run here — so a tab is never offered with nothing
+behind it, installing a preset model brings the tab with it, and a Mac whose models only clone still
+shows one tab. Clicking a tab moves the model to one that publishes it, chosen by
+`preferredAudioModel` (best that runs here) rather than "first in the list", which could be a model
+this Mac cannot generate with.
+
+**The page no longer opens on a model that cannot run.** `reconcileSelections` accepted `supported`,
+which is only *"this Hub ships a package for it"* — every TTS entry in the catalogue answers true.
+His page opened on `voxcpm2-4bit`, **whose folder is gone while its install receipt still said it
+was installed**, so nothing moved the selection and the page sat disabled with an error under the
+model. Availability is now read, on a **transition**: a model that was runnable and stops being so
+is moved off, and one already known unavailable is left alone — selecting a model in order to
+install it must not be undone by the next poll.
+
+**`[Errno 2] No such file or directory: 'voxcpm2-4bit'` was being shown to the operator, twice.**
+`preflight()`'s catch-all in `components/model_packages.py` turned every `OSError` into
+`state: invalid` with `str(exception)` as the reason, and the Hub republishes a package's `reason`
+verbatim — the app draws it under the script and again under the model. Six of his packages carried
+it. Two things were wrong: a package with **nothing on disk is `not_installed`**, not `invalid`
+(`verify_installed()` in the same file already said so, with a sentence naming the paths it looked
+for), and an errno with a relative filename is not something a person can act on. `preflight` now
+separates absent from wrong, shares the one sentence `verify_installed` uses, and never publishes a
+raw exception string. **A not-installed package also no longer tells you to "press Verify Files"** —
+that cannot conjure files that were never downloaded; it says to download it or copy its folder in.
+
+**SH-16 closed: `preset_speaker` is published by the lane that reads it.** It was accepted and read
+by the Voice worker and sent by the app, and published by no family's contract, so a scheduler
+reading only the contract could not learn how a speaking voice is chosen. The roster moved to one
+home (`catalog.PresetRoster`, carried on the family) and the parameter is published for a model that
+offers preset **and** has a roster — with the family's own ids as the enum. A single-voice family
+(Khmer) and a cloning-only tier publish **nothing**, per the standing rule that a lane must not
+advertise a key it discards. No shipped row qualifies today, because the roster's own model was
+pruned in ST-13.B; a CustomVoice tier returning to the catalogue publishes it with no code change.
+
+**And the app half of it, which is the same defect this release is about.**
+`HubAudioParams.presetSpeaker` was a non-optional `String`, always encoded — `""` for a
+single-voice model, otherwise a name **seeded from the roster**, so an untouched picker looked
+untouched while the app made the choice. A voice stored for a model in the Models tab could
+therefore never reach the engine. It is optional now and `audioSpeakerForRequest` sends only a voice
+the operator actually chose from a roster this model publishes; selecting a model **clears** a voice
+from another family rather than seeding a new one, and the picker's first row is the not-chosen
+state, naming the stored voice where the producer states one and saying only that the model decides
+where it does not. Three tests that pinned the old seeding are replaced by that invariant.
+
 ## 0.6.65 — 2026-09-25 · the default is a default, and the page control is the override
 
 The owner's ruling, for every generator: *"we have a default but control on the page is

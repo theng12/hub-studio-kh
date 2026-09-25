@@ -3,20 +3,57 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.65 (the default is a default, and the page control is the override, 2026-09-25).
+Last updated: 0.6.66 (the tab was filtering the models that could reach the tab, 2026-09-25).
 
-**0.6.65 in one paragraph.** SH-14, closed by the owner's ruling and applied to every generator:
-**a value set in Models is what a job uses, a control on a generator page is the operator's own
-answer and always wins, and a control nobody has touched supplies nothing at all.** The last clause
-is the one that was missing. Voice's `speed` was sent as a flat `1.0` on all four generation paths,
-so a `speed` default set in Models could never reach the engine *from the app*; it now sends none
-until the slider moves, and `static let audioSpeedRange = 0.5...2.0` is gone — the bounds and the
-value both come from the selected model's lane contract, which the worker publishes **resolved**.
-Subtitle's `word_timestamps` was worse: a persisted `false` submitted on every request with **no
-control anywhere in the app**, so the Models value was unreachable and so was the value; it is a
-toggle now. The weight format is the row's own `weight_format`, not the extension of a file name.
-And the app stopped sending a `language` to the **12 of 13** voice families whose lane publishes
-none.
+**0.6.66 in one paragraph.** The owner found the Audio page "dodgy": he had Khmer TTS installed and
+could not see it. It was a **closed loop between two controls** — the voice tabs were the *selected
+model's* modes, and the model picker listed only models publishing *the current tab's* mode — so a
+model that could not do the mode you wanted also hid every model that could, and there was no tab to
+press to discover the missing one. The tabs are now the **union of what this Mac's models publish**
+(over models that can actually run), and a tab click moves the model to one that publishes it. The
+page also no longer **opens on a model that cannot run**: `reconcileSelections` accepted `supported`,
+which is only "the Hub ships a package for this", so it opened on `voxcpm2-4bit` — whose folder is
+gone while its receipt still said it was installed — and sat there disabled. Availability is read
+now, **on a transition**, so deliberately selecting a model in order to install it is not undone by
+the next poll. And `[Errno 2] No such file or directory: 'voxcpm2-4bit'` was being rendered to the
+operator **twice**: `preflight()`'s catch-all turned every `OSError` into `state: invalid` with
+`str(exception)` as the reason, and the Hub republishes a package's `reason` verbatim. Six of his
+packages carried it.
+
+**The question to ask first, because it has now found the same bug three times.** **An omitted
+parameter takes the value in force; a supplied one is the caller's answer and wins.** Every worker
+already implements it. What keeps breaking is a **consumer that always supplies** — so when a Models
+default "doesn't work", do not start at the worker: ask *"does the page send this even when the
+operator never touched it?"* Three found that way: the pace (`speed`, a flat `1.0`),
+the word timings (`word_timestamps`, a persisted `false` with **no control in the app at all**), and
+the voice (`preset_speaker`, a non-optional `String` carrying `""` **or a name seeded from the
+roster**, so an untouched picker looked like a choice).
+
+**SH-16 closed on both sides, and publishing the contract alone would have been a trap.** The roster
+moved to one home (`catalog.PresetRoster`, carried on the family, feeding both the picker payload and
+the contract) and `lane_contract` publishes `preset_speaker` for a model that offers preset **and**
+has a roster — nothing for Khmer (one built-in voice), nothing for a cloning tier. **No shipped row
+qualifies today**: the roster's own model was pruned in ST-13.B, so the fix is data-driven and
+dormant, and a CustomVoice tier returning to the catalogue gets it with no code change.
+
+**Two traps met while doing this.** *A source regex is a parser and it is wrong in the same direction
+every time*: under `tests/native/`, the fixture's mock of the CustomVoice contract had to be updated
+to match the producer, or the fixture proves the app against a model shape that can no longer exist.
+*A fix that is right for one state can be wrong for the state beside it*: `preflight`'s early return
+covered both "no receipt at all" and "the manifest moved under a receipt while the bytes are present";
+reporting both as a bare `not_installed` made the app say **"download it"** for a model the operator
+already has. They carry different sentences now.
+
+**0.6.65 in one paragraph.** The owner's ruling for every generator — *"we have a default but control
+on the page is overwrite… stuff that can be change or altered such as speed must be given to the
+user"* — closed SH-14. A value set in Models is what a job uses; a control on a generator page is the
+operator's own answer and always wins; and a control nobody has touched supplies nothing at all,
+which was missing everywhere it mattered. Voice's `speed` was a flat `1.0` sent on all four
+generation paths, and `0.5...2.0` was written into the app rather than read from the lane contract;
+Subtitle's `word_timestamps` was a persisted `false` submitted on every request with no control
+anywhere in the app. The weight format is the row's own `weight_format`, not the extension of a file
+name, and the app stopped sending a `language` to the **12 of 13** voice families whose lane
+publishes none.
 
 **Read this before trusting a lane default.** The rule the whole release turns on: **an omitted
 parameter takes the value in force; a supplied one is the caller's answer and wins.** Every worker

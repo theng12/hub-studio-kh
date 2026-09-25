@@ -40,6 +40,25 @@ from components import model_defaults  # noqa: E402
 # can't see/edit it"), and one that publishes no cloning-specific parameter at all.
 SECTIONING = "mlx-community/VoxCPM2-4bit"
 PRESET_ONLY = "khmerttsopensource/khmer-tts"
+# The roster-publishing preset row the registered catalogue does not ship today: ST-13.B pruned
+# the Qwen3-TTS CustomVoice tier and the owner left Pocket TTS 4-bit's roster unbuilt
+# (docs/tasks/ST-20.md). Registering it in one test exercises the route's own resolution rather
+# than a second copy of it, and the row publishes what its family states.
+CUSTOM_VOICE = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+
+
+def _register_custom_voice(monkeypatch) -> catalog.ModelEntry:
+    """The roster tier, registered for one test: a preset that is a real choice."""
+    model = catalog.ModelEntry(
+        repo=CUSTOM_VOICE,
+        label="Qwen3-TTS 0.6B CustomVoice",
+        family="qwen3-tts",
+        size_gb=1.9,
+        gated=False,
+        capabilities=("tts", "multilingual", "expressive"),
+    )
+    monkeypatch.setattr(catalog, "CATALOG", (*catalog.CATALOG, model))
+    return model
 
 
 @pytest.fixture
@@ -482,6 +501,52 @@ class TestAppliedToARequest:
             "repo": model.repo, "text": "The page seeded this pace.", "speed": seeded})
         assert response.status_code == 200, response.text
         assert queued[0]["speed"] == stored
+
+    def test_an_omitted_preset_speaker_takes_the_stored_voice(self, client, queued, monkeypatch):
+        """SH-16, end to end: which ready-made voice a model speaks with is a per-model default.
+
+        No shipped row both offers a preset and publishes a roster today, so the row the roster
+        belongs to is registered here. The route's own resolution runs; nothing about it is
+        re-implemented in this test.
+        """
+        model = _register_custom_voice(monkeypatch)
+        stored = catalog.family_for(model).preset_roster.speakers[-1]["id"]
+        saved = client.put("/api/model-defaults", json={
+            "repo": model.repo, "values": {"preset_speaker": stored}})
+        assert saved.status_code == 200, saved.text
+
+        response = client.post("/api/generate/txt2speech", json={
+            "repo": model.repo, "text": "An omitted speaker takes the operator's voice."})
+        assert response.status_code == 200, response.text
+        assert queued[0]["preset_speaker"] == stored
+        # Read both sides: the voice the request ran with is the one the catalogue advertises.
+        assert _published(client, model.repo, "preset_speaker") == stored
+        assert _row(client, model.repo)["defaults"]["preset_speaker"] == stored
+
+    def test_a_request_that_supplies_a_speaker_keeps_it(self, client, queued, monkeypatch):
+        model = _register_custom_voice(monkeypatch)
+        speakers = catalog.family_for(model).preset_roster.speakers
+        stored, supplied = speakers[-1]["id"], speakers[0]["id"]
+        assert stored != supplied, "the fixture must be a real disagreement"
+        client.put("/api/model-defaults", json={
+            "repo": model.repo, "values": {"preset_speaker": stored}})
+
+        response = client.post("/api/generate/txt2speech", json={
+            "repo": model.repo, "text": "The caller's own voice wins.",
+            "preset_speaker": supplied})
+        assert response.status_code == 200, response.text
+        assert queued[0]["preset_speaker"] == supplied, (
+            "a stored default overrode the speaker the caller sent"
+        )
+
+    def test_a_speaker_the_roster_does_not_publish_is_refused_by_name(self, client, monkeypatch):
+        """The enum the contract publishes is the bound the route enforces."""
+        model = _register_custom_voice(monkeypatch)
+        refused = client.put("/api/model-defaults", json={
+            "repo": model.repo, "values": {"preset_speaker": "Ethan"}})
+        assert refused.status_code == 422, refused.text
+        assert "Ethan" in refused.json()["detail"]["preset_speaker"]
+        assert model_defaults.load(paths.data_dir()) == {}
 
     def test_the_reference_route_applies_them_the_same_way(self, client, queued, monkeypatch):
         model = catalog.get_model(SECTIONING)

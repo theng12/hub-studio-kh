@@ -1716,9 +1716,20 @@ struct StudioContent: View {
                                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                                 } else {
                                     Picker("Voice", selection: $workspace.audioSpeaker) {
+                                        // The not-chosen state is a real row, and it is the default
+                                        // one: it sends no `preset_speaker`, so the voice stored for
+                                        // this model in the Models tab is the one the engine speaks
+                                        // with. It names that voice where the producer states one,
+                                        // and says only that the model decides where it does not —
+                                        // the engine's own default is the engine's to state.
+                                        Text(workspace.audioSpeakerInForce.map { "Model default — \($0)" }
+                                             ?? "This model's own voice")
+                                            .tag("")
                                         ForEach(speakers, id: \.self) { Text($0).tag($0) }
                                     }.labelsHidden()
-                                    Text("These voices are built into the model. Nothing to choose or prepare.").font(.caption).foregroundStyle(.secondary)
+                                    Text("These voices are built into the model. Nothing to choose or prepare. Leaving this on the model's default uses the voice set for this model in Models.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                         } else {
@@ -2010,7 +2021,7 @@ struct StudioContent: View {
             return "\(model.label) has not reported which voice modes it supports. Update the local engine, or choose another model."
         }
         guard model.voiceModes.contains(workspace.audioMode) else {
-            return "\(model.label) does not publish \(workspace.audioMode.shortTitle). Choose one of its modes above."
+            return "\(model.label) does not publish \(workspace.audioMode.shortTitle). Pick a model that does, or choose another tab."
         }
         if workspace.audioMode == .preset, !model.publishesPresetRoster {
             return "This model's voice is built in. Type your script and generate."
@@ -2018,19 +2029,23 @@ struct StudioContent: View {
         return workspace.audioMode.detail
     }
 
-    /// The ways of choosing a voice, as tabs — exactly the modes the local engine published for
-    /// the selected model, in the producer's order.
+    /// The ways of choosing a voice, as tabs — the modes this Mac's Audio models publish between
+    /// them (`workspace.audioModes`).
     ///
-    /// The three tabs used to be shown for every model, including models whose engine can do only
-    /// one of them, so two of the three led to a form the engine would refuse. `modes` is the
-    /// runtime's own answer, and a model that publishes two (VoxCPM2 4-bit clones *and* designs)
-    /// gets both tabs. A model whose engine published none gets no tabs and a sentence saying so:
-    /// guessing a form is how a CustomVoice model was once sent down the clone path.
+    /// The tabs used to be exactly the selected model's modes, which closed a loop with the model
+    /// picker below: the tab decided which models the picker listed, and the selected model decided
+    /// which tabs existed. A model that could not do the mode you wanted therefore also hid every
+    /// model that could — the owner had Khmer TTS installed, was on the default Clone tab with a
+    /// cloning-only model selected, and had no Ready-Made tab to press and no way to see that a
+    /// preset voice existed on his own machine. `audioModes` in the store carries the full shape.
+    ///
+    /// A Mac whose models publish no modes at all gets no tabs and a sentence saying so, rather than
+    /// a guessed form — guessing is how a CustomVoice model was once sent down the clone path.
     private var voiceModeTabs: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let model = selectedAudioModel, model.reportsVoiceModes {
+            if !workspace.audioModes.isEmpty {
                 Picker("Voice", selection: $workspace.audioMode) {
-                    ForEach(model.voiceModes) { mode in
+                    ForEach(workspace.audioModes) { mode in
                         // Short labels, because a segmented control's minimum width is the sum of
                         // its labels and three long ones could not fit the column - which clipped
                         // the tabs themselves. The full name is in the line underneath and in the
@@ -2043,13 +2058,15 @@ struct StudioContent: View {
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
                 .onChange(of: workspace.audioMode) { _, mode in
-                    // Keep the selected model consistent with the tab: a model from another tab
-                    // would leave the controls below describing a different job than the one on
-                    // screen.
-                    if !workspace.audioModels(for: mode).contains(where: {
-                        $0.repo == workspace.audioModel && $0.supported
-                    }) {
-                        workspace.audioModel = workspace.audioModels(for: mode).first?.repo ?? ""
+                    // The tab decides the shape of the request, so the model has to be one that
+                    // publishes it. `preferredAudioModel` picks the best that can actually run
+                    // here; this used to take the first listed, which could be a model this Mac
+                    // cannot generate with, leaving Generate disabled for no visible reason.
+                    let keepsSelection = workspace.audioModels(for: mode).contains {
+                        $0.repo == workspace.audioModel && NativeWorkspaceStore.runsHere($0)
+                    }
+                    if !keepsSelection {
+                        workspace.audioModel = workspace.preferredAudioModel(for: mode)?.repo ?? ""
                     }
                 }
             }

@@ -82,6 +82,32 @@ class SectioningRefinement:
 
 
 @dataclass(frozen=True)
+class PresetRoster:
+    """The ready-made voices one family's engine accepts by name.
+
+    Three facts that only mean something together, so they live together:
+
+    ``speakers``
+        The roster itself - one mapping per voice, carrying the id the engine resolves and
+        the metadata a picker renders.
+    ``key``
+        The name the runtime publishes it under (``<key>_preset_speakers``). A consumer joins
+        a model to its family's roster by that key's shape, so the key is part of the data
+        rather than a literal in a second producer.
+    ``source``
+        Where the ids came from - republished as the lane contract's ``note``, so a scheduler
+        reads the same provenance a person does.
+
+    Exactly two producers publish a roster: ``generation.availability`` for the app's picker
+    and ``lane_contract`` for a scheduler. Both read this one object, so the two cannot
+    disagree about which voices exist.
+    """
+    key: str
+    speakers: tuple[Mapping[str, str], ...]
+    source: str
+
+
+@dataclass(frozen=True)
 class Family:
     id: str
     label: str
@@ -112,6 +138,14 @@ class Family:
     # (beyond `text` and `speed`, which every family honours). Published by the
     # lane contract, so a scheduler never sends a key the lane silently drops.
     lane_parameters: tuple[str, ...] = ()
+    # The ready-made voices this family publishes, when it publishes a roster at
+    # all. None means it does not: a family with one built-in speaker (the Khmer
+    # VITS voices) has nothing to choose between, and a family whose preset roster
+    # was deliberately skipped (Pocket TTS 4-bit, the owner's decision in
+    # docs/tasks/ST-20.md) publishes none either. Both the availability payload a
+    # picker reads and the lane contract a scheduler reads come from this field,
+    # so the two cannot disagree about which voices exist.
+    preset_roster: Optional[PresetRoster] = None
     # Behaviour flags that used to be per-family sets in consumers. They are
     # facts about the engine, so they live with the rest of the family's facts.
     #
@@ -135,6 +169,49 @@ OMNIVOICE_NONVERBAL_TAGS: tuple[str, ...] = (
     "question-en", "question-ah", "question-oh", "question-ei", "question-yi",
     "surprise-ah", "surprise-oh", "surprise-wa", "surprise-yo",
     "dissatisfaction-hnn",
+)
+
+
+# ───────────── the published preset rosters ─────────────
+
+# SOURCE OF TRUTH: the CustomVoice model's own config.json `spk_id` map. The installed
+# mlx-community/Qwen3-TTS-12Hz-*-CustomVoice models ship EXACTLY these 9 speakers (verified
+# against config.json):
+#     aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian
+# mlx-audio matches speaker names case-insensitively and lowercases them before the spk_id
+# lookup (qwen3_tts.py: `config.spk_id[speaker.lower()]`), so the capitalised display ids
+# below resolve correctly.
+#
+# DO NOT add speakers that aren't in the model's spk_id map. Earlier this list carried two
+# phantom speakers ("Ethan", "Chelsie") copied from an older Qwen roster — picking them passed
+# the app's own validation but mlx-audio rejected them with `ValueError: Speaker 'Ethan' not
+# supported`, which surfaced only as the generic "mlx-audio didn't produce a wav file" wall.
+# Removed in v1.4.4.
+#
+# This lives here, with the family that publishes it, because two consumers read it and a
+# second copy is free to disagree with the other: `generation.availability` publishes it as
+# `qwen3_preset_speakers` for the app's picker, and `lane_contract` publishes its ids as
+# `preset_speaker`'s enum for a scheduler.
+QWEN3_PRESET_SPEAKERS: tuple[Mapping[str, str], ...] = (
+    {"id": "Ryan",     "lang": "en", "gender": "m", "description": "Dynamic male, strong rhythmic drive"},
+    {"id": "Aiden",    "lang": "en", "gender": "m", "description": "Sunny American male, clear midrange"},
+    {"id": "Serena",   "lang": "en", "gender": "f", "description": "Warm, gentle young female"},
+    {"id": "Vivian",   "lang": "en", "gender": "f", "description": "Bright, slightly edgy young female"},
+    {"id": "Uncle_Fu", "lang": "zh", "gender": "m", "description": "Seasoned male, low mellow timbre"},
+    {"id": "Dylan",    "lang": "zh", "gender": "m", "description": "Youthful Beijing male, clear natural timbre"},
+    {"id": "Eric",     "lang": "zh", "gender": "m", "description": "Lively Chengdu male, slightly husky"},
+    {"id": "Ono_Anna", "lang": "ja", "gender": "f", "description": "Playful Japanese female, light timbre"},
+    {"id": "Sohee",    "lang": "ko", "gender": "f", "description": "Warm Korean female, rich emotion"},
+)
+
+# The key stays the legacy `qwen3` prefix rather than the family id: the native app joins a
+# roster to its family by the key's shape (`<family>_preset_speakers`, matched on the
+# normalised prefix), and the web picker reads `qwen3_preset_speakers` by that exact name, so
+# renaming it to `qwen3_tts` would empty the picker it was named for.
+QWEN3_PRESET_ROSTER = PresetRoster(
+    key="qwen3",
+    speakers=QWEN3_PRESET_SPEAKERS,
+    source="the Qwen3-TTS CustomVoice checkpoint's own config.json spk_id map",
 )
 
 
@@ -188,6 +265,10 @@ FAMILIES: dict[str, Family] = {
             "and transcript evidence, with a fixed 180 ms join."
         ),
         lane_parameters=("ref_transcript",),
+        # The roster a preset tier of this family chooses from: `qwen3_preset_speakers` to the
+        # app's picker, `preset_speaker`'s enum to a scheduler. Base tiers offer no preset and
+        # publish neither; see `lane_contract._preset_speaker_parameter`.
+        preset_roster=QWEN3_PRESET_ROSTER,
         section_refinements=(
             # The production candidate the fleet measured: 300 ms sentence joins
             # (the audit records 300/600/180 ms for it), same section budget.
@@ -1286,6 +1367,17 @@ def _validate_registry() -> None:
             raise RegistryError(
                 f"family {family_id!r} is in FAMILIES but no CATALOG row uses it; remove the "
                 "entry or add the model in components/voice/app/backend/catalog.py"
+            )
+        roster = family.preset_roster
+        if roster is not None and (
+            not roster.key or not roster.source or not roster.speakers
+            or any(not speaker.get("id") for speaker in roster.speakers)
+        ):
+            raise RegistryError(
+                f"family {family_id!r} publishes a preset roster with no key, no source, no "
+                "voices, or a voice with no id; a roster a consumer cannot match to its family "
+                "- or a scheduler cannot choose from - is a picker that never fills and a "
+                "contract that lies (components/voice/app/backend/catalog.py)"
             )
 
 

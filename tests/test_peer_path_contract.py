@@ -386,6 +386,35 @@ class GenerationDefaultOwnershipTests(unittest.TestCase):
             self.assertIn("language: requestedLanguage", site,
                           f"an audio path sends a language the lane may discard: {site.strip()}")
 
+    def test_the_preset_voice_is_sent_only_when_the_operator_chose_one(self):
+        """The third control with this shape, and the one that proves the rule generalises.
+
+        `preset_speaker` used to be a non-optional `String` carrying `""` or a name seeded from the
+        roster, so a voice stored for a model in the Models tab could never reach the engine — the
+        app supplied a value on every preset job, and the worker reads a supplied parameter as the
+        caller's own answer. The seeded value also made an untouched picker look like a choice.
+        """
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        params = re.search(r"private struct HubAudioParams: Codable \{(.*?)\n\}", api, re.S)
+        self.assertIsNotNone(params, "HubAudioParams not found")
+        self.assertIn("var presetSpeaker: String?", params.group(1),
+                      "an unchosen voice must be representable, so presetSpeaker is optional")
+        for site in self._audio_param_sites():
+            self.assertRegex(site, r"presetSpeaker: (audioSpeakerForRequest|nil)",
+                             f"an audio path sends something other than the operator's own voice, "
+                             f"or one a lane that publishes no roster discards: {site.strip()}")
+        self.assertIsNotNone(
+            re.search(r"var audioSpeakerForRequest: String\? \{.*?guard !chosen\.isEmpty else \{ return nil \}",
+                      api, re.S),
+            "an unchosen voice must send nothing, or the model's stored voice can never apply")
+        # And nothing may seed a choice from the roster. Seeding is the defect: it is the app
+        # deciding which voice the operator asked for.
+        for seeding in ("audioSpeaker = selected.speakers.first",
+                        "audioSpeaker = chosen.speakers.first",
+                        "audioSpeaker = model.speakers.first"):
+            self.assertNotIn(seeding, api,
+                             "selecting a model must not choose a voice for the operator")
+
     def test_the_speed_control_reads_the_published_contract(self):
         """The range is the lane's `minimum`/`maximum`, and the value is the lane's `default`."""
         api = (NATIVE / "StudioAPI.swift").read_text()

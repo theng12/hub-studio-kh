@@ -481,6 +481,146 @@ class ModelPackageTests(unittest.TestCase):
         self.assertEqual(packages.preflight(dependent, self.library, catalog=catalog)['state'], 'files_verified')
 
 
+class PreflightReceiptStateTests(unittest.TestCase):
+    """The cheap receipt path must call absent bytes `not_installed`, never `invalid`.
+
+    Measured on the owner's Mac: six packages whose folders were absent from the model library
+    were published as `state=invalid` with `reason=[Errno 2] No such file or directory:
+    'voxcpm2-4bit'`. `invalid` means the bytes are here and are not this manifest's, so the two
+    opposite repairs - "install it" and "replace the file the manifest names" - sat behind one
+    state, and the Hub republishes the reason into the app, which renders it under the model's
+    name. Absence is a state of its own, in the words `verify_installed` already uses for it; a
+    file that is present and wrong stays `invalid`, named with what it measures.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.source = self.root / 'source'
+        self.library = self.root / 'library'
+        self.source.mkdir()
+        self.library.mkdir()
+        self.files = {'model/weights.safetensors': b'actual weights',
+                      'tokenizer/config.json': b'{"vocab": 1}'}
+        self.manifest = manifest(self.files)
+        for name, data in self.files.items():
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.folder = packages.import_folder(self.manifest, self.source, self.library)
+        # `_repair_if_stale` remembers a repair per package for the whole process; each case here
+        # must exercise the path it names rather than inherit a decision from the case before it.
+        packages._repaired.clear()
+
+    def report(self):
+        return packages.preflight(self.manifest, self.library)
+
+    def assert_sentence(self, report):
+        """A reason on this path is a sentence for a person, never an exception's own text."""
+        self.assertNotIn('Errno', report['reason'])
+        self.assertNotIn('Traceback', report['reason'])
+        self.assertNotIn('No such file or directory', report['reason'])
+
+    def test_a_manifest_that_moved_under_a_receipt_asks_for_a_verify_not_a_download(self):
+        """The other half of the early return, and the one that would mislead.
+
+        A receipt whose digest no longer matches the current manifest is *not* the same fact as no
+        receipt at all: something is installed, under an older manifest, and only a full verify can
+        say whether the bytes are still right. Reported as a bare `not_installed` with no reason,
+        the app supplied its own sentence — "download it" — for a model the operator already has.
+        """
+        index = self.library / '.studiohub' / 'installed.json'
+        receipt = json.loads(index.read_text())
+        receipt['test-model']['manifest_sha256'] = '0' * 64
+        index.write_text(json.dumps(receipt))
+        report = self.report()
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assert_sentence(report)
+        self.assertIn('Verify Files', report['reason'])
+        self.assertNotIn('Install it in Models', report['reason'],
+                         'a model whose files are on disk must not be described as absent')
+        # And a package with no receipt at all still gets the absence sentence.
+        index.unlink()
+        self.assertIn('Install it in Models', self.report()['reason'])
+
+    def test_a_receipt_whose_folder_is_gone_is_not_installed_in_verifys_own_words(self):
+        shutil.rmtree(self.library / 'test-model')
+        report = self.report()
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assert_sentence(report)
+        self.assertIn('test-model', report['reason'])
+        self.assertIn('<library>/test-model/' + 'a' * 40, report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+        # One fact, one sentence: the explicit Verify says the same thing about the same absence.
+        self.assertEqual(report['reason'],
+                         packages.verify_installed(self.manifest, self.library)['reason'])
+
+    def test_a_receipt_whose_file_is_gone_is_not_installed_and_names_the_file(self):
+        (self.folder / 'model' / 'weights.safetensors').unlink()
+        report = self.report()
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assert_sentence(report)
+        self.assertIn('<library>/test-model/' + 'a' * 40 + '/model/weights.safetensors',
+                      report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+
+    def test_a_receipt_in_an_older_shape_whose_folder_is_gone_is_still_not_installed(self):
+        """The self-healing rehash used to report the missing folder as a damaged package."""
+        receipt = self.library / '.studiohub' / 'installed.json'
+        index = json.loads(receipt.read_text())
+        for saved in index['test-model']['files'].values():
+            saved['st_ino'] = 0
+        receipt.write_text(json.dumps(index, sort_keys=True))
+        packages._repaired.clear()
+        shutil.rmtree(self.library / 'test-model')
+        report = self.report()
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assert_sentence(report)
+        self.assertIn('<library>/test-model/' + 'a' * 40, report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+
+    def test_present_bytes_that_do_not_match_stay_invalid_and_name_the_measurement(self):
+        (self.folder / 'model' / 'weights.safetensors').write_bytes(b'wrong')
+        report = self.report()
+        self.assertEqual(report['state'], 'invalid', report)
+        self.assert_sentence(report)
+        self.assertIn('model/weights.safetensors', report['reason'])
+        self.assertIn('5 bytes', report['reason'])
+        self.assertIn('14 bytes', report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+        # The state was renamed, not relaxed: a present-but-wrong package still fails the full
+        # rehash, and the cheap path keeps refusing it afterwards.
+        self.assertEqual(packages.verify_installed(self.manifest, self.library)['state'], 'invalid')
+        self.assertEqual(self.report()['state'], 'invalid')
+
+    def test_an_unreadable_file_is_invalid_with_a_sentence_not_an_errno(self):
+        (self.folder / 'model' / 'weights.safetensors').chmod(0)
+        report = self.report()
+        self.assertEqual(report['state'], 'invalid', report)
+        self.assert_sentence(report)
+        self.assertIn('weights.safetensors', report['reason'])
+
+    def test_a_receipt_missing_where_the_package_lives_is_invalid_without_the_exception(self):
+        receipt = self.library / '.studiohub' / 'installed.json'
+        index = json.loads(receipt.read_text())
+        del index['test-model']['folder']
+        receipt.write_text(json.dumps(index, sort_keys=True))
+        packages._repaired.clear()
+        report = self.report()
+        self.assertEqual(report['state'], 'invalid', report)
+        self.assert_sentence(report)
+        self.assertIn("'folder' is missing", report['reason'])
+        self.assertIn('<library>/.studiohub/installed.json', report['reason'])
+
+    def test_the_passing_path_still_reports_files_verified(self):
+        report = self.report()
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(report['verification'], 'cached_receipt')
+        self.assertEqual(report['folder'], str(self.folder))
+        self.assertNotIn('reason', report)
+
+
 class VerifyInstalledTests(unittest.TestCase):
     """Verify Files must verify the files that are there, not only a receipt that already agrees.
 

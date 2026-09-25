@@ -2,6 +2,49 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.66 — 2026-09-25
+
+### The tab was hiding the voices
+
+You were right that it was dodgy, and it was worse than fiddly: **the two controls were reading each
+other in a circle.** The voice tabs (Clone / Ready-Made / Design) were the tabs *your selected model*
+supports, and the model list showed only models that support *the tab you are on*. So a model that
+couldn't do the mode you wanted also hid every model that could.
+
+That is why Khmer TTS was invisible. It was installed, it works, and there was no Ready-Made tab to
+press and nothing on screen saying a preset voice existed on your own machine — because the model you
+happened to have selected only knew how to clone.
+
+**The tabs are now what your Mac can do**, across all its voice models. Installing a preset model
+brings the Ready-Made tab with it; a Mac that can only clone shows one tab, which is the truth.
+Pressing a tab moves you to a model that can actually do it.
+
+### Your page opened on a broken model
+
+The Audio page was opening on **VoxCPM2 4-bit**, which is not installed on that Mac — its folder is
+gone while its install record still said it was there. That's why Generate was greyed out with an
+error under the model before you touched anything. It now opens on a model that can actually run.
+
+If you deliberately pick a model you're about to download, it stays picked — a refresh won't take it
+away from you.
+
+### `[Errno 2] No such file or directory: 'voxcpm2-4bit'`
+
+That string was shown to you twice on that page, and it should never have reached a screen. When a
+model simply isn't installed, the app was reporting it as *damaged* and passing Python's own error
+text straight through. Six of your models were labelled that way.
+
+A model that isn't there is now just **not installed**, with an instruction you can act on —
+download it in Models, or copy its folder in. (It also used to say "press Verify Files", which
+can't conjure files that were never downloaded.)
+
+### Ready-made voices can have a default now
+
+Last release made the Models tab's defaults actually reach the engine for pace and word timings.
+The **voice** had the same problem — the page always sent a name, so a voice you set in Models was
+overridden — and it's fixed the same way. The voice picker now has a **Model default** row at the
+top: leave it there and the model uses the voice you stored; pick one and that's what you hear.
+
 ## 0.6.65 — 2026-09-25
 
 ### The default is a default now

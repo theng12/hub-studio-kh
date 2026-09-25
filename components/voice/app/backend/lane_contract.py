@@ -211,6 +211,36 @@ def _language_parameter(model: catalog.ModelEntry) -> Optional[dict[str, Any]]:
     return parameter
 
 
+def _preset_speaker_parameter(model: catalog.ModelEntry) -> Optional[dict[str, Any]]:
+    """`preset_speaker`, only for a model that offers a preset **and** publishes a roster.
+
+    The two conditions are separate facts and both are required:
+
+    * ``preset`` in `catalog.voice_modes` - the model has a ready-made voice form at all. A
+      cloning-only tier of a roster family (Qwen3-TTS Base) has nothing to choose from, and
+      advertising the key would offer a scheduler a field that lane ignores.
+    * a roster on the family - one built-in speaker is not a choice (the Khmer VITS voices),
+      and a family whose roster is deliberately unbuilt publishes none either (Pocket TTS
+      4-bit, docs/tasks/ST-20.md). Publishing an enum for either would be inventing voices.
+
+    The enum is the family's published roster's own ids - the same object
+    `generation.availability` hands the app's picker - so a scheduler and a picker can never
+    offer different voices. No ``default`` is stated here: where no value is in force the key
+    is absent rather than a first-entry guess, and the value in force (the operator's stored
+    per-model default) is filled in by ``_with_resolved_defaults`` like every other parameter.
+    """
+    roster = catalog.family_for(model).preset_roster
+    if roster is None or "preset" not in catalog.voice_modes(model):
+        return None
+    return {
+        "name": "preset_speaker",
+        "type": "string",
+        "required": False,
+        "enum": [speaker["id"] for speaker in roster.speakers],
+        "note": f"one of this family's published ready-made voices ({roster.source})",
+    }
+
+
 # The stored record of runs that actually happened, relative to the repository
 # root. Found by walking up from this file, so the record can be read from a
 # checkout or a development build and is simply absent inside a packaged bundle.
@@ -370,6 +400,9 @@ def parameters_for(model: catalog.ModelEntry,
     language = _language_parameter(model)
     if language is not None:
         parameters.append(language)
+    preset_speaker = _preset_speaker_parameter(model)
+    if preset_speaker is not None:
+        parameters.append(preset_speaker)
     if "voice-cloning" in (model.capabilities or ()):
         parameters.append({"name": "voice_library_id", **_PARAMETER_SHAPES["voice_library_id"]})
     for name in family.lane_parameters:

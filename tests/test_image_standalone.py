@@ -203,7 +203,15 @@ class ImageStandaloneTests(unittest.TestCase):
             (self.folder / 'model/text_encoder/0.safetensors').unlink()
             catalog = self.client.get('/api/catalog', headers=self.headers).json()['models'][0]
             self.assertFalse(catalog['execution_ready'])
-            self.assertEqual(catalog['cache']['state'], 'invalid')
+            # The file the receipt records is gone, so this is `not_installed` - the state whose
+            # instruction is "put the file back or install the package again". Absence and
+            # corruption used to share `invalid`, whose reason was `[Errno 2] No such file or
+            # directory: 'model/text_encoder/0.safetensors'`. Dispatch stays blocked either way,
+            # which is what this test is named for.
+            self.assertEqual(catalog['cache']['state'], 'not_installed')
+            reason = catalog['readiness']['files']['reason']
+            self.assertIn('model/text_encoder/0.safetensors', reason)
+            self.assertNotIn('[Errno', reason)
             response = self.client.post('/api/generate/txt2img', json=self.request(),
                                         headers=self.headers)
             self.assertEqual(response.status_code, 409)

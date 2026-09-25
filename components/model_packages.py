@@ -962,6 +962,126 @@ def _repair_if_stale(manifest, record, root):
 _repaired: set[str] = set()
 
 
+def _not_installed_reason(manifest, folder_relative=None, relative=None):
+    """The one sentence for "the bytes are not there", shared by both checks.
+
+    `verify_installed` already publishes this for the fact; the cheap receipt path publishes the
+    same words, so an operator reading a model row cannot get two descriptions of one absence
+    depending on which check happened to notice it.
+    """
+    package_id = manifest['package_id']
+    if relative is not None:
+        return (
+            f"{package_id} has no file at <library>/{folder_relative}/{relative}: its receipt "
+            f"records the file, but it is not there. Install it in Models (or copy its folder "
+            f"in) and verify again; its manifest is model-manifests/{package_id}.json.")
+    return (
+        f"{package_id} has no files in this library: neither "
+        f"<library>/{package_id}/{manifest['revision']} nor the folder its receipt "
+        f"records is present. Install it in Models (or copy its folder in) and verify "
+        f"again; its manifest is model-manifests/{package_id}.json.")
+
+
+def _library_bytes(manifest, record, root):
+    """Where the receipt's bytes are, as ``(absent_reason, present, folder_relative)``.
+
+    `absent_reason` is the `not_installed` sentence when the folder the receipt names, or one of
+    the files this manifest lists inside it, is not on disk. `present` is True only when the
+    folder and every listed file were found and the receipt's shape was readable, so a caller can
+    say "present but does not match" truthfully. Existence is `lexists`: a dangling symlink is
+    still something on disk, and the check that follows names it rather than calling the package
+    absent.
+
+    A receipt whose own shape this build cannot read answers ``(None, False, folder-or-None)``.
+    That is a mismatch to report, never evidence that the package is not installed.
+    """
+    try:
+        folder_relative = _relative(record.get('folder') or '')
+    except (AttributeError, PackageError):
+        return None, False, None
+    if not os.path.lexists(root / folder_relative):
+        return _not_installed_reason(manifest), False, folder_relative
+    files = record.get('files')
+    if not isinstance(files, dict):
+        return None, False, folder_relative
+    for entry in manifest['files']:
+        saved = files.get(entry['path'])
+        if not isinstance(saved, dict):
+            return None, False, folder_relative
+        try:
+            relative = _relative(saved.get('relative') or '')
+        except PackageError:
+            return None, False, folder_relative
+        if relative not in (entry['path'], entry.get('source_path')):
+            return None, False, folder_relative
+        if not os.path.lexists(root / folder_relative / relative):
+            return (_not_installed_reason(manifest, folder_relative, relative), False,
+                    folder_relative)
+    return None, True, folder_relative
+
+
+_ERRNO_PREFIX = re.compile(r'\[Errno \d+\]\s*')
+
+
+def _oserror_sentence(error):
+    """What an `OSError` says, in words.
+
+    `str(OSError)` is `[Errno 2] No such file or directory: 'x'` - an error number and a relative
+    name, which is not something a person can act on.
+    """
+    what = (getattr(error, 'strerror', None) or error.__class__.__name__).strip().rstrip('.')
+    subject = getattr(error, 'filename', None)
+    return f'{what} while reading {subject!r}' if subject else what
+
+
+def _receipt_failure(manifest, record, root, error):
+    """The row `preflight` publishes when the cached receipt does not check out.
+
+    Two facts were conflated here. A package whose bytes are not on disk is `not_installed`, the
+    state `verify_installed` already gives it; `preflight` answered `invalid`, so six packages on
+    the owner's Mac published `[Errno 2] No such file or directory: 'voxcpm2-4bit'` under their
+    names - "absent" and "corrupt" made the same state, and the reason was a Python exception.
+    Bytes that are there and do not match stay `invalid`, named by file and by the manifest they
+    must match. Nothing here makes a mismatch pass: absence is a different state, not a softer
+    one.
+    """
+    package_id = manifest['package_id']
+    absent, present, folder_relative = _library_bytes(manifest, record, root)
+    if absent is not None:
+        return {'state': 'not_installed', 'reason': absent}
+    if not present and isinstance(error, (FileNotFoundError, NotADirectoryError)):
+        # The scan above could not confirm the receipt's paths and the read says one is not
+        # there - absent bytes rather than damage, and still not an errno. When the scan *did*
+        # find every path, a NotADirectoryError is the open refusing a symlink where a directory
+        # is required: bytes that are present and not this package's layout, which stays
+        # `invalid` and is named below.
+        return {'state': 'not_installed',
+                'reason': _not_installed_reason(manifest, folder_relative)}
+    manifest_name = f'model-manifests/{package_id}.json'
+    if isinstance(error, PackageError):
+        # Every PackageError on this path is written for the operator ("<file> changed since it
+        # was verified: ...", "Unexpected installed file mapping"). The one exception is
+        # `verify_package`'s wrapper, which embeds the errno text of the OSError it caught, so
+        # an errno in it is dropped rather than republished.
+        detail = _ERRNO_PREFIX.sub('', str(error)).strip()
+    elif isinstance(error, OSError):
+        detail = _oserror_sentence(error)
+    elif isinstance(error, KeyError):
+        missing = error.args[0] if error.args else 'a field'
+        detail = f'{missing!r} is missing from <library>/.studiohub/installed.json'
+    else:
+        detail = (f'<library>/.studiohub/installed.json is not in a shape this build can read '
+                  f'({error.__class__.__name__})')
+    if present:
+        return {'state': 'invalid', 'reason': (
+            f'{package_id} is present at <library>/{folder_relative} but does not match '
+            f'{manifest_name}: {detail}. Replace the named file (or reinstall the package) and '
+            f'verify again.')}
+    return {'state': 'invalid', 'reason': (
+        f"{package_id}'s receipt could not be checked against {manifest_name}: {detail}. Run "
+        f'Verify Files to rehash the package and rewrite its receipt.')}
+
+
 def preflight(manifest, library, *, catalog=None, _seen=None):
     """Cheap readability/change check against a previous full verification receipt.
 
@@ -973,7 +1093,24 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
     record = _index(root).get(manifest['package_id'])
     base = {'package_id': manifest['package_id'], 'manifest_sha256': digest}
     if not record or record.get('manifest_sha256') != digest:
-        return {**base, 'state': 'not_installed'}
+        # Two different situations, and they need different instructions.
+        #
+        # No receipt at all: nothing was ever installed here, and saying so is what the operator
+        # needs. A receipt whose digest no longer matches the manifest: *something* is installed,
+        # under an older manifest, and this cheap path cannot say whether the bytes are still
+        # right — only a full verify can, and it rewrites the receipt when they are. Reporting
+        # both as a bare `not_installed` with no reason left the app to supply its own sentence,
+        # and its sentence is "download it" — wrong, and wrong in the direction that makes an
+        # operator re-download a model he already has.
+        if not record:
+            return {**base, 'state': 'not_installed',
+                    'reason': _not_installed_reason(manifest)}
+        return {**base, 'state': 'not_installed', 'reason': (
+            f"{manifest['package_id']} was installed under a different manifest, so its files "
+            f"cannot be confirmed against the current one by the cheap check. Open Models and "
+            f"press Verify Files: if the files are right it will record them again, and if they "
+            f"are not it will name the file that differs. Its manifest is "
+            f"model-manifests/{manifest['package_id']}.json.")}
     # A receipt written by a different build may record different fields. That is a stale cache,
     # not a damaged package, so rehash once and repair it. Without this, changing what the receipt
     # records turned every installed model into `invalid` on every machine - which happened, twice,
@@ -981,7 +1118,7 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
     try:
         _repair_if_stale(manifest, record, root)
     except (OSError, KeyError, TypeError, PackageError) as error:
-        return {**base, 'state': 'invalid', 'reason': str(error)}
+        return {**base, **_receipt_failure(manifest, record, root, error)}
     record = _index(root).get(manifest['package_id']) or record
     try:
         folder_relative = _relative(record['folder'])
@@ -993,8 +1130,17 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
             if relative not in (entry['path'], entry.get('source_path')):
                 raise PackageError('Unexpected installed file mapping')
             with _open_regular(root, folder_relative + '/' + relative) as stream:
-                if _stamp(os.fstat(stream.fileno())) != {k: saved[k] for k in _stamp(os.fstat(stream.fileno()))}:
-                    raise PackageError(f'File changed; verify again: {entry["path"]}')
+                measured = _stamp(os.fstat(stream.fileno()))
+                recorded = {k: saved[k] for k in measured}
+                if measured != recorded:
+                    # Which file, and what it measures against the receipt. "File changed" alone
+                    # named the file but not the expectation, and this reason is published on the
+                    # Hub row the app renders.
+                    raise PackageError(
+                        f'{entry["path"]} changed since it was verified: '
+                        f'{measured["st_size"]} bytes, mtime {measured["mtime_s"]}, where its '
+                        f'receipt records {recorded["st_size"]} bytes, mtime '
+                        f'{recorded["mtime_s"]}')
         seen = set(_seen or ())
         if manifest['package_id'] in seen:
             raise PackageError('Companion dependency cycle')
@@ -1016,7 +1162,7 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
             return {**base, 'state': COMPANION_CACHE_STATE, 'reason': cache['reason'],
                     'companion_cache': cache}
     except (OSError, KeyError, TypeError, PackageError) as error:
-        return {**base, 'state': 'invalid', 'reason': str(error)}
+        return {**base, **_receipt_failure(manifest, record, root, error)}
     return {**base, 'state': 'files_verified', 'folder': str(folder),
             'engine': manifest['engine'], 'minimum_macos': manifest['minimum_macos'],
             'verification': 'cached_receipt', 'companion_cache': cache}
@@ -1086,11 +1232,8 @@ def verify_installed(manifest, library, *, catalog=None):
             record = _index(root).get(package_id)
             folder_relative = _installed_folder(root, manifest, record)
             if folder_relative is None:
-                return {**base, 'state': 'not_installed', 'reason': (
-                    f"{package_id} has no files in this library: neither "
-                    f"<library>/{package_id}/{manifest['revision']} nor the folder its receipt "
-                    f"records is present. Install it in Models (or copy its folder in) and verify "
-                    f"again; its manifest is model-manifests/{package_id}.json.")}
+                return {**base, 'state': 'not_installed',
+                        'reason': _not_installed_reason(manifest)}
             folder = root / folder_relative
             try:
                 # Full verification also refreshes the receipt so a valid touched file

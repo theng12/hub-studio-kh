@@ -2250,7 +2250,46 @@ final class NativeWorkspaceStore: ObservableObject {
         else { return nil }
         return model.laneParameter("language")
     }
+    /// The ready-made voice the operator chose, or empty when they have not chosen one.
+    ///
+    /// Empty is the ordinary state and is deliberately not the same as naming the first voice in
+    /// the roster. An untouched picker must send no `preset_speaker` at all, so this model's stored
+    /// voice — set in the Models tab — is what the engine speaks with. Seeding the roster's first
+    /// entry into this field, which is what the app did, made that stored default unreachable: the
+    /// picker looked untouched while the app supplied a name on every preset job, and the Voice
+    /// worker reads a supplied parameter as the caller's own answer.
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
+
+    /// The voice that will actually be used, when the producer states one: the operator's own
+    /// choice, or the value in force for this model (what the Models tab stores for it). Nil means
+    /// nothing is stated — not that the model has no voice — and the picker's not-chosen row says
+    /// so in those words rather than naming a voice the lane never published. The engine's own
+    /// default is the engine's to state, and this app does not speak for it.
+    var audioSpeakerInForce: String? {
+        guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio })
+        else { return nil }
+        let chosen = audioSpeaker.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !chosen.isEmpty { return chosen }
+        let stored = model.laneParameter("preset_speaker")?.defaultValue?.stringValue ?? ""
+        return stored.isEmpty ? nil : stored
+    }
+
+    /// What a preset request carries: the operator's voice only when they chose one, and only when
+    /// this model's lane publishes `preset_speaker` at all. A model with a single built-in voice,
+    /// or a cloning path, publishes no such parameter — the lane discards the key — so a request
+    /// that carried one would be a parameter nothing reads.
+    var audioSpeakerForRequest: String? {
+        guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
+              let parameter = model.laneParameter("preset_speaker"),
+              !parameter.isDeclaredIgnored else { return nil }
+        let chosen = audioSpeaker.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !chosen.isEmpty else { return nil }
+        // A name the lane does not publish is never sent. The roster is the producer's, and sending
+        // one family's voice names to another family's engine is how a Qwen preset was once refused
+        // by name after the app had already accepted it.
+        if let options = parameter.options, !options.isEmpty, !options.contains(chosen) { return nil }
+        return chosen
+    }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
     /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
     /// transcript invalidates the staged asset, because the Hub derives the asset id from both.
@@ -2733,10 +2772,13 @@ final class NativeWorkspaceStore: ObservableObject {
             adoptResolvedDefaults()
             // The speaker follows the selected model's own published roster, never a global list:
             // a global outlives the model it was read for, which is how a Khmer model would have
-            // been offered another family's voice names.
+            // been offered another family's voice names. A name the roster does not carry is
+            // cleared rather than reseeded — clearing means "not chosen", which sends no
+            // `preset_speaker` and lets this model's stored voice apply, where seeding the first
+            // entry presented an untouched picker that had silently made a choice.
             if let selected = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
-               !selected.speakers.contains(audioSpeaker) {
-                audioSpeaker = selected.speakers.first ?? ""
+               !audioSpeaker.isEmpty, !selected.speakers.contains(audioSpeaker) {
+                audioSpeaker = ""
             }
             var history: [NativeJob] = []
             var images: [NativeJob] = []
@@ -2968,7 +3010,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest,
+                            presetSpeaker: nil, language: requestedLanguage, speed: audioSpeedForRequest,
                             designPrompt: description))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 } else if audioMode == .cloning {
@@ -2986,7 +3028,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest))],
+                                presetSpeaker: nil, language: requestedLanguage, speed: audioSpeedForRequest))],
                             voiceReferenceAssetId: nil, voiceLibraryId: voiceID, routing: routingPin)
                     } else {
                         // The staged-reference path: kept for a reference that arrives without a
@@ -3006,21 +3048,24 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest))],
+                                presetSpeaker: nil, language: requestedLanguage, speed: audioSpeedForRequest))],
                             voiceReferenceAssetId: assetID, voiceLibraryId: nil, routing: routingPin)
                     }
                 } else {
                     // Only a speaker the model's own runtime published may be sent. A preset model
                     // that published no roster — Khmer VITS has a single built-in voice — is asked
-                    // for nothing rather than being handed another family's speaker names.
-                    guard model.speakers.isEmpty || model.speakers.contains(audioSpeaker) else {
+                    // for nothing rather than being handed another family's speaker names, and an
+                    // operator who has not chosen a voice sends none either: that is what lets this
+                    // model's stored voice apply.
+                    guard audioSpeaker.isEmpty || model.speakers.isEmpty
+                            || model.speakers.contains(audioSpeaker) else {
                         throw NativeAPIError.message("Choose a speaker reported by this model's local runtime.")
                     }
                     body = HubAudioRequest(
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: model.speakers.isEmpty ? "" : audioSpeaker,
+                            presetSpeaker: audioSpeakerForRequest,
                             language: requestedLanguage, speed: audioSpeedForRequest))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 }
@@ -6001,7 +6046,7 @@ final class NativeWorkspaceStore: ObservableObject {
         if !model.voiceModes.isEmpty, !model.voiceModes.contains(audioMode) {
             audioMode = model.voiceModes[0]
         }
-        if !model.speakers.contains(audioSpeaker) { audioSpeaker = model.speakers.first ?? "" }
+        if !audioSpeaker.isEmpty, !model.speakers.contains(audioSpeaker) { audioSpeaker = "" }
     }
 
     private func reconcileSelections(defaultTranscription: String?) {
@@ -6009,11 +6054,24 @@ final class NativeWorkspaceStore: ObservableObject {
         // "Repairing" the Audio selection to a hardcoded repo opened the page on a model that was
         // not in its own picker on a library without that model, and Generate stayed disabled
         // until the tab was changed.
-        if !models.contains(where: { $0.repo == audioModel && $0.function == .audio && $0.supported }) {
-            audioModel = models.first { $0.function == .audio && $0.supported }?.repo ?? ""
-            if let selected = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
-               !selected.speakers.contains(audioSpeaker) {
-                audioSpeaker = selected.speakers.first ?? ""
+        //
+        // `supported` is only "the Hub ships a package for this", which every TTS entry answers
+        // true, so a selection that can no longer *run* survived it indefinitely: the owner's page
+        // opened on `voxcpm2-4bit`, whose folder is gone and whose receipt still says it was
+        // installed. Availability is the second half of the question and it is read here — but only
+        // where it changed, so an operator who picks a model to install it keeps it.
+        let ordered = models.filter { $0.function == .audio }
+        let nowRunnable = Dictionary(uniqueKeysWithValues: ordered.map { ($0.repo, Self.runsHere($0)) })
+        let selected = ordered.first { $0.repo == audioModel }
+        let becameUnavailable = selected.map { model in
+            !Self.runsHere(model) && audioModelRunnable[model.repo] != false
+        } ?? true
+        audioModelRunnable = nowRunnable
+        if selected == nil || !selected!.supported || becameUnavailable {
+            audioModel = preferredAudioModel(for: audioMode)?.repo ?? ""
+            if let chosen = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
+               !audioSpeaker.isEmpty, !chosen.speakers.contains(audioSpeaker) {
+                audioSpeaker = ""
             }
         }
         // The tab has to be one of the modes the selected model publishes, and a catalogue refresh
@@ -6158,6 +6216,59 @@ final class NativeWorkspaceStore: ObservableObject {
                     : rank(left) < rank(right)
             }
     }
+
+    /// Whether this model can be generated with on this Mac right now.
+    ///
+    /// `supported` is only "this Hub ships a package for it", and every TTS entry in the catalogue
+    /// answers true — so a rule built on `supported` alone offers models that cannot run, which is
+    /// what the Audio page was opening on. `runtimeReady` is the app's collected answer from the
+    /// producer's own gates: the files are verified, the runtime is compatible, the Hub would
+    /// dispatch it, and it is not paused (`blockReason` is folded into it where the row is built).
+    /// Generate is already disabled on it, so nothing that fails it can be presented as usable.
+    static func runsHere(_ model: NativeModel) -> Bool { model.runtimeReady }
+
+    /// Which modes the Audio page offers as tabs: the union of what this Mac's Audio models
+    /// publish, **not** the modes of whichever model happens to be selected.
+    ///
+    /// Deriving the tabs from the selection made a closed loop with the picker: the tab decided
+    /// which models the picker listed (`audioModels(for:)`), and the model decided which tabs
+    /// existed (`voiceModeTabs` read `model.voiceModes`). With a cloning-capable model selected
+    /// there was no Ready-Made tab, so the preset-only models were absent from the picker too, and
+    /// between them every preset voice on the machine became unreachable — the owner had Khmer TTS
+    /// installed and could not see it, with nothing on screen saying preset existed at all.
+    ///
+    /// The union is taken over models that can run here, so a tab is never offered with nothing
+    /// behind it, and installing a preset model brings the tab with it. Order is the app's own
+    /// `VoiceMode.allCases`, which is the vocabulary the tabs are made of and already matches the
+    /// order the producers publish in (cloning, preset, design).
+    var audioModes: [VoiceMode] {
+        let available = models.filter { $0.function == .audio && Self.runsHere($0) }
+        let published = Set(available.flatMap(\.voiceModes))
+        return VoiceMode.allCases.filter { published.contains($0) }
+    }
+
+    /// The model to open on for one mode: the best one that can actually run here, or the first
+    /// listed when none can — so a Mac with nothing installed still has a selection that explains
+    /// itself rather than an empty picker. `audioModels(for:)` already sorts runnable models first.
+    func preferredAudioModel(for mode: VoiceMode) -> NativeModel? {
+        let candidates = audioModels(for: mode)
+        // A model that reports no modes is listed in every tab but can generate in none of them,
+        // so it is a last resort for a tab click and never the first pick.
+        return candidates.first { Self.runsHere($0) && $0.reportsVoiceModes }
+            ?? candidates.first(where: Self.runsHere)
+            ?? candidates.first
+    }
+
+    /// Whether each Audio model could run on this Mac, as last seen.
+    ///
+    /// The selection is only moved off an unavailable model on a **transition** — or on first
+    /// sight, which is the launch case — and never again for a model already known to be
+    /// unavailable. Without the map, a Mac whose page opened on a model whose folder had been
+    /// removed stayed on it, disabled, with an install error underneath; with a plain "always
+    /// prefer a runnable model" rule instead, an operator who deliberately selects a model he is
+    /// about to download would have it taken away on the next poll. Both are the same question
+    /// asked at different times, and the answer only changes at the transition.
+    private var audioModelRunnable: [String: Bool] = [:]
 
     /// The models this app offers for one Studio, filtered exactly as that Studio's picker
     /// filters them. The sidebar summary and the picker both read this, so the two cannot
@@ -6549,6 +6660,14 @@ final class NativeWorkspaceStore: ObservableObject {
             return "Paused by the Hub after repeated failures — \(why). Fix the cause, then press Recheck."
         }
         if let detail = package.reason, !detail.isEmpty { return detail }
+        // "Nothing is here" and "what is here is wrong" are different instructions. Every
+        // not-installed package used to fall through to the line below and tell the operator to
+        // press Verify Files, which cannot conjure files that were never downloaded — the
+        // producer's own sentence for this state is "Install it in Models (or copy its folder in)
+        // and verify again", and this says the same thing.
+        if package.filesState == "not_installed" {
+            return "Not installed on this Mac. Download it in Models, or copy its folder into the model library and verify it."
+        }
         if let files = package.filesState, files != "files_verified" {
             return "Its files are not verified. Open Models and press Verify Files."
         }
@@ -7659,7 +7778,13 @@ private struct HubVoiceReference: Decodable {
 }
 private struct HubAudioItem: Codable { let text: String; let params: HubAudioParams }
 private struct HubAudioParams: Codable {
-    let presetSpeaker: String
+    /// The ready-made voice the operator chose, or nil when they have not chosen one — and nil for
+    /// a model whose lane publishes no `preset_speaker`, which is every model with a single built-in
+    /// voice and every cloning path. Nil is encoded away entirely (`encodeIfPresent`), so the
+    /// request carries no key and the value in force applies. A non-optional `String` here was the
+    /// same defect the pace had: the app supplied `""` or a seeded name on every job, and a
+    /// parameter the caller supplies is read as their own answer.
+    var presetSpeaker: String?
     /// The language the operator asked for, or nil when this model publishes no `language` at all:
     /// a family that takes no language input discards the key, so sending one is a parameter the
     /// lane never reads. Nil is encoded away entirely (`encodeIfPresent`).
