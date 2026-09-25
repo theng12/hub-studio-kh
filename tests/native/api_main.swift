@@ -1041,8 +1041,11 @@ final class FixtureProtocol: URLProtocol {
     /// hold. Written out as test data rather than computed: this fixture exists to check what the
     /// app renders, and a copy of the worker's threshold rule here would only agree with itself.
     static let imageLoadingEffective: [String: [String: String]] = [
-        "fixture/flux": ["auto": "low-ram", "low": "low-ram", "full": "default"],
-        "fixture/zimage": ["auto": "default", "low": "default", "full": "default"],
+        // The fixture's Z-Image row mirrors the shipped Z-Image-Turbo 6B MLX 4-bit, which has a
+        // bounded configuration; its FLUX row mirrors FLUX.2 Klein 4B MLX 4-bit, which has one
+        // loading mode on purpose and says so in its own reason.
+        "fixture/zimage": ["auto": "low-ram", "low": "low-ram", "full": "default"],
+        "fixture/flux": ["auto": "default", "low": "default", "full": "default"],
     ]
 
     // MARK: The Subtitle worker's below-tier warning
@@ -2457,28 +2460,31 @@ struct NativeAPITests {
         // Everything the control renders was published. The options and their sentences are the
         // model's own catalogue row (its measured peak and wall time, and the host they were
         // measured on), the machine-wide setting is the Image worker's own payload, and a model
-        // with one loading mode renders its own reason instead of a dead control.
+        // with one loading mode renders its own reason instead of a dead control. The fixture's
+        // rows mirror the two shipped models: Z-Image-Turbo 6B MLX 4-bit has the bounded
+        // configuration, FLUX.2 Klein 4B MLX 4-bit has one loading mode on purpose.
         await store.refreshImageLoadingMode()
-        let fluxRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/flux" }
-        let fluxPublished = ((fluxRow?["loading_modes"] as? [String: Any])?["options"] as? [[String: Any]]) ?? []
-        require(fluxPublished.count == 3, "the fixture's FLUX row must publish the three options")
-        let fluxControl = store.imageLoadingControl
-        require(fluxControl?.repo == "fixture/flux" && fluxControl?.offersControl == true,
+        store.imageModel = "fixture/zimage"
+        let zimageRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/zimage" }
+        let zimagePublished = ((zimageRow?["loading_modes"] as? [String: Any])?["options"] as? [[String: Any]]) ?? []
+        require(zimagePublished.count == 3, "the fixture's Z-Image row must publish the three options")
+        let supportedControl = store.imageLoadingControl
+        require(supportedControl?.repo == "fixture/zimage" && supportedControl?.offersControl == true,
                 "a model with more than one loading mode must offer the control")
-        require(fluxControl?.options.map(\.id) == fluxPublished.compactMap { $0["id"] as? String },
+        require(supportedControl?.options.map(\.id) == zimagePublished.compactMap { $0["id"] as? String },
                 "the control's options must be the published ones in the published order, got: "
-                    + "\(fluxControl?.options.map(\.id) ?? [])")
-        require(fluxControl?.options.map(\.label) == fluxPublished.compactMap { $0["label"] as? String },
-                "the control's labels must be the published ones, got: \(fluxControl?.options.map(\.label) ?? [])")
-        require(fluxControl?.options.map { $0.detail ?? "" } == fluxPublished.map { $0["detail"] as? String ?? "" },
+                    + "\(supportedControl?.options.map(\.id) ?? [])")
+        require(supportedControl?.options.map(\.label) == zimagePublished.compactMap { $0["label"] as? String },
+                "the control's labels must be the published ones, got: \(supportedControl?.options.map(\.label) ?? [])")
+        require(supportedControl?.options.map { $0.detail ?? "" } == zimagePublished.map { $0["detail"] as? String ?? "" },
                 "each option's sentence must be the model's own, with its measured numbers")
-        require(fluxControl?.detail?.contains("7.1 GB") == true && fluxControl?.detail?.contains("236 s") == true
-                    && fluxControl?.detail?.contains("32 GiB M2 Max") == true,
-                "the selected option's own measured sentence must be shown, got: \(fluxControl?.detail ?? "nil")")
-        require(fluxControl?.selected == "auto" && fluxControl?.effective == "low-ram"
-                    && fluxControl?.effectiveSentence == "In force on this Mac: low-ram",
+        require(supportedControl?.detail?.contains("7.1 GB") == true && supportedControl?.detail?.contains("236 s") == true
+                    && supportedControl?.detail?.contains("32 GiB M2 Max") == true,
+                "the selected option's own measured sentence must be shown, got: \(supportedControl?.detail ?? "nil")")
+        require(supportedControl?.selected == "auto" && supportedControl?.effective == "low-ram"
+                    && supportedControl?.effectiveSentence == "In force on this Mac: low-ram",
                 "the page must show that auto resolved to the bounded configuration here, got: "
-                    + "\(fluxControl?.effectiveSentence ?? "nil")")
+                    + "\(supportedControl?.effectiveSentence ?? "nil")")
 
         // Choosing a mode PUTs the chosen id to the Image worker through the Hub proxy, then
         // refreshes, so the page shows the new selection and the new `effective`.
@@ -2493,20 +2499,20 @@ struct NativeAPITests {
         require(store.imageLoadingControl?.effectiveSentence == "In force on this Mac: default",
                 "the page must show the new effective after the change, got: "
                     + "\(store.imageLoadingControl?.effectiveSentence ?? "nil")")
-        require(store.models.first { $0.repo == "fixture/flux" }?.loadingModes?.selected == "full",
+        require(store.models.first { $0.repo == "fixture/zimage" }?.loadingModes?.selected == "full",
                 "the refreshed catalogue must carry the new selection too")
 
         // A model with exactly one loading mode: its own published reason is the sentence, and no
         // control is drawn.
-        store.imageModel = "fixture/zimage"
-        let zimageRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/zimage" }
-        let zimageReason = (zimageRow?["loading_modes"] as? [String: Any])?["reason"] as? String
-        let zimageControl = store.imageLoadingControl
-        require(zimageControl?.offersControl == false,
+        store.imageModel = "fixture/flux"
+        let fluxRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/flux" }
+        let fluxReason = (fluxRow?["loading_modes"] as? [String: Any])?["reason"] as? String
+        let fluxControl = store.imageLoadingControl
+        require(fluxControl?.offersControl == false,
                 "a single-mode model must not be given a control the lane would discard")
-        require(zimageControl?.reason == zimageReason && zimageReason?.isEmpty == false,
-                "the model's own reason must be the sentence shown, got: \(zimageControl?.reason ?? "nil")")
-        require(zimageControl?.effectiveSentence == "In force on this Mac: default",
+        require(fluxControl?.reason == fluxReason && fluxReason?.isEmpty == false,
+                "the model's own reason must be the sentence shown, got: \(fluxControl?.reason ?? "nil")")
+        require(fluxControl?.effectiveSentence == "In force on this Mac: default",
                 "a single-mode model still says what it loads as")
 
         // ...and when the machine-wide setting is low, the model's reason gains the clause saying

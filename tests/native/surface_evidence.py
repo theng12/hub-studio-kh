@@ -34,7 +34,7 @@ EVIDENCE = r'''
         FixtureProtocol.setMemoryPolicyOverride(nil)
         await store.refreshMemoryPolicy()
 
-        store.imageModel = "fixture/flux"
+        store.imageModel = "fixture/zimage"
         await store.refreshImageLoadingMode()
         if let control = store.imageLoadingControl {
             print("IMAGE     options      : " + control.options.map { "\($0.label) [\($0.id)]" }.joined(separator: " | "))
@@ -47,7 +47,7 @@ EVIDENCE = r'''
             print("IMAGE     after Full    : selected \(control.selected) · \(control.effectiveSentence ?? "")")
         }
         await store.setImageLoadingMode("auto")
-        store.imageModel = "fixture/zimage"
+        store.imageModel = "fixture/flux"
         if let control = store.imageLoadingControl {
             print("IMAGE     single mode  : control offered \(control.offersControl) · reason: \(control.reason ?? "")")
         }
