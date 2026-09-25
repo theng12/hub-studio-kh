@@ -198,6 +198,15 @@ reach a manifest.
 
 ### ST-17 — Image text-rendering tests, 16:9 spec (owner, 2026-09-24)
 
+**▶ The 8 GB tier run is ready and is the one open measurement in the Image work.** One command on
+one of the two 8 GB M1/M2 Macs, kit drive plugged in:
+`bash ~/Desktop/eight-gb-z-image-run.sh` (AirDrop `qualification/eight-gb-z-image-run.sh` to its
+Desktop first). It finds the pack and the engine itself, runs four generations, and prints one block
+to send back. **Instruction: [`qualification/README-8gb-z-image.md`](../../qualification/README-8gb-z-image.md).**
+The harness was verified on the 32 GB M2 Max — including a real 512×512 low-RAM smoke generation
+through the installed app's mflux 0.20.0 (22 s, peak MLX 5.86 GB, identical decoded-image hash on
+two runs) — but **every 8 GB figure is still unmeasured**, so no tier is claimed.
+
 Owner's standing spec from 2026-09-24: **16:9 landscape, 1280x720**, two images —
 one with a 4-5 word golden magical title, one with titles plus a long body of text.
 Redo only what does not match, for **Z-Image-Turbo** and **FLUX.2 Klein**, with speeds.
