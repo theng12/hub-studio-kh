@@ -3,7 +3,60 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.62 (the Clone tab, and the end of guessing a voice's contract, 2026-09-25).
+Last updated: 0.6.63 (Auto, and the controls that stopped lying, 2026-09-25).
+
+**0.6.63 in one paragraph.** Four owner asks drove it, and each turned out to be a number or a
+control published somewhere other than where it was read. Image's low-RAM configuration became an
+operator control (`Auto / Low RAM / Full`, published per model as `loading_modes`, and **no control
+at all** for a model that has one loading mode). Every Studio gained a fifth memory mode, **`auto`**,
+and it is the default — the one rule that is right on an 8 GB and a 32 GB Mac at once, and the
+reason chat and music now hold their models for 10 idle minutes on the larger machines. Chat became
+**dispatchable by the fleet** and its work is filed on the node that ran it, with tokens/second
+published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
+no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
+
+**Shipped state:** implementation commit `a4a78dc`, installed to `/Applications` and staged into all
+four kits; DMG `dist/StudioHub-0.6.63-a4a78dc.dmg`. App identity **`0.6.63 a4a78dc`,
+`development_build: False`**; each kit's library is 24 packages plus the Hugging Face cache
+(70,529,417,547 bytes) and every kit reports `problems: []`; `verify-kit.sh` reports **PASS** on
+ATLAS, NOVA, ORICO and UGREEN. Both `main` and `implementation/voice-runtime` are pushed to
+`a4a78dc`.
+
+> **A trap worth remembering, hit and fixed during this release.** `stage_voice.py` sets
+> `development_build` from `git status --porcelain`, so a bundle staged while *any* file is
+> uncommitted is published as a development build. The first 0.6.63 stage was — two test files a
+> worker had not yet handed over — and it was caught only because `verify-kit.sh` prints the
+> identity line and `development_build: True` looked wrong next to 0.6.62's `False`. **Stage from a
+> clean tree, and read the identity line on the first kit before doing the other three.**
+
+**Verification for this release** (all on the frozen tree): `tests/` **1156 passed, 11 skipped, 762
+subtests**; `tests/hub_regression/cases` **175 passed** — that suite is excluded from root
+collection by its own `collect_ignore`, so **run it explicitly**; `components/voice/app/tests`
+**726 passed, 19 skipped**; `bash native/build.sh` and `tests/native/pool-probe.sh` green;
+`tests/native/negative_controls.py` mutates one real source line per new UI piece and all four are
+caught.
+
+**Five traps this release paid for, so the next one does not:**
+
+1. **Read `HEAD`, not the working tree**, when deciding whether something already shipped. A
+   shared tree with agents in it makes the working tree a claim about the future: a render site
+   that was believed to pre-exist was in fact the same worker's uncommitted edit, and a correction
+   was issued on the strength of it.
+2. **A two-ended invariant does not see a hole in the middle.** "A worker publishes
+   `memory_warning`" and "a page renders `selected*Model?.memoryWarning`" were both true for
+   Subtitle while the sentence could not travel, because the Transcription page builds its models
+   from `/studio/transcribe/availability`, not from the catalog row. Pin the *middle* — the
+   mapping that joins them.
+3. **`staged_import_gaps` now runs on every build and it is not decorative.** It refused this
+   release over `registry.py`'s import of `enrollment_repair_transport`, a module that has never
+   existed; the 0.6.61 fix had caught the *symptom* (the ImportError) and left the pointer. The
+   import is deleted, not exempted.
+4. **A green fixture can describe a product that does not exist.** The native Image fixtures had
+   Z-Image and FLUX the wrong way round — every test passed while asserting the opposite of what
+   ships.
+5. **An allowlist is the security boundary.** Adding `chat` to `_FLEET_STUDIO` grants exactly the
+   GET shapes that regex is reused by; it was verified against the whole compiled allowlist rather
+   than assumed, and the POST/DELETE rows spell their modalities out so they gained nothing.
 
 **0.6.61 — the hardcoding audit, closed. New models are now data.** The owner's rule from
 2026-09-24 (*"my rule is never hardcoded — everything must be dynamic for all generators and
@@ -25,17 +78,9 @@ themselves are the snapshot and their `file:line` citations are deliberately not
   `docs/runtime-contract.md`, so a stale number in a document fails a test instead of misleading the
   next reader.
 
-**Shipped state:** implementation commit `3e1a0eb`, installed to `/Applications` and staged into all
-four kits; DMG `dist/StudioHub-0.6.62-3e1a0eb.dmg`. Each kit verifies **24 installed / 24 advertised,
-zero drift**, 208 model files checked by size (70.5 GB), app identity `0.6.62 3e1a0eb`,
-`development_build: False`; `verify-kit.sh` reports **PASS** on ATLAS, NOVA, ORICO and UGREEN. Both
-`main` and `implementation/voice-runtime` are pushed to `3e1a0eb` (a docs-only commit recording this
-identity follows and does not change the code).
-
-**Verification for this release** (all on the frozen tree before the commit): `tests/` **935
-passed, 11 skipped**; `tests/hub_regression/cases` **172 passed** — that suite is excluded from root
-collection by its own `collect_ignore`, so **run it explicitly**; `bash native/build.sh` and
-`tests/native/pool-probe.sh` green.
+**0.6.62 shipped** (superseded): commit `3e1a0eb`, DMG `dist/StudioHub-0.6.62-3e1a0eb.dmg` — both
+DMGs are in `_trash/dist/`, and 0.6.62's app is in each drive's `_trash` as `Studio Hub.app-0.6.62`.
+Its verification was `tests/` 935 passed / 11 skipped and `tests/hub_regression/cases` 172 passed.
 
 **Three things this release changes about the owner's Macs, all of them one-time:**
 
@@ -413,6 +458,39 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
 
 ## In flight / open
 
+**Opened by 0.6.63 — none of these blocks the release; each is recorded where it was found.**
+
+- **Voice publishes no below-tier warning, and there are two missing links, not one.** Its catalog
+  row publishes `min_unified_memory_gb` (a real qualification tier) but no `memory_warning`
+  sentence; the Audio `NativeModel(…)` in `combineModels` passes no `memoryWarning`; and the Audio
+  page has no render site. Subtitle's fix in this release is the template for all three. It cannot
+  fire on this fleet today — the copy step skips any voice model above the machine's tier, so a
+  below-tier voice model is never installed to be warned about — which is why it is recorded rather
+  than built.
+- **FLUX.2 Klein 4B MLX 4-bit's `79.34 s` lane-contract runtime traces to nothing.** Z-Image's pair
+  was reconciled in this release (185.61 s → the sourced 166 s); FLUX's number has no probe file
+  either and nobody has yet found the run it came from. Either produce the record or drop the row,
+  the way two Voice numbers were dropped in 0.6.61.
+- **The model-exposure approval surface cannot be used, for any modality.** No chat file publishes
+  a `genstudio_candidate` block, so `model_exposure.candidate_summary` returns `None` for a chat
+  row; and separately `monitor.candidate_models()`, `model_exposure.approve()` and `.revoke()` have
+  **no caller anywhere** in this tree. So there is no route or UI by which the owner approves a
+  model for the gateway. The chat model is visible in `GET /api/hub/capabilities` as a direct
+  observable (`chat.completion`, audit and exposure `null`). Whether this is needed depends on
+  which path GatewayKH actually uses — see the handoff doc.
+- **Chat's memory tier is still unmeasured** (8/16/24 GB throughput), harness ready in
+  `qualification/README-chat-tiers.md`. 0.6.63 changed the default so a 16 GB+ Mac holds the model,
+  which makes the first reply fast and every later one faster — but the tier measurement is what
+  turns "warn on 8 GB" into a qualified tier or a documented exclusion.
+- **The 8 GB Z-Image-Turbo run is now more valuable, not less.** The copy step carries the model on
+  8 GB Macs from `CARRY_BELOW_TIER` in `qualification/copy_models_for_this_mac.py` — "the owner
+  asked to try it there", explicitly *not* the proof table. One command,
+  `qualification/README-8gb-z-image.md`; the result either moves the entry to `PROVEN_SMALLER` or
+  documents the exclusion.
+- **The kit prune has nothing to do on the owner's Mac today** (0 candidates; all 15 folders are
+  still shipped) and will drop **18** stale receipts whose packages no longer ship. Verified by a
+  read-only dry run, not assumed.
+
 - **0.6.55, 0.6.56, 0.6.57 and 0.6.58 are all pushed** — `main` and `implementation/voice-runtime`
   were brought up to date at `34014d5` after sitting at 0.6.54, and every commit since is on both.
   The Khmer adoption is written up in `research/khmer-tts-adoption-2026-09-24.md` and tracked by
@@ -462,8 +540,15 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   to make, not a measurement to take, and it matches the image precedent (Z-Image-Turbo 6B MLX
   4-bit warns on 8 GB rather than refusing).
   gateway-kh remains read-only here and does not serve chat on its `studio_hub` kind
-  (`research/chat-studio-gateway-bridge.md`), and chat is absent from `auth._FLEET_STUDIO`, so a
-  remote fleet caller gets 403 — deliberately unresolved until the text-fleet story is decided.
+  (`research/chat-studio-gateway-bridge.md`). ~~chat is absent from `auth._FLEET_STUDIO`, so a
+  remote fleet caller gets 403~~ — **resolved in 0.6.63:** the owner chose to make chat
+  dispatchable (*"all models and generators should be shown and runnable"*), so `chat` is in
+  `_FLEET_STUDIO` for its read contracts and `POST /studio/chat/v1/chat/completions` is the one
+  work route; a fleet completion is filed as a job on the node that ran it. The handoff for the
+  GatewayKH session is [`docs/gatewaykh-handoff-0.6.63.md`](../gatewaykh-handoff-0.6.63.md).
+  **What GatewayKH still has to do is on its side:** its `KIND_STUDIO_HUB` modality set and its
+  `studio-hub-local` provider do not list `chat`, and `StudioHubBackend.generate` refuses it with
+  `MODEL_MODALITY_MISMATCH` before the Hub is reached.
   Streaming through the Hub is buffered by `studio_proxy`, so the app uses non-streaming.
   **Fixed since that paragraph was written:** the model's missing receipt and the Verify dead end
   (a real completion now answers through the installed Hub — see the verify entry above); the
