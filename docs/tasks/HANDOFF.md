@@ -52,6 +52,10 @@ already has. They carry different sentences now.
 
 **Two honest gaps it makes visible rather than papering over.** The **Music** catalogue labels (`ACE-Step 1.5 Turbo (2B DiT)`, `Stable Audio 3 Medium (1.4B)`) state no quantization, unlike the voice, image and chat labels which carry it — so the page shows what those labels say and the test that checks quantization is scoped to the rows where a reading states one. And **21 of 24 packages have no run behind them**; their floors are catalog metadata, which the page says plainly and lists by name.
 
+**The TTS prune is done, and it was done before it started.** The owner reviewed the voice models and confirmed the set is what he wants: a prune on 2026-09-24 (`~/StudioHubModels/_trash-tts-prune-2026-09-24`, now empty) removed the nine packages that were broken or absent on his Mac. All four drives hold **24 receipts with 0 missing folders, every package still shipped name for name** — nothing to move, nothing to forget. The prune *feature* stays; it removes whole models the kit stops shipping and deliberately never one a Mac merely cannot run.
+
+**Next in the owner's order: the LLM phase**, then video last (shelved). The whole LLM surface is **one package** — `Qwen3.5-9B 4-bit`, floor 16 GB, `qualified` on the three 16 GB Macs and excluded on 8 GB. So there is nothing to prune there either, and the open question is the one the 8 GB exclusion creates: **chat runs on 5 of his 7 Macs.**
+
 **0.6.65 in one paragraph.** The owner's ruling for every generator — *"we have a default but control
 on the page is overwrite… stuff that can be change or altered such as speed must be given to the
 user"* — closed SH-14. A value set in Models is what a job uses; a control on a generator page is the
