@@ -264,7 +264,15 @@ FAMILIES: dict[str, Family] = {
             "Clone continuity setting. Every section reuses the same reference voice "
             "and transcript evidence, with a fixed 180 ms join."
         ),
-        lane_parameters=("ref_transcript",),
+        # `max_output_duration_s` is honoured by this family alone: the dispatcher turns it into
+        # Qwen's own audio-token ceiling (`generation._qwen_max_tokens_for_duration`, for the Base
+        # clone and the other Qwen3-TTS tiers) and the quality path enforces it on the finished WAV.
+        # It is declared here because a lane must publish what it accepts - the shape existed in
+        # `lane_contract._PARAMETER_SHAPES` with no family naming it, so no contract offered it and
+        # a scheduler could not discover a ceiling the worker was enforcing. No other family
+        # declares it, which is right: they accept the field and ignore it, and a lane must not
+        # advertise a key it throws away.
+        lane_parameters=("ref_transcript", "max_output_duration_s"),
         # The roster a preset tier of this family chooses from: `qwen3_preset_speakers` to the
         # app's picker, `preset_speaker`'s enum to a scheduler. Base tiers offer no preset and
         # publish neither; see `lane_contract._preset_speaker_parameter`.

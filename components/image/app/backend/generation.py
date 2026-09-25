@@ -160,18 +160,46 @@ FLUX2_KLEIN = ImageModel(
         'an unverified change to a verified path.')),
     qualification={
         'historical_source_workload': '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
-        'packaged_inference': 'pending',
+        # This said `pending` while a completed packaged run sat in the tree: one real 1K
+        # generation driven through the assembled Hub + Image worker + native UI, job `af4913b2`,
+        # recorded 2026-09-15 in `qualification/st03-image-real-inference.md` after being found in
+        # a worktree's gitignored `.build/` during the record reconciliation. The record is not a
+        # plan; it is the receipt.
+        'packaged_inference': (
+            'proven: one real 1K generation through the assembled Hub + Image worker + native UI, '
+            'job af4913b2, 2026-09-15 (qualification/st03-image-real-inference.md)'),
     },
-    # Measured on the host in `qualification`'s own terms: this Mac, this engine, this scene.
-    # `measured` is always a list of rows — one per configuration that was run — so a lane whose
-    # cost depends on a request parameter (music's duration, image's memory mode) publishes the
-    # same shape as one whose cost does not.
+    # Measured in `qualification`'s own terms: this engine, this scene. `measured` is always a list
+    # of rows — one per configuration that was run — so a lane whose cost depends on a request
+    # parameter (music's duration, image's memory mode) publishes the same shape as one whose cost
+    # does not, and each row names the record its number came from.
+    #
+    # This row published `79.34 s` from the beginning with no artefact behind it. The stored run of
+    # **this exact scene** — same model, same pinned revision, 1280x720, 4 steps, guidance 1.0,
+    # seed 42 — is `105.943 s`, in `qualification/st03-image-real-inference.md` and again as
+    # `worker_terminal.duration_seconds` in `evidence/st03-image-real-inference.jsonl`. Two records
+    # agree; the published number matched neither and appeared in no file in this repository. The
+    # number is the record's now, and `tests/test_image_loading_mode.py` reads the row's own
+    # `source` and fails if it cannot find the figure there — which is what would have caught this
+    # on the day it was written.
+    #
+    # The old `measured_on` named a 32 GiB M2 Max and mflux 0.20.0, and the record states neither:
+    # it says **"Captured on Apple M4, 16 GiB RAM, macOS 26.6.2"**, and the run predates mflux
+    # 0.20.0, naming an image-runtime tree SHA instead. So the wrong number came with a wrong host,
+    # and the host it should have named is *better news*: this is a 16 GB measurement of the scene
+    # the row describes, on the tier the fleet actually runs, not a 32 GB one. A second packaged run
+    # in the same record reports 107.73 s, which corroborates ~106 s; it is not published as a row
+    # because that table does not state its resolution or steps.
     measured_runtime={
         'measured': [
-            {'seconds': 79.34, 'steps': 4,
-             'scene': '1280x720, 4 steps, guidance 1.0, seed 42'},
+            {'seconds': 105.94, 'steps': 4,
+             'scene': '1280x720, 4 steps, guidance 1.0, seed 42',
+             'source': ('qualification/st03-image-real-inference.md, "Duration"; '
+                        'qualification/evidence/st03-image-real-inference.jsonl, '
+                        'worker_terminal.duration_seconds')},
         ],
-        'measured_on': '32 GiB M2 Max, mflux 0.20.0, 4-bit pack',
+        'measured_on': ('Apple M4, 16 GiB, macOS 26.6.2; packaged app at 4377237e, image runtime '
+                        'tree c9cd56a6'),
         'evidence': 'measured',
     },
     below_tier_warning=(

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.67 — 2026-09-26 · three published things that were not true
+
+Three open items, each the same shape: something the product published or relied on with nothing
+behind it. Each fix is small; each guard was proved by breaking the thing it guards.
+
+**FLUX.2 Klein 4B MLX 4-bit published `79.34 s` for a scene it described exactly — and that number
+was in no file in this repository.** The stored run of that same scene — same model, same pinned
+revision, 1280x720, 4 steps, guidance 1.0, seed 42 — is **105.943 s**, recorded in
+`qualification/st03-image-real-inference.md` and again as `worker_terminal.duration_seconds` in
+`qualification/evidence/st03-image-real-inference.jsonl` (job `af4913b2`, 2026-09-15). The host was
+wrong too, and the correction is better news: the row claimed a 32 GiB M2 Max, and the record says
+**"Captured on Apple M4, 16 GiB RAM, macOS 26.6.2"** — a measurement on the tier this fleet actually
+runs. `qualification.packaged_inference` also said `pending` while that completed packaged run sat in
+the tree; it now names the run.
+
+`tests/test_image_loading_mode.py::test_every_published_runtime_is_found_in_the_record_it_names`
+opens the file each row names and fails if the figure is not in it. Proved: with the row set back to
+`79.34`, it fails naming the file; with `105.94`, it passes. **A scene description is not a source.**
+
+**`max_output_duration_s` was enforced by the worker and published by no family.** The shape, the
+API field and its validator were all real, and the dispatcher genuinely turned it into Qwen's
+audio-token ceiling — but no family named it, so **no lane contract offered a bound that was being
+applied**, and a scheduler reading contracts could not discover it. The `qwen3-tts` family declares it
+now, and it is the only family that honours it: every other family accepts the field and ignores it,
+and a lane must not advertise a key it throws away.
+`test_every_parameter_shape_reaches_a_published_contract` is a set difference rather than a list of
+names, so nobody has to remember it when the next shape is added. Proved: removing the declaration
+fails it, naming exactly `max_output_duration_s`.
+
+**Voice's "the lane decides" exception now has a boundary, in tests.** `_job_parameters` leaves a
+request field alone when the caller sent nothing *and* the value in force is the lane's own stated
+default — the engine resolves that default itself, and writing it in would record an override nobody
+chose. That reasoning holds only while the lane states the value, and the rule lived in a comment.
+It is the **only** such exception in the fleet: Image and Music fill an omitted field in
+`validate_request`, Subtitle in `with_model_defaults`, Chat in `_resolved_parameters`, all
+unconditionally. `TestLaneDecidesBoundary` pins all four cases. Proved: widening the condition to
+`if params[name] is None` — which would silently kill every optional parameter's stored default —
+fails six tests.
+
+**A note on the guard that did not run.** The first version of that test class was named
+`LaneDecidesBoundaryTests`, and pytest only collects classes named `Test*`. The suite reported the
+same count as before and looked green. A guard the runner does not collect is worse than no guard,
+because it reads as covered; the class is renamed and the reason is in a comment beside it.
+
 ## 0.6.66 — 2026-09-25 · the tab was filtering the models that could reach the tab
 
 The owner, on the Audio page: *"i can't see a 'preset model' like the khmer tts if i'm on the clone

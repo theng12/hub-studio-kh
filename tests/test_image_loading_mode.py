@@ -346,6 +346,39 @@ class TheCatalogIsHonestAboutAModelWithNoBoundedMode(ImageMemoryModeFixture):
                 self.assertEqual(published['evidence'], runtime.get('evidence'))
                 self.assertIn(model.repo, published['source'])
 
+    def test_every_published_runtime_is_found_in_the_record_it_names(self):
+        """A runtime is a number with an artefact behind it, or it is not published.
+
+        FLUX.2 Klein 4B MLX 4-bit published `79.34 s` for a scene it described exactly — same
+        model, same pinned revision, 1280x720, 4 steps, guidance 1.0, seed 42 — and **no file in
+        this repository held that number.** The stored run of that same scene is `105.943 s`, in
+        `qualification/st03-image-real-inference.md` and again in its `.jsonl`. Both the row and the
+        scene were in the tree; nothing joined them, so nobody could see that one had no artefact.
+
+        This walks every published row, opens the file the row itself names, and fails if the
+        figure is not in it. It proves the number exists in the artefact it claims — not that the
+        artefact is right, which is why the source is published beside it for a reader to check.
+        """
+        root = Path(__file__).resolve().parents[1]
+        checked = 0
+        for model in MODELS.values():
+            for row in (model.measured_runtime or {}).get('measured') or []:
+                with self.subTest(model=model.repo, seconds=row.get('seconds')):
+                    source = row.get('source')
+                    self.assertTrue(
+                        source,
+                        f"{model.repo} publishes a runtime of {row.get('seconds')} s and names no "
+                        f"record; a number with no source is what this test exists to stop")
+                    path = root / source.split(',')[0].strip()
+                    self.assertTrue(path.exists(),
+                                    f"{model.repo} names a record that is gone: {path}")
+                    self.assertIn(
+                        str(row['seconds']), path.read_text(encoding='utf-8'),
+                        f"{row['seconds']} is not in {path}: the row names that record, so the "
+                        f"number has to be the record's own")
+                checked += 1
+        self.assertGreater(checked, 0, "no measured runtime is published at all")
+
     def test_a_bounded_model_states_the_trade_in_its_own_numbers(self):
         published = loading_modes(Z_IMAGE_TURBO, 16 * GiB, 'auto')
         measured = published['measured']

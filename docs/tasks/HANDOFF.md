@@ -5,6 +5,10 @@
 
 Last updated: 0.6.66 (the tab was filtering the models that could reach the tab, 2026-09-25).
 
+**Three open items closed on 2026-09-26, and each guard was proved to fail on the defect it was written for.** *SH-4*: FLUX.2 Klein 4B MLX 4-bit published `79.34 s` for a scene it described exactly, and **the number was in no file in this repository**. The stored run of that scene is **105.943 s** (`qualification/st03-image-real-inference.md`, job `af4913b2`, 2026-09-15) — and the host was wrong too: the row claimed a 32 GiB M2 Max, the record says **Apple M4, 16 GiB**, which is a measurement on the tier the fleet runs. `packaged_inference` said `pending` while that completed run sat in the tree. *SH-8*: `max_output_duration_s` was enforced by the worker and published by no family, so no contract offered a bound that was being applied; the `qwen3-tts` family declares it now, and it is the only family that honours it. *SH-18*: Voice's "lane decides" exception is the only one in the fleet (Image, Music, Subtitle and Chat all fill an omitted field unconditionally) and now has four tests on its boundary.
+
+**The lesson each of the three taught, in one line each.** A published number needs an artefact, so the test opens the file the row names — a scene description is not a source. A shape in a table nobody references is not a contract. And **a guard the runner does not collect is not a guard**: the first version of the SH-18 test class was named `LaneDecidesBoundaryTests`, pytest collected nothing, and the suite reported the same count as before — which is how a boundary goes unguarded while looking guarded.
+
 **0.6.66 in one paragraph.** The owner found the Audio page "dodgy": he had Khmer TTS installed and
 could not see it. It was a **closed loop between two controls** — the voice tabs were the *selected
 model's* modes, and the model picker listed only models publishing *the current tab's* mode — so a
@@ -55,6 +59,8 @@ already has. They carry different sentences now.
 **The TTS prune is done, and it was done before it started.** The owner reviewed the voice models and confirmed the set is what he wants: a prune on 2026-09-24 (`~/StudioHubModels/_trash-tts-prune-2026-09-24`, now empty) removed the nine packages that were broken or absent on his Mac. All four drives hold **24 receipts with 0 missing folders, every package still shipped name for name** — nothing to move, nothing to forget. The prune *feature* stays; it removes whole models the kit stops shipping and deliberately never one a Mac merely cannot run.
 
 **Next in the owner's order: the LLM phase**, then video last (shelved). The whole LLM surface is **one package** — `Qwen3.5-9B 4-bit`, floor 16 GB, `qualified` on the three 16 GB Macs and excluded on 8 GB. So there is nothing to prune there either, and the open question is the one the 8 GB exclusion creates: **chat runs on 5 of his 7 Macs.**
+
+**SH-15(b) was not a flake, and it is solved.** The bridge test ran Voice's suite in a child interpreter; `components/voice/app/tests/test_storage_policy.py::test_release_notes_follow_installed_changelog` asserts the worker's newest changelog version equals the repo's `VERSION`, so **bumping `VERSION` before writing the changelog entry fails it deterministically** — a normal mid-release state. It read as a flake only because its own log was overwritten by the next green run. Two lessons, both already paid for: keep the failing log (done, and proved), and **write the changelog before bumping `VERSION`** — or expect that gate to fire, correctly, and mean it.
 
 **0.6.65 in one paragraph.** The owner's ruling for every generator — *"we have a default but control
 on the page is overwrite… stuff that can be change or altered such as speed must be given to the

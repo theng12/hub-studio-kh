@@ -2,6 +2,31 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.67 — 2026-09-26
+
+### A picture's timing was wrong, and so was the machine it was measured on
+
+The Image page told you how long FLUX.2 Klein 4-bit takes: about **79 seconds**. That number was
+invented — not deliberately, but it was sitting in the app with nothing behind it, and no record
+anywhere had it.
+
+The real run was found in your own files: **105.9 seconds**, and it turns out it was measured on a
+**16 GB M4**, not on the big Studio. So the honest number is a bit slower than you were told, and
+it's a better number — it's what the machine you'd actually generate on does, not the fastest Mac
+you own.
+
+### A limit nothing could see
+
+Qwen3-TTS had a *"stop at N seconds"* limit that worked — it genuinely capped the audio — but it was
+invisible: nothing published it, so nothing could find it. It's published now, for the Qwen models
+that honour it. Nothing about how it behaves changed.
+
+### Nothing you'd notice
+
+Two housekeeping fixes: a rule about your per-model defaults now has a test instead of a comment, and
+a test that wasn't actually running (the test runner silently skipped it) now runs. Neither changes
+what you see.
+
 ## 0.6.66 — 2026-09-25
 
 ### The tab was hiding the voices

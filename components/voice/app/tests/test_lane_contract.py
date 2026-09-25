@@ -375,3 +375,28 @@ def test_a_family_that_declares_an_unknown_lane_parameter_fails_loudly(monkeypat
     )
     with pytest.raises(ValueError, match="not_a_request_field"):
         lane_contract.for_model(model)
+
+
+def test_every_parameter_shape_reaches_a_published_contract() -> None:
+    """No shape in the table may be dead.
+
+    `max_output_duration_s` sat in `_PARAMETER_SHAPES` while **no family named it**, so no lane
+    contract offered it — and meanwhile the worker was enforcing it: the dispatcher converts it
+    into Qwen's audio-token ceiling and the quality path refuses a finished WAV that exceeds it.
+    A scheduler reading contracts could not discover a bound that was being applied. The other
+    direction already fails loudly (a family naming an unknown shape raises, and names the file);
+    only this one was silent, which is why it survived.
+
+    Written as a set difference rather than a list of names on purpose: a list would have to be
+    edited by whoever adds the next shape, and the whole point is that nobody has to remember.
+    """
+    published: set[str] = set()
+    for model in catalog.CATALOG:
+        for parameter in lane_contract.parameters_for(model):
+            published.add(parameter["name"])
+    dead = sorted(set(lane_contract._PARAMETER_SHAPES) - published)
+    assert not dead, (
+        f"these shapes are published by no shipped model, so no lane contract offers them: {dead}. "
+        "Either a family that honours the parameter declares it in its `lane_parameters`, or the "
+        "shape is removed — a bound nobody can discover is not a contract."
+    )

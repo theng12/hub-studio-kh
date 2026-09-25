@@ -628,3 +628,78 @@ class TestNothingThatMustNotMove:
         # The defaults surface is its own file; the memory policy's is not touched by it.
         assert (paths.data_dir() / "memory_policy.json").is_file()
         assert not (paths.data_dir() / model_defaults.SETTINGS_NAME).exists()
+
+
+# Named `Test*` so pytest collects it: a class the runner silently skips is a test
+# that never runs, which is how this boundary went unguarded in the first place.
+class TestLaneDecidesBoundary:
+    """The one exception in the whole fleet, pinned as a rule rather than a comment.
+
+    Voice's ``_job_parameters`` leaves a field alone when the request sent nothing **and** the value
+    in force is the lane's own stated default: rewriting it would record an override the operator
+    never chose, and the engine resolves that stated default itself. That reasoning holds *only*
+    while the lane states the value. Widen the condition to "the request sent nothing" and every
+    optional parameter silently loses its stored default — ``preset_speaker``, ``instruct``,
+    ``cfg_value``, ``voice_design_prompt`` would all stop reaching the engine. That is the defect
+    this release fixed three times over, so the boundary is worth a test of its own.
+
+    Every other lane fills an omitted field from the stored map unconditionally (Image and Music in
+    ``validate_request``, Subtitle in ``with_model_defaults``, Chat in ``_resolved_parameters``), so
+    the exception is Voice's alone and this is where it is guarded.
+    """
+
+    @staticmethod
+    def _body(**values):
+        return main.Txt2SpeechBody(repo=SECTIONING, text="A sentence.", **values)
+
+    @staticmethod
+    def _run(monkeypatch, *, lane_states, in_force, body):
+        model = catalog.get_model(SECTIONING)
+        monkeypatch.setattr(main, "_defaults_in_force", lambda _model: dict(in_force))
+        monkeypatch.setattr(
+            main.lane_contract, "parameters_for",
+            lambda _model: [{"name": name, **({"default": value} if value is not None else {})}
+                            for name, value in lane_states.items()])
+        return main._job_parameters(body, model)
+
+    def test_a_stored_default_reaches_the_engine_when_the_lane_states_none(self, monkeypatch):
+        params = self._run(
+            monkeypatch,
+            lane_states={"preset_speaker": None},
+            in_force={"preset_speaker": "Sohee"},
+            body=self._body())
+        assert params["preset_speaker"] == "Sohee", (
+            "the lane states no default, so there is nothing for the engine to resolve — the "
+            "operator's stored voice has to be written into the request"
+        )
+
+    def test_the_lane_stated_default_is_left_for_the_engine_to_resolve(self, monkeypatch):
+        params = self._run(
+            monkeypatch,
+            lane_states={"preset_speaker": "Ryan"},
+            in_force={"preset_speaker": "Ryan"},
+            body=self._body())
+        assert params["preset_speaker"] is None, (
+            "the request already resolves to the lane's own stated default; writing it in would "
+            "record an override the operator never chose"
+        )
+
+    def test_a_stored_default_is_not_swallowed_by_a_lane_stated_one(self, monkeypatch):
+        """The case the exception must not eat: the operator chose something else."""
+        params = self._run(
+            monkeypatch,
+            lane_states={"preset_speaker": "Ryan"},
+            in_force={"preset_speaker": "Sohee"},
+            body=self._body())
+        assert params["preset_speaker"] == "Sohee", (
+            "the lane states a default and the operator stored a different one; the stored value "
+            "is the one in force and has to reach the engine"
+        )
+
+    def test_a_value_the_request_supplies_always_wins(self, monkeypatch):
+        params = self._run(
+            monkeypatch,
+            lane_states={"preset_speaker": None},
+            in_force={"preset_speaker": "Sohee"},
+            body=self._body(preset_speaker="Aiden"))
+        assert params["preset_speaker"] == "Aiden", "a supplied value is the caller's own answer"

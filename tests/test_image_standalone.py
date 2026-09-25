@@ -486,10 +486,18 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual((flux['generation_defaults']['width'],
                           flux['generation_defaults']['height']), (1280, 720))
         self.assertEqual(flux['generation_limits']['max_steps'], 100)
-        self.assertEqual(flux['qualification'],
-                         {'historical_source_workload':
-                          '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
-                          'packaged_inference': 'pending'})
+        # The qualification block is the model's own, published verbatim. This used to assert the
+        # literal `'pending'` for `packaged_inference`, which was true when it was written and
+        # stopped being true when the completed packaged run was found in the tree — so the test
+        # held a stale fact in place and would have failed the correction that made it honest.
+        # What matters is the join, not the contents: whatever the model states is what is served.
+        self.assertEqual(flux['qualification'], dict(FLUX2_KLEIN.qualification))
+        self.assertEqual(flux['qualification']['historical_source_workload'],
+                         '1K, four steps, guidance 1.0 on 16 GB Apple Silicon')
+        self.assertTrue(flux['qualification']['packaged_inference'].startswith('proven:'),
+                        f"a completed packaged run is recorded for this model, so its "
+                        f"qualification cannot say otherwise: "
+                        f"{flux['qualification']['packaged_inference']!r}")
         self.assertFalse(flux['guidance_ignored'])
 
         # Z-Image-Turbo is its own entry, with its own nine steps and its own pin.
