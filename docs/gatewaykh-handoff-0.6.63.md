@@ -193,7 +193,102 @@ re-checked against 0.6.63:
 
 ---
 
-## 5. Deliberately not done
+## 5. Reachability: the bind, and the setter you asked to be named
+
+This answers the listen-by-default prompt (`_handoffs/2026-09-25-studio-hub-listen-by-default-prompt.md`
+on your side). **The setter you asked us to name is `--listen-auto`.** There are three forms, all
+of them persisted — a flag is a setting, not a one-launch override:
+
+| What you want | The supported call |
+|---|---|
+| Let this Mac answer on its own networks, and keep doing it | `--listen-auto` |
+| Pin an exact list of addresses | `--listen-host 127.0.0.1` (a comma-separated list works) |
+| A node that must be reachable after a reboot without anyone opening the app | `--fleet-mode` |
+
+They are arguments to the app, so the kit's install step runs e.g.
+`open -a "Studio Hub" --args --fleet-mode`. Each one **writes the preference down**, which is the
+part that did not exist before: `--listen-host` used to last exactly until the next launch, so a
+kit could configure a Mac and then watch it come up on the old addresses with no way to tell
+"ignored" from "forgotten".
+
+**The default changed, so most Macs need no call at all.** A fresh install always computed its
+addresses from the machine, but the moment *anything* was saved they froze — so a Mac set up
+before it joined a tailnet stayed on loopback forever. An absent `listenHostAutomatic` now means
+**automatic**, and automatic is **additive**: the saved list plus every current private and
+Tailscale address, recomputed on every launch. It never removes an address, so an upgrade cannot
+take away a way in that worked. An operator who genuinely wants loopback-only sets that preference
+to false, which the Connections screen now does on the first manual change.
+
+**We never bind `0.0.0.0`.** The wildcard is reported as `wildcard: true` and classified as
+`other`, deliberately not as a private address — it is the absence of a scope, not a network.
+
+### Reading it as a fact — your ask 3, with one deliberate departure
+
+You asked for it over `/api/hub/settings`. It is there, **and on `/api/health`, which is the one
+that will actually serve you**: `/api/hub/settings` is owner-only and scoped to output storage, so
+a **controller cannot read it** — and a controller is exactly who needs to know that a node came
+up loopback-only instead of discovering it as a timeout. `/api/health` is the route both sides
+already use to answer "is this Mac there?", and it is reachable with a fleet credential.
+
+```json
+"bind": {
+  "known": true,
+  "hosts": ["127.0.0.1", "192.168.18.248", "100.126.154.54"],
+  "classes": {"127.0.0.1": "loopback", "192.168.18.248": "lan", "100.126.154.54": "tailnet"},
+  "port": 47873,
+  "loopback_only": false,
+  "reachable_off_this_mac": true,
+  "tailnet": ["100.126.154.54"],
+  "wildcard": false
+}
+```
+
+`loopback_only` and `reachable_off_this_mac` are there so you do not have to re-derive them.
+**`known: false` is a different answer from loopback** and carries the reason — a Hub started
+without its launcher cannot say what it is bound to, and we would rather say that than have you
+render it as "loopback" and go and fix a Mac that was fine.
+
+`classes` uses the same rules the shell uses (RFC1918, link-local, and Tailscale's
+100.64.0.0/10), so "tailnet" means the same thing on both sides of this.
+
+### Joining is already scriptable — your ask 4
+
+No new work needed, and here is the exact sequence for the install flow:
+
+1. `PUT /api/hub/controller` on the node's own Hub, with the **Hub token** (read it from
+   `<data>/hub/.hub_token`; it is `0600` and the installer already runs as the owner). This is
+   owner-only by design — a remote caller cannot point a Mac at a controller.
+2. `POST /api/hub/fleet/nodes` on the **controller**, with the Fleet token. This one is
+   fleet-reachable, so a node can introduce itself.
+
+The app's own Join button is a UI over those two steps, not a separate mechanism.
+
+### What we did not build — your ask 5, partly
+
+`--fleet-mode` covers **listen + start at login + start services at login**. It deliberately does
+**not** touch sleep. Holding a Mac awake is a power decision with its own costs, and nobody has
+asked for it; if you want it, say so and we will scope it rather than fold it into a flag that
+already means three things.
+
+## 6. Per-model defaults (new in this release, and relevant to you)
+
+Every Studio now lets its operator set **their own default for each parameter that model
+publishes**, per model per machine. Two consequences for GatewayKH:
+
+- **The resolved values are published.** Both `generation_defaults` and the lane contract's
+  per-parameter `default` carry what this Mac will actually use, from one call, so a scheduler
+  reads the operator's answer rather than the model's. They cannot disagree — that is asserted per
+  row in four lanes.
+- **You do not have to send them.** A worker applies the stored default when the request *omits*
+  the parameter, and a parameter the request supplies always wins. So an omitted field is not
+  "the model's default", it is "whatever this Mac is set to" — which is the more useful meaning
+  for a scheduler and the one we now guarantee.
+
+The editor surface itself (`GET/PUT/DELETE /studio/<modality>/api/model-defaults`) is
+**Hub-token only**, as settings should be. You neither need it nor can reach it with a fleet
+credential, and the resolved numbers above are how you see the result.
+
+## 7. Deliberately not done
 
 - **Video.** The owner has shelved it; nothing is decided and nothing is published. Do not schedule
   video work, and do not read the `video` rows in some tables as a shipping lane.

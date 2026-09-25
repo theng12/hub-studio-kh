@@ -93,6 +93,28 @@ leave.
 **The one that matters:** a node joins a controller with the controller's **Fleet** token,
 *not* its Hub token. If a join is refused, that is almost always why.
 
+## Reachable on your own network, without a setting to remember
+
+A Mac that comes up loopback-only is invisible to every other Mac in the group, and the only
+symptom is work that never arrives. So a Mac now answers on **its own private and Tailscale
+addresses automatically** — recomputed every time it starts, because a tailnet address is not
+the same number forever. Nothing needs ticking, and an address you added yourself is never
+removed.
+
+If you want to be explicit, or to set a Mac up from a script:
+
+| Command | What it does |
+|---|---|
+| `--listen-auto` | Answer on this Mac's own networks, and keep doing it |
+| `--listen-host 127.0.0.1` | Answer on exactly these addresses, nothing else |
+| `--fleet-mode` | The above, plus start at login **and start the Hub at login** — for a Mac that must be ready for work after a reboot without anyone opening it |
+
+Run them as arguments to the app, e.g. `open -a "Studio Hub" --args --listen-auto`. Each one is
+remembered, so it is a one-time step per Mac.
+
+The Hub reports what it is actually bound to, so "is this Mac reachable, and on what" is a fact
+you can read rather than guess.
+
 ## The model library
 
 The kit carries **24 model packages** (about 70.5 GB). `2 - Copy the models.command` copies
