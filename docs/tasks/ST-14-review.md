@@ -17,12 +17,11 @@ harness/README were written.
 
 > **The tree moved while this review ran.** It was clean at `457fc27` when I started; two other
 > workers then committed `bbc6b0d` and `d8b7ca6` and left further uncommitted edits in
-> `native/StudioAPI.swift`, `native/StudioViews.swift`, `tests/native/api_main.swift` and
-> `tests/test_audio_layout.py`. I did not touch any of it, and the focused chat gate was green with
-> those edits present (69 → **70** passed as they added a behavioural native test). Anything they
-> change about the Chat page is theirs,
-> not part of this review's snapshot; the one place their commit changes a finding is F2, corrected
-> above.
+> `native/StudioAPI.swift`, `native/StudioViews.swift`, `tests/native/api_main.swift`,
+> `tests/test_chat_native_wiring.py` and `tests/test_audio_layout.py`. I did not touch any of it,
+> and the focused chat gate was green with those edits present (69 → **70** passed as they added a
+> behavioural native test). Anything they change about the Chat page is theirs, not part of this
+> review's snapshot; the one place their work changes a finding is F2/F3/F9, noted there.
 
 ---
 
@@ -45,16 +44,15 @@ blocker it still carries.** In detail:
   `manifest_digest`, all eleven model files size-matched, the kit app at 0.6.62/`3e1a0eb` **[M]**.
   The card's closing note ("the four SSDs were unmounted, so the kit libraries could not be
   stocked") is stale, and the *same card* already says so three sections earlier. Corrected.
-- **One claim is not supported by the product today:** ST-14.2 says the model was "imported into
-  `~/StudioHubModels`". The bytes are there and complete; the **receipt is not**, so the shipped
-  app reads `files_state: not_installed`, `dispatch_state: ineligible`, and the Chat page's Send
+- **ST-14.2's receipt: absent when this review measured it (12:2x), present from 12:27.** The
+  bytes were always there and complete; at the moment of measurement the receipt was not, so the
+  shipped app read `files_state: not_installed`, `dispatch_state: ineligible`, and the Chat page's
+  Send stayed disabled **[M]**. The button meant to create that receipt is fixed by commit
+  `d8b7ca6`, which is in the tree but **not in the shipped 0.6.62 bundle** (built 11:34, before
+  that commit at 12:30) — so the shipped Verify Files could not have written it, and the receipt
+  was written by running the fixed code against the library. See the correction below.
 
-**CORRECTION (coordinator, 2026-09-25, after this review shipped):** the receipt is now **present**. The verify-path worker's run wrote it into `~/StudioHubModels/.studiohub/installed.json` — digest `68a3cf02…` == the manifest digest, 11 files recorded — and the **installed** 0.6.62 app reads it through its own preflight path and reports `files_verified` / `dispatch_state: eligible` / `worker_state: running`. Verified end to end against the unmodified installed app: `POST /api/hub/chat/completions` → **HTTP 200 in 11.98 s**, answer `'READY'`, usage 17/1/18, `finish_reason: stop`. So the Chat page can send on this Mac today. What remains true is narrower: the **Verify button** in the shipped build is still the old code, so it could not have created that receipt — it was created by running the fixed code against the library. A package with no receipt is still a dead end until the next build; a package that has one, as this one now does, is read correctly by the shipped app. The lesson worth keeping: this review inferred "no receipt" from the shipped code rather than re-reading the index after the other worker had run, and the inference was wrong.
-
-  stays disabled on this Mac **[M]**. The button that creates that receipt was fixed by commit
-  `d8b7ca6`, which is in the tree but **not in the shipped 0.6.62 bundle** (built at 11:34, before
-  that commit at 12:30) — so on the app the owner has, Verify Files is still the dead end (see
-  F2). As the card stands it describes a usable install that this Mac does not have.
+  **CORRECTION (coordinator, 2026-09-25, after this review shipped):** the receipt is now **present**. The verify-path worker's run wrote it into `~/StudioHubModels/.studiohub/installed.json` — digest `68a3cf02…` == the manifest digest, 11 files recorded — and the **installed** 0.6.62 app reads it through its own preflight path and reports `files_verified` / `dispatch_state: eligible` / `worker_state: running`. Verified end to end against the unmodified installed app: `POST /api/hub/chat/completions` → **HTTP 200 in 11.98 s**, answer `'READY'`, usage 17/1/18, `finish_reason: stop`. So the Chat page can send on this Mac today. What remains true is narrower: the **Verify button** in the shipped build is still the old code, so it could not have created that receipt — it was created by running the fixed code against the library. A package with no receipt is still a dead end until the next build; a package that has one, as this one now does, is read correctly by the shipped app. The lesson worth keeping: this review inferred "no receipt" from the shipped code rather than re-reading the index after the other worker had run, and the inference was wrong.
 - **The 8 GB question has a different answer than the card implies.** Nothing in the shipped
   product refuses on memory tier: the worker publishes the manifest's 16 GB as a
   `memory_warning` while `eligible` stays true, the Hub's `effective_min_total_memory_gb` is
@@ -93,7 +91,7 @@ blocker it still carries.** In detail:
 | ST-14.0: `.build/voice-runtime` carries `mlx 0.31.2` / `mlx-lm 0.31.3` | **HOLDS** | Re-read today. **[M]** |
 | ST-14.0: model download network-bound at ≈75–96 KB/s | **NOT RE-CHECKED** | A 2026-09-24 observation; irrelevant now that the weights are local. **[I]** |
 | ST-14.1b: packaged-app inference proven on 0.6.56/`928ebd4` — health ok, catalog 262144/4096, `'HELLO WORLD'`, no `Thinking Process:`, JSON `json_valid: true` / 0 repairs, peak MLX 5.22 GB | **HOLDS as a dated receipt** | Every number matches the saved artefacts in `.build/chat-qual/` (`completion.json`: 3 tokens, 1.025 s, `HELLO WORLD`; `json_mode.json`: `json_valid true`, `repairs 0`). The 0.6.56 bundle no longer exists on this Mac, so it stands as a historical measurement. **New today:** the *0.6.62* installed bundle's own worker loaded the real 4-bit snapshot and completed (peak MLX **5,207,474,786 bytes = 5.21 GB**), so the packaged path still works on the shipped build. **[M]** |
-| ST-14.2: manifest captured, validated, registered; all 11 files SHA-256-verified and imported into `~/StudioHubModels/…/model/` (5,977,071,067 bytes) | **SPLIT — bytes yes, receipt no** | Manifest registered and `validate_manifest` accepts it; all eleven files are present with the manifest's exact sizes; the kit receipts carry `manifest_digest 68a3cf02…`. But `~/StudioHubModels/.studiohub/installed.json` (41 entries, mtime 2026-09-25 00:16) has **no** `qwen3-5-9b-4bit`, so the shipped Hub reports `files_state: not_installed` and the native gate reads "Its files are not verified" **[M]**. The 2026-09-24 review hashed all eleven files and they matched. The card's "imported" is true of the bytes and false of the app's own notion of installed. |
+| ST-14.2: manifest captured, validated, registered; all 11 files SHA-256-verified and imported into `~/StudioHubModels/…/model/` (5,977,071,067 bytes) | **BYTES YES; RECEIPT ABSENT WHEN MEASURED, PRESENT SINCE 12:27** (see the correction in §1) | Manifest registered and `validate_manifest` accepts it; all eleven files are present with the manifest's exact sizes; the kit receipts carry `manifest_digest 68a3cf02…`. But `~/StudioHubModels/.studiohub/installed.json` (41 entries, mtime 2026-09-25 00:16) has **no** `qwen3-5-9b-4bit`, so the shipped Hub reports `files_state: not_installed` and the native gate reads "Its files are not verified" **[M]**. The 2026-09-24 review hashed all eleven files and they matched. The card's "imported" is true of the bytes and false of the app's own notion of installed. |
 | ST-14.6: Mac library and all four kit libraries stocked; each kit carries the chat-capable app and `qwen3-5-9b-4bit`; `RESULT: PASS` | **HOLDS in substance, numbers stale** | Four drives, today: **24 installed / 24 advertised** (was 20/20), chat receipt present, `manifest_sha256` matches `model_packages.manifest_digest`, all 11 files size-match, kit app **0.6.62/`3e1a0eb`** (was 0.6.56/`4e87afd`), **215–234 files / 70.5–72.5 GB** (was 181 / 64.5 GB). I did not re-run `verify-kit.sh` itself. **[M]** |
 | ST-14.4b: Hub-dispatched generation proven — five workers, one authenticated `POST /api/hub/chat/completions`, 24 completion tokens, `elapsed_seconds` 0.973, clean shutdown | **HOLDS as a dated receipt** | `.build/chat-qual/hub_chat_completion.json` contains exactly that (usage 23/24/47, reply about the sky, `elapsed_seconds 0.973`). Today's probe confirms the Hub still starts all five workers (`/api/health` → `workers: 5`) and that `/api/hub/model-packages` → 200 with the chat row; the dispatch hop itself was not re-taken here (it needs a 6 GB load). **[M]** |
 | Gated apply list item 5: `packaging/hub_worker.py` chat spec landed, guarded | **HOLDS** | `_chat_spec()` refuses an incomplete bundle, a bad runtime identity and a catalog with no single `chat-mlx` manifest. **[M]** |
@@ -194,10 +192,10 @@ These are stated as limits, not as covered work:
    this 32 GiB M2 Max. The manifest's 16 GB floor is a fit claim, and the "8 GB is not viable"
    sentence in the manifest is an inference nobody has run. §7's harness exists to close this; it
    has not been run on either tier.
-2. **A human typing into the Chat page has never happened.** The proofs are HTTP-level. On this
-   Mac the page cannot send today (no receipt, F2 remnant), and even with a receipt the shipped
-   build would post `model: ""` (F3; being fixed uncommitted in the tree), so the page's own model
-   gates and pause states are untested in use.
+2. **A human typing into the Chat page has never happened.** The proofs are HTTP-level. The page
+   can send on this Mac now that the receipt exists (the coordinator's end-to-end 200 in 11.98 s),
+   but the shipped build posts `model: ""` (F3; being fixed uncommitted in the tree), so the page's
+   own model gates and pause states are still untested in use.
 3. **Nothing refuses on memory tier.** The worker warns below 16 GB and stays `eligible`; the
    Hub's total-memory floor is `0` without an operator override; the native gate ignores the
    warning. So "does an 8 GB Mac refuse honestly?" is, today, **"no — it tries"** **[M, code]**.
@@ -300,7 +298,8 @@ manifest) is corrected to the shipped `qwen3-5-9b-4bit` (uniform 4-bit MLX, 11 f
    caveat, and the verified Hub-token reachability.
 3. New: `qualification/chat-tier-run.sh`, `qualification/README-chat-tiers.md`,
    `qualification/evidence/st14-review-2026-09-25/`.
-4. Not corrected (not mine): `docs/tasks/HANDOFF.md` still says "ST-14.8 independent review has not
-   happened" and carries the 0.6.56 kit identity in the ST-14 paragraph; `components/chat`'s
-   catalog string and the manifest's stale sentence (F11) wait for the tier measurement. I touched
-   no worker, Hub, native or packaging file.
+4. Corrected by the coordinator while this review was being finished: `docs/tasks/HANDOFF.md`'s
+   "ST-14.8 independent review has not happened" line and `BOARD.md` (commit `4c3d894`), and the
+   receipt/Verify correction (commit `6c1a4de`). Still not mine: `components/chat`'s catalog string
+   and the manifest's stale sentence (F11) wait for the tier measurement. I touched no worker, Hub,
+   native or packaging file.
