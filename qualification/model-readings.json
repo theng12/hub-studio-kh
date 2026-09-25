@@ -1,0 +1,105 @@
+{
+  "schema": "studiohub.model-readings.v1",
+  "what_this_is": "The measurements that exist only as prose, collected into rows so `qualification/model_record.py` can put them in one readable place beside the tiers the manifests declare. Each row names the record it was read from; `packaging/../tests/test_model_record.py` fails if a row's `source_path` no longer exists, so a reading cannot outlive its evidence.",
+  "admission_rule": "A row is admitted only if the run left a stored record. A number that survives only as a sentence somewhere is not admitted, and the lane-contract rule for `runtime_seconds` is the same rule: an absent number is honest, a curated one is the defect. Where a machine has not been measured, the row is absent and the document says so.",
+  "readings": [
+    {
+      "package_id": "qwen3-5-9b-4bit",
+      "model": "Qwen3.5-9B 4-bit",
+      "quantization": "uniform 4-bit MLX",
+      "engine": "chat-mlx",
+      "machine": "16 GB · Apple M1",
+      "tier_gb": 16,
+      "outcome": "completed a 256-token completion",
+      "metrics": {
+        "tokens_per_second": "12.40–12.48",
+        "generation_seconds": "20.64 / 20.51",
+        "load_seconds": 9.08,
+        "peak_mlx_gb": 5.23,
+        "swap_peak_mb": 0.25,
+        "memory_available_at_start_gb": 7.7
+      },
+      "evidence": "M",
+      "source": "chat-tier-run.sh verdict block, run by the owner 2026-09-25",
+      "source_path": "qualification/README-chat-tiers.md"
+    },
+    {
+      "package_id": "qwen3-5-9b-4bit",
+      "model": "Qwen3.5-9B 4-bit",
+      "quantization": "uniform 4-bit MLX",
+      "engine": "chat-mlx",
+      "machine": "16 GB · Apple M2",
+      "tier_gb": 16,
+      "outcome": "completed a 256-token completion",
+      "metrics": {
+        "tokens_per_second": "14.14–14.02",
+        "generation_seconds": "18.11 / 18.26",
+        "load_seconds": 13.69,
+        "peak_mlx_gb": 5.23,
+        "swap_peak_mb": 0.0,
+        "memory_available_at_start_gb": 8.85
+      },
+      "evidence": "M",
+      "source": "chat-tier-run.sh verdict block, run by the owner 2026-09-25",
+      "source_path": "qualification/README-chat-tiers.md"
+    },
+    {
+      "package_id": "qwen3-5-9b-4bit",
+      "model": "Qwen3.5-9B 4-bit",
+      "quantization": "uniform 4-bit MLX",
+      "engine": "chat-mlx",
+      "machine": "16 GB · Apple M4",
+      "tier_gb": 16,
+      "outcome": "completed a 256-token completion",
+      "metrics": {
+        "tokens_per_second": "18.33–18.60",
+        "generation_seconds": "13.97 / 13.76",
+        "load_seconds": 12.48,
+        "peak_mlx_gb": 5.23,
+        "swap_peak_mb": 0.0,
+        "memory_available_at_start_gb": 7.78
+      },
+      "evidence": "M",
+      "source": "chat-tier-run.sh verdict block, run by the owner 2026-09-25",
+      "source_path": "qualification/README-chat-tiers.md"
+    },
+    {
+      "package_id": "z-image-turbo-mflux-4bit",
+      "model": "Z-Image-Turbo 6B MLX 4-bit",
+      "quantization": "4-bit mflux pack",
+      "engine": "image-mflux",
+      "machine": "32 GiB · Apple M2 Max",
+      "tier_gb": 16,
+      "outcome": "1280×720, 9 steps, seed 42 — completed in both configurations",
+      "metrics": {
+        "generation_seconds_default": 166,
+        "generation_seconds_low_ram": 236,
+        "peak_mlx_gb_default": 9.84,
+        "peak_mlx_gb_low_ram": 6.26,
+        "peak_footprint_gb_default": 17.7,
+        "peak_footprint_gb_low_ram": 7.12,
+        "swaps": 0
+      },
+      "evidence": "M",
+      "source": "Z-Image-Turbo generation time and memory requirements, 2026-09-24",
+      "source_path": "qualification/z-image-turbo-2026-09-24.md"
+    },
+    {
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "model": "FLUX.2 Klein 4B MLX 4-bit",
+      "quantization": "4-bit MLX",
+      "engine": "image-mflux",
+      "machine": "32 GiB · Apple M2 Max",
+      "tier_gb": 16,
+      "outcome": "measured beside Z-Image in the same configuration; no stored runtime of its own",
+      "metrics": {
+        "peak_mlx_gb_default": 12.9,
+        "low_ram_mode": "none — this model has no bounded configuration",
+        "weights_on_disk_gb": 4.62
+      },
+      "evidence": "M",
+      "source": "the like-for-like comparison table in the Z-Image record",
+      "source_path": "qualification/z-image-turbo-2026-09-24.md"
+    }
+  ]
+}
