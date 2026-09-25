@@ -31,12 +31,26 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `16b4a80`, installed to `/Applications` and staged into
-all four kits; DMG `dist/StudioHub-0.6.64-16b4a80.dmg`. Verified live from the **installed**
+**Shipped state:** implementation commit `fabe498`, installed to `/Applications` and staged into
+all four kits; DMG `dist/StudioHub-0.6.64-fabe498.dmg`. Verified live from the **installed**
 bundle: `/api/health` answers `"bind": {"known": true, "hosts": ["127.0.0.1"], "classes":
 {"127.0.0.1": "loopback"}, "port": 47899, "loopback_only": true, "reachable_off_this_mac": false,
 "tailnet": [], "wildcard": false}`.
-**Superseded:** `a4a78dc` (0.6.63), whose DMG is in `_trash/dist/`. App identity **`0.6.63 a4a78dc`,
+**Superseded:** `a4a78dc` (0.6.63) and `16b4a80` (0.6.64's first cut), both in `_trash/dist/`.
+**0.6.64 was cut twice**: the node-local-generation fix (`2433f63`) landed after the first stage, so
+the drives briefly carried a build that made the fleet reachable but still refused the owner's own
+work on a node. Re-cut rather than making him update twice.
+
+**A flaky native test, seen once:** `bash native/build.sh` failed with *"the in-flight read must
+have been torn down by the cancellation"* and passed on an immediate re-run with `native/` provably
+unmodified (`git status` clean). Recorded because a gate that fails once in a while is a gate people
+learn to re-run, which is the same as not having it. Not chased; it needs a deliberate reproduction.
+
+**A trap, walked into and out of on the same day:** reading `tests/test_hub_jobs.py`, two
+`class HubJobProofTests` by `grep` look like one shadowing the other and eleven tests never running.
+They do run — `_PROOF = r'''…'''` spans lines 19–733, so the first is *inside a string*, the
+packaged-Hub program a subprocess executes. `87c1e04` is a revert of exactly that conclusion, and it
+says so. The parser saw four classes while `grep` saw six. **Ask the parser.** App identity **`0.6.63 a4a78dc`,
 `development_build: False`**; each kit's library is 24 packages plus the Hugging Face cache
 (70,529,417,547 bytes) and every kit reports `problems: []`; `verify-kit.sh` reports **PASS** on
 ATLAS, NOVA, ORICO and UGREEN. Both `main` and `implementation/voice-runtime` are pushed to
