@@ -223,6 +223,174 @@ class ModelPackageIsolationTests(unittest.TestCase):
         self.assertIn("STUDIOHUB_MODELS_DIR", unusable["reason"])
 
 
+CHILD_VERIFY = r'''
+"""What the Verify Files route answers in each case, through the real packaged app.
+
+The app reads this route with a hard ``try`` and shows the row it returns, so the row has to
+carry what the verify measured. The case that was broken: bytes present at the conventional
+folder with no receipt - the owner's `mlx-community/Qwen3.5-9B-4bit` (4-bit) - answered
+`not_installed` and the row said "install it" after a hash-free 0.0 s.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from components import model_packages
+from components.hub import standalone
+from components.hub.backend import auth
+
+library = Path(os.environ["STUDIOHUB_MODELS_DIR"]).resolve()
+manifests = Path(os.environ["STUDIOHUB_MODEL_MANIFESTS"]).resolve()
+REVISION = "a" * 40
+FILES = {"model/config.json": b'{"tiny": true}', "model/weights.safetensors": b"weights"}
+
+
+def manifest(package_id, contents, requires=()):
+    return {
+        "schema_version": 1, "package_id": package_id, "model_id": "owner/" + package_id,
+        "revision": REVISION, "engine": "voice-mlx", "minimum_macos": "14.0",
+        "requires_packages": list(requires),
+        "files": [{"path": name, "size": len(data),
+                   "sha256": hashlib.sha256(data).hexdigest(),
+                   "urls": ["https://example.test/" + name]}
+                  for name, data in contents.items()],
+    }
+
+
+def lay(package_id, contents):
+    folder = library / package_id / REVISION
+    for name, data in contents.items():
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return folder
+
+
+catalog = {package_id: manifest(package_id, FILES)
+           for package_id in ("tiny-model", "broken-model", "stale-model", "absent-model")}
+for package_id, value in catalog.items():
+    (manifests / (package_id + ".json")).write_text(json.dumps(value))
+lay("tiny-model", FILES)
+lay("broken-model", {**FILES, "model/weights.safetensors": b"broken"})
+lay("stale-model", FILES)
+(library / ".studiohub").mkdir(mode=0o700, exist_ok=True)
+# A receipt whose digest the manifest moved under, with the bytes untouched: the
+# `chatterbox-{4,8}bit` shape after their companion field changed.
+moved = json.loads(json.dumps(catalog["stale-model"]))
+moved["requires_packages"] = ["companion"]
+model_packages._register(moved, library / "stale-model" / REVISION, library)
+
+token = auth.load_token()
+app = standalone.create_app(start_background=False)
+with TestClient(app) as client:
+    routes = {}
+    for package_id in ("tiny-model", "broken-model", "stale-model", "absent-model"):
+        response = client.post("/api/hub/model-packages/%s/verify" % package_id,
+                               headers={"X-Hub-Token": token})
+        routes[package_id] = {"status": response.status_code, "body": response.json()}
+installed = json.loads((library / ".studiohub" / "installed.json").read_text())
+print("RESULT:" + json.dumps({
+    "routes": routes,
+    "receipts": {key: value.get("manifest_sha256") for key, value in installed.items()},
+    "digests": {key: model_packages.manifest_digest(value) for key, value in catalog.items()},
+}))
+'''
+
+
+class VerifyRouteTests(unittest.TestCase):
+    """Verify Files must publish the measurement, not the row from before it ran."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-verify-")
+        root = Path(self.temporary.name)
+        self.manifests = root / "model-manifests"
+        self.manifests.mkdir()
+        write_catalog(self.manifests)
+        self.library = root / "model-library"
+        self.library.mkdir()
+        workers = root / "private-workers.json"
+        workers.write_text(json.dumps([_voice_worker()]))
+        os.chmod(workers, 0o600)
+        release = root / "release.json"
+        release.write_text(json.dumps({"version": "0.0.0", "components": {}}))
+        self.env = os.environ.copy()
+        self.env.update({
+            "STUDIOHUB_DATA_DIR": str(root / "state"),
+            "STUDIOHUB_WORKERS_FILE": str(workers),
+            "STUDIOHUB_MODEL_MANIFESTS": str(self.manifests),
+            "STUDIOHUB_MODELS_DIR": str(self.library),
+            "STUDIOHUB_PACKAGED": "1",
+            "STUDIOHUB_RELEASE_MANIFEST": str(release),
+            "PYTHONPATH": os.pathsep.join([str(WORKTREE), os.environ.get("PYTHONPATH", "")])
+                         .rstrip(os.pathsep),
+        })
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _verify(self) -> dict:
+        completed = subprocess.run(
+            [_runtime(), "-c", textwrap.dedent(CHILD_VERIFY)],
+            cwd=WORKTREE, env=self.env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(
+            completed.returncode, 0,
+            "isolated verify fixture failed:\nstdout:\n%s\nstderr:\n%s"
+            % (completed.stdout, completed.stderr),
+        )
+        line = next((row for row in reversed(completed.stdout.splitlines())
+                     if row.startswith("RESULT:")), None)
+        self.assertIsNotNone(line, f"the fixture printed no result:\n{completed.stdout}")
+        return json.loads(line[len("RESULT:"):])
+
+    def _row(self, payload: dict, package_id: str) -> dict:
+        route = payload["routes"][package_id]
+        self.assertEqual(route["status"], 200, route)
+        return route["body"]
+
+    def test_bytes_on_disk_with_no_receipt_verify_and_become_dispatchable(self) -> None:
+        payload = self._verify()
+        row = self._row(payload, "tiny-model")
+        self.assertEqual(row["files_state"], "files_verified", row)
+        self.assertEqual(row["state"], "files_verified", row)
+        self.assertEqual(row["dispatch_state"], "eligible", row)
+        self.assertEqual(row["verification"], "full_rehash",
+                         "the response must describe the rehash it just ran, not the cached row")
+        self.assertEqual(payload["receipts"]["tiny-model"], payload["digests"]["tiny-model"],
+                         "the verify did not register the package it just hashed")
+
+    def test_bytes_that_do_not_match_are_named_and_never_called_not_installed(self) -> None:
+        payload = self._verify()
+        row = self._row(payload, "broken-model")
+        self.assertEqual(row["state"], "invalid", row)
+        self.assertEqual(row["files_state"], "invalid", row)
+        self.assertEqual(row["dispatch_state"], "ineligible", row)
+        self.assertNotEqual(row["state"], "not_installed",
+                            "the bytes are present; the pre-verify row must not be republished")
+        self.assertIn("broken-model", row["reason"])
+        self.assertIn("weights.safetensors", row["reason"])
+        self.assertIn("broken-model.json", row["reason"])
+        self.assertNotIn("broken-model", payload["receipts"])
+        self.assertIn("broken-model.json", payload["routes"]["broken-model"]["body"]["reason"])
+
+    def test_a_receipt_the_manifest_moved_under_is_repaired(self) -> None:
+        payload = self._verify()
+        row = self._row(payload, "stale-model")
+        self.assertEqual(row["files_state"], "files_verified", row)
+        self.assertEqual(payload["receipts"]["stale-model"], payload["digests"]["stale-model"])
+
+    def test_nothing_on_disk_is_not_installed_with_a_reason(self) -> None:
+        payload = self._verify()
+        row = self._row(payload, "absent-model")
+        self.assertEqual(row["state"], "not_installed", row)
+        self.assertEqual(row["dispatch_state"], "ineligible", row)
+        self.assertIn("absent-model", row["reason"])
+        self.assertIn("<library>/absent-model/" + "a" * 40, row["reason"])
+
+
 class LaneContractRouteTests(unittest.TestCase):
     """The route a scheduler reads carries the lane: modality, contract, and the Hub's deadline."""
 

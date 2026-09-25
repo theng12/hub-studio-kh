@@ -481,6 +481,252 @@ class ModelPackageTests(unittest.TestCase):
         self.assertEqual(packages.preflight(dependent, self.library, catalog=catalog)['state'], 'files_verified')
 
 
+class VerifyInstalledTests(unittest.TestCase):
+    """Verify Files must verify the files that are there, not only a receipt that already agrees.
+
+    Measured on the shipped 0.6.62 bundle: `mlx-community/Qwen3.5-9B-4bit` (4-bit) had all
+    5,977,071,067 bytes at the conventional ``<library>/<package_id>/<revision>/model`` path and
+    **no receipt**, and `verify_installed` answered `not_installed` in 0.0 s - so the instruction
+    "press Verify Files" could not do anything. The same early return left the
+    `chatterbox-{4,8}bit` manifests unrepairable after their digest moved under their receipts.
+    Each case below is one of the three answers that button has to give.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.source = self.root / 'source'
+        self.library = self.root / 'library'
+        self.source.mkdir()
+        self.library.mkdir()
+        self.files = {'weights.safetensors': b'actual weights',
+                      'tokenizer/config.json': b'{"vocab": 1}'}
+        self.manifest = manifest(self.files)
+        for name, data in self.files.items():
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        # The layout the kits, the copy script and the owner's chat model use: bytes at the
+        # conventional folder, with no receipt anywhere.
+        self.folder = self.library / 'test-model' / ('a' * 40)
+        for name, data in self.files.items():
+            path = self.folder / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+    def receipt(self):
+        return packages._index(self.library).get('test-model')
+
+    def test_bytes_at_the_conventional_path_are_hashed_and_recorded(self):
+        self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'not_installed')
+        with mock.patch.object(packages, '_check_stream', wraps=packages._check_stream) as checked:
+            report = packages.verify_installed(self.manifest, self.library)
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(report['verification'], 'full_rehash')
+        self.assertEqual(report['folder'], str(self.folder))
+        self.assertEqual(checked.call_count, len(self.manifest['files']),
+                         'every file must be hashed, not merely stat-ed')
+        record = self.receipt()
+        self.assertEqual(record['manifest_sha256'], packages.manifest_digest(self.manifest))
+        self.assertEqual(record['folder'], 'test-model/' + 'a' * 40)
+        self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'files_verified')
+
+    def test_bytes_that_do_not_match_are_refused_by_name_and_nothing_is_recorded(self):
+        # A same-size rewrite and a truncation: the two failures a copied library actually has,
+        # each named with what was measured rather than "incomplete or invalid".
+        for written, expected in ((b'wrong weights!', 'hashes to'),
+                                  (b'short', 'is 5 bytes, not the 14 bytes')):
+            with self.subTest(written=written):
+                (self.folder / 'weights.safetensors').write_bytes(written)
+                report = packages.verify_installed(self.manifest, self.library)
+                self.assertEqual(report['state'], 'invalid', report)
+                self.assertIn('test-model', report['reason'])
+                self.assertIn('weights.safetensors', report['reason'])
+                self.assertIn('model-manifests/test-model.json', report['reason'])
+                self.assertIn(expected, report['reason'])
+                self.assertIsNone(self.receipt(), 'a failed verify must not write a receipt')
+                self.assertEqual((self.folder / 'weights.safetensors').read_bytes(), written,
+                                 'verification never rewrites a model file')
+
+    def test_a_receipt_the_manifest_moved_under_is_rewritten(self):
+        packages.import_folder(self.manifest, self.source, self.library)
+        changed = copy.deepcopy(self.manifest)
+        changed['minimum_macos'] = '15.0'          # A catalog change that moves the digest.
+        self.assertNotEqual(packages.manifest_digest(changed),
+                            packages.manifest_digest(self.manifest))
+        self.assertEqual(packages.preflight(changed, self.library)['state'], 'not_installed')
+        report = packages.verify_installed(changed, self.library)
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(self.receipt()['manifest_sha256'], packages.manifest_digest(changed))
+        self.assertEqual(packages.preflight(changed, self.library)['state'], 'files_verified')
+        self.assertEqual((self.folder / 'weights.safetensors').read_bytes(), b'actual weights')
+
+    def test_a_receipt_the_manifest_moved_under_still_refuses_changed_bytes(self):
+        packages.import_folder(self.manifest, self.source, self.library)
+        changed = copy.deepcopy(self.manifest)
+        changed['files'][0]['sha256'] = 'f' * 64   # The manifest now describes other bytes.
+        report = packages.verify_installed(changed, self.library)
+        self.assertEqual(report['state'], 'invalid', report)
+        self.assertIn('weights.safetensors', report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+        # The receipt that is left is the one that was true before; nothing was rewritten to
+        # describe bytes that are not there, so the package cannot read as verified under it.
+        self.assertEqual(self.receipt()['manifest_sha256'],
+                         packages.manifest_digest(self.manifest))
+        self.assertEqual(packages.preflight(changed, self.library)['state'], 'not_installed')
+
+    def test_nothing_on_disk_stays_not_installed_with_the_paths_it_looked_for(self):
+        shutil.rmtree(self.folder)
+        report = packages.verify_installed(self.manifest, self.library)
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assertIn('test-model', report['reason'])
+        self.assertIn('<library>/test-model/' + 'a' * 40, report['reason'])
+        self.assertIn('model-manifests/test-model.json', report['reason'])
+
+    def test_a_receipt_whose_folder_is_gone_is_not_installed_rather_than_damaged(self):
+        packages.import_folder(self.manifest, self.source, self.library)
+        shutil.rmtree(self.library / 'test-model')
+        report = packages.verify_installed(self.manifest, self.library)
+        self.assertEqual(report['state'], 'not_installed', report)
+        self.assertIn('test-model', report['reason'])
+
+    def test_a_receipt_for_another_revision_does_not_hide_the_revisions_own_folder(self):
+        packages.import_folder(self.manifest, self.source, self.library)
+        newer = copy.deepcopy(self.manifest)
+        newer['revision'] = 'b' * 40
+        destination = self.library / 'test-model' / ('b' * 40)
+        for name, data in self.files.items():
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.assertEqual(packages.preflight(newer, self.library)['state'], 'not_installed')
+        report = packages.verify_installed(newer, self.library)
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(report['folder'], str(destination),
+                         'the bytes for the manifest revision must win over an older receipt')
+        self.assertEqual(self.receipt()['revision'], 'b' * 40)
+
+    def test_a_folder_named_by_its_receipt_is_still_found_when_its_bytes_match_a_new_manifest(self):
+        """`import_folder` keeps the name of a folder already inside the library.
+
+        The receipt is then the only record of where the package lives, so a manifest change must
+        still be repaired from that folder rather than answered with `not_installed`.
+        """
+        copied = self.library / 'my copied model'
+        self.folder.rename(copied)
+        packages.import_folder(self.manifest, copied, self.library)
+        self.assertEqual(self.receipt()['folder'], 'my copied model')
+        changed = copy.deepcopy(self.manifest)
+        changed['minimum_macos'] = '15.0'
+        report = packages.verify_installed(changed, self.library)
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(report['folder'], str(copied))
+
+
+class ShippedManifestMigrationTests(unittest.TestCase):
+    """The `chatterbox-{4,8}bit` repair, driven by the shipped manifests themselves.
+
+    Their receipts were written while their companion list was spelled `dependencies`, a field
+    `manifest_digest` did not read; the current manifests declare it in `requires_packages`, so
+    the digest moved under a receipt nothing rewrote - and Verify Files answered `not_installed`
+    without hashing a byte. The installed copies are on the kit SSDs (`/Volumes/KH-STUDIO-*`),
+    not on this machine, so the bytes here are fixtures. Everything that makes the receipt stale
+    is the shipped value: package id, revision, engine, the companion relationship, every file
+    path and the publisher layout - and the digest premise is asserted against the real manifest.
+    """
+
+    SHIPPED = ('chatterbox-4bit', 'chatterbox-8bit')
+    COMPANION = 's3tokenizerv2'
+
+    def real(self, package_id):
+        return json.loads((ROOT / 'model-manifests' / f'{package_id}.json').read_text())
+
+    def fixture(self, real, prefix):
+        """The shipped manifest with its file list replaced by bytes this machine can hold."""
+        trimmed = copy.deepcopy(real)
+        trimmed['files'] = []
+        for entry in real['files']:
+            data = (prefix + entry['path']).encode()
+            replacement = {k: entry[k] for k in ('path', 'source_path') if k in entry}
+            trimmed['files'].append({
+                **replacement, 'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest(),
+                'urls': ['https://example.test/' + entry['path']]})
+        return trimmed
+
+    def install(self, manifest, library, prefix):
+        """Lay a fixture package on disk and register it, as the kit copy would have."""
+        source = library.parent / ('source-' + manifest['package_id'])
+        files = {}
+        for entry in manifest['files']:
+            data = (prefix + entry['path']).encode()
+            files[entry['path']] = data
+            path = source / entry['path']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        packages.import_folder(manifest, source, library)
+        return files
+
+    def test_the_shipped_receipts_were_invalidated_by_the_companion_field(self):
+        for package_id in self.SHIPPED:
+            with self.subTest(package=package_id):
+                real = self.real(package_id)
+                before = copy.deepcopy(real)
+                # What the digest saw while the companions were in the legacy field: not at all.
+                before['requires_packages'] = []
+                self.assertTrue(packages.required_packages(real))
+                self.assertNotEqual(
+                    packages.manifest_digest(real), packages.manifest_digest(before),
+                    f'{package_id}: the companion list is not part of the manifest digest, so the '
+                    f'receipt could not have gone stale when the field moved')
+
+    def test_a_stale_receipt_is_repaired_and_the_companion_reaches_the_engine_cache(self):
+        for package_id in self.SHIPPED:
+            with self.subTest(package=package_id):
+                with tempfile.TemporaryDirectory() as tmp:
+                    library = Path(tmp).resolve() / 'library'
+                    library.mkdir()
+                    real = self.real(package_id)
+                    manifest = self.fixture(real, '')
+                    companion_real = self.real(self.COMPANION)
+                    companion = self.fixture(companion_real, 'tokenizer ')
+                    companion_files = self.install(companion, library, 'tokenizer ')
+                    # The receipt the owner's library holds for this package: the digest the
+                    # legacy-spelled manifest produced, which the current manifest no longer
+                    # matches.
+                    legacy = copy.deepcopy(manifest)
+                    legacy['requires_packages'] = []
+                    self.install(legacy, library, '')
+                    catalog = {package_id: manifest, self.COMPANION: companion}
+                    self.assertEqual(
+                        packages.preflight(manifest, library, catalog=catalog)['state'],
+                        'not_installed',
+                        'the dead end as measured: bytes on disk, receipt the manifest moved under')
+                    report = packages.verify_installed(manifest, library, catalog=catalog)
+                    self.assertEqual(report['state'], 'files_verified', report)
+                    self.assertEqual(report['verification'], 'full_rehash')
+                    record = packages._index(library)[package_id]
+                    self.assertEqual(record['manifest_sha256'],
+                                     packages.manifest_digest(manifest))
+                    self.assertEqual(packages.preflight(manifest, library,
+                                                        catalog=catalog)['state'],
+                                     'files_verified')
+                    self.assertEqual(report['companion_cache']['state'], 'ready', report)
+                    plan, problems = packages._companion_plan(library, manifest, catalog)
+                    self.assertEqual(problems, [])
+                    self.assertTrue(plan, 'the companion has no files to place')
+                    for target, item in plan.items():
+                        placed = library / target
+                        self.assertTrue(placed.is_file(), target)
+                        self.assertEqual(placed.read_bytes(),
+                                         companion_files[item['entry']['path']])
+                    repo = companion_real['source']['layout']['model']['repo']
+                    revision = companion_real['source']['layout']['model']['revision']
+                    self.assertIn(f'hub/models--{repo.replace("/", "--")}/snapshots/{revision}',
+                                  ' '.join(plan))
+
+
 class CompanionCacheTests(unittest.TestCase):
     """A companion must reach the path the engine loads it from, not only the library.
 
@@ -578,6 +824,27 @@ class CompanionCacheTests(unittest.TestCase):
             for label, (path, digest) in found.items():
                 self.assertEqual(digest, hashlib.sha256(data).hexdigest(), (filename, label))
                 self.assertTrue(Path(path).is_file(), (filename, label, path))
+
+    def test_a_receiptless_host_still_ends_with_its_companion_in_the_engine_cache(self):
+        """The newly registered case has to run the companion half too.
+
+        A package whose bytes are on disk with no receipt verifies and registers; an explicit
+        verify is also where the operator asks for the whole thing to be true, so the companion
+        must still be placed where the engine reads it.
+        """
+        folder = self.library / self.host['package_id'] / ('a' * 40)
+        for name, data in self.files.items():
+            path = folder / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        # The companion was verified against a library whose engine cache was never written:
+        # there is no `hub` folder at all.
+        self.assertFalse((self.library / 'hub').exists())
+        report = packages.verify_installed(self.host, self.library, catalog=self.catalog)
+        self.assertEqual(report['state'], 'files_verified', report)
+        self.assertEqual(report['companion_cache']['state'], 'ready', report)
+        for target in self.targets():
+            self.assertTrue((self.library / target).is_file(), target)
 
     def test_an_unwritable_library_degrades_by_name_instead_of_reporting_success(self):
         # Installed first without the catalog, which is the shape a receipt copied from a Mac

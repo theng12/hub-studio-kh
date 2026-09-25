@@ -1420,8 +1420,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            model_packages.verify_installed(manifest, _model_library(), catalog=catalog)
-            return _model_state(manifest, catalog, monitor)
+            report = model_packages.verify_installed(manifest, _model_library(), catalog=catalog)
+            row = _model_state(manifest, catalog, monitor)
+            # The row is built from the cheap receipt check, and a verify that fails - bytes that
+            # are present but not this manifest's, a companion cache that could not be written -
+            # leaves that receipt exactly as it was. Returning the row unchanged would answer a
+            # named failure with the state from before it ran, and for a package that has no
+            # receipt that state is `not_installed`: "nothing is here" printed directly after
+            # "these bytes are wrong". The report is the measurement the operator just asked for.
+            state = report.get("state")
+            update: dict[str, Any] = {}
+            if state and state not in ("files_verified", row.get("files_state")):
+                update = {"state": state, "files_state": state, "reason": report.get("reason"),
+                          "dispatch_state": "ineligible"}
+            elif report.get("reason") and not row.get("reason"):
+                # Same state, but the verify is the call that actually looked for the files: its
+                # reason names the folder that is missing and the manifest to look at, where the
+                # cheap receipt check has nothing to say.
+                update = {"reason": report["reason"]}
+            if report.get("verification"):
+                # This response is the one place the operator asked for a full rehash; saying
+                # `cached_receipt` here would describe the pre-verify row instead of the work the
+                # button just did.
+                update["verification"] = report["verification"]
+            return {**row, **update} if update else row
         except KeyError as exc:
             raise HTTPException(404, "unknown model package") from exc
         except (OSError, ValueError) as exc:

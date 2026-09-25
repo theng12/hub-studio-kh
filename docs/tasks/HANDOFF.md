@@ -39,9 +39,15 @@ collection by its own `collect_ignore`, so **run it explicitly**; `bash native/b
 
 **Three things this release changes about the owner's Macs, all of them one-time:**
 
-1. `chatterbox-4bit` (MLX 4-bit) and `chatterbox-8bit` (MLX 8-bit) re-verify once, because the
-   manifest's companion list moved from the legacy `dependencies` field to `requires_packages` and
-   that changes the receipt digest. Everything else is unchanged — measured, not assumed.
+1. `chatterbox-4bit` (MLX 4-bit) and `chatterbox-8bit` (MLX 8-bit) need verifying **by hand**, once,
+   because the manifest's companion list moved from the legacy `dependencies` field to
+   `requires_packages` and that changed the receipt digest. **Correction (2026-09-25): this note
+   used to say they "re-verify once on the next launch". Nothing re-verifies automatically, and
+   pressing Verify Files could not repair them either — `verify_installed` returned `not_installed`
+   in 0.0 s whenever the receipt did not already agree with the digest, so it could only re-hash a
+   package that was already fine.** That dead end is fixed (see the verify entry below); on a build
+   before the fix the operator has to re-import. Everything else is unchanged — measured, not
+   assumed.
 2. The five companion-bearing voice packages (chatterbox 4-bit/8-bit, pocket-tts-4bit MLX 4-bit,
    qwen3-tts-12hz-0-6b-base-8bit MLX 8-bit, qwen3-tts-12hz-1-7b-base-4bit MLX 4-bit) report
    `companion_cache_missing` until the Hub's first catalog refresh writes the cache mirror. It is a
@@ -85,6 +91,27 @@ pocket-tts; it now reads the producer's field through one table and fails loudly
 The native build has no fallback for a missing `modes`: a model that publishes none stays listed
 with no tabs and generation blocked, naming what to update. **App and worker must ship together**,
 which they do — one bundle.
+
+**Verify Files was a dead end; it verifies now — and the LLM lane is proven end to end.** The Chat
+page told the owner "Its files are not verified. Open Models and press Verify Files." Pressing it did
+nothing: `verify_installed` decided from the receipt alone and returned `not_installed` in **0.0 s**
+whenever the receipt was missing or its digest had moved, so it could only re-hash a package that was
+already correct. Measured on the shipped 0.6.62 with Qwen3.5-9B 4-bit's 5,977,071,067 bytes sitting at
+the conventional folder and no receipt: `POST /api/hub/model-packages/qwen3-5-9b-4bit/verify` → 200,
+`not_installed`, nothing hashed, and Hub-side chat refused `503 MODEL_NOT_READY`. The same early
+return made `chatterbox-4bit` (MLX 4-bit) and `chatterbox-8bit` (MLX 8-bit) unrepairable after their
+digest moved — their receipts are exactly `manifest_digest` of the manifest **with the companion list
+emptied**, which is what the legacy `dependencies` spelling produced.
+
+It now hashes whatever is on disk and records the result: a package with no receipt registers, one
+whose digest moved verifies against the current manifest and rewrites its receipt, and one with
+nothing on disk stays `not_installed` with a reason naming both paths it looked in. Bytes that do not
+match are refused by name — package, file, measured size/sha256 — and the route publishes that
+refusal instead of republishing preflight's `not_installed`. Measured after: verify **2.97 s** →
+`files_verified`, `dispatch_state: eligible`; and a real completion through the installed Hub —
+**`POST /api/hub/chat/completions` → 200 in 7.61 s**, "The capital of Cambodia is Phnom Penh.", usage
+24/10/34, `finish_reason: stop`. Longer term this is why "the app says a model is missing when its
+bytes are present" must never be answered with an instruction that cannot work.
 
 **Open, with the exact fix rather than a guess:**
 

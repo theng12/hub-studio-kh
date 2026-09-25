@@ -501,8 +501,19 @@ def _check_stream(stream, entry, destination=None):
         digest.update(chunk)
         if destination is not None:
             destination.write(chunk)
-    if size != entry['size'] or digest.hexdigest() != entry['sha256']:
-        raise PackageError(f'Incomplete or invalid model file: {entry["path"]}')
+    # The failure says which check failed and what was measured. "Incomplete or invalid" left the
+    # operator with a file name and no reason, which is the shape of message that gets ignored
+    # rather than acted on - and a size that differs and a hash that differs are different
+    # repairs (a truncated copy against a file that is simply not this model's).
+    if size != entry['size']:
+        raise PackageError(
+            f'Incomplete model file: {entry["path"]} is {size} bytes, not the {entry["size"]} '
+            f'bytes the manifest records')
+    measured = digest.hexdigest()
+    if measured != entry['sha256']:
+        raise PackageError(
+            f'Model file does not match its manifest: {entry["path"]} hashes to '
+            f'sha256:{measured}, not the sha256:{entry["sha256"]} the manifest records')
 
 
 # ── Companion packages must also reach the engine the way the engine reads them ────────────
@@ -1011,22 +1022,89 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
             'verification': 'cached_receipt', 'companion_cache': cache}
 
 
+def _installed_folder(root, manifest, record):
+    """The library-relative folder this package's bytes are in, or None.
+
+    Two pieces of evidence, and the order between them is the whole decision:
+
+    * the folder the **receipt** names - the only record of an install performed under a folder
+      name that is not the conventional one, because `import_folder` keeps the name of a folder
+      that is already inside the library (`test_in_library_registration_never_makes_second_copy`);
+    * the conventional ``<package_id>/<revision>`` that `_publish` and the kits write, and where
+      the owner's chat model's 5.6 GB sits with **no receipt at all**.
+
+    A receipt that names a *different* revision describes other bytes, so the conventional folder
+    is read first in that one case; the older folder is still tried when there is nothing at the
+    conventional path, because its bytes may be exactly what the current manifest describes.
+
+    Existence, not readability, is all this decides. A folder that is present with damaged or
+    wrong bytes must reach the verifier and be reported by name - returning `not_installed`
+    because the *shape* of the evidence was unexpected is the dead end this function exists to
+    remove.
+    """
+    receipt = None
+    if isinstance(record, dict):
+        try:
+            receipt = _relative(record.get('folder') or '')
+        except PackageError:
+            receipt = None
+    conventional = _relative(f"{manifest['package_id']}/{manifest['revision']}")
+    # `revision` has been written by `_register` since the first build; a hand-written receipt
+    # that omits it cannot be said to describe another revision, so it is treated as this one's.
+    same_revision = record.get('revision') in (None, manifest['revision']) if receipt else False
+    for relative in ([receipt, conventional] if same_revision else [conventional, receipt]):
+        if relative and os.path.lexists(root / relative):
+            return relative
+    return None
+
+
 def verify_installed(manifest, library, *, catalog=None):
-    """Rehash the indexed package; this is the explicit operator verify path."""
+    """Rehash the installed package, record it, and place its companions.
+
+    This is the explicit operator path - the button labelled Verify Files - so it verifies the
+    files that are **there**, not only the ones a previous verify already recorded:
+
+    * no receipt, bytes at the conventional ``<library>/<package_id>/<revision>`` (how the kits,
+      the copy script and a manual install leave a package): hash them and write the receipt;
+    * a receipt whose digest the current manifest no longer matches - `chatterbox-{4,8}bit` after
+      their companion field moved to `requires_packages`, which changed their digest under a
+      receipt nothing rewrote: verify the current manifest against the files and rewrite it;
+    * nothing on disk: `not_installed`, with the paths that were looked for, so "install it" is
+      the instruction the state actually supports.
+
+    It never downloads and never writes a model file. Bytes that do not match are refused by
+    name - package, file, measured reason, and the manifest to fix - and no receipt is written,
+    so a failed verify cannot turn into a silent pass.
+    """
     validate_manifest(manifest)
     root = _library(library)
+    package_id = manifest['package_id']
     digest = manifest_digest(manifest)
-    base = {'package_id': manifest['package_id'], 'manifest_sha256': digest}
+    base = {'package_id': package_id, 'manifest_sha256': digest}
     try:
         with _lock(root):
-            record = _index(root).get(manifest['package_id'])
-            if not record or record.get('manifest_sha256') != digest:
-                return {**base, 'state': 'not_installed'}
-            folder_relative = _relative(record['folder'])
+            record = _index(root).get(package_id)
+            folder_relative = _installed_folder(root, manifest, record)
+            if folder_relative is None:
+                return {**base, 'state': 'not_installed', 'reason': (
+                    f"{package_id} has no files in this library: neither "
+                    f"<library>/{package_id}/{manifest['revision']} nor the folder its receipt "
+                    f"records is present. Install it in Models (or copy its folder in) and verify "
+                    f"again; its manifest is model-manifests/{package_id}.json.")}
             folder = root / folder_relative
-            # Full verification also refreshes the receipt so a valid touched file
-            # does not remain permanently stale in the cheap preflight path.
-            _register(manifest, folder, root)
+            try:
+                # Full verification also refreshes the receipt so a valid touched file
+                # does not remain permanently stale in the cheap preflight path.
+                _register(manifest, folder, root)
+            except PackageError as error:
+                # The bytes are there and they are not this manifest's. Say what was measured,
+                # where, and which file to fix - and record nothing, so the next reader of
+                # `installed.json` cannot mistake this for a pass.
+                return {**base, 'state': 'invalid', 'reason': (
+                    f"{package_id} is present at <library>/{folder_relative} but does not match "
+                    f"model-manifests/{package_id}.json: {error}. Replace the named file (or "
+                    f"reinstall the package); nothing was recorded and no model file was "
+                    f"changed."), 'verification': 'full_rehash'}
         result = {**base, 'state': 'files_verified', 'folder': str(folder),
                   'engine': manifest['engine'], 'minimum_macos': manifest['minimum_macos'],
                   'verification': 'full_rehash'}
@@ -1053,7 +1131,12 @@ def verify_installed(manifest, library, *, catalog=None):
                     'companion_cache': cache}
         return {**result, 'companion_cache': cache}
     except (OSError, KeyError, TypeError, PackageError) as error:
-        return {**base, 'state': 'invalid', 'reason': str(error),
+        # Infrastructure around the hash - an unreadable receipt, a library that cannot be
+        # locked, a catalog that does not answer. Named with the package and its manifest so the
+        # message points at something to look at rather than a bare exception.
+        return {**base, 'state': 'invalid',
+                'reason': (f'{package_id} could not be verified: {error}. Its manifest is '
+                           f'model-manifests/{package_id}.json.'),
                 'verification': 'full_rehash'}
 
 
