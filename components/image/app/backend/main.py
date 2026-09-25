@@ -12,10 +12,10 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import loading_mode, memory_policy
 from .generation import (MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES, SIZE_PRESETS,
-                         GenerationManager, final_matches, lane_contract, loading_modes,
-                         missing_runtime_model_reason)
+                         GenerationManager, defaults_in_force, final_matches, lane_contract,
+                         lane_parameters, loading_modes, missing_runtime_model_reason)
 
-from components import app_version
+from components import app_version, model_defaults
 
 
 DEFAULT_MODEL = MODELS[MODEL_ID]
@@ -112,7 +112,17 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         state = model_state(model)
         host = state['host']
         warning = memory_warning(model, host)
-        default_width, default_height = SIZE_PRESETS[model.defaults['aspect_ratio']]
+        # The values this worker will actually generate with on this Mac: what the model states,
+        # overridden per parameter by what the operator chose (`model_defaults.json`). One call,
+        # so the catalog's `generation_defaults`, its size table and the lane contract's per
+        # parameter `default` cannot publish two answers to one question — and none of them can
+        # publish a number `validate_request` would refuse, because `resolved()` validates on the
+        # way out too.
+        in_force = defaults_in_force(model, manager.data)
+        # The geometry follows the aspect ratio in force, not the one the model shipped with: a
+        # stored ratio whose width/height still came from another preset would be a form that
+        # disagrees with the job it starts.
+        default_width, default_height = SIZE_PRESETS[in_force['aspect_ratio']]
         sizes = [{'id': ratio, 'label': ratio, 'width': width, 'height': height}
                  for ratio, (width, height) in SIZE_PRESETS.items()]
         ready = state['ready']
@@ -163,8 +173,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'readiness': {'ready': ready, 'files': files, 'host': host,
                           'reason': None if ready else files.get('reason') or host.get('reason')},
             'execution_ready': ready, 'available': ready,
-            'generation_defaults': {**model.defaults, 'width': default_width,
-                                    'height': default_height},
+            # The values in force, with the geometry derived from the aspect ratio in force. The
+            # app pre-fills its form from this and sends every field, so this is the number an
+            # operator's stored default has to reach it by.
+            'generation_defaults': {**model.defaults, **in_force,
+                                    'width': default_width, 'height': default_height},
             'guidance_ignored': model.guidance_ignored,
             'image_sizes': sizes,
             'generation_limits': {key: value for key, value in model.limits.items()
@@ -172,11 +185,12 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'max_prompt_characters': model.limits['max_prompt'],
             'sizes': [{'aspect_ratio': item['id'], 'width': item['width'],
                        'height': item['height'], 'tier': '1K',
-                       'default': item['id'] == model.defaults['aspect_ratio']} for item in sizes],
+                       'default': item['id'] == in_force['aspect_ratio']} for item in sizes],
             # How to ask for this lane's work, per model: operation, accepted parameters and
             # their enforced bounds, artifact, state vocabulary and cancel semantics. Built from
-            # this model's own limits so it cannot disagree with `validate_request`.
-            'lane_contract': lane_contract(model),
+            # this model's own limits so it cannot disagree with `validate_request`, with each
+            # settable parameter's `default` resolved to the value in force on this machine.
+            'lane_contract': lane_contract(model, manager.data),
             'qualification': dict(model.qualification),
         }
 
@@ -323,6 +337,63 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return loading_mode_status()
+
+    # ── per-model generation defaults (`model_defaults`) ────────────────────
+    # Which numbers the next job generates *with*: `resolution`, `aspect_ratio`, `steps`,
+    # `guidance` and `seed`, stored per model and per Mac, validated against the very bounds
+    # `lane_contract` publishes, and applied by `validate_request` to a parameter the request
+    # **omits** (an explicitly supplied parameter always wins).
+    #
+    # This is the other axis from `loading_mode` directly above, and the two are deliberately not
+    # merged. A model default says *what to ask the model for*; `loading_mode` says *which mflux
+    # memory configuration loads* to answer it. They are independent settings in independent
+    # files (`model_defaults.json` here, `loading_mode.json` there): setting `steps` for
+    # Z-Image-Turbo must not load a different memory configuration, and forcing low-RAM must not
+    # change a single number in the request.
+    #
+    # A parameter the lane marks `required` (`prompt`) is not defaultable: it is per-request
+    # content, and a stored value would answer with something nobody wrote this time.
+
+    def model_defaults_status() -> dict:
+        """Every registered model's published parameters and this Mac's values in force."""
+        return model_defaults.status(
+            manager.data,
+            [(model.repo, lane_parameters(model)) for model in MODELS.values()])
+
+    def registered_model(repo: object):
+        """The registered model a route names, or a refusal that says which repos exist."""
+        model = MODELS.get(repo) if isinstance(repo, str) else None
+        if model is None:
+            raise HTTPException(
+                422, f'{repo!r} is not a registered image model; this worker serves: '
+                     + ', '.join(sorted(MODELS)))
+        return model
+
+    @app.get('/api/model-defaults')
+    def get_model_defaults() -> dict:
+        return model_defaults_status()
+
+    @app.put('/api/model-defaults')
+    def put_model_defaults(body: dict | None = None) -> dict:
+        values = (body or {}).get('values')
+        if not isinstance(values, dict):
+            raise HTTPException(422, 'values must be an object of parameter to default')
+        model = registered_model((body or {}).get('repo'))
+        try:
+            model_defaults.save(manager.data, model.repo, values, lane_parameters(model))
+        except ValueError as exc:
+            # The shared reader, so all five Studios answer a bad PUT the same way: every refused
+            # parameter with its own reason, or — if this is not one of our refusals — the message.
+            raise HTTPException(422, detail=model_defaults.refusals(exc) or str(exc)) from exc
+        return model_defaults_status()
+
+    @app.delete('/api/model-defaults')
+    def delete_model_defaults(body: dict | None = None, repo: str | None = None) -> dict:
+        # Either a JSON body (the shape the app sends) or `?repo=`, so a caller that cannot put a
+        # body on DELETE still reaches the same call.
+        model = registered_model((body or {}).get('repo') or repo)
+        model_defaults.clear(manager.data, model.repo)
+        return model_defaults_status()
 
     return app
 

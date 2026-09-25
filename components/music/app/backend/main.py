@@ -20,9 +20,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import catalog, memory_policy
-from .generation import GenerationManager, final_matches, lane_contract
+from .generation import (GenerationManager, defaults_in_force, final_matches, lane_contract,
+                         lane_parameters)
 
-from components import app_version
+from components import app_version, model_defaults
 
 
 # The 30 s probe ran on this 11.8 GB Mac at tier4, so 8 GB is a working floor
@@ -122,7 +123,14 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # back to the first catalog entry, so a newly added model cannot be
             # advertised with ACE-Step's revision, caps or qualification.
             revision = model.revision
-            defaults = dict(model.defaults)
+            # The values this worker will actually render with on this Mac: what the model
+            # states, overridden per parameter by what the operator chose (`model_defaults.json`).
+            # One call, so `generation_defaults` and the lane contract's per-parameter `default`
+            # cannot publish two answers to one question — and neither can publish a number
+            # `validate_request` would refuse, because `resolved()` validates on the way out too.
+            # The app pre-fills its form from `generation_defaults` and sends every field, so this
+            # is how a stored default reaches an app-dispatched job.
+            defaults = {**model.defaults, **defaults_in_force(model, manager.data)}
             limits = dict(model.limits)
             qualification = dict(model.qualification)
             entry = catalog.serialize_model(model)
@@ -152,14 +160,21 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                 "execution_ready": ready,
                 "available": ready,
                 "generation_defaults": defaults,
+                # The same two numbers in their other spelling on this row: the model's own
+                # `inference_steps`/`guidance_scale` fields are the `steps`/`guidance_scale`
+                # defaults, so they read the resolved map rather than disagreeing with the field
+                # beside them. A model that publishes no such default keeps its own field.
+                "inference_steps": defaults.get("steps", model.inference_steps),
+                "guidance_scale": defaults.get("guidance_scale", model.guidance_scale),
                 "generation_limits": limits,
                 "sample_rate_hz": model.sample_rate_hz,
                 "channels": model.channels,
                 # How to ask for this lane's work, per model: the operation, the parameters this
                 # model's own validator accepts and enforces, the artifact, the state vocabulary
                 # and what a cancel does not promise. Built in `generation.py` beside the
-                # validators, from this model's own limits, so it cannot drift from them.
-                "lane_contract": lane_contract(model),
+                # validators, from this model's own limits, so it cannot drift from them, with
+                # each settable parameter's `default` resolved to the value in force on this Mac.
+                "lane_contract": lane_contract(model, manager.data),
                 "qualification": qualification,
             })
             models.append(entry)
@@ -263,6 +278,68 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         except RuntimeError as exc:
             # 409, like Image and Subtitle: the work is active, not the request malformed.
             raise HTTPException(409, str(exc)) from exc
+
+    # ── per-model generation defaults (`model_defaults`) ───────────────────
+    # Which numbers the next job renders *with*: `duration_seconds`, `steps`, `guidance_scale`,
+    # `seed` — plus the controls only a runtime that accepts them publishes (`shift`,
+    # `instrumental`, `lyrics`, `vocal_language` for ACE-Step; none for Stable Audio 3) — stored
+    # per model and per Mac, validated against the very bounds `lane_contract` publishes, and
+    # applied by `validate_request` to a parameter the request **omits** (an explicitly supplied
+    # parameter always wins).
+    #
+    # This is a different axis from `/api/memory-policy` above: that is *when a resident engine
+    # gives its weights back*, this is *what the request asks the weights for*. Stored in a
+    # different file (`model_defaults.json`, beside `memory_policy.json`), and neither setting
+    # changes the other.
+    #
+    # A parameter the lane marks `required` (`prompt`) is not defaultable: it is per-request
+    # content, and a stored value would render something nobody wrote this time.
+
+    def model_defaults_status() -> dict:
+        """Every registered model's published parameters and this Mac's values in force."""
+        return model_defaults.status(
+            manager.data,
+            [(model.repo, lane_parameters(model)) for model in catalog.CATALOG])
+
+    def registered_model(repo: object):
+        """The catalog entry a route names by **repo id**, or a refusal that says which exist.
+
+        Deliberately the repo id and not ``catalog.get_model``'s package-id alias: the stored
+        defaults are keyed by repo, so accepting a package id here would write a row the catalog
+        would never read — a default that silently does nothing.
+        """
+        model = next((item for item in catalog.CATALOG if item.repo == repo), None)
+        if model is None:
+            raise HTTPException(
+                422, f"{repo!r} is not a registered music model; this worker serves: "
+                     + ", ".join(item.repo for item in catalog.CATALOG))
+        return model
+
+    @app.get("/api/model-defaults")
+    def get_model_defaults() -> dict:
+        return model_defaults_status()
+
+    @app.put("/api/model-defaults")
+    def put_model_defaults(body: dict | None = None) -> dict:
+        values = (body or {}).get("values")
+        if not isinstance(values, dict):
+            raise HTTPException(422, "values must be an object of parameter to default")
+        model = registered_model((body or {}).get("repo"))
+        try:
+            model_defaults.save(manager.data, model.repo, values, lane_parameters(model))
+        except ValueError as exc:
+            # The shared reader, so all five Studios answer a bad PUT the same way: every refused
+            # parameter with its own reason, or — if this is not one of our refusals — the message.
+            raise HTTPException(422, detail=model_defaults.refusals(exc) or str(exc)) from exc
+        return model_defaults_status()
+
+    @app.delete("/api/model-defaults")
+    def delete_model_defaults(body: dict | None = None, repo: str | None = None) -> dict:
+        # Either a JSON body (the shape the app sends) or `?repo=`, so a caller that cannot put a
+        # body on DELETE still reaches the same call.
+        model = registered_model((body or {}).get("repo") or repo)
+        model_defaults.clear(manager.data, model.repo)
+        return model_defaults_status()
 
     # A stopped worker must not leave a 4-5 GB engine child holding the model.
     # Uvicorn runs shutdown handlers on SIGTERM/SIGINT before the process ends.

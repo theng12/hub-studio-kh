@@ -15,9 +15,13 @@ make it worth publishing rather than the membership of today's list:
 * `uncertain` is published as explicitly not terminal, which is the one thing a scheduler gets
   wrong by default;
 * a published runtime traces back to a stored measurement, so the number can be checked rather
-  than believed.
+  than believed;
+* the duration ladder a control can be rendered from is the model's own, so no rung it would
+  refuse is ever offered.
 """
 from __future__ import annotations
+
+from dataclasses import replace
 
 import json
 from pathlib import Path
@@ -31,6 +35,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from components.hub.backend.capabilities import OPERATION_BY_MODALITY  # noqa: E402
+from components.model_defaults import validate as validate_defaults  # noqa: E402
 from components.music.app.backend import catalog, generation  # noqa: E402
 
 
@@ -152,6 +157,125 @@ class ThePublishedNumbersTraceToEvidenceTests(unittest.TestCase):
             if model.measured_runtime is None:
                 self.assertNotIn("runtime_seconds", contract,
                                  f"{model.repo} has no measurement, so it must publish no runtime")
+
+
+class TheDurationLadderIsTheModelsOwnTests(unittest.TestCase):
+    """A ladder is a published control, so every rung has to be one the model accepts.
+
+    The failure this prevents is a fixed list of rungs in a consumer: 300 s offered to a model
+    capped at 60 s, or a 600 s rung offered to Stable Audio 3, which stops at 380 s. Each model's
+    ladder is therefore read back against **its own** published bounds.
+    """
+
+    @staticmethod
+    def duration_parameter(model: catalog.ModelEntry) -> dict:
+        return {parameter["name"]: parameter
+                for parameter in generation.lane_parameters(model)}["duration_seconds"]
+
+    def test_every_rung_is_inside_the_models_own_published_bounds(self) -> None:
+        for model in catalog.CATALOG:
+            duration = self.duration_parameter(model)
+            with self.subTest(repo=model.repo):
+                ladder = duration["ladder"]
+                self.assertTrue(ladder, "a model with no rung offers nothing to choose")
+                for rung in ladder:
+                    self.assertGreaterEqual(rung["seconds"], duration["minimum"])
+                    self.assertLessEqual(rung["seconds"], duration["maximum"],
+                                         "a rung the model would refuse must never be offered")
+                    self.assertEqual(rung["label"], f"{rung['seconds']} s")
+                    self.assertIsInstance(rung["exceeds_single_pass"], bool)
+
+    def test_the_models_own_anchors_are_rungs(self) -> None:
+        """The shortest, the default and the longest this model states are all reachable."""
+        for model in catalog.CATALOG:
+            duration = self.duration_parameter(model)
+            rungs = {rung["seconds"] for rung in duration["ladder"]}
+            with self.subTest(repo=model.repo):
+                for anchor in (duration["minimum"], duration["default"], duration["maximum"]):
+                    self.assertIn(anchor, rungs)
+
+    def test_only_rungs_beyond_the_single_pass_maximum_are_marked_as_such(self) -> None:
+        for model in catalog.CATALOG:
+            single_pass = model.limits["single_pass_max_seconds"]
+            ladder = self.duration_parameter(model)["ladder"]
+            with self.subTest(repo=model.repo):
+                self.assertIn(single_pass, {rung["seconds"] for rung in ladder},
+                              "the single-pass maximum is what a long-form request turns on")
+                for rung in ladder:
+                    self.assertEqual(rung["exceeds_single_pass"],
+                                     rung["seconds"] > single_pass)
+                    if rung["exceeds_single_pass"]:
+                        self.assertIn("sections", rung["note"])
+
+    def test_the_ladder_follows_the_models_limits_rather_than_a_constant_list(self) -> None:
+        """The control: tighten a model's own limits and the ladder moves with them."""
+        model = catalog.CATALOG[0]
+        tightened = replace(model, limits={
+            **model.limits, "min_duration_seconds": 5, "max_duration_seconds": 45,
+            "single_pass_max_seconds": 40})
+        ladder = {rung["seconds"]: rung
+                  for rung in self.duration_parameter(tightened)["ladder"]}
+        self.assertEqual(min(ladder), 5)
+        self.assertEqual(max(ladder), 45)
+        self.assertEqual({seconds for seconds in ladder if ladder[seconds]
+                          ["exceeds_single_pass"]}, {45})
+        self.assertNotEqual(set(ladder),
+                            {rung["seconds"]
+                             for rung in self.duration_parameter(model)["ladder"]},
+                            "a constant ladder would have published rungs this model refuses")
+
+    def test_the_ladder_is_what_the_contract_publishes(self) -> None:
+        for model in catalog.CATALOG:
+            contract = {parameter["name"]: parameter
+                        for parameter in generation.lane_contract(model)["parameters"]}
+            with self.subTest(repo=model.repo):
+                self.assertEqual(contract["duration_seconds"]["ladder"],
+                                 generation.duration_ladder(model))
+
+
+class EverySettableParameterPublishesADefaultTests(unittest.TestCase):
+    """What the Models tab renders a control from: a value in force for every settable parameter.
+
+    ``model_defaults`` can only resolve a parameter whose ``default`` the lane publishes, so a
+    settable parameter with no default would silently have no value in force — and
+    ``validate_request`` would fall through to a second source for it. A ``required`` parameter is
+    the one exception, and deliberately so: it is per-request content, not a default.
+    """
+
+    def test_every_published_parameter_is_either_required_or_defaultable(self) -> None:
+        for model in catalog.CATALOG:
+            with self.subTest(repo=model.repo):
+                published = generation.lane_parameters(model)
+                self.assertTrue(published)
+                for parameter in published:
+                    if parameter.get("required"):
+                        self.assertNotIn("default", parameter)
+                        continue
+                    self.assertIn("default", parameter, parameter["name"])
+                    self.assertEqual(parameter["default"],
+                                     model.defaults[parameter["name"]])
+
+    def test_the_published_surface_is_exactly_what_may_be_defaulted(self) -> None:
+        """One list, two readers: the contract offers it and ``model_defaults`` accepts it.
+
+        The values sent are the parameters' own published defaults, so this also proves no model
+        publishes a default its own bound would refuse.
+        """
+        samples = {"shift": 3.0, "instrumental": True, "lyrics": "la", "vocal_language": "en"}
+        for model in catalog.CATALOG:
+            parameters = generation.lane_parameters(model)
+            settable = {parameter["name"]: parameter["default"]
+                        for parameter in parameters if not parameter.get("required")}
+            with self.subTest(repo=model.repo):
+                self.assertTrue(settable)
+                accepted, refusals = validate_defaults(parameters, settable)
+                self.assertEqual(refusals, {})
+                self.assertEqual(set(accepted), set(settable))
+                # Control: a control this runtime does not publish has nothing to default.
+                for name in sorted(set(samples) - set(settable)):
+                    _accepted, refused = validate_defaults(parameters, {name: samples[name]})
+                    self.assertIn(name, refused)
+                    self.assertIn("publishes no such settable parameter", refused[name])
 
 
 if __name__ == "__main__":

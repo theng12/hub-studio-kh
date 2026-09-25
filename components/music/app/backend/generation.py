@@ -38,6 +38,8 @@ try:
 except ImportError:  # pragma: no cover - psutil ships with the engine venv
     psutil = None
 
+from components import model_defaults
+
 from . import catalog, cache as cache_module, engine_child, stable_audio
 
 
@@ -112,32 +114,38 @@ def _limit(model: catalog.ModelEntry, key: str):
 
 
 def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
-                           tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS) -> dict:
+                           tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
+                           data_dir=None) -> dict:
     """Stable Audio 3 parameters: instrumental only, up to this model's own cap.
 
     ``tier_cap_seconds`` is accepted for the shared validator signature and ignored:
     this engine has no hardware tier table, so its single-pass cap is its own.
+
+    ``data_dir`` is this Studio's state directory. A parameter the request **omits** takes the
+    value in force for this model — the operator's stored default over what the model states —
+    and a parameter the request supplies always wins verbatim.
     """
+    defaults = defaults_in_force(model, data_dir)
     prompt = raw.get("prompt")
     if (not isinstance(prompt, str) or not prompt.strip()
             or len(prompt) > PROMPT_MAX_CHARACTERS):
         raise ValueError(f"Prompt must contain 1-{PROMPT_MAX_CHARACTERS} characters")
     duration = raw.get("duration_seconds",
-                       raw.get("duration", _default(model, "duration_seconds")))
+                       raw.get("duration", defaults["duration_seconds"]))
     duration = _finite_number(duration, name="duration",
                               low=float(_limit(model, "min_duration_seconds")),
                               high=float(_limit(model, "max_duration_seconds")))
-    steps = raw.get("steps", raw.get("inference_steps", _default(model, "steps")))
+    steps = raw.get("steps", raw.get("inference_steps", defaults["steps"]))
     if (type(steps) is not int or not _limit(model, "min_steps")
             <= steps <= _limit(model, "max_steps")):
         raise ValueError(
             f"Steps must be an integer between {_limit(model, 'min_steps')} and "
             f"{_limit(model, 'max_steps')}")
     guidance = _finite_number(
-        raw.get("guidance_scale", raw.get("cfg", _default(model, "guidance_scale"))),
+        raw.get("guidance_scale", raw.get("cfg", defaults["guidance_scale"])),
         name="guidance_scale", low=float(_limit(model, "min_guidance")),
         high=float(_limit(model, "max_guidance")))
-    seed = raw.get("seed", _default(model, "seed"))
+    seed = raw.get("seed", defaults["seed"])
     if seed is None:
         seed = -1
     if (type(seed) is not int
@@ -157,8 +165,15 @@ def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
 
 
 def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
-                       tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS) -> dict:
-    """ACE-Step parameters, bounded by this model's own defaults and limits."""
+                       tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
+                       data_dir=None) -> dict:
+    """ACE-Step parameters, bounded by this model's own defaults and limits.
+
+    ``data_dir`` is this Studio's state directory. A parameter the request **omits** takes the
+    value in force for this model — the operator's stored default over what the model states —
+    and a parameter the request supplies always wins verbatim.
+    """
+    defaults = defaults_in_force(model, data_dir)
     revision = raw.get("model_revision")
     if revision is not None and revision != model.revision:
         raise ValueError(f"Only the pinned {model.label} revision is available")
@@ -168,14 +183,14 @@ def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
         raise ValueError(f"Prompt must contain 1-{PROMPT_MAX_CHARACTERS} characters")
 
     duration = raw.get("duration_seconds",
-                       raw.get("duration", _default(model, "duration_seconds")))
+                       raw.get("duration", defaults["duration_seconds"]))
     if duration is None:
-        duration = _default(model, "duration_seconds")
+        duration = defaults["duration_seconds"]
     duration = _finite_number(duration, name="duration",
                               low=float(_limit(model, "min_duration_seconds")),
                               high=float(_limit(model, "max_duration_seconds")))
 
-    steps = raw.get("steps", raw.get("inference_steps", _default(model, "steps")))
+    steps = raw.get("steps", raw.get("inference_steps", defaults["steps"]))
     if (type(steps) is not int or not _limit(model, "min_steps")
             <= steps <= _limit(model, "max_steps")):
         raise ValueError(
@@ -183,30 +198,31 @@ def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
             f"{_limit(model, 'max_steps')}")
 
     guidance = _finite_number(
-        raw.get("guidance_scale", _default(model, "guidance_scale")),
+        raw.get("guidance_scale", defaults["guidance_scale"]),
         name="guidance_scale", low=float(_limit(model, "min_guidance")),
         high=float(_limit(model, "max_guidance")))
     # The shift control is the ACE-Step engine's own parameter, not a value this
-    # catalogue publishes per model; its bounds are the engine's.
-    shift = _finite_number(raw.get("shift", _default(model, "shift")),
-                           name="shift", low=0.0, high=20.0)
+    # catalogue publishes per model; its bounds are the engine's, named once here and
+    # published on the lane contract from the same constants.
+    shift = _finite_number(raw.get("shift", defaults["shift"]),
+                           name="shift", low=SHIFT_MINIMUM, high=SHIFT_MAXIMUM)
 
-    seed = raw.get("seed", _default(model, "seed"))
+    seed = raw.get("seed", defaults["seed"])
     if seed is None:
         seed = -1
     if (type(seed) is not int
             or not _limit(model, "min_seed") <= seed <= _limit(model, "max_seed")):
         raise ValueError("Seed must be -1 or a 32-bit unsigned integer")
 
-    instrumental = raw.get("instrumental", _default(model, "instrumental"))
+    instrumental = raw.get("instrumental", defaults["instrumental"])
     if not isinstance(instrumental, bool):
         raise ValueError("instrumental must be a boolean")
-    lyrics = raw.get("lyrics", _default(model, "lyrics"))
+    lyrics = raw.get("lyrics", defaults["lyrics"])
     if not isinstance(lyrics, str) or len(lyrics) > LYRICS_MAX_CHARACTERS:
         raise ValueError("Lyrics must be a string of at most 8000 characters")
     if instrumental and not lyrics.strip():
-        lyrics = _default(model, "lyrics")
-    language = raw.get("vocal_language", _default(model, "vocal_language"))
+        lyrics = defaults["lyrics"]
+    language = raw.get("vocal_language", defaults["vocal_language"])
     if not isinstance(language, str) or len(language) > 32:
         raise ValueError("vocal_language must be a short string")
 
@@ -240,16 +256,26 @@ _VALIDATORS = {
 LANE_CONTRACT_SCHEMA = "studiohub.lane-contract.v1"
 PROMPT_MAX_CHARACTERS = 4000
 LYRICS_MAX_CHARACTERS = 8000
+# The shift control's bounds are the ACE-Step engine's own, not a value this catalogue states per
+# model. Named once and read by both the validator and the published contract, so the bound a
+# caller is offered and the bound that refuses the request cannot drift apart.
+SHIFT_MINIMUM = 0.0
+SHIFT_MAXIMUM = 20.0
 
 # runtime -> the parameters that runtime's validator accepts *in addition to* the shared ones.
 # Keyed the same way `_VALIDATORS` is, and `tests/test_music_lane_contract.py` asserts the two
 # tables cover the same runtimes, so a runtime added to one and not the other fails loudly rather
 # than publishing a contract that silently omits half its surface.
+#
+# Each entry's `default` is filled from the model's own `defaults` in `lane_parameters`: a control
+# is published with the value this model states for it, and the operator's stored value overrides
+# it, exactly as for the shared parameters.
 _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
     catalog.RUNTIME_ACE_STEP: (
-        {"name": "shift", "type": "number", "required": False, "minimum": 0.0, "maximum": 20.0,
+        {"name": "shift", "type": "number", "required": False,
+         "minimum": SHIFT_MINIMUM, "maximum": SHIFT_MAXIMUM,
          "note": "the engine's own control; its bounds are the engine's, not this model's"},
-        {"name": "instrumental", "type": "boolean", "required": False, "default": True,
+        {"name": "instrumental", "type": "boolean", "required": False,
          "note": "false asks for sung lyrics; this engine is the only one that can sing"},
         {"name": "lyrics", "type": "string", "required": False,
          "max_characters": LYRICS_MAX_CHARACTERS},
@@ -262,18 +288,83 @@ _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
 }
 
 
-def lane_contract(model: catalog.ModelEntry) -> dict:
-    """The Music lane's dispatch contract for one model.
+def _json_number(value: float):
+    """A duration as JSON: an integer when it is one, so a ladder rung reads `30`, not `30.0`."""
+    return int(value) if float(value).is_integer() else round(float(value), 3)
 
-    What a scheduler needs in order to *ask for* this lane's work. Every bound is the one
-    ``validate_request`` enforces, read from this model's own ``limits``/``defaults`` through the
-    same ``_limit``/``_default`` helpers the validators use — so the contract cannot drift from
-    the code that accepts or refuses the request, and a newly adopted music model publishes a
-    correct contract with no edit here.
+
+def duration_ladder(model: catalog.ModelEntry) -> list[dict]:
+    """The durations this model itself offers, built from its own generation limits.
+
+    A ladder has to be the model's, not the worker's. The single-pass cap and the absolute
+    maximum differ per model — ACE-Step 1.5 renders up to 480 s in one pass and 600 s with
+    sections, Stable Audio 3 stops at 380 s — so a fixed list of rungs would offer one of them a
+    duration it refuses. Every rung here is therefore inside this model's own
+    ``min_duration_seconds``..``max_duration_seconds``; the model's stated default, its
+    single-pass maximum and its absolute maximum are always rungs, and the rest are that default
+    doubled until the model's own ceiling is reached.
+
+    ``exceeds_single_pass`` compares a rung with the **model's** ``single_pass_max_seconds``, the
+    number the catalogue publishes; this host's own tier cap can be lower still, which is why the
+    request is validated against the host cap as well (``_tier_cap_for_this_host``).
+    """
+    low = float(_limit(model, "min_duration_seconds"))
+    high = float(_limit(model, "max_duration_seconds"))
+    single_pass = float(_limit(model, "single_pass_max_seconds"))
+    stated = min(max(float(_default(model, "duration_seconds")), low), high)
+    rungs = {low, stated, min(single_pass, high), high}
+    rung = stated
+    while rung > 0 and rung * 2 <= high:
+        rung *= 2
+        rungs.add(rung)
+    ladder = []
+    for value in sorted(rungs):
+        rung = {"seconds": _json_number(value),
+                "label": f"{_json_number(value)} s",
+                "exceeds_single_pass": value > single_pass}
+        if rung["exceeds_single_pass"]:
+            rung["note"] = ("beyond this model's single-pass maximum: the worker renders it in "
+                            "sections")
+        ladder.append(rung)
+    return ladder
+
+
+def defaults_in_force(model: catalog.ModelEntry, data_dir=None) -> dict:
+    """Every published parameter's default: what this model states, over what was chosen.
+
+    ``data_dir`` is this Studio's state directory, where ``model_defaults.json`` lives. With no
+    ``data_dir`` nothing has been chosen on this machine as far as this call can see, so the
+    answer is exactly what the lane states.
+
+    One call, two readers: the validators apply these values to a request that omits a parameter,
+    and :func:`lane_contract` publishes them in each parameter's ``default``. They therefore
+    cannot disagree — a contract can never advertise a number this worker would refuse.
+
+    ``model_defaults.stated``/``resolved`` rather than the *editable* surface the editor renders:
+    a parameter with no control (a one-option enum has nothing to choose between) is still a value
+    the request has to carry, and building this map from the settable subset would drop it.
+    """
+    parameters = lane_parameters(model)
+    if data_dir is None:
+        return model_defaults.stated(parameters)
+    resolved, _not_used = model_defaults.resolved(data_dir, model.repo, parameters)
+    return resolved
+
+
+def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
+    """The parameters this model's lane publishes, from its own limits and defaults.
+
+    One definition read by two consumers that must agree: :func:`lane_contract` publishes it, and
+    ``components.model_defaults`` validates an operator's stored default against exactly these
+    bounds, enums and character limits. A second copy would be free to disagree with the code
+    that rejects the request — which is the thing a published bound exists to prevent.
 
     The per-runtime split is real, not cosmetic: ACE-Step accepts lyrics, a vocal language and a
-    shift control, and Stable Audio 3 accepts none of them. A contract that listed the union would
-    invite a scheduler to send parameters one of the two silently discards.
+    shift control, and Stable Audio 3 accepts none of them. A contract that listed the union
+    would invite a scheduler to send parameters one of the two silently discards.
+
+    A fresh list of fresh dicts on every call: the caller may set a resolved ``default`` on a
+    parameter without that leaking into the next model's contract.
     """
     parameters = [
         {"name": "prompt", "type": "string", "required": True,
@@ -282,6 +373,7 @@ def lane_contract(model: catalog.ModelEntry) -> dict:
          "minimum": _limit(model, "min_duration_seconds"),
          "maximum": _limit(model, "max_duration_seconds"),
          "default": _default(model, "duration_seconds"),
+         "ladder": duration_ladder(model),
          "note": "a duration beyond this host's single-pass cap is rendered in sections"},
         {"name": "steps", "type": "integer", "required": False,
          "minimum": _limit(model, "min_steps"), "maximum": _limit(model, "max_steps"),
@@ -292,8 +384,31 @@ def lane_contract(model: catalog.ModelEntry) -> dict:
         {"name": "seed", "type": "integer", "required": False,
          "minimum": _limit(model, "min_seed"), "maximum": _limit(model, "max_seed"),
          "default": _default(model, "seed"), "note": "-1 draws a random seed"},
-        *_CONTRACT_EXTRAS.get(model.runtime, ()),
     ]
+    for extra in _CONTRACT_EXTRAS.get(model.runtime, ()):
+        parameters.append({**extra, "default": _default(model, extra["name"])})
+    return parameters
+
+
+def lane_contract(model: catalog.ModelEntry, data_dir=None) -> dict:
+    """The Music lane's dispatch contract for one model.
+
+    What a scheduler needs in order to *ask for* this lane's work. Every bound is the one
+    ``validate_request`` enforces, read from this model's own ``limits``/``defaults`` through the
+    same ``_limit``/``_default`` helpers the validators use — so the contract cannot drift from
+    the code that accepts or refuses the request, and a newly adopted music model publishes a
+    correct contract with no edit here.
+
+    ``data_dir`` resolves each settable parameter's ``default`` to the value in force on this
+    machine — what the model states, overridden by what the operator chose. It comes from the same
+    :func:`defaults_in_force` call the validators apply, so the catalog cannot publish a default
+    the worker would not itself accept.
+    """
+    parameters = lane_parameters(model)
+    in_force = defaults_in_force(model, data_dir)
+    for parameter in parameters:
+        if parameter["name"] in in_force:
+            parameter["default"] = in_force[parameter["name"]]
     contract = {
         "schema": LANE_CONTRACT_SCHEMA,
         "modality": "music",
@@ -327,7 +442,15 @@ def lane_contract(model: catalog.ModelEntry) -> dict:
 
 
 
-def validate_request(raw: dict, tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS) -> dict:
+def validate_request(raw: dict, tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
+                     data_dir=None) -> dict:
+    """One request, resolved against the model it names and this Mac's stored defaults.
+
+    ``data_dir`` is where ``model_defaults.json`` lives (the manager's state directory). A
+    parameter the request **omits** takes the value in force for this model; a parameter the
+    request **supplies** always wins. With no ``data_dir`` there are no stored defaults to read,
+    so the answer is exactly what the lane states.
+    """
     if not isinstance(raw, dict):
         raise ValueError("Music request must be an object")
     model = catalog.require_model(str(raw.get("repo") or MODEL_ID))
@@ -337,7 +460,7 @@ def validate_request(raw: dict, tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS
             f"{model.repo} declares runtime {model.runtime!r}, which this worker has no "
             "request validator for; add one in "
             "components/music/app/backend/generation.py")
-    return validator(raw, model, tier_cap_seconds=tier_cap_seconds)
+    return validator(raw, model, tier_cap_seconds=tier_cap_seconds, data_dir=data_dir)
 
 
 def _atomic_json(path: Path, value: object) -> None:
@@ -1052,7 +1175,7 @@ class GenerationManager:
                  if isinstance(raw, dict) else None)
         tier_cap = (_tier_cap_for_this_host(model) if model is not None
                     else DEFAULT_TIER_CAP_SECONDS)
-        params = validate_request(raw, tier_cap_seconds=tier_cap)
+        params = validate_request(raw, tier_cap_seconds=tier_cap, data_dir=self.data)
         model = catalog.require_model(params["repo"])
         files = self.preflight(model.repo)
         if files["state"] != "cached":

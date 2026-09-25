@@ -5,6 +5,13 @@ policy - when a resident model is dropped - and Image's answer there is fixed, b
 is built inside a job and dropped when the job returns. This module is the other axis: which
 mflux memory *configuration* the next job loads with, on this Mac.
 
+It is also not the per-model generation defaults (``model_defaults``,
+``GET/PUT/DELETE /api/model-defaults``), the third thing a job is shaped by. Those are the numbers
+the request asks the model *for* - resolution, aspect ratio, steps, guidance, seed - stored per
+model; this is which memory configuration loads to answer it, chosen per machine. The two are
+stored in two files and neither changes the other: setting ``steps`` for Z-Image-Turbo must not
+load a different configuration, and forcing low-RAM must not change a number in the request.
+
 Nothing about a model lives here. Whether a model has a bounded configuration at all is the
 model's own ``generation.MemoryPolicy``, and what this setting does to each model is
 published per model in ``/api/catalog``'s ``loading_modes`` (derived in

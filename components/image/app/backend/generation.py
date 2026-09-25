@@ -28,6 +28,8 @@ from uuid import uuid4
 
 from PIL import Image
 
+from components import model_defaults
+
 from . import loading_mode
 from .loading_mode import DEFAULT_MODE as DEFAULT_LOADING_MODE
 from .loading_mode import MODE_AUTO, MODE_FULL, MODE_LOW
@@ -572,13 +574,78 @@ def model_class(model: ImageModel):
     return getattr(importlib.import_module(module_name), class_name)
 
 
-def validate_request(raw: dict) -> dict:
+def lane_parameters(model: ImageModel) -> list[dict]:
+    """The parameters this model's lane publishes, from its own limits and defaults.
+
+    One definition read by two consumers that must agree: :func:`lane_contract` publishes it,
+    and ``components.model_defaults`` validates an operator's stored default against exactly
+    these bounds and enums. A second copy would be free to disagree with the code that rejects
+    the request — which is the thing a published bound exists to prevent.
+
+    A fresh list of fresh dicts on every call: the caller may set a resolved ``default`` on a
+    parameter without that leaking into the next model's contract.
+    """
+    return [
+        {'name': 'prompt', 'type': 'string', 'required': True,
+         'max_characters': model.limits['max_prompt']},
+        {'name': 'aspect_ratio', 'type': 'string', 'required': False,
+         'enum': sorted(SIZE_PRESETS), 'default': model.defaults['aspect_ratio'],
+         'note': 'width and height follow from the preset; a mismatched pair is refused'},
+        {'name': 'resolution', 'type': 'string', 'required': False,
+         'enum': ['1K'], 'default': '1K'},
+        {'name': 'steps', 'type': 'integer', 'required': False,
+         'minimum': model.limits['min_steps'], 'maximum': model.limits['max_steps'],
+         'default': model.defaults['steps']},
+        {'name': 'guidance', 'type': 'number', 'required': False,
+         'minimum': model.limits['min_guidance'], 'maximum': model.limits['max_guidance'],
+         'default': model.defaults['guidance'],
+         'note': ('accepted and ignored: this model runs without classifier-free guidance'
+                  if model.guidance_ignored else None)},
+        {'name': 'seed', 'type': 'integer', 'required': False,
+         'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
+         'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
+    ]
+
+
+def defaults_in_force(model: ImageModel, data_dir=None) -> dict:
+    """Every published parameter's default: what this model states, over what was chosen.
+
+    ``data_dir`` is this Studio's state directory, where ``model_defaults.json`` lives. With no
+    ``data_dir`` nothing has been chosen on this machine as far as this call can see, so the
+    answer is exactly what the lane states.
+
+    One call, two readers: :func:`validate_request` applies these values to a request that omits
+    a parameter, and :func:`lane_contract` publishes them in each parameter's ``default``. They
+    therefore cannot disagree — a contract can never advertise a number this worker would refuse.
+
+    Deliberately ``model_defaults.stated``/``resolved`` rather than the *editable* surface the
+    editor renders: ``resolution`` publishes a one-option enum, so there is nothing to choose and
+    it has no control — but every job still has to carry it, and the width/height
+    ``aspect_ratio`` derives. A map built from the settable subset would silently drop them.
+    """
+    parameters = lane_parameters(model)
+    if data_dir is None:
+        return model_defaults.stated(parameters)
+    resolved, _not_used = model_defaults.resolved(data_dir, model.repo, parameters)
+    return resolved
+
+
+def validate_request(raw: dict, data_dir=None) -> dict:
+    """One request, resolved against the model it names and this Mac's stored defaults.
+
+    ``data_dir`` is where ``model_defaults.json`` lives (the manager's state directory). A
+    parameter the request **omits** takes the value in force for this model — what the operator
+    stored, over what the model states — and a parameter the request **supplies** always wins.
+    With no ``data_dir`` there are no stored defaults to read, so the answer is exactly what the
+    lane states: that is the path every direct caller and the existing suite already pins.
+    """
     if not isinstance(raw, dict):
         raise ValueError('Image request must be an object')
     model = MODELS.get(raw.get('repo'))
     if model is None:
         raise ValueError('Only a registered image model is available: '
                          + ', '.join(sorted(MODELS)))
+    defaults = defaults_in_force(model, data_dir)
     if raw.get('model_revision', model.revision) != model.revision:
         raise ValueError(f'Only the pinned {model.label} revision is available')
     if any(raw.get(key) for key in ('reference_images', 'image_path', 'lora_names',
@@ -591,19 +658,19 @@ def validate_request(raw: dict) -> dict:
     if ratio is None:
         dimensions = (raw.get('width'), raw.get('height'))
         if dimensions == (None, None):
-            ratio = model.defaults['aspect_ratio']
+            ratio = defaults['aspect_ratio']
         else:
             ratio = next((name for name, pixels in SIZE_PRESETS.items()
                           if dimensions == pixels), None)
-    if ratio not in SIZE_PRESETS or raw.get('resolution', '1K') != '1K':
+    if ratio not in SIZE_PRESETS or raw.get('resolution', defaults['resolution']) != '1K':
         raise ValueError('Choose a qualified 1K aspect ratio')
     width, height = SIZE_PRESETS[ratio]
     if type(raw.get('width', width)) is not int or type(raw.get('height', height)) is not int:
         raise ValueError('Width and height must be integer 1K preset pixels')
     if (raw.get('width', width), raw.get('height', height)) != (width, height):
         raise ValueError('Dimensions must match the selected 1K aspect ratio')
-    steps = raw.get('steps', model.defaults['steps'])
-    guidance = raw.get('guidance', model.defaults['guidance'])
+    steps = raw.get('steps', defaults['steps'])
+    guidance = raw.get('guidance', defaults['guidance'])
     if type(steps) is not int or not model.limits['min_steps'] <= steps <= model.limits['max_steps']:
         raise ValueError(f'Steps must be between {model.limits["min_steps"]} '
                          f'and {model.limits["max_steps"]}')
@@ -611,7 +678,7 @@ def validate_request(raw: dict) -> dict:
             or not model.limits['min_guidance'] <= guidance <= model.limits['max_guidance']):
         raise ValueError(f'Guidance must be finite and between {model.limits["min_guidance"]:g} '
                          f'and {model.limits["max_guidance"]:g}')
-    seed = raw.get('seed', model.defaults['seed'])
+    seed = raw.get('seed', defaults['seed'])
     if seed is None:
         seed = -1
     if type(seed) is not int or not model.limits['min_seed'] <= seed <= model.limits['max_seed']:
@@ -624,7 +691,7 @@ def validate_request(raw: dict) -> dict:
 LANE_CONTRACT_SCHEMA = 'studiohub.lane-contract.v1'
 
 
-def lane_contract(model: ImageModel) -> dict:
+def lane_contract(model: ImageModel, data_dir=None) -> dict:
     """The Image lane's dispatch contract for one model.
 
     What a scheduler needs in order to *ask for* this lane's work: the operation name, the
@@ -637,38 +704,29 @@ def lane_contract(model: ImageModel) -> dict:
     disagree with the code that rejects the request, and the contract would be the thing that is
     wrong. A new image model therefore publishes a correct contract with no edit in this function.
 
+    ``data_dir`` resolves each settable parameter's ``default`` to the value in force on this
+    machine — what the model states, overridden by what the operator chose. It comes from the same
+    :func:`defaults_in_force` call ``validate_request`` applies, so the catalog cannot publish a
+    default the worker would not itself accept.
+
     Deliberately **not** listed: the parameters ``validate_request`` refuses outright
     (``reference_images``, ``image_path``, ``lora_names``, ``lora_paths``, ``negative_prompt``,
     ``quantize``) and ``width``/``height``, which are derived from ``aspect_ratio`` and refused
     unless they match the preset. A contract that offers a parameter the lane rejects is worse
     than one that omits it.
     """
+    parameters = lane_parameters(model)
+    in_force = defaults_in_force(model, data_dir)
+    for parameter in parameters:
+        if parameter['name'] in in_force:
+            parameter['default'] = in_force[parameter['name']]
     contract = {
         'schema': LANE_CONTRACT_SCHEMA,
         'modality': 'image',
         # The same token `capabilities.OPERATION_BY_MODALITY` publishes, so a reader can join the
         # contract to the Hub's operation namespace without a table of its own.
         'operation': 'image.text_to_image',
-        'parameters': [
-            {'name': 'prompt', 'type': 'string', 'required': True,
-             'max_characters': model.limits['max_prompt']},
-            {'name': 'aspect_ratio', 'type': 'string', 'required': False,
-             'enum': sorted(SIZE_PRESETS), 'default': model.defaults['aspect_ratio'],
-             'note': 'width and height follow from the preset; a mismatched pair is refused'},
-            {'name': 'resolution', 'type': 'string', 'required': False,
-             'enum': ['1K'], 'default': '1K'},
-            {'name': 'steps', 'type': 'integer', 'required': False,
-             'minimum': model.limits['min_steps'], 'maximum': model.limits['max_steps'],
-             'default': model.defaults['steps']},
-            {'name': 'guidance', 'type': 'number', 'required': False,
-             'minimum': model.limits['min_guidance'], 'maximum': model.limits['max_guidance'],
-             'default': model.defaults['guidance'],
-             'note': ('accepted and ignored: this model runs without classifier-free guidance'
-                      if model.guidance_ignored else None)},
-            {'name': 'seed', 'type': 'integer', 'required': False,
-             'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
-             'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
-        ],
+        'parameters': parameters,
         'artifact': {'modality': 'image', 'media_type': 'image/png', 'extension': 'png',
                      'per_item': 1},
         'states': {
@@ -987,7 +1045,9 @@ class GenerationManager:
         }
 
     def submit(self, raw: dict) -> dict:
-        params = validate_request(raw)
+        # The worker's own state directory, so a parameter the request omits takes this Mac's
+        # stored default for this model rather than the model's own.
+        params = validate_request(raw, data_dir=self.data)
         files = self.preflight(params['repo'])
         if files['state'] != 'files_verified':
             raise RuntimeError(f'MODEL_FILES_UNAVAILABLE: {files.get("reason") or files["state"]}')
