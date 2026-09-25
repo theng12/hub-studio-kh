@@ -1,5 +1,188 @@
 # Changelog
 
+## 0.6.63 — 2026-09-25 · Auto, and the controls that stopped lying
+
+Four asks from the owner drove this one, and each turned out to be about the same thing: a
+number or a control that was published somewhere other than where it was read.
+
+**The Image low-RAM mode is now a control.** *"there is a real lever for image if you want one…
+That could be exposed as Auto / Low memory / Full on the Image page."* mflux is built inside every
+job and dropped when the job returns, so Image has exactly one *release* policy — that stays the
+sentence it was. The new axis is how the model **loads**: `GET/PUT /api/loading-mode` with
+`auto` | `low` | `full`, published per model as `loading_modes` on every catalog row and offered
+on the Image page. Z-Image-Turbo 6B MLX 4-bit declares a bounded configuration (below 24 GB of
+unified memory) and publishes three options whose sentences carry its own measurements: about
+7.1 GB peak instead of 17.7 GB, about 236 s instead of 166 s at 1280×720, 9 steps. FLUX.2 Klein 4B
+MLX 4-bit declares none **on purpose** — its own registry comment says adding a knob would be an
+unverified change to a verified path — so it publishes `supported: false`, no options at all, and
+its own sentence saying the machine-wide setting does not change how it loads. A control that
+could do nothing is not offered.
+
+It was called `memory-mode` for one afternoon and renamed before it shipped: the shared
+`components/memory_modes.py` is the *release* table, a catalog row would have published
+`memory_policy` and `memory_modes` side by side meaning different things, and "loading" is what
+the setting actually selects. After a release that rename would have been a published contract.
+
+**Every Studio gained `auto`, and it is the default.** All four workers shipped the same four
+modes and all four defaulted to `immediate`. That default was measured — 2026-08-07, 16 of 19
+fleet machines below the memory guard's 3.2 GB floor with swap burned, because each of 3–5
+Studios on one 8 GB Mac independently believed holding its model was free — and it is the wrong
+answer on a 16/24/32 GB Mac, where it buys a full model reload per job to free memory nobody was
+short of. `auto` is right on both: **at 16 GiB and above it behaves as `balanced` (10 idle
+minutes), below it as `immediate`**; a machine whose memory cannot be measured gets `immediate`,
+never `balanced`. The rule is the one Subtitle already shipped, moved into
+`components/memory_modes.py` so it exists once — every worker imports that table and asserts
+identity, and the Hub derives its label-only table from it, so a sixth mode cannot exist in every
+Studio and nowhere in the Hub.
+
+The sentence the operator reads now comes from the worker, which is the only party that knows
+what `auto` resolved to on that Mac: `options[].detail` says *"Follows this Mac: releases after 10
+idle minutes here"*, and `status()` publishes `resolved_mode`, the resolved `idle_seconds` (never
+null for auto) and `machine_mode`. A UI that re-derived it from a threshold could only guess.
+
+Two packaging consequences, both proved by staging a real Voice-only bundle: Voice is the one
+worker whose bundle did not put `Resources/` on `sys.path`, so `packaging/voice_worker.py`
+appends it, and `stage_voice.py` now stages the shared `components/*.py` for **every** bundle
+rather than only Hub ones. The Voice web UI also hardcoded its four radios and a "· default"
+badge — Auto would have been invisible and unselectable there — and now renders the published
+options.
+
+**Chat became work you can see, and work you can measure.** A Chat-page send left no trace:
+`GET /api/hub/jobs` is built from the ledger plus the broker's live queue, and the Chat route is a
+synchronous proxy call that created no batch, so a Chat tab over that route could only ever have
+been empty. `chat_jobs.record_page_completion` now writes one finished one-item batch through
+`ledger.save_batch`, in the same shape every other studio's finished work takes, surviving a
+restart; the answer is the item's `text` and the item is the artifact, because the worker streams
+a completion and keeps no file. The other chat lane (GenStudio packs) has no producer and no
+route on this Hub at all, so it is *declared* unlisted with its reason in
+`broker.UNLISTED_JOB_LANES` rather than mapped into a second vocabulary — and
+`tests/test_hub_jobs.py` now AST-discovers every backend module owning a job queue and fails,
+both ways, if it neither reaches `listed_batches()` nor declares why not.
+
+Tokens per second needed two facts and only one existed. `usage.completion_tokens` was on the
+wire; the time was not usable, because the Hub kept only `runtime_s`, measured **around the whole
+proxied call** — so the model load on a cold turn is inside it (the ST-14 review measured
+6.4–8.8 s loads in its packaged probes; our own first packaged reply took 11.98 s end to end).
+A rate derived from that would have understated the model's speed on exactly the turn being
+measured, and meant something different on the next one. So the worker states its own generation
+window on both paths (`studio_hub.elapsed_seconds`, measured in the engine and started where
+`complete()` starts its own, after the model is resident), the Hub records it as `generation_s`
+**beside** `runtime_s` rather than replacing it, and the rate is derived only where it is
+displayed. A worker that states no time gets `null`, never a number derived from the round trip.
+
+**And the Chat below-tier warning was already there.** The review had recorded *"the app ignores
+the warning"*; measured, the worker publishes `memory_warning` derived from the model's own
+manifest tier on an 8 GB host and nothing on a 32 GB one, and the Chat page draws it with the
+same orange triangle Image uses. Nothing refuses, which is what the owner asked for. It is now a
+test, and the test carries an invariant: no worker may publish a `memory_warning` that no page
+renders. That invariant immediately found two gaps, recorded rather than papered over — Subtitle
+computes a warning and publishes it at `readiness.host.memory_warning`, where nothing reads it
+(and it cannot fire on this fleet, whose smallest Mac is exactly Subtitle's tier), and Voice
+publishes none at all, only `min_free_memory_gb`, which is a *live-free admission floor* and a
+different fact from a qualification tier.
+
+**A published duration now states its seconds everywhere.** The run time was fixed in 0.6.62; the
+lines beside it were not. `assetFacts` — the "Result details" line under every job row — still
+rendered a clip's own length as `%.1f min`, so a 2 min 5 s clip read **"2.1 min" directly above
+"2 min 5 s"**, and `NativeVoice.durationLabel` had the same copy, so a saved 90-second reference
+clip read "1.5 min". All of them go through `NativeJob.clock` now. The transport label
+("0:07 / 0:30") is a playhead, not a duration report, and keeps the shape every other player uses.
+
+**The Subtitle worker now really does reuse the Voice snapshot-view builder.** The import was
+`from components.voice.app.backend import cache`, and the bundle stages Voice at
+`Resources/voice`, not under `Resources/components` — so it resolved in the checkout and nowhere
+a worker runs. It sat inside a bare `except Exception`, so the local fallback kept the catalog
+looking healthy while the one-source reuse the module docstring promises had silently stopped
+happening in every shipped build. The fallback cannot convert `weights.npz`, which is what pinned
+Whisper base and small ship, so those two were catalog-only **for the wrong reason**. Measured
+after the fix, inside the bundle layout against the real library: `view_source=voice-cache` for
+both, `weights.npz` converted, `runtime_supported: true` for whisper-small, and a real
+transcription returns HTTP 200. Which builder produced a package's folder is published as
+`readiness.files.view_source` rather than inferred.
+
+**Two dead imports that could only ever raise.** `broker._monitor` and `cloud_guard` both fell
+back to `from .main import monitor`, a module that has not existed since the Hub moved to
+`standalone.py`; nothing took the path, which is exactly why it survived — `broker` raised
+`ModuleNotFoundError` naming a file nobody could find, and `cloud_guard`'s was swallowed by a
+bare `except` and looked exactly like a clean "no cloud model matched". `registry` imported a
+module that is not in this project and never was. None is a behaviour change on the path anyone
+takes; each now says what is wrong in the words of the thing that is wrong.
+
+`packaging/stage_voice.py` gained `staged_import_gaps()`, which is why that class of bug stops
+here: `copy_tracked_tree` copies what `git ls-files` lists, so a new module is invisible to
+staging until it is added to the index and the bundle builds happily with a worker that dies at
+import. Run against the bundle that shipped as 0.6.62 it reports four — these three, and the
+Subtitle one — which is the release it would have blocked.
+
+**A cancelled proxied request no longer pins a Mac for six hours.** Cancellation arrives as
+`CancelledError`, a `BaseException`, so it slipped past both the transport handler and the
+settlement after it, and the machine reservation survived until `_peer_lease_loop` expired it.
+What a disconnect does is now declared per route, once: synchronous routes release, asynchronous
+submits retain — and a cancel or ack POST no longer takes a machine lease of its own. Both
+directions are pinned by tests that fail when the policy is inverted.
+
+**Chat's worker got five fixes of the same shape** — a state the operator could reach but the
+worker could not describe. A cancelled stream wedged the engine lock (Starlette never closes a
+sync route generator, so `with self._lock` released only when the abandoned generator was
+finalised, on whatever thread dropped it, and an `RLock` refuses a release from another thread;
+measured ~0.11 s to the next served request after the fix). A prompt that could not fit the
+model's stated context was silently truncated and is now refused before the SSE status line is
+committed, naming the measured prompt tokens, the budget, the model's own limit and its source. A
+boolean field accepted `"false"` as true. Sampling defaults lived as route literals and now live
+beside the lane. `max_tokens` is validated against the model's stated limit instead of being
+clamped without a word.
+
+**The native Chat page joined the other four.** It ends with the same "managed centrally" note
+and a **Manage Chat Models** row, pinned structurally for all five forms — the Manage row is the
+last control, and its filter tag equals the Studio whose picker that page uses, parsed from the
+enum rather than copied. The operator's own message appears in the transcript **before** the
+request leaves, a failure marks that turn instead of inventing a model turn, a send while one is
+in flight appends nothing, and `disconnect()` releases the busy flag. The Jobs page gained a
+**Chat** tab with a real row (prompt, published model label including the quantization, state,
+generation time, the answer, Copy Answer and Save…) and a **Video** placeholder tab that is
+listed, files nothing, offers no controls or dates, and says what it will be.
+
+**The kit's copy step now cleans up after a cut, and carries Z-Image on 8 GB.** The owner asked
+for both: *"can you make the script prune out old models that's not supported or rejected? like
+delete or move it to trash or sth?"* and *"as for the z-image, can you override it too so it can
+run on 8gb machines too?"*
+
+The prune's **safety property is the whole design**, because the obvious rule destroys data.
+Measured against the real library, "any folder no shipped manifest names" would have moved two
+things to `_trash`: `hub/`, which is the **Hugging Face cache** the Voice worker reads, and
+`yue2-3b-mlx/`, the owner's Yue2 candidate, kept on purpose. So a managed package is a folder that
+is **both** a key in the app's own `.studiohub/installed.json` **and** really a directory, and it is
+pruned only when no manifest names it. The folder is tested second, never first — the index is a
+historical receipt log (42 keys, 15 folders), so treating it as a picture of the disk would name
+folders that are not there. It is a **move** into `<library>/_trash/<package_id>-<stamp>/`, shown
+with its size before anything moves and covered by the same confirmation as the copy, including
+when a prune is the only thing to do — which the old "nothing to copy" early return would have
+skipped. Two corrections to my own numbers, both measured: the receipts this drops are **18**, not
+the 27 I first said (9 of the 27 no-folder receipts are still shipped and correctly kept), and a
+test for this script already existed (`tests/test_model_copy_script.py`), so the new file is
+additional rather than a replacement. Dry run against the real library: **0 packages would move**,
+18 receipts would be forgotten, and the four folders the app does not own are untouched.
+
+Z-Image is carried on 8 GB Macs from a **separate table** from FLUX's. `PROVEN_SMALLER` means "the
+owner has run it there"; Z-Image's 8 GB run is still unmeasured, so it goes in a new
+`CARRY_BELOW_TIER` meaning "he asked to try it there". Writing it into `PROVEN_SMALLER` would have
+made that table state something untrue, and `floor_origin()` names the exact table so a wrong skip
+stays traceable. Measured: 8 GB machines copy **18 packages / 36.3 GB** instead of 17 / 30.4 GB;
+16, 24 and 32 GB are byte-identical to before. The app still publishes Z-Image's below-tier
+warning, so the operator is told what he is trading.
+
+### The 166 s question
+
+The image lane contract published **185.61 s** for Z-Image's default configuration. That number
+entered the repo in the 0.6.61 registry commit and **nothing in the tree stores it** — no probe
+file, no JSONL, nothing. The only record that does exist,
+`qualification/z-image-turbo-2026-09-24.md`, says **166 s**, as does the constant's comment,
+`README-8gb-z-image.md` ("166–236 s") and the 0.6.60 notes. Four places against one, and the one
+had no artefact behind it — which is the thing this project refuses to publish. Both rows now
+state 166 s and 236 s and name the document they came from, and the comment's "27 %" (the real
+difference between the two configurations is 42 %) is fixed with them. FLUX's `79.34 s` also
+traces to nothing; it is recorded as an open item rather than silently kept.
+
 ## 0.6.62 — 2026-09-25 · the Clone tab, and the end of guessing a voice's contract
 
 The owner reported that the Audio page's Clone tab showed no voice picker until he went to the

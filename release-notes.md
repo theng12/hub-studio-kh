@@ -2,6 +2,125 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.63 — 2026-09-25
+
+### Image gets the memory control you asked for
+
+The Image page now has **Memory: Auto / Low RAM / Full**, and it is the real low-RAM lever rather
+than a label. On **Auto**, each model decides from this Mac's memory — Z-Image-Turbo 6B MLX 4-bit
+runs its bounded configuration below 24 GB and its full one at or above it. **Low RAM** forces the
+bounded configuration on any model that has one, which is how you tell Image to stay small on the
+32 GB Mac so Audio or Chat can keep a model loaded instead. **Full** forces the big configuration
+back.
+
+Each option says what it costs, in the model's own measured numbers: about **7.1 GB peak instead
+of 17.7 GB**, and about **236 s instead of 166 s** for a 1280×720 nine-step image on the machine
+it was measured on. FLUX.2 Klein 4B MLX 4-bit has no bounded mode at all — that is deliberate and
+it says so on the page instead of showing you a control that would do nothing.
+
+This is a **loading** setting and it lives on the Image page. The memory setting in Settings is a
+different question — when a held model is let go — and Image's answer there is still the one
+sentence it was.
+
+### Auto — one memory setting that is right on every Mac
+
+Every Studio's memory setting now has a fifth choice, **Auto**, and it is the new default:
+
+- **16 GB and above:** hold the model for **10 idle minutes**, then release it.
+- **8 GB:** release as soon as each job finishes.
+
+That is the whole rule, and it means Chat and Music stop throwing their model away after every job
+on the Macs that can afford to keep it — no more ~12-second reload before every Chat reply on your
+16 GB and larger machines — while the two 8 GB Macs keep behaving exactly as they do today. The
+setting tells you what it did: on Auto it reads *"Follows this Mac: releases after 10 idle
+minutes here"*.
+
+Nothing here can interrupt work. A held model is never released while a job is queued or running,
+and if another Studio on that Mac needs the memory before it can start, the Hub already asks the
+idle Studios to let go first — that is the *"unless another request is in"* part.
+
+### Chat is now work you can see — and measure
+
+**A Chat send is recorded as a job.** That means the Jobs page has a **Chat** tab listing every
+question you asked and every answer, with the model, how long it took, and Copy Answer / Save….
+Before this, a Chat send left no record anywhere.
+
+**Chat rows show tokens per second.** You asked for a way to measure generation speed, and that
+needs the model's own generation time rather than the whole round trip — a cold reply includes the
+model load, so a rate taken from the round trip would have been wrong on exactly the turn you were
+measuring. The worker now states its own generation time, and the row shows e.g.
+`10 tokens · 1.4 tok/s · 7.2 s`. When the worker does not state a time, no rate is shown — there is
+no invented number.
+
+The Jobs page also has a **Video** tab now. It lists nothing and says so: Video is not in this
+build yet, and an empty tab that explains itself is better than no tab at all.
+
+Chat also ends with the same *"Model installation and storage are managed centrally"* line and
+**Manage Chat Models** button the other four Studios have. And the message you send appears in the
+transcript **immediately** now, instead of after the reply arrives — a slow reply used to look like
+a dead button, and a failed one said nothing at all.
+
+### 8 GB Chat now warns you, exactly like Image
+
+On an 8 GB Mac, Chat tells you the model is qualified at 16 GB and that it will swap or fail,
+especially with another Studio holding a model. It still lets you try — it is advice, not a wall,
+the same as Image.
+
+### Times always show their seconds
+
+You asked for this and it was only half done. The run time was fixed last release; the line
+directly under it was not. A 2 min 5 s clip read **"2.1 min"** on the row above **"2 min 5 s"**,
+and a saved voice clip of 90 seconds read "1.5 min". Every duration in the app now goes through one
+formatter that always states the seconds: `59.4 s`, `1 min 0 s`, `2 min 5 s`, `2 h 7 min 3 s`.
+
+### Whisper small and base are actually usable now
+
+They were listed as "catalog only" for the wrong reason. The Subtitle worker was supposed to reuse
+the Voice Studio's snapshot builder — the one that can convert the `weights.npz` these two models
+ship — and a one-word path error meant it never did in any installed build. The fallback kept the
+catalogue looking healthy, so nobody could see it. Fixed and measured end to end: both models now
+build a loadable folder, and a real transcription comes back correctly.
+
+### The copy-models step now cleans up after a model is cut
+
+`2 - Copy the models.command` still copies and updates exactly as before, and it is still safe to
+run again on a Mac that is already set up. What is new is that it will also **offer to remove
+models this kit no longer offers** — an old model you have stopped shipping just sits in
+`~/StudioHubModels` forever otherwise. Nothing is deleted: they are **moved to
+`~/StudioHubModels/_trash/`**, the list is shown before anything moves, and emptying that folder is
+your call.
+
+Two things it deliberately will not touch: the **Hugging Face cache** that lives inside the same
+folder, and anything you put there yourself — including your **Yue2** download.
+
+### Z-Image-Turbo 6B MLX 4-bit is now carried on 8 GB Macs
+
+You asked for the override, so the copy step now carries it on 8 GB machines even though its
+manifest's tier is 16 GB. It is recorded differently from FLUX — FLUX is in the "you have run it
+there" list, Z-Image is in a new "you asked to try it there" list — because the 8 GB measurement is
+still outstanding. The app still warns you it is below tier and still lets you run it, in low-RAM
+mode.
+
+### Fixes you won't see
+
+- **A cancelled request no longer holds a Mac for six hours.** A cancel landed as an exception the
+  proxy's cleanup didn't catch, so the machine stayed reserved. What a dropped connection does is
+  now declared per route instead of guessed.
+- **Chat's engine could wedge after a cancelled answer**, leaving every later question waiting
+  behind it. Fixed, and measured: the next reply is served in about a tenth of a second.
+- **A question too long for the model is refused, not silently truncated**, and the refusal tells
+  you the measured sizes and the model's own limit.
+- **Three imports in the Hub pointed at files that do not exist.** One of them made the cloud-model
+  check report "nothing matched" when it had checked nothing at all.
+- **Something now checks the bundle before it ships**: any module a worker imports that is not in
+  the bundle stops the build. Run against the app you have installed today, it finds four.
+
+### Still yours to do
+
+The **8 GB Z-Image-Turbo test** is the one measurement outstanding, and it is now more useful than
+ever: it decides whether that override becomes a proven tier. One command, instructions in
+`qualification/README-8gb-z-image.md`.
+
 ## 0.6.62 — 2026-09-25
 
 ### The Clone tab works the moment you open it
