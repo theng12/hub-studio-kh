@@ -14,14 +14,18 @@ and does not have to be re-derived.
 > landed: the 0.6.62 bundle carries `components.chat` and the packaged Hub publishes the model
 > (`/api/hub/catalog` → exactly one chat row, `capabilities: ["chat.completion"]`).
 >
-> **Credential caveat, measured 2026-09-25.** The peer path recommended below
-> (`POST {base}/studio/chat/v1/chat/completions`) works with the **Hub token** the local adapter
-> already holds: `GET /studio/chat/api/catalog` with that token → **200** with the chat row, and
-> without a credential → **401**. It does **not** work for a *fleet* credential: `chat` is absent
-> from `components/hub/backend/auth.py`'s `_FLEET_STUDIO` allowlist, so a remote node's fleet token
-> gets **403** on `/studio/chat/...` (2026-09-24 review, finding F6). A local "Studio Hub (this
-> Mac)" bridge is therefore ready on our side; a remote-node bridge needs that allowlist decision
-> first. The Hub also echoes our `lane_contract.deadline_seconds`, which this adapter already reads.
+> **Credential caveat — CLOSED in 0.6.63, 2026-09-25.** This paragraph used to say the peer path
+> below works with the Hub token but that a *fleet* credential gets **403** because `chat` was
+> absent from `_FLEET_STUDIO`. The owner decided that every model which is running should be
+> **shown and runnable**, and 0.6.63 does it: `chat` is in `_FLEET_STUDIO` for its read contracts
+> and one work route — `POST /studio/chat/v1/chat/completions` — is allowed to a Fleet credential.
+> So a **remote node's** fleet token now drives chat as well as the local Hub token does, and that
+> decision is no longer a prerequisite for this bridge. `POST /api/hub/chat/completions` stays
+> Hub-token only, deliberately: a second spelling of one operation for the fleet is the second
+> vocabulary this project keeps paying for. The Hub also echoes our
+> `lane_contract.deadline_seconds`, which this adapter already reads. The full current picture,
+> including the job record a chat completion now leaves on the node, is in
+> [`docs/gatewaykh-handoff-0.6.63.md`](../docs/gatewaykh-handoff-0.6.63.md).
 
 ## What Studio Hub already exposes (this project)
 
