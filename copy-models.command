@@ -10,6 +10,12 @@
 # correct are left alone, so a second run takes seconds rather than minutes. A voice already on
 # this Mac is never overwritten.
 #
+# It also moves out a model this kit no longer offers: if the app's own record still lists it and
+# no model in this kit ships it, the folder is moved into "_trash" inside ~/StudioHubModels - not
+# deleted - and the app's record is updated to match. Emptying that folder when you are happy
+# nothing in it is wanted is what returns the space, and that is your call. A model the kit does
+# ship is never removed, even when this Mac has too little memory to run it.
+#
 # Nothing else is needed: the app finds this folder by itself the first time it opens, and the
 # folder belongs to whichever account is signed in, so a different account name on another Mac
 # needs nothing special.

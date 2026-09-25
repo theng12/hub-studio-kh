@@ -100,6 +100,15 @@ only what the Mac's memory can run, so an 8 GB Mac gets the image models and a 1
 gets the audio ones too. Voices you have saved are copied at the same time. The library on
 a drive is the library the Mac gets — there is no download step.
 
+The step also keeps the library in step with the kit between releases: a model the kit no
+longer offers is moved into **`_trash`** inside `~/StudioHubModels` (never deleted) and the
+app's record is updated, so a model cut from a release does not sit on the Mac forever. The
+space comes back when you empty that folder — that is your call, and the step says where it
+went. Models the kit *does* ship are never removed, including ones this Mac is too small to
+run: those are listed as left behind and stay. **Z-Image-Turbo 6B MLX 4-bit** is carried on
+the 8 GB Macs at your request, and the app still shows its below-tier warning while its 8 GB
+run is being measured.
+
 ## Other files here
 
 | File | Use |

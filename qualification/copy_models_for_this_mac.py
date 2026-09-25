@@ -13,9 +13,14 @@ models. It compares each model folder against the copy already here and:
   * replaces models whose shipped files changed (a corrected or updated weight file),
   * leaves untouched models that are already identical,
   * keeps the app's record of what is installed in step with the new files, so an updated model
-    still reads as installed instead of needing to be re-verified by hand.
+    still reads as installed instead of needing to be re-verified by hand,
+  * moves a model this kit no longer offers out of the way, into `_trash` beside the library, so a
+    model cut from a release does not sit on the Mac forever.
 
-Nothing is ever deleted except an old revision folder of a model that was just updated.
+Nothing is ever deleted except an old revision folder of a model that was just updated: that one is
+inside the package being replaced, and moving it aside on the same volume would not return the
+24 GB it holds. Everything else that leaves the library is a *move* into `<library>/_trash`, which
+is the operator's to empty when he is satisfied nothing in it is wanted.
 """
 from __future__ import annotations
 
@@ -39,10 +44,26 @@ LEGACY_LIBRARY_FOLDER = Path("Downloads") / "model-library"
 # them on smaller Macs many times. Raising a model's floor here is a deliberate, reviewable act;
 # lowering one is not, so there is no way to say "needs less than the manifest says" - only
 # "the owner has proven this one runs smaller".
+#
+# Two tables, and they are not the same claim:
+#   PROVEN_SMALLER   the owner has run this model on the smaller Mac. Measured.
+#   CARRY_BELOW_TIER the owner has asked for this model on a smaller Mac than its manifest
+#                    declares, and the run that would prove it does not exist yet. It is carried
+#                    on his request, not on evidence, and the app still publishes the model's
+#                    below-tier warning - so he is told what he is trading. Move a model to
+#                    PROVEN_SMALLER once it has actually run there.
 PROVEN_SMALLER = {
     # FLUX.2 Klein 4B: the manifest says 16 GB, the owner has produced tens of thousands of
     # images on 8 GB Macs. The 16 GB figure is a qualification tier, not a requirement.
     "flux2-klein-4b-mlx-4bit": 8,
+}
+
+CARRY_BELOW_TIER = {
+    # Z-Image-Turbo 6B MLX 4-bit: the manifest declares 16 GB and its 8 GB run is still unmeasured
+    # (`qualification/README-8gb-z-image.md`, and `fleet_8gb: pending` in the manifest's own
+    # record), so this is a request to try it, not a result. The owner asked for it to be carried
+    # on the 8 GB Macs anyway. Nothing here is proof of anything.
+    "z-image-turbo-mflux-4bit": 8,
 }
 
 
@@ -62,25 +83,37 @@ def required_gb(manifest: dict) -> int:
     qualification = manifest.get("qualification") or {}
     floor = qualification.get("minimum_unified_memory_gb")
     floor = int(floor) if isinstance(floor, (int, float)) and floor > 0 else 0
-    return PROVEN_SMALLER.get(manifest["package_id"], floor)
+    package_id = manifest["package_id"]
+    # A measured run outranks a request to try it, so `PROVEN_SMALLER` is asked first.
+    if package_id in PROVEN_SMALLER:
+        return PROVEN_SMALLER[package_id]
+    return CARRY_BELOW_TIER.get(package_id, floor)
 
 
 def floor_origin(manifest: dict) -> str:
     """Where this model's memory requirement came from, so a wrong skip can be traced.
 
-    There are exactly two sources: the `PROVEN_SMALLER` table below (the owner has run the model
-    on a smaller Mac than its manifest claims) and the manifest's own
+    There are exactly three sources: the `PROVEN_SMALLER` table (the owner has run the model on a
+    smaller Mac than its manifest claims), the `CARRY_BELOW_TIER` table (the owner has asked for it
+    there and it is still unmeasured), and the manifest's own
     `qualification.minimum_unified_memory_gb`. The skip *is* printed, but it printed only the
     number - so a new model the owner had proven on a small Mac looked like a model that did not
-    fit, and nothing said which of the two places to change. Both are named here.
+    fit, and nothing said which of the three places to change. All three are named here, and the
+    two tables are named apart from each other: a wrong skip has to stay traceable to the exact
+    table that caused it, and "carried because he asked" must not read as "proven".
     """
     package_id = manifest["package_id"]
     if package_id in PROVEN_SMALLER:
         return (f"floor {PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER in "
-                f"qualification/copy_models_for_this_mac.py")
+                f"qualification/copy_models_for_this_mac.py (the owner has run it on that Mac)")
+    if package_id in CARRY_BELOW_TIER:
+        return (f"floor {CARRY_BELOW_TIER[package_id]} GB from CARRY_BELOW_TIER in "
+                f"qualification/copy_models_for_this_mac.py (the owner asked to carry it there; "
+                f"the run that would prove it is still unmeasured)")
     return ("floor from qualification.minimum_unified_memory_gb in its manifest (raise it there, "
             "or add the model to PROVEN_SMALLER in qualification/copy_models_for_this_mac.py if "
-            "the owner has run it on a smaller Mac)")
+            "the owner has run it on a smaller Mac, or to CARRY_BELOW_TIER there if he has asked "
+            "for it there and it is still unmeasured)")
 
 
 def size_gb(manifest: dict) -> float:
@@ -165,6 +198,133 @@ def prune_old_revisions(target: Path, keep: str) -> int:
         freed += sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
         shutil.rmtree(child, ignore_errors=True)
     return freed
+
+
+#: Where a package this kit no longer offers is moved. A move, not a delete: the folder is still
+#: the operator's, `_trash` is his to empty, and a model reinstated in a later kit is still there.
+TRASH_FOLDER = "_trash"
+
+#: The app's receipt log, relative to the library it belongs to.
+INDEX_RELATIVE = Path(".studiohub") / "installed.json"
+
+
+def read_index(library: Path) -> dict:
+    """The app's record of what is installed in this library, or {} when there is none.
+
+    The validity rule is the app's own (`_index` in `components/model_packages.py`): an object,
+    every value an object. A record the app itself would refuse to read is not a record this
+    script will move folders on the strength of.
+    """
+    try:
+        value = json.loads((library / INDEX_RELATIVE).read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict) or any(not isinstance(row, dict) for row in value.values()):
+        return {}
+    return value
+
+
+def write_index(library: Path, index: dict) -> None:
+    """Replace the receipt log in one step, in the shape the app itself writes it.
+
+    `.tmp` then `os.replace`, so an interrupted run leaves either the old log or the new one - never
+    a half-written file. A damaged index reads to the app as "nothing is installed" for every model
+    on this Mac, which is a far worse outcome than a model that is still listed after a failed run.
+    """
+    state = library / ".studiohub"
+    state.mkdir(mode=0o700, exist_ok=True)
+    temporary = state / (INDEX_RELATIVE.name + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(json.dumps(index, sort_keys=True))
+    os.replace(temporary, state / INDEX_RELATIVE.name)
+
+
+def folder_bytes(folder: Path) -> int:
+    """Every file in a package folder, in bytes - the count the kit's own verifier reports."""
+    total = 0
+    for path in folder.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def plan_prune(index: dict, library: Path,
+               offered: set[str]) -> tuple[list[tuple[str, Path, int]], list[str]]:
+    """What the library holds that this kit no longer offers, in the two groups it is handled in.
+
+    A managed package is a **key in the app's own record whose folder really is a directory**.
+    `installed.json` is the only thing that says a folder belongs to this app, and it is the only
+    thing this script may move. The library holds other things on purpose - the Hugging Face cache
+    in `hub/`, a candidate model the owner is still qualifying, an older `_trash` - and those are
+    his, not the kit's. The folder is tested as the *second* condition, never the first: the record
+    is a historical receipt log (the owner's Mac holds 42 receipts and 15 folders), so treating it
+    as a picture of the disk would name folders that are not there.
+
+    Returns (packages to move, stale receipts to forget). A stale receipt names a package this kit
+    no longer offers whose folder is already gone, so removing it changes nothing on disk - it is
+    a line in the log that names a folder nobody will find. A receipt whose package *is* still
+    shipped is kept even with no folder: that is a model the operator may simply re-download, and
+    the app already reports it as not installed, with the reason.
+    """
+    to_move: list[tuple[str, Path, int]] = []
+    stale: list[str] = []
+    for package_id in sorted(index):
+        # The id names one folder directly inside the library. Anything that is not one plain path
+        # component is not something this script is going to follow out of the library.
+        if not package_id or package_id in (".", "..") or "/" in package_id or "\\" in package_id:
+            continue
+        folder = library / package_id
+        if not folder.is_dir():
+            if package_id not in offered:
+                stale.append(package_id)
+            continue
+        if package_id in offered:
+            continue
+        to_move.append((package_id, folder, folder_bytes(folder)))
+    return to_move, stale
+
+
+def move_to_trash(folder: Path, library: Path, package_id: str, stamp: str | None = None) -> Path:
+    """Move one package folder into `<library>/_trash/<package_id>-<YYYYMMDD-HHMMSS>/`.
+
+    A rename inside the same library, so nothing is copied and nothing is deleted. It also means
+    the space is *not* freed yet: it comes back when the operator empties `_trash`, which is his
+    call and the reason the path is printed at the end of the run.
+    """
+    trash = library / TRASH_FOLDER
+    trash.mkdir(parents=True, exist_ok=True)
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    destination = trash / f"{package_id}-{stamp}"
+    suffix = 1
+    while destination.exists():  # two prunes in one second, or a second run before he empties it
+        suffix += 1
+        destination = trash / f"{package_id}-{stamp}-{suffix}"
+    shutil.move(str(folder), str(destination))
+    return destination
+
+
+def forget_packages(library: Path, moved: list[str], stale: list[str]) -> tuple[int, int]:
+    """Drop entries from the app's receipt log, in one atomic replace.
+
+    Called after the copy step has finished writing receipts, because the log is also seeded from
+    the kit's copy earlier in the run: an entry removed before that would only be carried back in.
+    Returns (dropped for moved packages, dropped stale receipts). A stale receipt the log no longer
+    holds is not counted - the log as it stands is what matters, and the kit's record and this
+    Mac's do not have to be the same file.
+    """
+    index = read_index(library)
+    moved_present = [package_id for package_id in moved if package_id in index]
+    stale_present = [package_id for package_id in stale if package_id in index]
+    if not moved_present and not stale_present:
+        return (0, 0)
+    for package_id in moved_present + stale_present:
+        del index[package_id]
+    write_index(library, index)
+    return (len(moved_present), len(stale_present))
 
 
 def voice_library() -> Path:
@@ -372,6 +532,11 @@ def main() -> int:
               "the Downloads copy can be deleted once you are happy with it.")
     destination.mkdir(parents=True, exist_ok=True)
 
+    # What this Mac holds that the kit no longer offers. Read before anything is copied, so the
+    # operator sees it in the plan and agrees to it with the same answer as the copy - nothing is
+    # moved that he was not shown first.
+    prune, stale_receipts = plan_prune(read_index(destination), destination, set(manifests))
+
     # Sort every model this Mac should have into: new, changed, or already identical.
     plan: list[tuple[str, int, dict, str]] = []
     for package_id, needs, manifest in chosen:
@@ -417,6 +582,21 @@ def main() -> int:
         print("  Not a problem: they are for bigger Macs. The rest works normally.")
         print()
 
+    # The prune is part of the same plan and the same confirmation. It is deliberately *after* the
+    # "Leaving behind" block: a model below this Mac's tier is named by a manifest, so it is still
+    # offered, so it is never a candidate here however little of it this Mac can use.
+    if prune:
+        prune_bytes = sum(size for _package_id, _folder, size in prune)
+        print(f"  Removing {len(prune)} model(s) this kit no longer offers, "
+              f"{prune_bytes / 1e9:.1f} GB -> {destination / TRASH_FOLDER}")
+        for package_id, _folder, size in prune:
+            print(f"      {package_id:<32} {size / 1e9:>6.1f} GB")
+        print()
+    if stale_receipts:
+        print(f"  Forgetting {len(stale_receipts)} receipt(s) in the app's record for models this "
+              f"kit no longer offers, whose folders are already gone.")
+        print()
+
     adding_gb = sum(size_gb(m) for _p, _n, m, how in new + update)
 
     # Voices travel with the models but are a separate library, and they are tiny: the whole kit's
@@ -435,15 +615,19 @@ def main() -> int:
     print(f"  Going to: {destination}")
     print()
     nothing_to_copy = not new and not update
+    nothing_to_remove = not prune
     if nothing_to_copy:
         print("  Everything this Mac needs is already here. Nothing to copy.")
+    if nothing_to_copy and nothing_to_remove:
         if not voices_to_add:
             print("  Checking the app's record of what is installed, then stopping.")
     else:
+        # A prune on its own still has to reach this prompt: it moves GB the operator may not
+        # expect to lose, and "nothing to copy" used to return before ever asking.
         answer = input(
             "  Press Return to start, or type n and press Return to stop: ").strip().lower()
         if answer == "n":
-            print("  Nothing was copied.")
+            print("  Nothing was copied or moved.")
             return 0
 
     # Carry the verified record across, so models that are already current keep proving
@@ -484,6 +668,20 @@ def main() -> int:
             updated += 1
         print(f" done - {outcome}")
 
+    # Move out what this kit no longer offers. A rename on the same volume, so it costs no copy and
+    # frees no space yet: the space comes back when the operator empties `_trash`, which is his call
+    # and why the path is printed at the end. A package that cannot be moved is left exactly where
+    # it is and named, rather than deleted to make the plan look like it worked.
+    moved: list[tuple[str, int]] = []
+    for package_id, folder, size in prune:
+        try:
+            move_to_trash(folder, destination, package_id)
+        except OSError as error:
+            print(f"  {package_id}: could not be moved to _trash ({error}); left where it is")
+            continue
+        moved.append((package_id, size))
+        print(f"  {package_id}: moved to {TRASH_FOLDER}")
+
     # Every model this Mac should have, copied or not, must satisfy the app's check. A run that
     # copied nothing is still the repair path for a model the app calls "not installed" - a lost
     # or stale record is fixed from the files already here, without copying anything again.
@@ -495,11 +693,26 @@ def main() -> int:
             repaired += 1
             print(f"  {manifest['package_id']}: {outcome}")
 
+    # The receipt log was seeded from the kit's copy above, so this is the last word on it: the
+    # moved packages and the stale receipts are dropped together, in one atomic replace. Until this
+    # runs, the app's record still names the folder that is now in `_trash`.
+    try:
+        forgotten_moved, forgotten_stale = forget_packages(
+            destination,
+            [package_id for package_id, _folder, _size in prune],
+            stale_receipts)
+    except OSError as error:
+        # A rerun removes these as stale receipts, so nothing is lost - but say so rather than
+        # leaving a record that names a folder the operator just watched move.
+        print(f"  Could not update the app's record ({error}); it still names what moved.")
+        forgotten_moved = forgotten_stale = 0
+
     voices_added, voices_present, voice_names = copy_voices(voices_source, voices_target)
 
-    # Nothing copied, nothing added, no record needed repairing: there is no report to make, and
-    # the summary would only repeat what the two lines above already said.
-    if nothing_to_copy and not voices_added and not repaired and not failed:
+    # Nothing copied, nothing added, nothing moved, no record needed repairing: there is no report
+    # to make, and the summary would only repeat what the lines above already said.
+    if (nothing_to_copy and not moved and not forgotten_moved and not forgotten_stale
+            and not voices_added and not repaired and not failed):
         return 0
 
     print()
@@ -515,10 +728,20 @@ def main() -> int:
           f"{f', {failed} failed' if failed else ''} in {time.time() - started:.0f} seconds.")
     if freed:
         print(f"  Removed {freed / 1e9:.1f} GB of older model versions that are no longer used.")
+    if moved:
+        moved_gb = sum(size for _package_id, size in moved) / 1e9
+        print(f"  Moved {len(moved)} model(s) this kit no longer offers, {moved_gb:.1f} GB, to:")
+        print(f"      {destination / TRASH_FOLDER}")
+        print("  The space comes back when you empty that folder; it is yours to sort out.")
+    if forgotten_moved or forgotten_stale:
+        print(f"  Removed {forgotten_moved + forgotten_stale} old receipt(s) from the app's record"
+              f" ({forgotten_moved} for the model(s) moved, {forgotten_stale} already stale).")
     print()
     if new or update:
         print("  Now open Studio Hub and, when it asks for a model folder, choose:")
         print(f"      {destination}")
+    elif moved or forgotten_moved or forgotten_stale:
+        print("  Nothing needed copying. Open Studio Hub when you are ready.")
     else:
         print("  Nothing needed copying. Open Studio Hub and use the new voices.")
     print()
