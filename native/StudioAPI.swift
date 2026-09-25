@@ -468,6 +468,17 @@ struct NativeLaneParameter: Decodable, Equatable, Identifiable {
         if let ignored { return ignored }
         return (note ?? "").lowercased().hasPrefix("accepted and ignored")
     }
+
+    /// The lane's own bounds as a control range, or nil when it publishes no numeric bound. The
+    /// range is inclusive because the lane's clamp is: Voice bounds `speed` with
+    /// `max(SPEED_MINIMUM, min(speed, SPEED_MAXIMUM))`, so the endpoints are values it accepts. A
+    /// lane that publishes `minimum_exclusive` says otherwise about its own bound, and an editor
+    /// that offers one value at a time reads that flag itself.
+    var numericRange: ClosedRange<Double>? {
+        guard let minimum, let maximum, minimum.isFinite, maximum.isFinite, minimum <= maximum
+        else { return nil }
+        return minimum...maximum
+    }
 }
 
 /// One limit a worker publishes with the artefact that states it.
@@ -771,9 +782,14 @@ struct NativeModel: Identifiable, Equatable {
     /// model that publishes `false` says "not supported" rather than staying silent.
     var supportsSegmentTimestamps: Bool? = nil
     var wordTimestampsClaim: Bool? = nil
-    /// Subtitle: the weight files the worker's own catalogue row lists, which is what says which
-    /// weight format this runtime can load.
+    /// Subtitle: the weight files the worker's own catalogue row lists. This is the receipt — real
+    /// data, and it says which files the runtime found — but it is not the format. The format is
+    /// `weightFormat` below, which the row states.
     var weightFiles: [String] = []
+    /// Subtitle: the weight format the package's own row states (`weight_format`), read verbatim.
+    /// Nil when the row states none, and then no format is claimed: the extension of a file name is
+    /// not the package's format, and "index, safetensors" is not a format at all.
+    var weightFormat: String? = nil
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
     /// A cleaned short name for a chooser. The catalogue label carries a recommendation suffix and
@@ -895,13 +911,20 @@ struct NativeModel: Identifiable, Equatable {
                 label: "Word timestamps", value: words ? "supported" : "not supported",
                 source: "availability row supports_word_timestamps"))
         }
+        // The format is what the package *states*, never what its file names look like. The worker
+        // publishes `weight_format` from the package's own manifest; joining extensions off the
+        // receipt was an interpretation standing in for a fact, and it read a package of
+        // `model.safetensors.index.json` + shards as the format "index, safetensors". Where the row
+        // states no format, no format is claimed. The receipt stays, as its own fact, because which
+        // files the runtime found is real data.
+        if let weightFormat, !weightFormat.isEmpty {
+            facts.append(NativeModelFact(label: "Weight format", value: weightFormat,
+                                         source: "catalog row weight_format"))
+        }
         if !weightFiles.isEmpty {
-            let formats = Self.distinctExtensions(weightFiles)
-            facts.append(NativeModelFact(
-                label: "Weight format",
-                value: formats.isEmpty ? weightFiles.joined(separator: ", ")
-                                       : "\(formats.joined(separator: ", ")) · \(weightFiles.joined(separator: ", "))",
-                source: "catalog row readiness.files.weight_files"))
+            facts.append(NativeModelFact(label: "Weight files",
+                                         value: weightFiles.joined(separator: ", "),
+                                         source: "catalog row readiness.files.weight_files"))
         }
         if let minimumMemoryGB {
             facts.append(NativeModelFact(
@@ -980,15 +1003,21 @@ struct NativeModel: Identifiable, Equatable {
     /// discards), so their absence is what "this model cannot sing" is read from. This list
     /// interprets a published vocabulary; it never decides whether a control exists.
     static let vocalParameters: Set<String> = ["instrumental", "lyrics", "vocal_language"]
+}
 
-    /// The extensions the worker's own weight-file names carry, in the order they appear.
-    static func distinctExtensions(_ files: [String]) -> [String] {
-        var seen: [String] = []
-        for file in files {
-            let ext = (file as NSString).pathExtension.lowercased()
-            if !ext.isEmpty, !seen.contains(ext) { seen.append(ext) }
-        }
-        return seen
+extension NativeModel {
+    /// One parameter this model's lane publishes, or nil when it publishes none of that name.
+    ///
+    /// The `default` inside is the value in force — the worker hands its resolved map to the lane
+    /// contract before publishing it — so a page reads here what an omitted field would receive,
+    /// and reads the bound the worker will clamp to. A model whose lane does not publish the name
+    /// offers no control for it at all, which is the rule the Image and Music forms already follow.
+    ///
+    /// An extension rather than a member on purpose: the struct's own body is read by a source
+    /// contract test that stops at the first indented closing brace, so a method added among the
+    /// stored properties silently truncated it and hid the property it was looking for.
+    func laneParameter(_ name: String) -> NativeLaneParameter? {
+        laneContract?.parameters.first { $0.name == name }
     }
 }
 
@@ -2162,11 +2191,65 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var audioMode: VoiceMode = .cloning { didSet { scheduleSave() } }
     /// The written description a voice-design model turns into a voice.
     @Published var audioDesignPrompt = "" { didSet { scheduleSave() } }
-    /// Speaking pace, 0.5-2.0. The engine's own pace is 1.0, and the worker clamps anything else.
-    @Published var audioSpeed: Double = 1.0 { didSet { scheduleSave() } }
-    /// The bounds the audited contract allows. Held here so the slider, the store and anything that
-    /// reports the value cannot disagree about the range.
-    static let audioSpeedRange: ClosedRange<Double> = 0.5...2.0
+    /// Speaking pace, or nil when the operator has not chosen one on this page.
+    ///
+    /// Nil is the ordinary state, and it is deliberately not the same as 1.0: an untouched control
+    /// puts no pace in the request at all, so the model's own value in force applies — what the
+    /// Models tab stores for this model over the pace its lane states. A number here is a choice
+    /// made on this page, it is what the request carries, and it therefore always wins. Nothing
+    /// about the pace is fixed in the app: the bounds and the value in force are read from the
+    /// selected model's lane contract, which the worker publishes with its defaults resolved.
+    @Published var audioSpeed: Double? { didSet { scheduleSave() } }
+
+    /// The pace control the selected Audio model publishes, from its own lane contract.
+    ///
+    /// Nil when no Audio model is selected, when the model publishes no `speed`, when it declares
+    /// the parameter accepted-and-ignored, or when it publishes no range or no value in force. A
+    /// model that reads no pace gets no slider, rather than one whose movement changes nothing.
+    /// The `default` inside is the resolved value — `lane_contract.for_model` is handed what the
+    /// request path would apply — so the number shown and the number an omitted field receives
+    /// cannot be two answers to one question.
+    var audioSpeedControl: NativeLaneParameter? {
+        guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio }),
+              let parameter = model.laneParameter("speed"),
+              parameter.type == "number",
+              !parameter.isDeclaredIgnored,
+              parameter.numericRange != nil,
+              parameter.defaultValue?.doubleValue != nil
+        else { return nil }
+        return parameter
+    }
+
+    /// The pace the slider shows: the operator's own choice where they made one, otherwise the
+    /// model's value in force. So the control always displays the pace that will actually be used,
+    /// instead of a stored app constant silently outranking the Models tab. A choice made against
+    /// another model is pulled into this model's published bounds — the same bounds the worker
+    /// clamps to, so what is shown is what is heard.
+    var audioSpeedInForce: Double? {
+        guard let control = audioSpeedControl, let range = control.numericRange,
+              let value = audioSpeed ?? control.defaultValue?.doubleValue else { return nil }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    /// What an Audio request carries: the operator's pace only when they chose one. An untouched
+    /// control sends nothing, which is what lets this model's stored default reach the engine.
+    var audioSpeedForRequest: Double? {
+        audioSpeed == nil ? nil : audioSpeedInForce
+    }
+
+    /// The language control the selected Audio model publishes, from its own lane contract.
+    ///
+    /// Nil for a family that takes no language input, which is most of them: the lane omits
+    /// `language` on purpose because it discards the key — the Khmer VITS voices are Khmer by
+    /// construction — and the page must not offer a control whose value goes nowhere. Chatterbox is
+    /// the live case that publishes one, and it publishes it `required`, so the lane's own answer
+    /// decides whether a request can be made without it. Voice publishes no optional `language`,
+    /// which is why there is no stored default for it to follow.
+    var audioLanguageControl: NativeLaneParameter? {
+        guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio })
+        else { return nil }
+        return model.laneParameter("language")
+    }
     @Published var audioSpeaker = "" { didSet { scheduleSave() } }
     @Published var audioLanguage = "en" { didSet { scheduleSave() } }
     /// Local reference clip for Qwen Base voice cloning. Choosing a new clip or editing the
@@ -2187,7 +2270,34 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var transcriptionDefaultModel: String?
     @Published var transcriptionFile: URL? { didSet { scheduleSave() } }
     @Published var transcriptionLanguage = "" { didSet { scheduleSave() } }
-    @Published var wordTimestamps = false { didSet { scheduleSave() } }
+    /// Per-word timings, or nil when the operator has not chosen.
+    ///
+    /// The Subtitle worker counts a field as supplied when its key is in the submitted form — its
+    /// own words: "an explicit `word_timestamps=false` is still the caller's answer and a stored
+    /// `true` cannot override it". So an untouched toggle must submit nothing at all for this
+    /// model's stored default to apply; an explicit off is still an answer and still wins.
+    @Published var wordTimestamps: Bool? { didSet { scheduleSave() } }
+
+    /// The word-timings control for the selected Subtitle model: the model's own runtime has to
+    /// claim word timings, and its lane has to publish a boolean `word_timestamps` with a value in
+    /// force. Nil otherwise, so a model that produces no word timings gets no toggle rather than
+    /// one whose movement would change nothing.
+    ///
+    /// The value returned is the one in force: the operator's own answer where they gave one,
+    /// otherwise what the Models tab stores for this model over the `false` its lane states. It was
+    /// a persisted app value with no control anywhere in the app, submitted as `false` on every
+    /// request — so the Models control could never reach the engine and the operator could not
+    /// reach the value at all.
+    var wordTimestampsControl: Bool? {
+        guard let model = models.first(where: { $0.repo == transcriptionModel && $0.function == .transcription }),
+              model.supportsWordTimestamps,
+              let parameter = model.laneParameter("word_timestamps"),
+              parameter.type == "boolean",
+              !parameter.isDeclaredIgnored,
+              let inForce = parameter.defaultValue?.boolValue
+        else { return nil }
+        return wordTimestamps ?? inForce
+    }
     @Published var transcriptionResult: NativeTranscript? { didSet { scheduleSave() } }
     @Published private(set) var transcribing = false
     @Published private(set) var submittingAudio = false
@@ -2830,6 +2940,16 @@ final class NativeWorkspaceStore: ObservableObject {
                 guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
                 guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
                 let language = audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                // A family that takes no language input must not be sent one. Most of them do not:
+                // the lane omits `language` precisely because it discards the key - the Khmer VITS
+                // voices are Khmer by construction - and the app sent the field's value on every
+                // job anyway, which is the "do not offer what the lane discards" rule read from the
+                // other side. A lane that *requires* a language is a different case and is refused
+                // below rather than filled in with a code this app invented.
+                let requestedLanguage = audioLanguageControl == nil ? nil : (language.isEmpty ? nil : language)
+                if audioLanguageControl?.required == true, requestedLanguage == nil {
+                    throw NativeAPIError.message("\(model.label) needs a language code. Enter one, for example en.")
+                }
                 // Which form this request takes is the tab the operator is on, and the tab is one
                 // the model publishes. A model that clones *and* designs has two valid forms, so
                 // neither the model's first mode nor a guess may decide this.
@@ -2848,7 +2968,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         modality: "voice", model: model.repo,
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
-                            presetSpeaker: "", language: language, speed: audioSpeed,
+                            presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest,
                             designPrompt: description))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 } else if audioMode == .cloning {
@@ -2866,7 +2986,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: language, speed: audioSpeed))],
+                                presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest))],
                             voiceReferenceAssetId: nil, voiceLibraryId: voiceID, routing: routingPin)
                     } else {
                         // The staged-reference path: kept for a reference that arrives without a
@@ -2886,7 +3006,7 @@ final class NativeWorkspaceStore: ObservableObject {
                             modality: "voice", model: model.repo,
                             clientRequestId: "native:\(UUID().uuidString)",
                             items: [HubAudioItem(text: text, params: HubAudioParams(
-                                presetSpeaker: "", language: language, speed: audioSpeed))],
+                                presetSpeaker: "", language: requestedLanguage, speed: audioSpeedForRequest))],
                             voiceReferenceAssetId: assetID, voiceLibraryId: nil, routing: routingPin)
                     }
                 } else {
@@ -2901,7 +3021,7 @@ final class NativeWorkspaceStore: ObservableObject {
                         clientRequestId: "native:\(UUID().uuidString)",
                         items: [HubAudioItem(text: text, params: HubAudioParams(
                             presetSpeaker: model.speakers.isEmpty ? "" : audioSpeaker,
-                            language: language, speed: audioSpeed))],
+                            language: requestedLanguage, speed: audioSpeedForRequest))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
                 }
             }
@@ -4176,7 +4296,7 @@ final class NativeWorkspaceStore: ObservableObject {
             guard let file = transcriptionFile, FileManager.default.fileExists(atPath: file.path) else {
                 throw NativeAPIError.message("Choose an audio or video file that still exists.")
             }
-            guard !wordTimestamps || model.supportsWordTimestamps else {
+            guard wordTimestamps != true || model.supportsWordTimestamps else {
                 throw NativeAPIError.message("The selected transcription model does not support word timestamps.")
             }
             transcribing = true
@@ -4189,14 +4309,22 @@ final class NativeWorkspaceStore: ObservableObject {
             try savePendingTranscription()
             let boundary = "StudioHub-\(UUID().uuidString)"
             guard let uploadDirectory = dataDirectory else { throw NativeAPIError.message("The app data directory is unavailable.") }
-            let fields = [
+            // Only the fields the operator actually answered are submitted. The Subtitle worker
+            // counts a field as supplied when its key is in the form - its own words: "an explicit
+            // `word_timestamps=false` is still the caller's answer and a stored `true` cannot
+            // override it" - so an untouched toggle or an empty language box must send no key at
+            // all, or this model's stored default can never apply. An empty language means
+            // auto-detect, which is what omitting it means too, so nothing is lost by leaving it
+            // out.
+            let language = transcriptionLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            var fields = [
                     "model": model.repo,
                     "item_ids": identity.itemID,
                     "project": "native",
-                    "episode": identity.episode,
-                    "language": transcriptionLanguage.trimmingCharacters(in: .whitespacesAndNewlines),
-                    "word_timestamps": wordTimestamps ? "true" : "false"
+                    "episode": identity.episode
                 ]
+            if !language.isEmpty { fields["language"] = language }
+            if let wordTimestamps { fields["word_timestamps"] = wordTimestamps ? "true" : "false" }
             // Only present when pinned, so the Hub's automatic choice stays the default rather
             // than an empty string it would have to interpret.
             var uploadFields = fields
@@ -5901,8 +6029,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 $0.repo == defaultTranscription && $0.function == .transcription && $0.supported
             }?.repo ?? models.first { $0.function == .transcription && $0.supported }?.repo ?? ""
         }
+        // Clearing the choice rather than answering "off": a model that does not support word
+        // timings has no business recording that the operator asked for none, and an untouched
+        // toggle submits no key, so this leaves the field to the model's own default.
         if let selected = models.first(where: { $0.repo == transcriptionModel && $0.function == .transcription }),
-           !selected.supportsWordTimestamps { wordTimestamps = false }
+           !selected.supportsWordTimestamps { wordTimestamps = nil }
         // A Music model that leaves the catalogue (or is not runnable here) must not stay selected,
         // or the page shows controls for a model the Hub will refuse.
         if !models.contains(where: { $0.repo == musicModel && $0.function == .music && $0.supported }) {
@@ -6209,7 +6340,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 minimumMemorySource: catalogTiers[item.repo]?.source,
                 supportsSegmentTimestamps: item.supportsSegmentTimestamps,
                 wordTimestampsClaim: item.supportsWordTimestamps,
-                weightFiles: catalogWeightFiles[item.repo] ?? []
+                weightFiles: catalogWeightFiles[item.repo] ?? [],
+                weightFormat: item.weightFormat
             )
         }
         let imageModels = catalog.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
@@ -6715,7 +6847,9 @@ final class NativeWorkspaceStore: ObservableObject {
         let transcriptionModel: String
         let transcriptionFile: String?
         let transcriptionLanguage: String
-        let wordTimestamps: Bool
+        /// Absent means the operator has not chosen; absent in state written before the toggle
+        /// existed, and still absent in state written since whenever they have left it alone.
+        let wordTimestamps: Bool?
         let transcriptionResult: NativeTranscript?
         let imagePrompt: String?
         let imageModel: String?
@@ -6833,10 +6967,15 @@ final class NativeWorkspaceStore: ObservableObject {
         // every audio model in the earlier state did.
         audioMode = state.audioMode.flatMap(VoiceMode.init(rawValue:)) ?? .cloning
         audioDesignPrompt = state.audioDesignPrompt ?? ""
-        // Absent means 1.0, and a value from an older or edited file that is out of range is pulled
-        // back to the contract's bounds rather than refused - a saved pace is not worth an error.
-        audioSpeed = min(max(state.audioSpeed ?? 1.0, Self.audioSpeedRange.lowerBound),
-                         Self.audioSpeedRange.upperBound)
+        // A saved pace of exactly 1.0 stays absent. Every build before this one wrote 1.0 whenever
+        // the operator had never touched the slider, so keeping it would read as a choice and hold
+        // the Models tab's stored pace dead on every Mac that has ever run the app. Nil is "not
+        // chosen", which is what that 1.0 meant. A deliberate 1.0 chosen against a model whose
+        // default is something else is the one value this cannot tell apart, and it costs one
+        // movement of the slider to restore. A pace from an older file is otherwise kept as
+        // written: it is pulled into the selected model's published bounds when it is used, which
+        // are the bounds the worker clamps to.
+        audioSpeed = state.audioSpeed.flatMap { abs($0 - 1.0) > 0.0001 ? $0 : nil }
         transcriptionModel = state.transcriptionModel
         if let path = state.transcriptionFile, FileManager.default.fileExists(atPath: path) { transcriptionFile = URL(fileURLWithPath: path) }
         transcriptionLanguage = state.transcriptionLanguage
@@ -7032,7 +7171,11 @@ private struct CatalogModel: Decodable {
     /// The package's file receipt, which is where the Subtitle worker names the weight files it
     /// found. Read one level down, because that is where the producer publishes them.
     let readiness: CatalogReadiness?
+    /// The weight format the row states for this package, from the package's own manifest. Kept
+    /// beside `readiness` on purpose: the receipt says which files exist, this says what they are.
+    let weightFormat: String?
     var isAuditGrounded: Bool { executionContract?.qualificationSource == "audit" }
+
 
     /// The tier this row publishes with the key that carried it, or nil when it publishes none.
     var memoryTier: (value: Double, source: String)? {
@@ -7270,6 +7413,10 @@ private struct TranscriptionModel: Decodable {
     let supportsWordTimestamps: Bool?
     /// The manifest's own claim about timed sections, published beside the word-timestamp claim.
     let supportsSegmentTimestamps: Bool?
+    /// The weight format the package states, on the row the Subtitle worker computes it for
+    /// (`weight_format`, from the manifest's own file list). This is the fact; the catalogue's
+    /// `readiness.files.weight_files` is the receipt beside it.
+    let weightFormat: String?
     /// The lane contract the Subtitle worker publishes on this same row.
     let laneContract: NativeLaneContract?
     /// The model limits the row publishes with the artefact that states each one, when it does.
@@ -7513,10 +7660,16 @@ private struct HubVoiceReference: Decodable {
 private struct HubAudioItem: Codable { let text: String; let params: HubAudioParams }
 private struct HubAudioParams: Codable {
     let presetSpeaker: String
-    let language: String
-    /// How fast to speak. The worker bounds this to 0.5-2.0 and applies tempo to the finished
-    /// audio, so pitch is preserved; 1.0 is the engine's own pace and is sent as-is.
-    var speed: Double
+    /// The language the operator asked for, or nil when this model publishes no `language` at all:
+    /// a family that takes no language input discards the key, so sending one is a parameter the
+    /// lane never reads. Nil is encoded away entirely (`encodeIfPresent`).
+    var language: String?
+    /// How fast to speak, or nil when the operator has not chosen a pace on this page. Nil is
+    /// encoded away entirely (`encodeIfPresent`), so the request carries no `speed` key at all and
+    /// the Voice worker's own resolution applies: the Models tab's stored pace for this model, over
+    /// the pace its lane states. Sending 1.0 for an untouched slider was what made that stored
+    /// default unreachable from the app.
+    var speed: Double?
     /// Sent only by a voice-design model. Encoded as `voice_design_prompt`; the Hub and the Voice
     /// worker both read that name.
     var designPrompt: String?
@@ -7527,7 +7680,10 @@ private struct PendingTranscription: Codable {
     let filePath: String
     let model: String
     let language: String
-    let wordTimestamps: Bool
+    /// The operator's own answer, or nil when they left the toggle alone and the model's stored
+    /// default was in force. Kept as the answer rather than as the resolved value so the record of
+    /// what was asked for stays what was asked for.
+    let wordTimestamps: Bool?
     let batchID: String?
     func withBatchID(_ id: String) -> Self {
         Self(episode: episode, itemID: itemID, filePath: filePath, model: model,
@@ -7609,12 +7765,6 @@ private struct JobWire: Decodable {
     let createdAt: Double?
 }
 private struct JobParameters: Decodable { let text: String?; let repo: String? }
-private struct AudioRequest: Encodable {
-    let repo: String
-    let text: String
-    let presetSpeaker: String
-    let language: String
-}
 private struct DownloadsResponse: Decodable { let jobs: [DownloadWire] }
 private struct DownloadWire: Decodable {
     let id: String

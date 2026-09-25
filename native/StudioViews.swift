@@ -1739,9 +1739,22 @@ struct StudioContent: View {
                                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Language").font(.callout)
-                            TextField("Language code, e.g. en", text: $workspace.audioLanguage).textFieldStyle(.roundedBorder)
+                        // Offered only where this model's lane publishes a `language`. The lane
+                        // omits it for a family that takes no language input — it discards the key
+                        // — so a box here would be a control whose value goes nowhere.
+                        if let languageControl = workspace.audioLanguageControl {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(languageControl.required == true ? "Language (required)" : "Language")
+                                    .font(.callout)
+                                TextField(languageControl.options?.first.map { "Language code, e.g. \($0)" }
+                                          ?? "Language code, e.g. en",
+                                          text: $workspace.audioLanguage).textFieldStyle(.roundedBorder)
+                                if let options = languageControl.options, !options.isEmpty {
+                                    Text("This model accepts \(options.joined(separator: ", ")).")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
                         }
                         speedControl
                         Divider().padding(.top, 8)
@@ -1923,38 +1936,49 @@ struct StudioContent: View {
         "\(connected)/\(workspace.connectionGeneration)"
     }
 
-    /// Speaking pace: one slider, with the engine's own pace as the default.
+    /// Speaking pace: one slider, whose range and value both come from the selected model's own
+    /// lane contract.
     ///
     /// The engine applies this as pitch-preserving tempo to the finished audio, so the voice keeps
     /// its identity at every setting - which is why it is a plain slider and not an engine choice.
-    /// The range is the audited contract's, taken from the store rather than repeated here.
+    /// Nothing here decides the pace: the bounds are the lane's own `minimum`/`maximum`, and the
+    /// value shown is the operator's choice or, until they make one, the value in force for this
+    /// model - what the Models tab stores over the pace the lane states. A model that publishes no
+    /// pace gets no slider, rather than one whose movement would change nothing.
+    @ViewBuilder
     private var speedControl: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Speed").font(.callout)
-                Spacer()
-                if abs(workspace.audioSpeed - 1.0) > 0.001 {
-                    Button("Normal") { workspace.audioSpeed = 1.0 }
-                        .font(.caption).buttonStyle(.link)
+        if let control = workspace.audioSpeedControl, let range = control.numericRange,
+           let shown = workspace.audioSpeedInForce {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Speed").font(.callout)
+                    Spacer()
+                    if workspace.audioSpeed != nil {
+                        Button("Model default") { workspace.audioSpeed = nil }
+                            .font(.caption).buttonStyle(.link)
+                    }
+                    Text(String(format: "%.2f×", shown))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(workspace.audioSpeed == nil ? .secondary : .primary)
                 }
-                Text(String(format: "%.2f×", workspace.audioSpeed))
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(abs(workspace.audioSpeed - 1.0) > 0.001 ? .primary : .secondary)
+                Slider(value: Binding(get: { shown }, set: { workspace.audioSpeed = $0 }),
+                       in: range, step: 0.05) {
+                    Text("Speed")
+                } minimumValueLabel: {
+                    Text(String(format: "%.2g×", range.lowerBound)).font(.caption2)
+                } maximumValueLabel: {
+                    Text(String(format: "%.2g×", range.upperBound)).font(.caption2)
+                }
+                .labelsHidden()
+                Text(workspace.audioSpeed == nil
+                     ? "This model's own pace. Move the slider to choose another."
+                     : shown > 1.0
+                     ? "Faster than this model's pace, with the voice unchanged."
+                     : shown < 1.0
+                     ? "Slower than this model's pace, with the voice unchanged."
+                     : "This model's pace.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Slider(value: $workspace.audioSpeed, in: NativeWorkspaceStore.audioSpeedRange, step: 0.05) {
-                Text("Speed")
-            } minimumValueLabel: {
-                Text("0.5×").font(.caption2)
-            } maximumValueLabel: {
-                Text("2×").font(.caption2)
-            }
-            .labelsHidden()
-            Text(workspace.audioSpeed > 1.0
-                 ? "Faster than normal, with the voice unchanged."
-                 : workspace.audioSpeed < 1.0
-                 ? "Slower than normal, with the voice unchanged."
-                 : "The engine's own pace.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -2148,8 +2172,22 @@ struct StudioContent: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Language").font(.callout)
                             TextField("Auto-detect", text: $workspace.transcriptionLanguage).textFieldStyle(.roundedBorder)
-                            Text("Leave blank to detect the language, or enter a code such as en.").font(.caption).foregroundStyle(.secondary)
+                            Text("Leave blank to detect the language, or enter a code such as en. Blank means this model's own default, which the Models tab sets.").font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                        // Shown only where the model's own runtime claims word timings and its lane
+                        // publishes the parameter, so the wording never promises timings a model
+                        // cannot produce.
+                        if let wordTimings = workspace.wordTimestampsControl {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Toggle(isOn: Binding(get: { wordTimings },
+                                                     set: { workspace.wordTimestamps = $0 })) {
+                                    Text("Word timings").font(.callout)
+                                }
+                                Text("Per-word start and end times in the returned segments. Off returns segment timings only. The value shown is this model's default until you change it.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         Divider().padding(.top, 8)
                         Text("This workspace keeps its recording, model and transcript separate from Audio.").font(.callout).foregroundStyle(.secondary)

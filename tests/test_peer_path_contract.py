@@ -325,37 +325,122 @@ class JobRowContractTests(unittest.TestCase):
         self.assertIn('Button("Play")', body[:2000])
 
 
-class AudioSpeedWireTests(unittest.TestCase):
-    """The pace control must reach the worker, and within the range the audit allows.
+class GenerationDefaultOwnershipTests(unittest.TestCase):
+    """A page control is an override; the model's own default is what it overrides.
 
-    The engine applies speed as pitch-preserving tempo to the finished audio, so the value is a
-    plain number on the job parameters. It has to be in the body: a control that changes the UI and
-    not the audio is worse than no control.
+    The owner's rule, stated for every generator: *"we have a default but control on the page is
+    overwrite... we are only setting defaults for stuff we can. stuff that can be change or altered
+    such as speed must be given to the user."* The Models tab sets a per-model default; a control on
+    a generator page is the operator's own answer and always wins; and a control nobody has touched
+    must supply **nothing**, so the default the Models tab stored is what the worker applies.
+
+    This class replaced three tests that pinned the opposite. They asserted `var speed: Double`,
+    that every audio path passed `speed: audioSpeed`, and that the slider used a `0.5...2.0` literal
+    declared in the app — so they were green while the pace control outranked the Models tab on
+    every job, and while the slider's range was a number no lane had published. A test that asserts
+    the broken behaviour is worse than no test: it is the reason nobody looked.
     """
 
-    def test_the_audio_params_carry_a_speed(self):
+    def test_the_audio_params_carry_an_optional_speed(self):
+        """Optional, because nil is a fact the request has to be able to state: *not chosen*."""
         text = (NATIVE / "StudioAPI.swift").read_text()
         params = re.search(r"private struct HubAudioParams: Codable \{(.*?)\n\}", text, re.S)
         self.assertIsNotNone(params, "HubAudioParams not found")
-        self.assertIn("var speed: Double", params.group(1))
+        self.assertIn("var speed: Double?", params.group(1),
+                      "an untouched pace must be representable, so speed is optional")
+
+    @staticmethod
+    def _audio_param_sites() -> list[str]:
+        """Every `HubAudioParams(…)` construction: the four voice paths, and nothing else.
+
+        Anchored on the call rather than on a line shape, because a bare
+        `presetSpeaker: … language: …` regex also matches the dead legacy `AudioRequest` struct and
+        the parameter declaration itself — which is how a "found four" assertion silently counts
+        five and how a rule about request bodies ends up measuring a struct definition.
+        """
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        return [site[:260] for site in api.split("HubAudioParams(")[1:]]
 
     def test_every_audio_submission_sends_the_chosen_speed(self):
         """All four voice paths: clone-from-library, clone-from-clip, preset and design."""
-        text = (NATIVE / "StudioAPI.swift").read_text()
-        constructions = re.findall(r"presetSpeaker: [^\n]*\n?[^\n]*language: language[^\n]*", text)
-        audio = [line for line in constructions if "HubAudioParams" not in line]
-        self.assertTrue(audio, "no audio parameter constructions found")
-        for line in audio:
-            self.assertIn("speed: audioSpeed", line,
-                          f"an audio path does not send the pace: {line.strip()}")
+        sites = self._audio_param_sites()
+        self.assertEqual(len(sites), 4, f"expected four voice paths, found {len(sites)}")
+        for site in sites:
+            self.assertIn("speed: audioSpeedForRequest", site,
+                          f"an audio path does not send the operator's own pace: {site.strip()}")
+        # The store's half of the rule: nothing is sent at all until they choose one.
+        store = (NATIVE / "StudioAPI.swift").read_text()
+        self.assertRegex(
+            store, r"var audioSpeedForRequest: Double\? \{\s*\n\s*audioSpeed == nil \? nil",
+            "an untouched pace control must send no speed, or the model's default can never apply")
 
-    def test_the_slider_uses_the_audited_range(self):
-        """0.5-2.0 comes from the contract, and is declared once."""
+    def test_no_audio_path_sends_a_language_the_lane_discards(self):
+        """12 of the 13 voice families publish no `language`: the lane omits the key because it
+        throws it away, so a request that carries one is a parameter nothing reads."""
         api = (NATIVE / "StudioAPI.swift").read_text()
-        self.assertIn("static let audioSpeedRange: ClosedRange<Double> = 0.5...2.0", api)
+        self.assertIn("let requestedLanguage = audioLanguageControl == nil ? nil :", api,
+                      "the language must be dropped for a model whose lane publishes none")
+        self.assertIn("var language: String?", api,
+                      "an unread language must be representable, and nil is encoded away")
+        for site in self._audio_param_sites():
+            self.assertIn("language: requestedLanguage", site,
+                          f"an audio path sends a language the lane may discard: {site.strip()}")
+
+    def test_the_speed_control_reads_the_published_contract(self):
+        """The range is the lane's `minimum`/`maximum`, and the value is the lane's `default`."""
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        self.assertNotIn("audioSpeedRange", api,
+                         "the app must keep no pace range of its own; the lane publishes one")
+        self.assertIsNotNone(
+            re.search(r"var audioSpeedControl: NativeLaneParameter\? \{.*?laneParameter\(\"speed\"\)",
+                      api, re.S),
+            "the pace control must be built from the model's published lane contract")
+        self.assertIn("control.defaultValue?.doubleValue", api,
+                      "the value in force must come from the contract's own `default`")
         views = (NATIVE / "StudioViews.swift").read_text()
-        self.assertIn("in: NativeWorkspaceStore.audioSpeedRange", views,
-                      "the slider must not repeat the range by hand")
+        self.assertIn("in: range", views,
+                      "the slider must use the range it was handed, not one written here")
+        self.assertNotIn("0.5", views.split("speedControl")[1][:1600],
+                         "the slider must not repeat a bound by hand")
+
+    def test_an_untouched_subtitle_form_omits_the_toggle(self):
+        """The Subtitle worker reads a key's presence as *the caller answered*.
+
+        Its own words: "an explicit `word_timestamps=false` is still the caller's answer and a
+        stored `true` cannot override it". So the form may only include the key once the operator
+        has actually set the toggle.
+        """
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        self.assertIn('if let wordTimestamps { fields["word_timestamps"]', api,
+                      "the form must add word_timestamps only when the operator answered")
+        self.assertIn("var wordTimestamps: Bool?", api,
+                      "an untouched toggle must be representable")
+        self.assertIn("wordTimestamps != true || model.supportsWordTimestamps", api,
+                      "the support guard must read the operator's answer, not the resolved value")
+
+    def test_every_page_control_can_say_not_chosen(self):
+        """The rule, applied to every generator's page-side control.
+
+        A generation control the app owns must be optional, because "the operator has not chosen"
+        is a state the request has to be able to express. A non-optional page value is a default the
+        app invented, and it will outrank the Models tab silently. Image and Music hold theirs as a
+        settings struct (optional, seeded from the resolved `generation_defaults` and adopted when
+        the catalogue republishes); Voice and Subtitle hold theirs as a bare optional so an
+        untouched control supplies nothing at all.
+        """
+        api = (NATIVE / "StudioAPI.swift").read_text()
+        controls = {
+            "audioSpeed": "Voice speaking pace",
+            "wordTimestamps": "Subtitle word timings",
+            "imageSettings": "the Image form's controls",
+            "musicSettings": "the Music form's controls",
+        }
+        for name, what in controls.items():
+            declaration = re.search(rf"@Published var {name}: ([^\n{{]+)", api)
+            self.assertIsNotNone(declaration, f"{name} not found in the workspace store")
+            self.assertTrue(declaration.group(1).rstrip().endswith("?"),
+                            f"{what} must be optional so 'not chosen' is representable, "
+                            f"found: {declaration.group(1).strip()}")
 
 
 class AudioBlockageTests(unittest.TestCase):

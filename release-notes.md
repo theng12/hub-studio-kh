@@ -2,6 +2,43 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.65 — 2026-09-25
+
+### The default is a default now
+
+You said it plainly: set a default in **Models**, but the control on the page is yours and wins —
+and anything you can change has to actually be given to you. That is now how every generator works,
+and it fixed three things that were quietly ignoring you.
+
+**Speed, on the Audio page.** You could set a speaking pace per model in Models and it did nothing
+at all — the page was sending its own `1.0` on every job, so your value never left the app. Now the
+slider sends nothing until you move it. Leave it alone and the model uses **your** default. Move it
+and that is what you hear.
+
+The slider's ends are no longer numbers written into the app: they are the model's own, so a model
+with a narrower range gets a slider that matches it instead of one the engine silently clamps. And a
+model with no pace setting now shows no slider, instead of one that did nothing. There is a
+**Model default** button to put it back.
+
+**Word timings, on the Subtitle page.** This one had no control anywhere in the app at all — it
+stored `off` and sent `off` on every transcription, so a word-timings default set in Models could
+never arrive, and you had no way to turn it on from the page either. There is now a **Word timings**
+switch, and it only appears for models that actually produce them.
+
+**The weight format line** used to guess from file names — a sharded model showed up as
+"index, safetensors", which is not a format. It now shows what the package itself states, and lists
+the weight files separately underneath, because which files were found is real information.
+
+**One small thing you would have hit eventually:** the Audio page was sending a language code to
+almost every voice model, including the Khmer VITS voices that take no language at all — 12 of your
+13 voice families throw that field away. The box now only appears for a model that reads one
+(Chatterbox), where it is required and says so.
+
+### If you had set speed to exactly 1.0
+
+Then it reads as "not chosen" now, so your Models default works. If you deliberately set 1.0
+against a model whose default is something else, move the slider once to put it back.
+
 ## 0.6.64 — 2026-09-25
 
 ### Your Macs can reach each other again

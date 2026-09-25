@@ -1017,7 +1017,7 @@ final class FixtureProtocol: URLProtocol {
     /// transcription contract, others only a name — so the app's dedupe is exercised rather than
     /// assumed. A bare row sits both before and after the rich one: neither "first seen" nor "last
     /// seen" may win, because both would lose the engine and cache state the Subtitle form needs.
-    private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"supports_segment_timestamps":true,"recommended":true,"cached":true,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"transcription","operation":"audio.transcription","parameters":[{"name":"file","type":"string","required":true,"max_bytes":2147483648,"enum":[".wav",".mp3",".m4a",".flac",".mp4",".mov"],"note":"multipart upload; the filename extension must be one of the listed values"},{"name":"model","type":"string","required":false,"enum":["whisper-turbo","whisper-base"],"default":"whisper-turbo"},{"name":"word_timestamps","type":"boolean","required":false,"default":false},{"name":"language","type":"string","required":false,"enum":["en","km","zh"]}],"artifact":{"modality":"transcription","media_type":"application/json","extension":"json","per_item":1}}},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
+    private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","weight_format":"safetensors","supports_word_timestamps":true,"supports_segment_timestamps":true,"recommended":true,"cached":true,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"transcription","operation":"audio.transcription","parameters":[{"name":"file","type":"string","required":true,"max_bytes":2147483648,"enum":[".wav",".mp3",".m4a",".flac",".mp4",".mov"],"note":"multipart upload; the filename extension must be one of the listed values"},{"name":"model","type":"string","required":false,"enum":["whisper-turbo","whisper-base"],"default":"whisper-turbo"},{"name":"word_timestamps","type":"boolean","required":false,"default":false},{"name":"language","type":"string","required":false,"enum":["en","km","zh"]}],"artifact":{"modality":"transcription","media_type":"application/json","extension":"json","per_item":1}}},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
 
     private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-narrow-image","model_id":"fixture/narrow-image","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-two-mode-voice","model_id":"fixture/two-mode-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unreported-modes","model_id":"fixture/unreported-modes","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
 
@@ -3141,10 +3141,30 @@ struct NativeAPITests {
         require((generated?["client_request_id"] as? String)?.count ?? 0 >= 8,
                 "durable client_request_id missing - the Hub reads snake_case")
         let items = generated?["items"] as? [[String: Any]]
-        require((items?.first?["params"] as? [String: Any])?["speed"] as? Double == 1.0,
-                "the engine's own pace must be sent explicitly, got: \(String(describing: items?.first?["params"]))")
+        // An untouched pace control sends no `speed` key at all. Sending 1.0 here is what held the
+        // Models tab's stored pace dead: the Voice worker treats a supplied parameter as the
+        // caller's own answer, so the app's own constant outranked the operator's default on every
+        // job.
+        require((items?.first?["params"] as? [String: Any])?["speed"] == nil,
+                "an untouched pace must send no speed at all, so this model's own default applies, got: \(String(describing: items?.first?["params"]))")
         require(items?.first?["text"] as? String == "Hello locally", "Hub text item")
         require((items?.first?["params"] as? [String: Any])?["preset_speaker"] as? String == "Ryan", "Hub speaker params")
+
+        // A pace the operator chose on this page is theirs, and it is what the request carries.
+        store.audioSpeed = 1.4
+        await store.generateAudio()
+        let paced = (FixtureProtocol.generatedBody()?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(paced?["speed"] as? Double == 1.4,
+                "a pace chosen on the page must be sent, got: \(String(describing: paced))")
+
+        // And it is pulled into this model's own published bounds - the same bounds the worker
+        // clamps to - rather than sent out of range.
+        store.audioSpeed = 5.0
+        await store.generateAudio()
+        let clamped = (FixtureProtocol.generatedBody()?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(clamped?["speed"] as? Double == 2.0,
+                "a chosen pace must be pulled into the lane's own bounds, got: \(String(describing: clamped))")
+        store.audioSpeed = nil
 
         // A newly visible preset family must submit as itself. Khmer VITS has one built-in speaker
         // and no roster, so the app must not lend it the Qwen names it happens to be holding: the
@@ -3157,7 +3177,10 @@ struct NativeAPITests {
         let khmerParams = (FixtureProtocol.generatedBody()?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
         require(khmerParams?["preset_speaker"] as? String == "",
                 "a single-speaker model must not be sent another family's preset speaker, got: \(String(describing: khmerParams))")
-        require(khmerParams?["speed"] as? Double == 1.0, "the engine's own pace must still be sent")
+        // This model publishes no lane contract, so it publishes no pace: one is never invented for
+        // it, and the app never sends a parameter the lane does not offer.
+        require(khmerParams?["speed"] == nil,
+                "a model that publishes no pace must never be sent one, got: \(String(describing: khmerParams))")
 
         // Which request a two-mode model builds is the tab's decision, not the model's first mode.
         // VoxCPM2 4-bit / 8-bit / bf16 (MLX 4-bit / 8-bit / bf16) clone *and* design, so picking the
@@ -3524,12 +3547,27 @@ struct NativeAPITests {
         try Data([0x52, 0x49, 0x46, 0x46]).write(to: input)
         store.transcriptionFile = input
         store.transcriptionLanguage = "en"
+        // The word-timings toggle follows this model's own published default until the operator
+        // answers it, and it is offered only where the runtime itself claims word timings - so a
+        // model that produces none gets no toggle rather than one whose movement does nothing.
+        require(store.wordTimestampsControl == false,
+                "an untouched word-timings toggle must show this model's published default")
+        store.transcriptionModel = "moonshine-ai/moonshine-base"
+        require(store.wordTimestampsControl == nil,
+                "a model whose runtime claims no word timings must be offered no toggle")
+        store.transcriptionModel = "mlx-community/whisper-large-v3-turbo"
         store.wordTimestamps = true
         await store.transcribe()
         require(store.transcriptionResult?.text == "hello world", "transcription result: \(store.error ?? "no error"), pending \(FileManager.default.fileExists(atPath: state.appendingPathComponent("native-pending-transcription.json").path))")
         let multipart = FixtureProtocol.transcriptionBody()
         require(multipart.contains("name=\"model\"") && multipart.contains("name=\"files\""), "Hub multipart transcription contract")
         require(multipart.contains("name=\"item_ids\"") && multipart.contains("name=\"episode\""), "stable Hub transcription identity")
+        // An answered toggle is submitted as the caller's own answer. The untouched case sends no
+        // `word_timestamps` key at all, which is what `tests/test_peer_path_contract.py` pins: the
+        // Subtitle worker reads a key's presence as "the caller answered", so supplying the app's
+        // own `false` is what kept the Models tab's stored default out of every job.
+        require(multipart.contains("name=\"word_timestamps\"") && multipart.contains("true"),
+                "an answered word-timings toggle must be submitted as the operator's answer")
         let subtitleData = try store.transcriptData(format: .srt)
         require(String(decoding: subtitleData, as: UTF8.self).contains("hello world"), "SRT export data")
 
@@ -4580,15 +4618,28 @@ struct NativeAPITests {
                     == "not accepted: this lane publishes no vocal or lyric parameter",
                 "a runtime that forces instrumental output must say so, got: \(fact("Vocals & lyrics", instrumentalOnly)?.value ?? "nil")")
 
-        // Subtitle: languages, both timestamp claims, and the weight format the worker named.
+        // Subtitle: languages, both timestamp claims, and the weight format the package *states*.
         let subtitleModel = store.models.first { $0.function == .transcription && $0.repo == "mlx-community/whisper-large-v3-turbo" }
         require(fact("Languages", subtitleModel)?.value == "Multilingual", "the manifest's languages must be shown")
         require(fact("Segment timestamps", subtitleModel)?.value == "supported",
                 "the manifest's segment-timestamp claim must be shown")
         require(fact("Word timestamps", subtitleModel)?.value == "supported",
                 "the manifest's word-timestamp claim must be shown")
-        require(fact("Weight format", subtitleModel)?.value == "safetensors · weights.safetensors",
-                "the weight format must be read from the files the worker listed, got: \(fact("Weight format", subtitleModel)?.value ?? "nil")")
+        // The format is the row's own `weight_format`, verbatim. It used to be derived by joining
+        // the extensions off the file receipt - an interpretation standing in for a fact, which
+        // read a sharded package as the format "index, safetensors" and had no answer at all for a
+        // package with no loadable weights.
+        require(fact("Weight format", subtitleModel)?.value == "safetensors",
+                "the weight format must be the row's own stated value, got: \(fact("Weight format", subtitleModel)?.value ?? "nil")")
+        require(fact("Weight format", subtitleModel)?.source == "catalog row weight_format",
+                "the stated format must name the field it came from")
+        // The receipt stays, as its own fact: which files the runtime found is real data.
+        require(fact("Weight files", subtitleModel)?.value == "weights.safetensors",
+                "the file receipt must still be shown, got: \(fact("Weight files", subtitleModel)?.value ?? "nil")")
+        // A row that states no format claims none, rather than inferring one from a file name.
+        let unstatedFormat = store.models.first { $0.function == .transcription && $0.repo == "moonshine-ai/moonshine-base" }
+        require(fact("Weight format", unstatedFormat) == nil,
+                "a package that states no weight format must claim none, got: \(fact("Weight format", unstatedFormat)?.value ?? "nil")")
 
         // The editor is built from the Studio's own route: one control per settable parameter, in
         // the Studio's order, with the Studio's bounds.

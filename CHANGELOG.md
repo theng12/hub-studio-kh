@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.6.65 — 2026-09-25 · the default is a default, and the page control is the override
+
+The owner's ruling, for every generator: *"we have a default but control on the page is
+overwrite… we are only setting defaults for stuff we can. stuff that can be change or altered such
+as speed must be given to the user."* A value set in **Models** is what a job uses. A control on a
+generator page is the operator's own answer and always wins. And a control **nobody has touched
+supplies nothing at all** — which is the part that was missing everywhere it mattered.
+
+**Voice's pace.** The Audio page held `audioSpeed: Double = 1.0` and sent it on all four
+generation paths. The Voice worker treats a supplied parameter as the caller's own answer — its
+own words, and its own test: *"an explicit `word_timestamps=false` is still the caller's answer and
+a stored `true` cannot override it"* — so a `speed` default set in the Models tab could never reach
+the engine **from the app**. It now sends none until the operator moves the slider. Nil is encoded
+away entirely (`encodeIfPresent`), so the request carries no `speed` key and the worker's own
+resolution applies: the operator's stored pace over the pace the lane states.
+
+**Nothing about the pace is fixed in the app any more.** `static let audioSpeedRange =
+0.5...2.0` is gone. The bounds are the selected model's lane contract (`minimum`/`maximum`) and the
+value shown is its own `default`, which the worker publishes **resolved** — it hands
+`model_defaults.resolved`'s map to `lane_contract.for_model` before publishing it. The slider
+labels follow the lane too, and a chosen value is pulled into this model's published bounds, which
+are the same bounds the worker clamps to. A model that publishes no pace gets **no slider**, rather
+than one whose movement changes nothing.
+
+**Subtitle's word timings were worse: there was no control at all.** `wordTimestamps: Bool = false`
+was persisted and submitted on every transcription request, and no screen in the app rendered it —
+so a `word_timestamps` default set in Models was unreachable *and* the operator had no way to reach
+the value either. It is now a toggle, offered only where the model's own runtime claims word
+timings, showing the value in force, and the form adds the key only once the operator has answered
+it. A model that produces no word timings gets no toggle.
+
+**The weight format is the package's own statement.** The model detail line read
+`readiness.files.weight_files` and joined the extensions off the file names, which is an
+interpretation standing in for a fact: a sharded package read as the format `index, safetensors`,
+and a package with no loadable weights had no answer at all. It now shows the row's own
+`weight_format` and names that field as its source; the file receipt stays, as its own line, because
+which files the runtime found is real data. The Subtitle worker had already published the stated
+value on its availability row — the app was reading the receipt instead.
+
+**A parameter the lane discards is no longer sent.** The Audio page sent `language` on every job,
+and **12 of the 13 voice families publish no `language` parameter at all** — the lane omits it
+precisely because it throws the key away (the Khmer VITS voices are Khmer by construction). The
+field is now offered only where the lane publishes one, with the lane's own accepted codes beside
+it, and Chatterbox — the one family that publishes it `required` — is refused clearly when the box
+is empty rather than filled in with a code this app invented.
+
+**Three tests were pinning the defect, and are replaced by the invariant.** They asserted
+`var speed: Double`, that every audio path passed `speed: audioSpeed`, and that the slider used a
+`0.5...2.0` literal declared in the app. All three were green for as long as the pace control
+outranked the Models tab, and one of them *required* the hardcoded range — so nobody looked. The
+rule now has a name and a test class (`GenerationDefaultOwnershipTests`): a generation control the
+app owns must be **optional**, because "the operator has not chosen" is a state the request has to
+be able to express, and a non-optional page value is a default the app invented.
+
+**Migration.** Every build before this one wrote `audioSpeed: 1.0` whenever the slider had never
+been touched, so a saved `1.0` is read as *not chosen* — otherwise the Models tab's pace would stay
+dead on every Mac that has ever run the app. A deliberate `1.0` against a model whose default is
+something else is the one value that cannot be told apart, and it costs one movement of the slider.
+
+**Recorded, not fixed:** `preset_speaker` is accepted and read by the Voice worker and published by
+**no** family's lane contract (SH-16), so a scheduler reading only the contract cannot learn how a
+speaking voice is chosen. The app's behaviour is right — it offers only the roster the model itself
+published — but publishing it means deciding what a contract-shaped enum for a per-model roster
+looks like.
+
 ## 0.6.64 — 2026-09-25 · the fleet can reach itself
 
 Every node on the controller was unreachable. GatewayKH measured five of five answering
