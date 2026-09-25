@@ -307,6 +307,29 @@ def _repair_origin_for_host(host: str) -> str:
     return f"http://{display}:47873"
 
 
+def _private_origin_resolver():
+    """The private-origin resolver this project does not have, or ``None``.
+
+    Nothing in this tree defines ``resolve_private_origin`` or ``OriginInvalid``. This function
+    exists so that absence is a **stated fact** rather than an exception discovered at runtime:
+    the identity check below used to start with
+    ``from .enrollment_repair_transport import OriginInvalid, resolve_private_origin`` — a module
+    that does not exist and never has — so the path always refused, and it refused with a
+    ``ModuleNotFoundError`` naming a file nobody could find.
+
+    That dead import was found twice: once by reading, and again by
+    ``packaging/stage_voice.staged_import_gaps``, which refuses to build a bundle containing an
+    import that resolves to nothing. It is deleted rather than exempted, because a build that
+    tolerates a pointer to a missing file tolerates the next one too.
+
+    To implement the resolver: return ``(resolve_private_origin, OriginInvalid)`` from here, where
+    ``resolve_private_origin(host, resolver=...)`` returns an object with an ``.address`` and
+    ``OriginInvalid`` is raised for a host it cannot resolve. The check below is already written
+    against exactly that shape.
+    """
+    return None
+
+
 def repair_machine_snapshot(
     rows: Sequence[dict[str, Any]],
     machine: str,
@@ -356,19 +379,16 @@ def repair_machine_snapshot(
     if len(set(endpoint_ids)) != len(endpoint_ids):
         raise RepairRegistryAmbiguity("endpoint_duplicate")
 
+    # Whether two hostnames are one machine cannot be answered without the resolver above. Until
+    # it exists this refuses with the reason it already has for "cannot tell whether these are the
+    # same machine" — the same answer the failing import gave, said in the words of the thing that
+    # is missing instead of naming a file nobody can find.
+    delivered = _private_origin_resolver()
+    if delivered is None:
+        raise RepairRegistryAmbiguity("host_address_ambiguous")
+    resolve_private_origin, OriginInvalid = delivered
     try:
-        from .enrollment_repair_transport import OriginInvalid, resolve_private_origin
-
         origin = resolve_private_origin(_repair_origin_for_host(host), resolver=resolver)
-    except ImportError:
-        # `enrollment_repair_transport` is not in this project and never was - nothing defines
-        # `resolve_private_origin` or `OriginInvalid` anywhere in the tree, so this import could
-        # only ever raise, and it raised `ModuleNotFoundError` straight past the handler below
-        # because ImportError was not in the tuple. The identity check cannot run without it, so
-        # the repair refuses with the reason it already has for "cannot tell whether these are the
-        # same machine" instead of a traceback naming a file nobody can find. Implementing the
-        # resolver is an open item; until then this path always refuses here.
-        raise RepairRegistryAmbiguity("host_address_ambiguous") from None
     except (OriginInvalid, OSError, TypeError, ValueError):
         raise RepairRegistryAmbiguity("host_address_ambiguous") from None
     # A different hostname is not a different machine identity when it pins to
