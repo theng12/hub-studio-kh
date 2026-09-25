@@ -3,7 +3,23 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.63 (Auto, and the controls that stopped lying, 2026-09-25).
+Last updated: 0.6.64 (the fleet can reach itself, 2026-09-25).
+
+**0.6.64 in one paragraph.** Every node on controller 1100 was unreachable — five of five
+`ConnectTimeout` — because each Mac was answering on an address frozen the day it was set up. A Mac
+now recomputes its listen list on every launch from its own current private and Tailscale
+addresses, **additively**, so nothing that worked is ever removed; `--listen-auto`, `--listen-host`
+(both persisted now) and `--fleet-mode` are the supported setters; `/api/health` and
+`/api/hub/settings` publish what the Hub is actually bound to, so "loopback only" is a fact rather
+than a timeout. The Models tab is rebuilt around what each lane publishes, with per-model editable
+defaults for four of five lanes.
+
+**The lesson this release cost, and it is now a rule in `AGENTS.md`:** the 0.6.63 handoff
+documented this release's fixes as though the running build had them — *thirteen commits apart* —
+and GatewayKH diagnosed an entire fleet against promises the installed binary could not keep.
+**"It is implemented" and "it is in the build you are running" are different claims**, and only the
+second is worth sending. Check the **installed bundle**, not the checkout. This was the third time
+in two days a claim outran its artefact.
 
 **0.6.63 in one paragraph.** Four owner asks drove it, and each turned out to be a number or a
 control published somewhere other than where it was read. Image's low-RAM configuration became an
@@ -15,8 +31,12 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `a4a78dc`, installed to `/Applications` and staged into all
-four kits; DMG `dist/StudioHub-0.6.63-a4a78dc.dmg`. App identity **`0.6.63 a4a78dc`,
+**Shipped state:** implementation commit `16b4a80`, installed to `/Applications` and staged into
+all four kits; DMG `dist/StudioHub-0.6.64-16b4a80.dmg`. Verified live from the **installed**
+bundle: `/api/health` answers `"bind": {"known": true, "hosts": ["127.0.0.1"], "classes":
+{"127.0.0.1": "loopback"}, "port": 47899, "loopback_only": true, "reachable_off_this_mac": false,
+"tailnet": [], "wildcard": false}`.
+**Superseded:** `a4a78dc` (0.6.63), whose DMG is in `_trash/dist/`. App identity **`0.6.63 a4a78dc`,
 `development_build: False`**; each kit's library is 24 packages plus the Hugging Face cache
 (70,529,417,547 bytes) and every kit reports `problems: []`; `verify-kit.sh` reports **PASS** on
 ATLAS, NOVA, ORICO and UGREEN. Both `main` and `implementation/voice-runtime` are pushed to
