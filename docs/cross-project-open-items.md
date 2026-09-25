@@ -47,10 +47,11 @@ exist to make a row cheap to *disprove*.
 
 ## Open on the Studio Hub side, after 0.6.69
 
-No items are open on the Studio Hub side.
+One item, and it needs a machine rather than code.
 
 | # | Item | Why it is still open |
 |---|---|---|
+| SH-7 | **The 8 GB Z-Image-Turbo 6B MLX 4-bit run.** The copy step carries it on 8 GB Macs from `CARRY_BELOW_TIER` — *"the owner asked to try it there"*, explicitly not proof. | It needs the owner's 8 GB Mac. The run is unblocked on his side as of 0.6.68: every drive carries the app with **mflux 0.20.0** (releases 0.6.63–0.6.67 shipped 0.17.5 and the harness refused, correctly), and `Technical/RUN-8GB-Z-IMAGE.command` is double-clickable and names the engine version before it starts. Either outcome closes the row: a completed run moves the entry to `PROVEN_SMALLER`, an out-of-memory abort documents the exclusion. |
 
 
 **Needing a machine, not code:** SH-7 only (the 8 GB Z-Image-Turbo 6B MLX 4-bit run,
