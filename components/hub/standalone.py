@@ -1707,9 +1707,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return {"voice": await shared_voices.sync_voice(monitor, voice_id, target_ids)}
 
     @app.post("/api/hub/jobs")
-    def submit_jobs(envelope: dict[str, Any]) -> dict[str, Any]:
-        if not control_plane.accepts_customer_jobs():
-            raise HTTPException(409, "This Hub is in agent mode; submit customer jobs to a controller.")
+    def submit_jobs(envelope: dict[str, Any], request: Request) -> dict[str, Any]:
+        # The gate is about who owns the work, not about which Mac may run it. A node must not own
+        # a *customer's* submission, so a controller is refused - but the person sitting at this
+        # Mac is not a customer, and refusing his own app meant a Mac switched to a node could not
+        # generate anything locally at all. `presented_owner_token` is the whole of the difference:
+        # the Hub token is this Mac's own, the fleet token is someone else's.
+        if (not control_plane.accepts_customer_jobs()
+                and not auth.presented_owner_token(request, token)):
+            raise HTTPException(
+                409, "This Hub is in agent mode, so a controller submits work here. This Mac's "
+                     "own app can still run work locally with this Mac's Hub token.")
         client_request_id = envelope.get("clientRequestId")
         replay = (next((batch for batch in broker.batches.values()
                        if batch.get("client_request_id") == client_request_id), None)
@@ -1868,10 +1876,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         word_timestamps: bool = Form(False), label: str | None = Form(None),
         project: str | None = Form(None), episode: str | None = Form(None),
         genstudio_execution: str | None = Form(None),
-        routing: str | None = Form(None),
+        routing: str | None = Form(None), request: Request = None,
     ) -> dict[str, Any]:
-        if not control_plane.accepts_customer_jobs():
-            raise HTTPException(409, "This Hub is in agent mode; submit transcription to a controller.")
+        if (not control_plane.accepts_customer_jobs()
+                and not auth.presented_owner_token(request, token)):
+            raise HTTPException(
+                409, "This Hub is in agent mode, so a controller submits work here. This Mac's "
+                     "own app can still run transcription locally with this Hub token.")
         parsed, routing_error = routing_rule.parse(routing)
         if routing_error:
             raise HTTPException(400, routing_error)

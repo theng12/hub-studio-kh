@@ -257,7 +257,14 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
 
 
 def accepts_customer_jobs() -> bool:
-    """Agents execute controller commands but never own customer submissions."""
+    """Whether a **remote** caller may submit customer work to this Hub.
+
+    Agents execute controller commands but never own customer submissions, so a node refuses a
+    controller's job submission with a 409. That rule is about who *owns* the work, and it does not
+    apply to the person sitting at the Mac: ``standalone`` asks
+    ``auth.presented_owner_token`` alongside this and lets the owner's own credential through, so a
+    Mac switched to a node can still generate from its own window. See the call sites.
+    """
     return load_settings()["role"] != "agent"
 
 

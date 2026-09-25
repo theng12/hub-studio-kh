@@ -401,6 +401,22 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
     return bool(fleet and secrets.compare_digest(offered, fleet))
 
 
+def presented_owner_token(request: Request, hub_token: str) -> bool:
+    """Whether this request carries **this Mac's own** Hub token, not a fleet credential.
+
+    Both credentials are valid on most routes, and the difference never mattered until a node had
+    to answer *"may I run work for the person sitting at this Mac?"*. It does now:
+    ``POST /api/hub/jobs`` refuses every submission in agent mode, because an agent must not own a
+    customer's job — but the owner's app on his own Mac is not a customer, and refusing him meant a
+    Mac switched to a node could not generate anything at all from its own window.
+
+    Deliberately narrow: this answers "is this the owner's credential", never "is this allowed".
+    The fleet scope stays exactly where it is.
+    """
+    offered = presented_machine_token(request)
+    return bool(offered and secrets.compare_digest(offered, hub_token))
+
+
 # What a fleet credential may do on a Mac it does not own.
 #
 # This is an allowlist, not a denylist: a new route added later is refused to a fleet caller

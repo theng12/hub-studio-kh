@@ -884,3 +884,52 @@ class EveryJobLaneIsListedOrDeclaredTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NodeLocalGenerationTests(unittest.TestCase):
+    """A Mac switched to a node must still run work for the person sitting at it.
+
+    This class is deliberately **outside** the `_PROOF` string above. That string is a complete
+    packaged-Hub program executed in a subprocess by `test_real_broker_lifecycle_proof`, and a test
+    written inside it is source for that subprocess rather than a test of this suite — which is how
+    a previous session concluded ten live tests were dead, and how this one nearly did the same
+    again by counting `class` lines with grep instead of asking the parser.
+    """
+
+    def test_a_node_still_runs_work_for_the_person_sitting_at_this_mac(self) -> None:
+        """A Mac switched to a node could not generate anything from its own window.
+
+        ``accepts_customer_jobs()`` refused *every* submission in agent mode with a 409 — on the
+        reasonable grounds that an agent must not own a **customer's** job. But the owner's own
+        app on his own Mac is not a customer, and the gate could not tell the two apart. Measured
+        by the owner: *"when any of the machine are in node mode. i can't generate on that machine
+        manually. bad. i want to be able to."*
+
+        The difference is the credential and nothing else: the Hub token is this Mac's own, the
+        fleet token is someone else's. The fleet refusal is asserted here too, because narrowing a
+        gate is only safe if the thing it was protecting still holds.
+        """
+        from unittest import mock
+        from fastapi.testclient import TestClient
+        from components.hub import standalone
+        from components.hub.backend import auth, control_plane, peers
+
+        app = standalone.create_app(start_background=False)
+        # The app's own credential, read the way the app reads it: `_TOKEN` is a name inside the
+        # `_PROOF` string above and does not exist out here.
+        owner = {"Authorization": f"Bearer {auth.load_token()}"}
+        fleet = {"Authorization": "Bearer fixture-fleet-token"}
+        with mock.patch.object(control_plane, "load_settings", return_value={"role": "agent"}), \
+                mock.patch.object(peers, "fleet_token", return_value="fixture-fleet-token"), \
+                TestClient(app) as client:
+            # The owner's own app: refused for whatever else is wrong with an empty envelope, but
+            # never for being in agent mode.
+            mine = client.post("/api/hub/jobs", json={}, headers=owner)
+            self.assertNotEqual(mine.status_code, 409, mine.text)
+            self.assertNotIn("agent mode", mine.text)
+
+            # A controller: still refused, which is the rule the gate exists for.
+            theirs = client.post("/api/hub/jobs", json={}, headers=fleet)
+            self.assertEqual(theirs.status_code, 409, theirs.text)
+            self.assertIn("agent mode", theirs.text)
+
