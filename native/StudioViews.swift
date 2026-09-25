@@ -930,6 +930,11 @@ struct StudioContent: View {
             heading("Chat Studio", "Work with a language model running on this Mac.")
             if !connected { setup }
             HSplitView {
+                // The form, on the left, in the same shape as the Image page: the box, the action
+                // that acts on it, then a divider and the model it will run on. Send used to sit
+                // *below* the model picker, so the one control this page is built around was
+                // pushed into the middle of the column with the picker between it and the message
+                // it sends.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         HStack {
@@ -942,10 +947,6 @@ struct StudioContent: View {
                             .font(.body).padding(8).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
                             .accessibilityLabel("Chat message")
-                        // The same picker the other four pages use. The page used to name one model
-                        // in its copy and offer no chooser at all, so a second listed Chat model
-                        // could not be selected.
-                        modelPicker(.chat)
                         HStack {
                             if workspace.submittingChat { ProgressView().controlSize(.small) }
                             Spacer()
@@ -957,6 +958,15 @@ struct StudioContent: View {
                                           || selectedChatModel?.cached != true
                                           || selectedChatModel?.runtimeReady != true)
                         }
+                        Divider().padding(.top, 8)
+                        // The same picker the other four pages use. The page used to name one model
+                        // in its copy and offer no chooser at all, so a second listed Chat model
+                        // could not be selected.
+                        modelPicker(.chat)
+                        // Everything below belongs to the model above it, which is why it sits
+                        // under the picker rather than under the button: a paragraph of warning
+                        // text floating beneath Send read as a comment on the message, not on the
+                        // model that cannot answer it.
                         if selectedChatModel?.supported != true || selectedChatModel?.cached != true
                             || selectedChatModel?.runtimeReady != true {
                             // The sentence names the model that is actually selected, or says none
@@ -980,27 +990,47 @@ struct StudioContent: View {
                         }
                     }.padding(.trailing, 20).padding(.bottom, 20)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                // What you said and what the model answered, on the right, in the house shape the
+                // Image preview and the Audio and Subtitle histories use: a fixed heading row, then
+                // the content under it. The heading used to be the first line *inside* the
+                // ScrollView, so it scrolled away with the conversation and never lined up with the
+                // other pages' heading rows.
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
                         Text("Conversation").font(.headline)
-                        if workspace.chatTurns.isEmpty {
-                            Text("No messages yet. The first prompt starts the conversation.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                        ForEach(workspace.chatTurns) { turn in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(turn.role == "user" ? "You" : "Model")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Text(turn.content).textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    if workspace.chatTurns.isEmpty {
+                        // The house empty state: symbol, title and one line, centred, exactly as an
+                        // empty Preview or an empty Recent audio pane reads. A lone sentence at the
+                        // top of a large empty pane looked like a rendering fault rather than an
+                        // invitation, and no other result pane does that.
+                        empty("No messages yet", "The first prompt starts the conversation.",
+                              symbol: "bubble.left.and.bubble.right")
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 14) {
+                                ForEach(workspace.chatTurns) { turn in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(turn.role == "user" ? "You" : "Model")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        Text(turn.content).textSelection(.enabled)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(10)
+                                    .background(Color(nsColor: .controlBackgroundColor))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                    }.padding(20)
-                }.frame(minWidth: 380)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                }
+                .padding(.leading, 20)
+                // The same house frame as the other three workspace pages, so a result pane cannot
+                // drift apart one fix at a time.
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
     }

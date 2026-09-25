@@ -54,6 +54,20 @@ def imageWorkspace() -> str:
     return page("imageWorkspace")
 
 
+def chatWorkspace() -> str:
+    return page("chatWorkspace")
+
+
+def without_comments(swift: str) -> str:
+    """Swift source with `//` comments removed, so prose about a layout cannot pass for the layout."""
+    lines = []
+    for line in swift.splitlines():
+        if line.strip().startswith("//"):
+            continue
+        lines.append(line.split("//", 1)[0])
+    return "\n".join(lines)
+
+
 class AudioLayoutTests(unittest.TestCase):
     def test_the_script_editor_cannot_eat_the_window(self) -> None:
         """An unbounded TextEditor is the original cause: it starved the controls column.
@@ -72,13 +86,15 @@ class AudioLayoutTests(unittest.TestCase):
                                  f"{name}'s editor may be at most 260 pt tall, found {ceilings}")
 
     def test_the_workspace_pages_share_one_shape(self) -> None:
-        """Form on the left, result on the right - the Image page's shape, on all three.
+        """Form on the left, result on the right - the Image page's shape, on all four.
 
         The owner asked for this twice: the Image generator's layout, applied everywhere. The
-        numbers are the same on every page so they cannot drift apart one fix at a time.
+        numbers are the same on every page so they cannot drift apart one fix at a time. Chat is in
+        this list for the same reason it was missing from it: it was the one workspace page whose
+        columns were drawn by hand, so it was the one that could drift.
         """
         for name, body in (("audio", audioWorkspace()), ("subtitle", subtitleWorkspace()),
-                           ("image", imageWorkspace())):
+                           ("image", imageWorkspace()), ("chat", chatWorkspace())):
             self.assertIn("HSplitView", body, f"{name} must use the two-column split")
             self.assertIn("minWidth: 350, idealWidth: 390, maxWidth: 440", body,
                           f"{name}'s form column must use the house width")
@@ -157,6 +173,84 @@ class AudioLayoutTests(unittest.TestCase):
         self.assertIn("NSHostingView", source,
                       "the harness must host a real window: ImageRenderer cannot draw AppKit controls")
         self.assertIn("cacheDisplay", source)
+
+
+class WorkspaceFormOrderTests(unittest.TestCase):
+    """Every workspace form reads the same way: what you write, the action, a divider, the model.
+
+    The owner's report was that Chat "is so bad" beside the other four, and this is the concrete
+    difference: Chat drew its model picker *between* the message box and the Send button, so the
+    one control the page exists for was stranded mid-column and the paragraph explaining a blocked
+    model floated underneath the button instead of under the model it describes.
+
+    No behaviour test can see that. These pin the order itself, and they are written as properties
+    over the page bodies rather than against literal text, so the next page - or the next rename of
+    a button - is held to the same order instead of quietly exempting itself.
+    """
+
+    # page, member, the box it starts from (None where a page has no text box), its primary
+    # action, and its model picker.
+    FORMS = (
+        ("chat", "chatWorkspace", "TextEditor(", 'Button("Send")', "modelPicker(.chat)"),
+        ("image", "imageWorkspace", "TextEditor(", 'Button("Generate Image")', "modelPicker(.image)"),
+        ("audio", "audioWorkspace", "TextEditor(", 'Button("Generate Audio")', "modelPicker(.audio)"),
+        ("subtitle", "transcriptionWorkspace", None, 'Button("Transcribe")',
+         "modelPicker(.transcription)"),
+    )
+
+    def test_the_action_row_comes_before_the_model_picker_behind_a_divider(self) -> None:
+        """The property worth pinning: input, then action, then a divider, then the model.
+
+        A disabled prominent button that sits below the picker is the shape the owner saw: the
+        action and the thing it acts on are separated by settings, and the settings' own warnings
+        land under the button.
+        """
+        for name, member, editor, action, picker in self.FORMS:
+            body = without_comments(page(member))
+            self.assertIn(action, body, f"{name} no longer has its primary action")
+            self.assertIn(picker, body, f"{name} no longer has its model picker")
+            action_at, picker_at = body.index(action), body.index(picker)
+            self.assertLess(action_at, picker_at,
+                            f"{name}'s action sits below its model picker")
+            if editor:
+                self.assertLess(body.index(editor), action_at,
+                                f"{name}'s action comes before the box it acts on")
+            self.assertIn("Divider()", body[action_at:picker_at],
+                          f"no divider separates {name}'s action row from its model picker")
+
+    def test_every_result_pane_opens_with_a_heading_row(self) -> None:
+        """The heading is fixed and the content scrolls under it, on every page.
+
+        On Chat the heading was the first line *inside* the pane's ScrollView, so it scrolled away
+        with the conversation and never lined up with the other pages' heading rows. The pane's
+        first HStack holds the heading and a Spacer, and it is finished before anything scrolls.
+        """
+        panes = (
+            ("chat", "chatWorkspace", 'Text("Conversation")'),
+            ("image", "imageWorkspace", 'Text("Preview")'),
+            ("audio", "audioWorkspace", 'Text("Recent audio")'),
+            ("subtitle", "transcriptionWorkspace", 'Text("Transcript")'),
+        )
+        for name, member, heading in panes:
+            result = without_comments(page(member)).split("maxWidth: 440)", 1)[1]
+            self.assertIn(heading, result, f"{name}'s result pane lost its heading")
+            heading_at = result.index(heading)
+            spacer_at = result.index("Spacer()")
+            scroll_at = result.find("ScrollView")
+            self.assertLess(heading_at, spacer_at,
+                            f"{name}'s heading row must hold the heading and a spacer")
+            self.assertTrue(scroll_at < 0 or spacer_at < scroll_at,
+                            f"{name}'s heading row is inside the scrolling content")
+
+    def test_the_empty_result_pane_uses_the_house_empty_state(self) -> None:
+        """An empty pane says so the way every other empty pane does, not with a stray sentence."""
+        for name, member, title in (("chat", "chatWorkspace", "No messages yet"),
+                                    ("image", "imageWorkspace", "Your image will appear here"),
+                                    ("audio", "audioWorkspace", "Your audio will appear here"),
+                                    ("subtitle", "transcriptionWorkspace", "Your transcript")):
+            body = without_comments(page(member))
+            self.assertIn(f'empty("{title}"', body,
+                          f"{name}'s empty pane no longer uses the shared empty state")
 
 
 if __name__ == "__main__":
