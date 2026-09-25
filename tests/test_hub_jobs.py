@@ -5,11 +5,16 @@ process so this test cannot contaminate the normal Hub configuration suite.
 """
 from __future__ import annotations
 
+import ast
+import importlib
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 _PROOF = r'''from __future__ import annotations
 
@@ -779,6 +784,102 @@ class FinishedBatchMemoryTests(unittest.TestCase):
         finally:
             broker.batches.clear()
             broker.batches.update(saved)
+
+
+class EveryJobLaneIsListedOrDeclaredTests(unittest.TestCase):
+    """`GET /api/hub/jobs` must list a lane's jobs, or say in one place why it does not.
+
+    A Chat-page completion used to leave no job at all, because the listing read the ledger's
+    finished batches and a completion was never a batch. The same hole is one module away for the
+    next studio, so this walks the backend's own queue modules: a `*_jobs.py` that owns a queue is
+    either part of `broker.listed_batches()` or named in `broker.UNLISTED_JOB_LANES` with its
+    reason - and the declaration itself is checked, so a stale one fails too.
+    """
+
+    SENTINEL = {
+        "id": "sentinel-batch", "modality": "image", "model": "sentinel-model",
+        "created_at": time.time(), "cancelled": False,
+        "items": [{"index": 0, "state": "done", "runtime_s": 1.0,
+                   "finished_at": time.time()}],
+    }
+
+    @staticmethod
+    def queue_modules() -> list[str]:
+        """Backend modules that own a module-level `batches` queue, found without importing them."""
+        backend = Path(__file__).resolve().parents[1] / "components" / "hub" / "backend"
+        found = []
+        for path in sorted(backend.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in tree.body:
+                targets = node.targets if isinstance(node, ast.Assign) else (
+                    [node.target] if isinstance(node, ast.AnnAssign) else [])
+                if any(isinstance(target, ast.Name) and target.id == "batches"
+                       for target in targets):
+                    found.append(path.stem)
+                    break
+        return found
+
+    def test_every_queue_module_reaches_the_listing_or_declares_why_not(self) -> None:
+        from components.hub.backend import broker, ledger
+
+        names = self.queue_modules()
+        self.assertIn("broker", names, "the scan found no queues at all")
+        with tempfile.TemporaryDirectory(prefix="studiohub-listed-") as state:
+            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                declared = broker.UNLISTED_JOB_LANES
+                for name in names:
+                    module = importlib.import_module(f"components.hub.backend.{name}")
+                    module.batches["sentinel-batch"] = dict(self.SENTINEL)
+                    try:
+                        listed = {row["id"] for row in broker.listed_batches()}
+                    finally:
+                        module.batches.pop("sentinel-batch", None)
+                    if name in declared:
+                        self.assertTrue(declared[name].strip(),
+                                        f"{name} is declared unlisted without a reason")
+                        self.assertNotIn(
+                            "sentinel-batch", listed,
+                            f"{name} is declared unlisted but its jobs reach /api/hub/jobs; "
+                            f"remove the declaration")
+                    else:
+                        self.assertIn(
+                            "sentinel-batch", listed,
+                            f"{name} owns a job queue that /api/hub/jobs can never show; list it "
+                            f"in broker.listed_batches() or declare it in broker.UNLISTED_JOB_LANES")
+
+    def test_a_chat_page_completion_is_summarisable_through_the_listing(self) -> None:
+        from components.hub.backend import broker, chat_jobs, ledger
+
+        with tempfile.TemporaryDirectory(prefix="studiohub-chat-listed-") as state:
+            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                done = chat_jobs.record_page_completion(
+                    request_body=b'{"model": "mlx-community/Qwen3.5-9B-4bit", "messages": '
+                                 b'[{"role": "user", "content": "when is low tide?"}]}',
+                    started_at=time.time() - 2, runtime_s=2.0, worker_id="chat",
+                    machine="local", status_code=200, content_type="application/json",
+                    content=b'{"id": "chatcmpl-1", "model": "mlx-community/Qwen3.5-9B-4bit",'
+                            b' "choices": [{"message": {"role": "assistant",'
+                            b' "content": "Low water is at 04:12."}}]}')
+                failed = chat_jobs.record_page_completion(
+                    request_body=b'{"model": "mlx-community/Qwen3.5-9B-4bit"}',
+                    started_at=time.time() - 1, runtime_s=1.0, worker_id="chat",
+                    machine="local", status_code=409,
+                    content_type="application/json",
+                    content=b'{"detail": "the model is not installed"}')
+                rows = broker.listed_batches()
+        self.assertEqual({row["id"] for row in rows}, {done["id"], failed["id"]})
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual(by_id[done["id"]]["modality"], "chat")
+        self.assertEqual(by_id[done["id"]]["model"], "mlx-community/Qwen3.5-9B-4bit")
+        self.assertEqual((by_id[done["id"]]["done"], by_id[done["id"]]["error"]), (1, 0))
+        self.assertEqual((by_id[failed["id"]]["done"], by_id[failed["id"]]["error"]), (0, 1))
+        self.assertEqual(by_id[failed["id"]]["errors"][0]["message"], "the model is not installed")
+        self.assertEqual(done["items"][0]["text"], "Low water is at 04:12.")
+        self.assertIsNone(failed["items"][0]["text"])
+        self.assertEqual(failed["items"][0]["state"], "error")
+        # The answer is the artifact the generic job route serves, not a private field.
+        self.assertEqual(done["items"][0]["media_type"], "text/plain; charset=utf-8")
+        self.assertGreater(done["items"][0]["bytes"], 0)
 
 
 if __name__ == "__main__":

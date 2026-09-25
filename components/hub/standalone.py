@@ -8,6 +8,7 @@ registered by the packaged application.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hashlib
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, shared_voices, transcription_jobs, vocabulary
+from .backend import app_release, chat_jobs, shared_voices, transcription_jobs, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -596,19 +597,55 @@ def _observe_peer_response(worker_id: str, tail: str, response: Response) -> Non
         _release_peer_lease(owner)
 
 
-def _peer_work_request(method: str, path: str) -> bool:
-    """Whether this proxied request asks the node to create new work.
+# What a proxied work request does with its machine reservation when the caller goes away and the
+# handler is cancelled before the worker answers. Cancellation arrives as `asyncio.CancelledError` -
+# a BaseException - so it slipped past both the transport handler and the settlement after it, and
+# the reservation then survived until `_peer_lease_loop` expired it (six hours). There is no
+# response to ask, so the answer is declared per route here, once. *Whether* a given disconnect
+# cancels the handler belongs to the server in front - uvicorn 0.52.4 runs a buffered HTTP handler
+# to completion on a bare TCP close and cancels it at shutdown - which is why this cannot be
+# inferred at the call site.
+PEER_DISCONNECT_RELEASE = "release"
+PEER_DISCONNECT_RETAIN = "retain"
 
-    Status, cancellation, artifact and acknowledgement paths are deliberately
-    excluded: an operator pausing a mode must not lock anyone out of work this
-    Mac already accepted.
+_PEER_WORK_PATHS: dict[str, str] = {
+    # Synchronous routes: the caller holds the connection until the work is done and the response
+    # *is* the result, so a disconnect means nothing continues that the lease would protect.
+    "v1/chat/completions": PEER_DISCONNECT_RELEASE,
+    "api/transcribe": PEER_DISCONNECT_RELEASE,
+}
+_PEER_WORK_PREFIXES: dict[str, str] = {
+    # Asynchronous submits: the worker acknowledges a job before its result exists, and the POST is
+    # not the result. A dropped connection may have left a real job on the machine, so the lease is
+    # retained exactly as it is for an accepted job - releasing it would let a second request take
+    # the machine while the first still runs.
+    "api/generate/": PEER_DISCONNECT_RETAIN,
+}
+# Paths under a work prefix that create no work: a status, cancellation, artifact or
+# acknowledgement POST must not reserve a machine, and must not read as an accepted job. The
+# documented intent always said so; the single broad prefix did not, so a cancel or an ack took a
+# lease of its own.
+_PEER_NON_WORK_PREFIXES = ("api/generate/jobs/",)
+
+
+def _peer_lease_policy(path: str) -> str | None:
+    """The disconnect policy for one proxied path, or None when it creates no machine work.
+
+    Status, cancellation, artifact and acknowledgement paths are deliberately excluded: an
+    operator pausing a mode must not lock anyone out of work this Mac already accepted.
     """
-    if method != "POST":
-        return False
     cleaned = path.strip("/")
-    return (cleaned.startswith("api/generate/")
-            or cleaned == "api/transcribe"
-            or cleaned == "v1/chat/completions")
+    if cleaned.startswith(_PEER_NON_WORK_PREFIXES):
+        return None
+    for prefix, policy in _PEER_WORK_PREFIXES.items():
+        if cleaned.startswith(prefix):
+            return policy
+    return _PEER_WORK_PATHS.get(cleaned)
+
+
+def _peer_work_request(method: str, path: str) -> bool:
+    """Whether this proxied request asks the node to create new work."""
+    return method == "POST" and _peer_lease_policy(path) is not None
 
 
 async def _request_model(request: Request, body: bytes, content_type: str) -> str:
@@ -1612,11 +1649,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/hub/jobs")
     def list_jobs() -> dict[str, Any]:
-        batches = {batch["id"]: batch for batch in ledger.load_finished_batches()}
-        batches.update(broker.batches)
-        return {"batches": [broker.batch_summary(batch) for batch in sorted(
-            batches.values(), key=lambda value: -value["created_at"]
-        )]}
+        return {"batches": broker.listed_batches()}
 
     @app.get("/api/hub/jobs/{batch_id}")
     def get_job(batch_id: str) -> dict[str, Any]:
@@ -1678,8 +1711,22 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if batch is None:
             raise HTTPException(404, "unknown batch")
         item = next((row for row in batch["items"] if row.get("index") == item_index), None)
-        artifact_url = (item or {}).get("worker_artifact_url") or (item or {}).get("artifact_url")
-        if not item or item.get("state") != "done" or not artifact_url:
+        if not item or item.get("state") != "done":
+            raise HTTPException(404, "artifact is not available")
+        # A Chat completion's artifact is the answer the Hub already recorded on its item: the
+        # worker streams a completion and keeps no file, so there is nothing on the worker to
+        # fetch. Serving it here as UTF-8 text keeps one artifact route for every modality, so
+        # the Jobs page can show and save a Chat answer the same way it saves an image or a clip.
+        if batch.get("modality") == "chat":
+            answer = item.get("text")
+            if not isinstance(answer, str) or not answer:
+                raise HTTPException(404, "artifact is not available")
+            payload = answer.encode("utf-8")
+            return Response(content=payload, media_type=chat_jobs.PAGE_MEDIA_TYPE,
+                            headers={"Content-Length": str(len(payload)),
+                                     "X-Content-SHA256": hashlib.sha256(payload).hexdigest()})
+        artifact_url = item.get("worker_artifact_url") or item.get("artifact_url")
+        if not artifact_url:
             raise HTTPException(404, "artifact is not available")
         worker = next((row for row in monitor.registry if row["id"] == item.get("studio")), None)
         if worker is None:
@@ -1937,14 +1984,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown studio")
         return worker_id, "/" + "/".join(segments[1:])
 
-    @app.api_route("/studio/{modality}/{path:path}",
-                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    async def studio_proxy(modality: str, path: str, request: Request) -> Response:
+    async def _proxy_to_worker(modality: str, path: str, request: Request,
+                               record=None) -> Response:
         """Forward one fleet request to this Mac's own worker for that studio.
 
         The caller's credential is not passed on. The worker trusts only this Hub, so the
         request is re-signed with the worker's own token: a fleet credential reaching this Mac
         must never become a fleet credential reaching its workers.
+
+        ``record`` is called once with the settled outcome when the job history belongs to this
+        Hub rather than to the caller that submitted it - the app's own Chat page. The peer
+        surface passes nothing: those jobs are the submitting controller's, and restating them in
+        this Mac's Jobs list would file someone else's work under this node.
         """
         worker_id, tail = _proxy_target(f"{modality}/{path}")
         worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
@@ -1952,19 +2003,36 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
         body = await request.body()
         content_type = request.headers.get("content-type") or ""
+        policy = _peer_lease_policy(path) if request.method == "POST" else None
+        machine = str(worker.get("machine") or "local")
         owner = None
         _prune_peer_leases()
-        if _peer_work_request(request.method, path):
+        if policy is not None:
             model = await _request_model(request, body, content_type)
             refusal = _peer_admission_refusal(worker, monitor, model)
             if refusal is not None:
                 return _peer_refusal_response(refusal)
-            machine = str(worker.get("machine") or "local")
             owner = _reserve_peer_machine(worker_id, machine)
             if owner is None:
                 return _peer_refusal_response(
                     {"code": "MACHINE_BUSY",
                      "detail": f"{machine} is reserved for other work on this Mac"})
+
+        def settled(**facts) -> None:
+            """Hand one settled attempt to the caller's recorder, never failing the request.
+
+            A job-history write is the Hub's own bookkeeping; it must not turn an answer the
+            worker already produced into an error the operator sees.
+            """
+            if record is None:
+                return
+            try:
+                record(**facts)
+            except Exception:
+                logging.getLogger("studiohub.chat").exception(
+                    "the completed %s request could not be recorded as a job", worker_id)
+
+        started_at = time.time()
         url = worker["base_url"] + tail
         if request.url.query:
             url += "?" + request.url.query
@@ -1979,10 +2047,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (httpx.HTTPError, OSError) as exc:
             if owner is not None:
                 _release_peer_lease(owner)
+            settled(request_body=body, started_at=started_at,
+                    runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
+                    failure="worker_unreachable", failure_detail=str(exc) or type(exc).__name__)
             raise HTTPException(502, f"{worker_id.title()} worker request failed") from exc
+        except BaseException:
+            # The handler was cancelled before the worker answered - a caller that went away, a
+            # shutting-down server, or any layer that cancels rather than waits. Nothing was
+            # answered, so the response cannot be asked whether real work continues: the route's
+            # declared disconnect policy decides. A synchronous route leaves nothing running and
+            # must not pin this Mac; an asynchronous submit keeps its lease, as an accepted job
+            # does.
+            if owner is not None and policy == PEER_DISCONNECT_RELEASE:
+                _release_peer_lease(owner)
+            settled(request_body=body, started_at=started_at,
+                    runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
+                    failure="request_cancelled")
+            raise
         if owner is not None:
             _settle_peer_lease(owner, worker_id, upstream)
         _observe_peer_response(worker_id, tail, upstream)
+        settled(request_body=body, started_at=started_at, runtime_s=time.time() - started_at,
+                worker_id=worker_id, machine=machine, status_code=upstream.status_code,
+                content_type=upstream.headers.get("content-type") or "",
+                content=upstream.content)
         passthrough = {}
         for name in ("content-type", "content-disposition", "x-content-sha256"):
             if name in upstream.headers:
@@ -1990,14 +2078,23 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return Response(content=upstream.content, status_code=upstream.status_code,
                         headers=passthrough)
 
+    @app.api_route("/studio/{modality}/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def studio_proxy(modality: str, path: str, request: Request) -> Response:
+        """Serve the fleet peer surface over ``_proxy_to_worker``."""
+        return await _proxy_to_worker(modality, path, request)
+
     @app.post("/api/hub/chat/completions")
     async def hub_chat_completions(request: Request) -> Response:
         """Local Chat completion for this app's own Chat page.
 
         Reuses the peer surface's worker lookup, admission reservation and lease settlement:
         the app talks to its own Hub, and the Hub re-signs the request with the worker token.
+        The outcome is recorded as a finished one-item Chat job, so the Jobs page lists it with
+        every other studio's work; the send itself stays synchronous.
         """
-        return await studio_proxy("chat", "v1/chat/completions", request)
+        return await _proxy_to_worker("chat", "v1/chat/completions", request,
+                                      record=chat_jobs.record_page_completion)
 
     from . import delivery, operator_controls, statistics
     delivery.register_routes(app, monitor)

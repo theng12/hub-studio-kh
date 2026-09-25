@@ -1,4 +1,13 @@
-"""Restart-safe Chat Studio work queue for adaptive scene-prompt packs."""
+"""Restart-safe Chat Studio work queue for adaptive scene-prompt packs.
+
+This module owns both Chat lanes:
+
+* the pack queue below, dispatched to a Chat worker as an asynchronous job; and
+* the single synchronous completion the app's own Chat page sends through
+  ``POST /api/hub/chat/completions``, which is recorded here as a finished one-item job
+  (``record_page_completion``) so it appears in ``GET /api/hub/jobs`` like every other studio's
+  finished work. The request path is untouched: it stays a synchronous proxy call.
+"""
 
 import asyncio
 import hashlib
@@ -12,6 +21,7 @@ import httpx
 from fastapi import HTTPException
 
 from . import broker, cloud_guard, execution_identity, ledger, peers
+from . import routing as routing_rule
 from .peers import studio_request
 from .registry import machine_enabled, studio_enabled
 
@@ -808,6 +818,248 @@ def restore_batches() -> int:
     if restored:
         _wakeup.set()
     return restored
+
+
+# ── the Chat page's own completions ──────────────────────────────────────────
+# A Chat-page send is deliberately synchronous: the app posts to the Hub's own
+# `/api/hub/chat/completions`, the Hub re-signs the request for the local Chat worker, and the app
+# waits for the whole answer. That request path is not changed here. What was missing is that it
+# left no job behind at all - `/api/hub/jobs` lists the ledger's finished batches, a completion was
+# never a batch, and so a Chat tab over that route could only ever be empty.
+#
+# `record_page_completion` writes that job down in the shape every other studio's finished work
+# already takes, so `broker.batch_summary` renders it and the generic job routes serve it with no
+# special case and no second vocabulary:
+#
+# * `modality` is "chat", `model` is the model the request named (or the one the worker answered
+#   with, when the request named none), `created_at` is the Hub's receipt time;
+# * the batch holds exactly one item, and that item's `state` is "done" with the answer or "error"
+#   with the reason - never a failure dressed as a completion;
+# * `runtime_s` and `finished_at` are measured by the Hub around the proxied call.
+#
+# **The answer is the item's `text`, and the item is the artifact.** A Chat worker streams its
+# completion over the response and keeps no file, so there is no worker artifact for the Hub to
+# point at; writing the same bytes to a Hub-side file would be a second store to keep, secure and
+# clean up for no fact it adds. `GET /api/hub/jobs/{id}/items/0/artifact` serves this text, so the
+# Jobs page can show it and save it through the same route it uses for every other modality.
+PAGE_ANSWER_FIELD = "text"
+PAGE_MEDIA_TYPE = "text/plain; charset=utf-8"
+PAGE_FAILURE_CODES = {
+    "worker_unreachable": "CHAT_WORKER_UNREACHABLE",
+    "request_cancelled": "CHAT_REQUEST_CANCELLED",
+}
+
+
+def _request_facts(request_body: bytes) -> tuple[str, str]:
+    """The model asked for and the last user turn, as the request itself stated them."""
+    try:
+        payload = json.loads((request_body or b"").decode("utf-8", "replace"))
+    except ValueError:
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+    model = str(payload.get("model") or "").strip()
+    prompt = ""
+    for message in reversed(payload.get("messages") or []):
+        if (isinstance(message, dict) and message.get("role") == "user"
+                and isinstance(message.get("content"), str)):
+            prompt = message["content"]
+            break
+    return model, prompt
+
+
+def _usage(value: object) -> dict | None:
+    """Token usage only when the worker stated it as whole non-negative counts."""
+    if not isinstance(value, dict):
+        return None
+    fields = ("prompt_tokens", "completion_tokens", "total_tokens")
+    if any(isinstance(value.get(field), bool) or not isinstance(value.get(field), int)
+           or value.get(field) < 0 for field in fields):
+        return None
+    return {field: value[field] for field in fields}
+
+
+def _streamed_completion(content: bytes) -> tuple[str, dict | None, str | None]:
+    """The answer, usage and completion id an OpenAI-shaped SSE stream carries."""
+    parts: list[str] = []
+    usage = None
+    job_id = None
+    for line in content.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:"):].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(payload)
+        except ValueError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        if job_id is None and isinstance(chunk.get("id"), str):
+            job_id = chunk["id"]
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+        for choice in chunk.get("choices") or []:
+            delta = (choice or {}).get("delta") if isinstance(choice, dict) else None
+            text = (delta or {}).get("content")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts), usage, job_id
+
+
+def _buffered_completion(content: bytes) -> tuple[str | None, dict | None, str | None, str]:
+    """The answer, usage, completion id and model a buffered completion response states."""
+    try:
+        payload = json.loads(content.decode("utf-8", "replace"))
+    except ValueError:
+        return None, None, None, ""
+    if not isinstance(payload, dict):
+        return None, None, None, ""
+    choices = payload.get("choices")
+    message = ((choices or [{}])[0] or {}).get("message") if isinstance(choices, list) else None
+    answer = (message or {}).get("content")
+    model = payload.get("model")
+    return (answer if isinstance(answer, str) else None, payload.get("usage"),
+            payload.get("id") if isinstance(payload.get("id"), str) else None,
+            str(model).strip() if isinstance(model, str) else "")
+
+
+def _failure_detail(content: bytes) -> str:
+    """The reason an error response states, in the shapes a worker uses."""
+    text = content.decode("utf-8", "replace").strip()
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text[:500]
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()[:500]
+        if isinstance(detail, dict) and isinstance(detail.get("detail"), str):
+            return detail["detail"].strip()[:500]
+        error = payload.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"].strip()[:500]
+        if isinstance(error, str) and error.strip():
+            return error.strip()[:500]
+    return text[:500]
+
+
+def completion_outcome(*, status_code: int, content_type: str, content: bytes
+                       ) -> tuple[str | None, dict | None, str | None, str, str | None, str | None]:
+    """Classify one Chat worker response as an answer or a failure.
+
+    Returns ``(answer, usage, worker_job_id, model, error, error_code)``. Exactly one of
+    ``answer`` and ``error`` is set: a response with no answer is a failure with the reason the
+    worker stated, never an empty completion.
+    """
+    if status_code >= 400:
+        return (None, None, None, "",
+                _failure_detail(content) or f"Chat worker returned HTTP {status_code}",
+                "CHAT_COMPLETION_FAILED")
+    if "text/event-stream" in (content_type or "").lower():
+        answer, usage, job_id = _streamed_completion(content)
+        return (answer or None, usage, job_id, "", None, None)
+    answer, usage, job_id, model = _buffered_completion(content)
+    if not (answer or "").strip():
+        return (None, usage, job_id, model, "Chat worker returned no answer", "CHAT_EMPTY_ANSWER")
+    return (answer, usage, job_id, model, None, None)
+
+
+def record_page_completion(*, request_body: bytes = b"", started_at: float, runtime_s: float,
+                           worker_id: str = "", machine: str = "local",
+                           status_code: int | None = None, content_type: str = "",
+                           content: bytes = b"", failure: str | None = None,
+                           failure_detail: str = "") -> dict:
+    """Persist one Chat-page completion as a finished, one-item Chat job.
+
+    Called by the Hub's own completion route once the proxied attempt has settled, including when
+    it settled with a failure: a dispatched attempt that produced no answer is recorded as
+    ``error`` with the reason, exactly like a failed generation in any other studio.
+    """
+    model, prompt = _request_facts(request_body)
+    usage = None
+    worker_job_id = None
+    model_revision = None
+    error = None
+    error_code = None
+    answer = None
+    if failure is not None:
+        error_code = PAGE_FAILURE_CODES.get(failure, "CHAT_COMPLETION_FAILED")
+        if failure == "request_cancelled":
+            # The proxy cannot know why it was cancelled - a caller that went away, a shutdown -
+            # so the reason says only what is true: the attempt ended with no result.
+            error = ("The request was cancelled before the Chat worker's answer arrived; "
+                     "this attempt has no recorded result.")
+        else:
+            error = f"Chat worker could not be reached: {failure_detail}".strip()
+    else:
+        answer, usage, worker_job_id, stated_model, error, error_code = completion_outcome(
+            status_code=status_code, content_type=content_type, content=content)
+        if not model:
+            model = stated_model
+    finished_at = time.time()
+    runtime_s = round(max(0.0, float(runtime_s)), 3)
+    body = (answer or "").encode("utf-8")
+    item = {
+        "index": 0,
+        "prompt": prompt,
+        "params": {},
+        "state": "done" if error is None else "error",
+        "tries": 1,
+        "studio": worker_id or None,
+        "studio_job_id": worker_job_id,
+        "worker_id": worker_id or None,
+        "machine": machine,
+        "run_started": started_at,
+        "runtime_s": runtime_s,
+        "duration_s": runtime_s,
+        "finished_at": finished_at,
+        "progress": 1.0,
+        "last_progress_at": finished_at,
+        "error": error,
+        "error_code": error_code,
+        "retry_at": None,
+        "artifact_path": None,
+        "artifact_url": None,
+        "asset_id": None,
+        "model_revision": model_revision,
+        "usage": usage,
+        PAGE_ANSWER_FIELD: answer,
+        "media_type": PAGE_MEDIA_TYPE,
+        "bytes": len(body),
+        "sha256": hashlib.sha256(body).hexdigest(),
+    }
+    record = {
+        "id": uuid.uuid4().hex[:10],
+        "client_request_id": None,
+        "request_fingerprint": None,
+        "genstudio_execution": None,
+        "modality": "chat",
+        "model": model,
+        "shared_params": {},
+        # The Studio this Hub's own proxy dispatched to, spelled in the routing vocabulary every
+        # other batch uses, rather than a new "direct" value a reader would have to learn.
+        "routing": (f"{routing_rule.STUDIO_PREFIX}{worker_id}" if worker_id
+                    else routing_rule.POOL),
+        "label": None,
+        "webhook": None,
+        "item_webhook": None,
+        "webhook_sent": False,
+        "created_at": started_at,
+        "cancelled": False,
+        "items": [item],
+        "governor_note": None,
+        "last_dispatched_at": started_at,
+        "finished_at": finished_at,
+    }
+    # Written to the ledger, which is where finished batches live: `/api/hub/jobs` merges
+    # `ledger.load_finished_batches()` with the broker's in-memory queue, so this record is listed
+    # immediately and again after a restart, and history clearing removes it with the rest.
+    ledger.save_batch(record)
+    return record
 
 
 def activity_batches() -> dict[str, dict]:

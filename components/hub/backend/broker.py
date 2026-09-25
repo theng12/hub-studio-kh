@@ -847,10 +847,19 @@ def admission_refusal(envelope: dict) -> dict | None:
 
 
 def _monitor():
-    if _packaged_monitor is not None:
-        return _packaged_monitor
-    from .main import monitor
-    return monitor
+    """The packaged application's monitor, bound by ``configure_monitor`` at startup.
+
+    The fallback here used to be ``from .main import monitor`` — a module that has not existed since
+    the Hub moved to ``standalone.py``, so it raised ``ModuleNotFoundError`` naming a file nobody
+    could find. Nothing depended on it (``standalone.py`` configures the monitor before any route
+    runs), which is exactly why it survived: a dead import that only fails on the path nobody takes
+    until they do. A missing monitor is a programming error, and it now says so.
+    """
+    if _packaged_monitor is None:
+        raise RuntimeError(
+            'the Hub monitor has not been configured; call broker.configure_monitor(monitor) at '
+            'startup (components/hub/standalone.py does this) before using this route')
+    return _packaged_monitor
 
 
 async def _catalog_entry(studio: dict, model: str) -> dict | None:
@@ -1329,6 +1338,35 @@ def activity_batches() -> dict[str, dict]:
     so this is the queue itself.
     """
     return dict(batches)
+
+
+# Job stores that own their work and are deliberately *not* listed by `GET /api/hub/jobs`, with
+# the reason. Each has its own shape, its own summary and its own route, and none of them is
+# actionable through the generic job routes - a listed row that cannot be cancelled, retried or
+# read is a worse answer than a row that is honestly absent. Declared here, beside the list
+# function, so the next lane has to make this decision instead of being missed:
+# `tests/test_hub_jobs.py` fails for a `*_jobs` module that owns a queue and appears in neither
+# `listed_batches` nor this table.
+UNLISTED_JOB_LANES = {
+    "chat_jobs": "the GenStudio pack lane: pack-shaped jobs with their own summary, driven by an "
+                 "external controller rather than by any route on this Hub",
+    "transcription_jobs": "Subtitle owns /api/hub/transcription/jobs, and its items are "
+                          "file-backed transcription records rather than broker items",
+}
+
+
+def listed_batches() -> list[dict]:
+    """Every job `GET /api/hub/jobs` shows, newest first, as summaries.
+
+    One producer-side function so "what the Jobs page can show" has a single definition: the
+    ledger's finished batches - which survive a restart, and which every finished producer
+    (including the Chat page's own completions) writes through `ledger.save_batch` - merged with
+    the broker's in-memory queue.
+    """
+    listed: dict[str, dict] = {batch["id"]: batch for batch in ledger.load_finished_batches()}
+    listed.update(batches)
+    return [batch_summary(batch) for batch in sorted(
+        listed.values(), key=lambda value: -value["created_at"])]
 
 
 def busy_machines() -> set[str]:
