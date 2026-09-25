@@ -2,6 +2,75 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.64 — 2026-09-25
+
+### Your Macs can reach each other again
+
+None of your nodes could be reached by the controller. The joins had worked — the controller knew
+all of them — but each Mac was answering only on an address it had years ago, or on nothing but
+itself. **A Mac now answers on whatever networks it is actually on, every time it starts**: the
+local one and the Tailscale one, added automatically. Nothing to tick, and nothing you set by hand
+is ever removed.
+
+This is the fix for the thing you kept having to remember. A new Mac always did the right thing;
+the problem was that the moment *anything* was saved, that list was frozen — so a Mac set up
+before it joined your tailnet stayed on a dead address forever.
+
+You can also now see the truth from outside: every Mac reports **what it is actually listening
+on**, so "bound to loopback only" is a fact you can read rather than a job that never arrives.
+
+### One command to set a Mac up properly
+
+If you would rather be explicit, or you are setting up from a script:
+
+| Command | What it does |
+|---|---|
+| `--listen-auto` | Answer on this Mac's own networks, and keep doing it |
+| `--listen-host 127.0.0.1` | Answer on exactly these addresses |
+| `--fleet-mode` | The above, plus start at login **and start the Hub at login** — for a Mac that must be ready after a reboot without anyone opening it |
+
+Each one is remembered, so it is a one-time step per Mac.
+
+### The Models page, built around what each Studio actually does
+
+**Models is now split by Studio** instead of one long list, because an LLM's context window, a
+TTS model's word chunks, an image model's steps and ratios, and a music model's length are not the
+same kind of setting. Search still works across all of them.
+
+Each model now shows its own facts, and where each fact came from:
+
+- **Chat** — the context window and the file that states it, and the output limit **marked as the
+  worker's own** rather than the model's, because this checkpoint ships no file that states one.
+- **Audio** — the **word chunks** you could not edit before: `section_max_characters`, its real
+  range, the hard cap, the pause between sections, and how speed is delivered.
+- **Image** — the size table with the actual pixels per ratio, which tier the model is qualified
+  at, and whether it ignores guidance (Z-Image does).
+- **Music** — the song lengths it accepts, with the one that renders in sections marked.
+- **Subtitle** — languages, timestamps, weight format.
+
+And **you can set your own defaults for each model** — steps and size for one image model, tokens
+and temperature for one chat model, section size and pace for one voice model — **per model, not
+per Studio**, because each model is weighted differently. A value you set is used when a request
+does not name one, it is remembered per Mac, and "Restore This Model's Defaults" puts it back.
+Nothing a Studio does not accept is offered as a control.
+
+### Fixes you won't see
+
+- **Chat's memory default** and its tokens-per-second readout landed in the last build; this one
+  adds the per-model defaults behind them.
+- **Two things that were described in prose are now facts**: an image model saying "I ignore this
+  setting" publishes a flag rather than a sentence a program had to match, and Subtitle publishes
+  its weight format instead of leaving the app to work it out from file names.
+- **A promise we broke**: the previous handoff described this build's fixes as though the running
+  app already had them. It didn't. There is now a rule against that — a document names the build
+  that has the behaviour — and the handoff says so at the top.
+
+### Still yours to do
+
+The **8 GB Z-Image-Turbo 6B MLX 4-bit run**: your manual test proved it works (~5 minutes, against
+166–236 s on the 32 GB Mac). The script on the drive is what records the peak memory and swap that
+decide whether 8 GB becomes a *proven* tier. It is in `Technical/8gb-z-image-run.sh`.
+
 ## 0.6.63 — 2026-09-25
 
 ### Image gets the memory control you asked for

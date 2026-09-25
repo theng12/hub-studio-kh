@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.6.64 — 2026-09-25 · the fleet can reach itself
+
+Every node on the controller was unreachable. GatewayKH measured five of five answering
+`ConnectTimeout`, and found the cause by checking the **installed bundle** rather than the
+checkout: our 0.6.63 handoff documented this release's fixes as though the running build had
+them, thirteen commits apart. So this one is the fixes, and the rule that stops the next
+document from doing the same (`AGENTS.md`, "a document names the build that has the behaviour").
+
+**A Mac now answers on its own networks, and keeps doing it.** First-run behaviour was always
+right — every private and Tailscale address the Mac has — and it **froze the moment anything was
+saved**. A Mac set up before it joined a tailnet stayed on a LAN address from that day forever,
+which is exactly what 1101 and 1102 were advertising to their controller: addresses they left
+months ago, while their tailnet addresses went unused. An absent `listenHostAutomatic` now means
+automatic: recomputed on every launch as this Mac's current private and Tailscale addresses
+**plus** whatever was already saved. **Additive — it can never remove a way in that worked.**
+
+**The setter GatewayKH asked us to name exists and persists.** `--listen-auto` turns automatic on
+and writes it down; `--listen-host <list>` pins an exact list and now also survives the next
+launch (it used to last exactly until then, so a kit could configure a Mac and then watch it come
+up on the old addresses with no way to tell "ignored" from "forgotten"); `--fleet-mode` is the one
+switch for a Mac that must be ready after a reboot — listen + start at login + **start the Hub at
+login**, the third being the one that mattered, since the app already started at login while the
+Hub did not. It deliberately does not touch sleep, and says so.
+
+**The bind is a fact, not an inference.** `/api/health` and `/api/hub/settings` publish what this
+Hub is actually listening on: the hosts, their classes (`loopback` / `lan` / `tailnet` / `other`),
+the port, and the two questions a caller asks — `loopback_only` and `reachable_off_this_mac`. It
+is on `/api/health` rather than only on settings because settings is owner-only and a
+**controller** is who needs to see that a node came up loopback-only instead of learning it from
+a timeout. `known: false` is a different answer from loopback and carries its reason.
+
+**Every Studio has per-model defaults, and the Models tab is rebuilt around what each lane
+publishes.** Four of five lanes are here — chat, image, music, voice and subtitle — with the app
+reading `lane_contract` for the first time (it read none of it before, which is why every fact the
+owner asked for was already on the wire and not on screen):
+
+- **Models is split by Studio** — one collapsible section per function, derived from the enum, so a
+  new Studio gets a section with no edit in the app. Search flattens across them.
+- **Each section shows that generator's facts with provenance**: the chat context window and
+  where it came from, the max output labelled a worker default, TTS's section bounds and hard cap,
+  the image size table with the tier it is qualified at, Music's duration ladder and single-pass
+  cap, the subtitle weight format. A value nobody states renders nothing.
+- **"Your defaults for this model"** is built only from the lane's own settable parameters, in the
+  lane's order, with the bounds it enforces. A refusal's per-parameter reasons land under their own
+  fields; a stored value the lane now refuses is shown with its reason rather than dropped.
+- **The generator pages seed from the resolved values**, which matters because they send every
+  field: a stored default the page cannot see is one the page overwrites.
+
+**Two facts that were prose or a join, now published.** The Image lane says `"ignored": true`
+rather than relying on a note's wording, and Subtitle publishes `weight_format` on the row the app
+reads instead of leaving it to join file names. Both were found by the worker building the screen,
+and both are the same shape — a consumer interpreting where a producer could state.
+
+**And `lane_contract.structured_output`**, published by chat: how the JSON guarantee is kept
+(`prompt_validate_repair`, `grammar_constrained: false`, one repair attempt), because "json_object
+is supported" does not answer the question a strict-JSON caller has.
+
+### What is not here
+
+Two app-side items are recorded rather than fixed: the Audio page's own persisted speed slider
+still shadows a `speed` default set in Models (the page sends every field, so the Models value
+never reaches the engine from the app), and the app still joins file names for the subtitle weight
+format in one place. Both are in `docs/cross-project-open-items.md`.
+
 ## 0.6.63 — 2026-09-25 · Auto, and the controls that stopped lying
 
 Four asks from the owner drove this one, and each turned out to be about the same thing: a
