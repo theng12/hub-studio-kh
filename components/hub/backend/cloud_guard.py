@@ -18,6 +18,19 @@ from .monitor import LOCAL_ONLY_MODALITIES
 
 log = logging.getLogger("studiohub.cloud_guard")
 _packaged_monitor = None
+_unconfigured_monitor_warned = False
+
+
+def _warn_unconfigured_monitor() -> None:
+    """Say once that the cloud check had no catalog to read, rather than reporting a clean miss."""
+    global _unconfigured_monitor_warned
+    if _unconfigured_monitor_warned:
+        return
+    _unconfigured_monitor_warned = True
+    log.warning(
+        'the cloud guard was asked to check a model before a monitor was configured, so no catalog '
+        'was consulted; call cloud_guard.configure_monitor(monitor) at startup '
+        '(components/hub/standalone.py does this)')
 
 REFUSAL_CODE = "CLOUD_WORK_RETIRED"
 
@@ -170,8 +183,14 @@ def _cached_entries(model: object, modality: object) -> list[dict]:
     try:
         monitor = _packaged_monitor
         if monitor is None:
-            from .main import monitor
-
+            # No monitor has been configured, so there is no catalog to consult. This runs on the
+            # submission path and must never fail a job - but "nothing matched" and "nothing was
+            # checked" are different answers, so the second one is recorded instead of being
+            # returned as the first. The fallback used to be `from .main import monitor`, a module
+            # that has not existed for a long time; its ModuleNotFoundError was caught by the bare
+            # `except` below and looked exactly like a clean miss.
+            _warn_unconfigured_monitor()
+            return []
         matches = monitor.cached_catalog_entries(
             str(model or ""),
             modality=str(modality) if modality else None,

@@ -316,6 +316,88 @@ def unregistered_components(root: Path) -> list[str]:
         if (path / 'app/backend/main.py').is_file() and path.name not in COMPONENT_STAGERS)
 
 
+def staged_import_gaps(resources: Path) -> list[str]:
+    """Python modules a staged worker imports that are not in the staged tree.
+
+    `copy_tracked_tree` copies what `git ls-files` lists, not what is on disk. A new module in a
+    component is therefore **invisible to staging until it is added to the index**, and the bundle
+    builds successfully with a `main.py` importing something that is not in it - so the worker dies
+    at import, the Hub refuses to start, and the failure appears only when the app is launched (or
+    worse, on a drive). That happened for real: `components/music/app/backend/memory_policy.py`
+    was written, staged and would have shipped missing had its author not warned in prose.
+
+    Prose is not a guard. This walks every staged `.py` and reports the imports that resolve to
+    nothing in the tree: relative imports inside a component, and `components.<...>` imports of the
+    shared modules the workers add `Resources/` to the path for. Third-party imports are ignored -
+    only the two shapes this build controls are checked, because a false alarm here would be a
+    blocked release.
+    """
+    import ast
+
+    # Only the code this stager writes: the component trees, the Voice worker, and the worker entry
+    # points at the top level. `runtimes/` and `engines/` are vendored trees with tens of thousands
+    # of third-party files - walking them is slow, finds imports this build does not control, and
+    # one of them is not even UTF-8.
+    roots = [path for path in (resources / 'components', resources / 'voice') if path.is_dir()]
+    sources = [path for root in roots for path in root.rglob('*.py')]
+    sources += sorted(resources.glob('*.py'))
+
+    staged = {path.relative_to(resources).as_posix() for path in sources}
+    # The roots themselves count: `components` is a namespace package, so `from components import
+    # app_version` resolves against the directory even though it has no `__init__.py`.
+    directories = {root.relative_to(resources).as_posix() for root in roots}
+    directories |= {path.relative_to(resources).as_posix()
+                    for root in roots for path in root.rglob('*') if path.is_dir()}
+    problems: list[str] = []
+
+    def resolves(parts: list[str]) -> bool:
+        """A module path exists as a file, as a package, or as a namespace package directory."""
+        joined = '/'.join(parts)
+        return (f'{joined}.py' in staged or f'{joined}/__init__.py' in staged
+                or joined in directories)
+
+    for path in sources:
+        relative = path.relative_to(resources)
+        package = list(relative.parts[:-1])
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError) as error:
+            problems.append(f'{relative}: cannot be read as Python ({error})')
+            continue
+        for node in ast.walk(tree):
+            targets: list[list[str]] = []
+            if isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = package[:len(package) - (node.level - 1)] if node.level > 1 else package
+                    if node.module:
+                        # `from .memory_policy import status` - the module is the dependency.
+                        targets.append(base + node.module.split('.'))
+                    else:
+                        # `from . import memory_policy` - the names are the submodules.
+                        targets.extend(base + [alias.name] for alias in node.names)
+                elif node.module == 'components':
+                    # `from components import app_version` - `components` is a namespace of
+                    # modules, so here the names really are modules. This is the shape the shared
+                    # modules are imported with, and the one that broke an image bundle fixture.
+                    targets.append(['components'])
+                    targets.extend(['components', alias.name] for alias in node.names)
+                elif node.module and node.module.startswith('components.'):
+                    # Deeper, the names are symbols (`from components.chat...llm_engine import
+                    # ChatEngine`), so only the module itself has to exist.
+                    targets.append(node.module.split('.'))
+            elif isinstance(node, ast.Import):
+                # `import components.model_packages` - always a module path.
+                for alias in node.names:
+                    if alias.name == 'components' or alias.name.startswith('components.'):
+                        targets.append(alias.name.split('.'))
+            for target in targets:
+                if target and not resolves(target):
+                    problems.append(
+                        f'{relative}: imports {"/".join(target)}, which is not in the bundle - '
+                        f'if it is a new file, `git add` it before staging')
+    return sorted(set(problems))
+
+
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
@@ -464,6 +546,14 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:
         plistlib.dump(plist, stream)
+    # Before anything is hashed or recorded: a worker that cannot import is not a bundle. This is
+    # the check that turns `git add` from a thing someone remembers into a thing the build does.
+    gaps = staged_import_gaps(resources)
+    if gaps:
+        shutil.rmtree(output, ignore_errors=True)
+        raise ValueError(
+            'The staged bundle is missing modules its own code imports, so a worker would die at '
+            'startup. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
     # Hash all shipped code/resources including the worker, shell and plist.
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)

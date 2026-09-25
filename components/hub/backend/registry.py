@@ -360,6 +360,15 @@ def repair_machine_snapshot(
         from .enrollment_repair_transport import OriginInvalid, resolve_private_origin
 
         origin = resolve_private_origin(_repair_origin_for_host(host), resolver=resolver)
+    except ImportError:
+        # `enrollment_repair_transport` is not in this project and never was - nothing defines
+        # `resolve_private_origin` or `OriginInvalid` anywhere in the tree, so this import could
+        # only ever raise, and it raised `ModuleNotFoundError` straight past the handler below
+        # because ImportError was not in the tuple. The identity check cannot run without it, so
+        # the repair refuses with the reason it already has for "cannot tell whether these are the
+        # same machine" instead of a traceback naming a file nobody can find. Implementing the
+        # resolver is an open item; until then this path always refuses here.
+        raise RepairRegistryAmbiguity("host_address_ambiguous") from None
     except (OriginInvalid, OSError, TypeError, ValueError):
         raise RepairRegistryAmbiguity("host_address_ambiguous") from None
     # A different hostname is not a different machine identity when it pins to
