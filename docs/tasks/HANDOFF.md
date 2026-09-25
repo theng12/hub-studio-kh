@@ -72,20 +72,34 @@ reason chat and music now hold their models for 10 idle minutes on the larger ma
 published from the worker's own generation time. And the kit's copy step now **prunes** what the kit
 no longer offers and **carries Z-Image-Turbo 6B MLX 4-bit on 8 GB Macs** at the owner's request.
 
-**Shipped state:** implementation commit `fabe498`, installed to `/Applications` and staged into
-all four kits; DMG `dist/StudioHub-0.6.64-fabe498.dmg`. Verified live from the **installed**
-bundle: `/api/health` answers `"bind": {"known": true, "hosts": ["127.0.0.1"], "classes":
-{"127.0.0.1": "loopback"}, "port": 47899, "loopback_only": true, "reachable_off_this_mac": false,
-"tailnet": [], "wildcard": false}`.
-**Superseded:** `a4a78dc` (0.6.63) and `16b4a80` (0.6.64's first cut), both in `_trash/dist/`.
-**0.6.64 was cut twice**: the node-local-generation fix (`2433f63`) landed after the first stage, so
-the drives briefly carried a build that made the fleet reachable but still refused the owner's own
-work on a node. Re-cut rather than making him update twice.
+**Shipped state:** implementation commit `37cb07b`, installed to `/Applications` and staged into
+all four kits; DMG `dist/StudioHub-0.6.65-37cb07b.dmg`. `development_build: false` on the stage, read
+from `release-manifest.json` **before** installing, on a tree confirmed clean first.
+**Verified in the installed bundle, not the checkout** (the rule 0.6.64 cost us): version `0.6.65`,
+commit `37cb07b`, and the new UI copy is present in
+`/Applications/Studio Hub.app/Contents/MacOS/StudioHub` — the binary is `StudioHub`, not `Studio Hub`,
+which is why the first `strings` attempt reported a missing file.
+**Kits:** all four (`NOVA`, `UGREEN`, `ATLAS`, `ORICO`) at `0.6.65`, `files 60641`, `"problems": []`,
+and each ran its own `verify-kit.sh` → `RESULT: PASS — this copy starts, becomes ready and answers
+its health check.`
+**Gate on this commit:** `tests/` **1306 passed, 11 skipped, 990 subtests**; `tests/hub_regression/cases`
+**175 passed**; `components/voice/app/tests` **749 passed, 19 skipped**; `bash native/build.sh` green.
+**Pushed:** `main` and `implementation/voice-runtime`, both `d1fc93a..37cb07b`.
+**Superseded:** `fabe498` (0.6.64), `a4a78dc` (0.6.63) and `16b4a80` (0.6.64's first cut), all three in
+`_trash/dist/`.
 
 **A flaky native test, seen once:** `bash native/build.sh` failed with *"the in-flight read must
 have been torn down by the cancellation"* and passed on an immediate re-run with `native/` provably
 unmodified (`git status` clean). Recorded because a gate that fails once in a while is a gate people
 learn to re-run, which is the same as not having it. Not chased; it needs a deliberate reproduction.
+
+**A second flake, also seen once, and it destroyed its own evidence.** In the 0.6.65 gate,
+`tests/test_voice_product_suite.py` failed inside a full `tests/` run; the next full run was green
+(`1306 passed`, exit 0) at the same deterministic order (`-p no:randomly`). The test writes its
+child's output to `.build/voice-product-suite.log` on **every** run, so the failing child's log was
+overwritten by the next pass before anyone could read it. **That is a harness defect, not only a
+flake**: a test whose evidence does not survive the next run cannot be diagnosed. The fix is to keep
+the last *failing* log. Recorded as SH-15(b) beside the native one as SH-15(a).
 
 **A trap, walked into and out of on the same day:** reading `tests/test_hub_jobs.py`, two
 `class HubJobProofTests` by `grep` look like one shadowing the other and eleven tests never running.
