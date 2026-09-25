@@ -58,6 +58,32 @@ def chatWorkspace() -> str:
     return page("chatWorkspace")
 
 
+def musicWorkspace() -> str:
+    return page("musicWorkspace")
+
+
+def studio_function_raw_values() -> dict[str, str]:
+    """The Studio enum's case → rawValue pairs, read from its own declaration.
+
+    The tag a Manage row writes into `modelFilter` is compared against the Studio whose picker that
+    page uses, so the mapping is read here rather than copied: a renamed case cannot leave the test
+    asserting yesterday's spelling.
+    """
+    shell = (ROOT / "native" / "ShellCore.swift").read_text()
+    body = shell[shell.index("enum StudioFunction"):]
+    for stop in ("\n    var ", "\n    func ", "\n}"):
+        if stop in body:
+            body = body[:body.index(stop)]
+    pairs: dict[str, str] = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("case "):
+            continue
+        for match in re.finditer(r'([a-zA-Z]+)\s*(?:=\s*"([^"]+)")?', line[len("case "):]):
+            pairs[match.group(1)] = match.group(2) or match.group(1)
+    return pairs
+
+
 def without_comments(swift: str) -> str:
     """Swift source with `//` comments removed, so prose about a layout cannot pass for the layout."""
     lines = []
@@ -251,6 +277,68 @@ class WorkspaceFormOrderTests(unittest.TestCase):
             body = without_comments(page(member))
             self.assertIn(f'empty("{title}"', body,
                           f"{name}'s empty pane no longer uses the shared empty state")
+
+
+class TrailingRowTests(unittest.TestCase):
+    """Every workspace form ends with the row that hands model management to the Models page.
+
+    Chat was the only one of the five without it, so four pages ended one way and Chat ended
+    another - which is the difference the owner saw when he put them side by side. The invariant is
+    structural: whichever Studio a page generates with, the row at the foot of its form must filter
+    the Models page to *that* Studio, so a page cannot omit the row or point at another page's
+    models.
+    """
+
+    FORMS = (
+        ("image", "imageWorkspace"),
+        ("music", "musicWorkspace"),
+        ("audio", "audioWorkspace"),
+        ("subtitle", "transcriptionWorkspace"),
+        ("chat", "chatWorkspace"),
+    )
+    MANAGE = re.compile(
+        r'Button\("Manage [A-Za-z]+ Models"\) \{ modelFilter = "([A-Za-z]+)"; studio\.select\(\.models\) \}')
+
+    def form_column(self, name: str, member: str) -> str:
+        body = without_comments(page(member))
+        self.assertIn("maxWidth: 440)", body, f"{name} has no form column to inspect")
+        return body.split("maxWidth: 440)", 1)[0]
+
+    def test_every_form_column_ends_with_its_own_manage_models_row(self) -> None:
+        raw_values = studio_function_raw_values()
+        self.assertTrue(raw_values, "the Studio enum could not be read at all")
+        for name, member in self.FORMS:
+            form = self.form_column(name, member)
+            pickers = re.findall(r"modelPicker\(\.([a-zA-Z]+)\)", form)
+            self.assertEqual(len(pickers), 1,
+                             f"{name} must call the shared model picker exactly once, found {pickers}")
+            case = pickers[0]
+            self.assertIn(case, raw_values,
+                          f"{name} picks a Studio case the enum does not declare: {case}")
+            rows = list(self.MANAGE.finditer(form))
+            self.assertEqual(len(rows), 1,
+                             f"{name} must end with exactly one Manage-models row, found {len(rows)}")
+            self.assertLess(form.index(f"modelPicker(.{case})"), rows[0].start(),
+                            f"{name}'s Manage row must come after the model picker it manages")
+            self.assertEqual(rows[0].group(1), raw_values[case],
+                             f"{name}'s Manage row must filter Models to its own Studio "
+                             f"({raw_values[case]!r}), not {rows[0].group(1)!r}")
+            tail = form[rows[0].end():]
+            for control in ("Button(", "modelPicker(", "Picker(", "TextEditor(", "Toggle("):
+                self.assertNotIn(control, tail,
+                                 f"{name}'s Manage row must be the last control in the form column")
+
+    def test_the_chat_form_carries_the_shared_managed_centrally_note(self) -> None:
+        """Chat's trailing row reads like the pages that already had one, not a variant of it."""
+        audio, chat = without_comments(audioWorkspace()), without_comments(chatWorkspace())
+        note = re.search(r'Text\("([^"]*managed centrally[^"]*)"\)', audio)
+        self.assertIsNotNone(note, "the Audio page no longer carries the shared note")
+        self.assertIn(f'Text("{note.group(1)}")', chat,
+                      "Chat must carry the same note as the page it is being matched to")
+        # ...introduced by a divider, the way Audio and Music introduce theirs.
+        head = chat[:chat.index(f'Text("{note.group(1)}")')]
+        self.assertIn("Divider()", head[head.rindex("modelPicker("):],
+                      "a divider must separate the model controls from the closing note")
 
 
 if __name__ == "__main__":

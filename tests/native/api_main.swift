@@ -15,6 +15,24 @@ func eventually(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Boo
     return condition()
 }
 
+/// Read a rendered duration back into seconds, so the formatter can be checked as a property and
+/// not only as a table. Returns nil for anything the formatter should never print.
+func clockSeconds(_ rendered: String) -> Double? {
+    let parts = rendered.split(separator: " ")
+    guard parts.count >= 2, parts.count % 2 == 0 else { return nil }
+    var total = 0.0
+    for pair in stride(from: 0, to: parts.count, by: 2) {
+        guard let value = Double(parts[pair]) else { return nil }
+        switch parts[pair + 1] {
+        case "h": total += value * 3600
+        case "min": total += value * 60
+        case "s": total += value
+        default: return nil
+        }
+    }
+    return total
+}
+
 final class FixtureProtocol: URLProtocol {
     static let lock = NSLock()
     static var lastGenerateBody: [String: Any]?
@@ -117,6 +135,15 @@ final class FixtureProtocol: URLProtocol {
     static var holdGeneration = false
     static let generationStarted = DispatchSemaphore(value: 0)
     static let releaseGeneration = DispatchSemaphore(value: 0)
+    /// The local Chat completion: how many were asked for, the last body, and a hold so the
+    /// transcript can be read while the reply is still in flight. The failure status exists so a
+    /// failed attempt can be told from a silent one.
+    static var chatCalls = 0
+    static var lastChatBody: [String: Any]?
+    static var holdNextChat = false
+    static var heldChatStarted = false
+    static var chatFailureStatus: Int?
+    static let releaseChat = DispatchSemaphore(value: 0)
     static var heldCatalogPort: Int?
     static var catalogPorts: [Int] = []
     static let catalogStarted = DispatchSemaphore(value: 0)
@@ -250,6 +277,17 @@ final class FixtureProtocol: URLProtocol {
         lock.lock(); defer { lock.unlock() }; releaseTrustedPublisher = value
     }
     static func waitForGenerationStart() -> Bool { generationStarted.wait(timeout: .now() + 2) == .success }
+    /// Hold the next Chat completion unanswered, so a transcript can be read mid-flight.
+    static func holdChat() {
+        lock.lock(); defer { lock.unlock() }
+        holdNextChat = true
+        heldChatStarted = false
+    }
+    static func chatHasStarted() -> Bool { lock.lock(); defer { lock.unlock() }; return heldChatStarted }
+    static func releaseHeldChat() { releaseChat.signal() }
+    static func chatCallCount() -> Int { lock.lock(); defer { lock.unlock() }; return chatCalls }
+    static func recordedChatBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastChatBody }
+    static func setChatFailure(_ status: Int?) { lock.lock(); defer { lock.unlock() }; chatFailureStatus = status }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
     static func catalogCount(on port: Int) -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.filter { $0 == port }.count }
@@ -619,6 +657,10 @@ final class FixtureProtocol: URLProtocol {
                 ["id": "old-job", "modality": "voice"],
                 ["id": "image-job", "modality": "image"],
                 ["id": "music-job", "modality": "music"],
+                // A Chat-page completion, which the Hub now records as a finished one-item batch.
+                // It is placed by its modality like every other batch, so the Chat tab lists real
+                // work rather than only an empty state.
+                ["id": "chat-job", "modality": "chat"],
                 // One modality that maps to a Studio with no batch history, and one this build has
                 // never heard of. Both must be named in the startup note: the old filter skipped
                 // anything not on its list before the loop, so neither was shown, counted or
@@ -718,6 +760,19 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"ok":true,"batch_id":"music-job","item_index":0}"#.utf8))
         case ("GET", "/studio/voice/api/downloads"):
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/chat-job"):
+            // The shape the Hub records for a Chat-page completion: one item, the operator's last
+            // user turn as `prompt`, the answer as the item's `text` (the Chat worker streams its
+            // completion and keeps no artifact, so the item is the artifact), and the runtime the
+            // Hub measured around the proxied call.
+            let chatJob: [String: Any] = ["id": "chat-job", "modality": "chat",
+                "model": "Qwen/Qwen3.5-9B", "created_at": 40,
+                "items": [["index": 0, "state": "done", "progress": 1.0,
+                           "prompt": "What is a tokenizer?",
+                           "text": "It turns text into the numbers a model reads.",
+                           "runtime_s": 61.4, "bytes": 48,
+                           "media_type": "text/plain; charset=utf-8"]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: chatJob))
         case ("POST", "/api/hub/jobs"):
             Self.lock.lock(); let shouldHold = Self.holdGeneration; Self.lock.unlock()
             if shouldHold {
@@ -746,6 +801,29 @@ final class FixtureProtocol: URLProtocol {
                 }
             }
             result = (200, "application/json", Data(#"{"batch_id":"new-job","items":1,"replayed":false}"#.utf8))
+        case ("POST", "/api/hub/chat/completions"):
+            // The Hub's local Chat proxy: one complete reply, or the status a worker that is not
+            // answering gets. The body is recorded so the request can be checked against the
+            // transcript it was built from, and the hold is what makes the in-flight state
+            // observable.
+            let body = requestBody()
+            Self.lock.lock()
+            Self.chatCalls += 1
+            Self.lastChatBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            let hold = Self.holdNextChat
+            if hold { Self.holdNextChat = false; Self.heldChatStarted = true }
+            let failure = Self.chatFailureStatus
+            Self.lock.unlock()
+            if hold {
+                _ = Self.releaseChat.wait(timeout: .now() + 5)
+            }
+            if let failure {
+                result = (failure, "application/json",
+                          Data(#"{"detail":"the local Chat worker is not answering"}"#.utf8))
+            } else {
+                result = (200, "application/json",
+                          Data(#"{"choices":[{"message":{"role":"assistant","content":"Fixture reply."}}]}"#.utf8))
+            }
         case ("POST", "/api/hub/transcription/jobs"):
             let body = requestBody()
             Self.lock.lock()
@@ -1161,6 +1239,52 @@ struct NativeAPITests {
                 "a long generation must read in minutes, not 125 seconds")
         require(NativeJob.generationSuffix(generationSeconds: 0, runningSeconds: nil).isEmpty,
                 "a zero must read as unknown rather than as an instant")
+
+        // B31: the duration formatter is exact, and never contradicts itself.
+        //
+        // The owner: "when it took seconds. it showed seconds. but if it took more than 1 minute. it
+        // just shows the minute without the exact seconds." He was reading a real defect: the
+        // minutes were truncated while the seconds were rounded, and the seconds were dropped
+        // entirely when the rounded remainder was zero, so 119.7 s reported "1 min" - hiding 59.7
+        // seconds - and a run that finished at 60.4 s reported "1 min" as well.
+        //
+        // Exact inputs to exact strings, every boundary the old implementation got wrong, driven
+        // against the real function rather than against a copy of it.
+        let clockTable: [(Double, String)] = [
+            (0.0, "0.0 s"),          // no duration at all reads without inventing one
+            (0.4, "0.4 s"),
+            (52.2, "52.2 s"),
+            (59.4, "59.4 s"),        // the last tenth below the boundary stays in seconds
+            (59.9, "1 min 0 s"),     // rounded once: 59.9 is a minute, and it says what it is
+            (59.97, "1 min 0 s"),    // never "60.0 s" - the scale comes from the same rounding
+            (60.0, "1 min 0 s"),     // seconds are stated, not dropped
+            (60.4, "1 min 0 s"),
+            (119.7, "2 min 0 s"),    // was "1 min", hiding 59.7 s
+            (120.4, "2 min 0 s"),
+            (125.0, "2 min 5 s"),
+            (3599.6, "1 h 0 min 0 s"),   // was "59 min 59 s" at best, and "59 min" at worst
+            (3600.4, "1 h 0 min 0 s"),
+            (7623.0, "2 h 7 min 3 s"),   // a two-hour render must not read 127 min 3 s
+        ]
+        for (seconds, expected) in clockTable {
+            require(NativeJob.clock(seconds) == expected,
+                    "clock(\(seconds)) read \(NativeJob.clock(seconds)), expected \(expected)")
+        }
+        // The property behind the table: whatever scale it picks, no rendering may lose more than
+        // half a second of the real duration. This is what the old one broke - "1 min" for 119.7 s
+        // was off by 59.7 - and it is checked across every boundary rather than at a few points.
+        var probe = 0.0
+        while probe < 8000 {
+            let shown = NativeJob.clock(probe)
+            require(clockSeconds(shown) != nil, "clock(\(probe)) read as unreadable: \(shown)")
+            let lost = abs((clockSeconds(shown) ?? 0) - probe)
+            require(lost <= 0.5 + 1e-9,
+                    "clock(\(probe)) lost \(lost) s by reading \(shown)")
+            probe += 0.37
+        }
+        // A duration no machine will ever report must not trap on the way to the screen.
+        require(NativeJob.clock(.infinity) == "0.0 s" && NativeJob.clock(1e300) == "99 h 59 min 59 s",
+                "a nonsense duration must read as one, not crash the app")
 
         // Joining has to say what this Mac runs, or the controller registers a node that
         // nothing can be dispatched to.
@@ -2117,6 +2241,43 @@ struct NativeAPITests {
                     "\(history.function.rawValue) rows must be real jobs")
         }
 
+        // B32: the Chat tab lists real Chat work, and Video's tab is honestly empty.
+        //
+        // A Chat-page send is synchronous and used to leave no job behind at all, so a Chat tab
+        // over `/api/hub/jobs` could only ever have been empty. The Hub now records each attempt as
+        // a finished one-item batch; the app has to place it by its modality, carry the answer, and
+        // give the row the facts the other rows have. Video has no engine, so its tab must say so
+        // and list nothing - which is a different claim from "no jobs yet".
+        require(StudioFunction.chat.hasBatchHistory && StudioFunction.video.hasHistoryTab,
+                "Chat must have a batch history and Video must keep its placeholder tab")
+        require(StudioFunction.video.hasBatchHistory == false,
+                "Video has no jobs to file, so it must not claim a batch history")
+        // `HistoryTab.allCases` is built from this same pair in the SwiftUI layer, so a Studio that
+        // answers yes here has a tab there without this binary needing to know about tabs.
+        require(StudioFunction.allCases.allSatisfy(\.hasHistoryTab),
+                "every Studio must have a Jobs tab, including the ones with nothing to list yet, "
+                    + "missing: \(StudioFunction.allCases.filter { !$0.hasHistoryTab }.map(\.rawValue))")
+        require(store.startupNote?.contains("chat") != true,
+                "a Chat batch must be placed, not reported as a modality this build cannot place: "
+                    + "\(store.startupNote ?? "nil")")
+        require(store.startupNote?.contains("video") == true,
+                "the fixture's video batch must still be reported by name, got: \(store.startupNote ?? "nil")")
+        let chatJobs = store.jobs(for: .chat)
+        require(chatJobs.count == 1 && chatJobs.first?.id == "chat-job",
+                "the Hub's Chat batch must be listed under Chat, got: \(chatJobs.map(\.id))")
+        let chatJob = chatJobs[0]
+        require(chatJob.text == "What is a tokenizer?",
+                "the row's label is the prompt the operator sent, got: \(chatJob.text)")
+        require(chatJob.answer == "It turns text into the numbers a model reads.",
+                "the answer the Hub recorded must reach the row, got: \(chatJob.answer)")
+        require(chatJob.model == "Qwen/Qwen3.5-9B" && chatJob.generationSuffix == " · took 1 min 1 s",
+                "the row must carry the model and how long it took, got: "
+                    + "\(chatJob.model)\(chatJob.generationSuffix)")
+        require(store.jobHistories.contains { $0.function == .chat && $0.jobs.count == 1 },
+                "the Chat tab must have a section with the Chat job in it")
+        require(store.jobs(for: .video).isEmpty,
+                "the Video tab must list nothing rather than another Studio's work")
+
         // B28: "Use in …" must point the Studio that owns the model at it. It used to set the
         // Subtitle selection for every non-audio model.
         for function in engineFunctions where function != .video {
@@ -2128,6 +2289,125 @@ struct NativeAPITests {
         store.select(store.models.first { $0.repo == "Qwen/Qwen3.5-9B" }!)
         require(store.chatModel == "Qwen/Qwen3.5-9B", "Use in Chat must set the Chat selection, not Subtitle")
         require(store.transcriptionModel != "Qwen/Qwen3.5-9B", "a Chat model must never become the Subtitle selection")
+
+        // B30: the Chat transcript tells the truth while a reply is in flight, and after one fails.
+        //
+        // The operator's own turn was appended only once the completion returned, so during a slow
+        // send the pane still read "No messages yet" and the message they had just sent was nowhere
+        // on screen - while the editor kept the text, which made a slow worker look like a dead
+        // button. A failed send was worse: the prompt came back to the editor and the transcript
+        // never mentioned the attempt at all. Measured with a held completion, then with a failing
+        // one, then with a connection that ends mid-flight.
+        store.clearChat()
+        require(store.chatTurns.isEmpty && store.chatPrompt.isEmpty,
+                "the Chat transcript and editor must start empty for this test")
+        let chatCallsBefore = FixtureProtocol.chatCallCount()
+        store.chatPrompt = "Hello from the fixture"
+        FixtureProtocol.holdChat()
+        let heldSend = Task { await store.sendChat() }
+        for _ in 0..<200 where !FixtureProtocol.chatHasStarted() {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(FixtureProtocol.chatHasStarted(), "the held Chat completion never reached the fixture")
+        require(store.submittingChat, "a send in flight must hold the Chat gate")
+        require(store.chatTurns.count == 1 && store.chatTurns.first?.role == "user"
+                    && store.chatTurns.first?.content == "Hello from the fixture",
+                "the operator's own message must be in the transcript before the reply arrives, got: "
+                    + "\(store.chatTurns.map { "\($0.role):\($0.content)" })")
+        require(store.chatTurns.allSatisfy { $0.role != "assistant" },
+                "no model turn may exist before the model has answered")
+        require(store.chatPrompt.isEmpty,
+                "a sent message must leave the editor at once, not when the reply lands")
+        // A second send while one is in flight is refused by the gate, not queued: the transcript
+        // must not grow a second copy, and the reply must stay attached to the prompt that asked
+        // for it.
+        store.chatPrompt = "Typed while the first was still in flight"
+        await store.sendChat()
+        require(store.chatTurns.count == 1,
+                "a second send while one is in flight must append nothing, got: "
+                    + "\(store.chatTurns.map(\.content))")
+        require(FixtureProtocol.chatCallCount() == chatCallsBefore + 1,
+                "the gate must refuse a second send before it reaches the Hub, got "
+                    + "\(FixtureProtocol.chatCallCount() - chatCallsBefore) requests")
+        FixtureProtocol.releaseHeldChat()
+        await heldSend.value
+        require(!store.submittingChat, "a completed send must release the Chat gate")
+        require(store.chatTurns.count == 2 && store.chatTurns.first?.role == "user"
+                    && store.chatTurns.last?.role == "assistant",
+                "the reply must land once, after the message that asked for it, got: "
+                    + "\(store.chatTurns.map(\.role))")
+        require(store.chatTurns.first?.failure == nil, "a successful turn must not be marked as failed")
+        require(store.chatTurns.last?.content == "Fixture reply.",
+                "the transcript must carry the worker's own text, got: \(store.chatTurns.last?.content ?? "nil")")
+        // The wire body is the conversation and nothing else: the message that was just sent, as a
+        // plain user turn. A failure marker is a display fact and must never reach the Hub.
+        let chatBody = FixtureProtocol.recordedChatBody()
+        require(chatBody?["stream"] as? Bool == false, "the Chat request must ask for one complete reply")
+        require(chatBody?["model"] as? String == "Qwen/Qwen3.5-9B",
+                "the request must name the model the operator chose, got: \(chatBody?["model"] ?? "nil")")
+        let sentMessages = chatBody?["messages"] as? [[String: Any]]
+        require(sentMessages?.count == 1
+                    && sentMessages?.first?["role"] as? String == "user"
+                    && sentMessages?.first?["content"] as? String == "Hello from the fixture",
+                "the request must carry exactly the message that was sent, got: \(sentMessages ?? [])")
+
+        // No model chosen is an absent field, not an empty string. The worker reads a falsy `model`
+        // as "serve the model I was started with", so `model: ""` could not be told apart from a
+        // real choice and the Hub had nothing to gate or dispatch by.
+        let callsBeforeUnnamed = FixtureProtocol.chatCallCount()
+        store.clearChat()
+        store.chatPrompt = "No model chosen"
+        store.chatModel = ""                      // set immediately before the send: reconcile
+        await store.sendChat()                    // re-seeds it on the next catalogue refresh
+        require(FixtureProtocol.chatCallCount() == callsBeforeUnnamed + 1,
+                "the unnamed send never reached the fixture")
+        let unnamedBody = FixtureProtocol.recordedChatBody()
+        require(unnamedBody?["model"] == nil,
+                "an unselected model must be left out, not sent as an empty string, got: "
+                    + "\(unnamedBody?["model"] ?? "nil")")
+        store.chatModel = "Qwen/Qwen3.5-9B"
+
+        // A failure stays in the transcript, marked, with no invented reply.
+        FixtureProtocol.setChatFailure(500)
+        store.chatPrompt = "This one gets no answer"
+        await store.sendChat()
+        require(store.chatTurns.count == 3,
+                "a failed send must add exactly its own turn, got: \(store.chatTurns.map(\.role))")
+        let failedTurn = store.chatTurns[2]
+        require(failedTurn.role == "user" && failedTurn.content == "This one gets no answer",
+                "the failed attempt must stay in the transcript as the operator's own message")
+        require(failedTurn.failure?.isEmpty == false,
+                "a failed attempt must be marked in the transcript, not only in the status line")
+        require(store.chatTurns.filter { $0.role == "assistant" }.count == 1,
+                "a failed completion must not be answered with a model turn that never happened, got: "
+                    + "\(store.chatTurns.map(\.role))")
+        require(store.error?.contains("Chat failed") == true,
+                "the page banner must still name the failure, got: \(store.error ?? "nil")")
+        require(store.chatPrompt.isEmpty,
+                "a failed message must not sit in the editor as well as in the transcript")
+        FixtureProtocol.setChatFailure(nil)
+
+        // A send whose connection ends mid-flight must not file its reply under a transcript it no
+        // longer owns - and must release the gate, rather than leaving Send disabled for good.
+        store.clearChat()
+        store.chatPrompt = "Sent to a connection that goes away"
+        FixtureProtocol.holdChat()
+        let supersededSend = Task { await store.sendChat() }
+        for _ in 0..<200 where !FixtureProtocol.chatHasStarted() {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(FixtureProtocol.chatHasStarted(), "the superseded Chat completion never reached the fixture")
+        store.disconnect()
+        require(!store.submittingChat, "a connection that ends must release the Chat gate")
+        FixtureProtocol.releaseHeldChat()
+        await supersededSend.value
+        require(store.chatTurns.count == 1 && store.chatTurns.first?.role == "user",
+                "a superseded send must not append its reply to a transcript it no longer owns, got: "
+                    + "\(store.chatTurns.map(\.role))")
+        require(store.chatTurns.first?.failure?.isEmpty == false,
+                "a superseded send must say in the transcript that no answer arrived")
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
+        store.clearChat()
 
         // B27: a preset roster belongs to the family that published it and is lent to no other.
         let secondPreset = store.models.first { $0.repo == "fixture/second-preset" }

@@ -38,7 +38,7 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertIn("generationSeconds: item?.runtimeS", mapping)
         self.assertIn("runningSeconds: item?.elapsedS", mapping)
 
-    # The four row styles, by their exact signatures. `jobRow(_:for:)` is deliberately not one of
+    # The five row styles, by their exact signatures. `jobRow(_:for:)` is deliberately not one of
     # them: it is the dispatcher that routes a job to the style its function uses, so asserting a
     # suffix inside it would be asserting that a `switch` renders text.
     ROW_STYLES = (
@@ -46,6 +46,7 @@ class GenerationTimeTests(unittest.TestCase):
         "private func jobRow(_ job: NativeJob, compact: Bool) -> some View",
         "private func musicJobRow(_ job: NativeJob) -> some View",
         "private func subtitleJobRow(_ job: NativeJob) -> some View",
+        "private func chatJobRow(_ job: NativeJob) -> some View",
     )
 
     def test_every_job_row_shows_it(self) -> None:
@@ -71,7 +72,8 @@ class GenerationTimeTests(unittest.TestCase):
         dispatcher = VIEWS[VIEWS.index("private func jobRow(_ job: NativeJob, for function"):
                             ]
         dispatcher = dispatcher[:dispatcher.index("\n    private func", 10)]
-        for style in ("imageJobRow(job)", "musicJobRow(job)", "subtitleJobRow(job)"):
+        for style in ("imageJobRow(job)", "musicJobRow(job)", "subtitleJobRow(job)",
+                      "chatJobRow(job)"):
             with self.subTest(style=style):
                 self.assertIn(style, dispatcher, f"the dispatcher no longer routes to {style}")
         self.assertIn("jobRow(job, compact:", dispatcher,
@@ -86,6 +88,65 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertIn("durationSeconds", facts, "the media length stays in the facts line")
         self.assertNotIn("generationSeconds", facts,
                          "the generation time is its own line, not folded into the facts")
+
+
+class DurationFormattingTests(unittest.TestCase):
+    """Every duration is exact, and never contradicts itself.
+
+    The owner read the defect off the Jobs page: "when it took seconds. it showed seconds. but if it
+    took more than 1 minute. it just shows the minute without the exact seconds." The formatter
+    truncated the minutes and rounded the remainder separately, then dropped the seconds when the
+    rounded remainder was zero - so 119.7 s read "1 min" and hid 59.7 seconds, and a run finishing
+    at 60.4 s read "1 min" as well.
+
+    The exact inputs and the exact strings they must produce live in `tests/native/api_main.swift`,
+    where the real `NativeJob.clock` is called - a second implementation here would only agree with
+    itself. What is pinned here is the shape that makes the table pass: one rounding, the branch
+    taken from it, the seconds never dropped, and hours instead of a 127-minute run.
+    """
+
+    CLOCK = API[API.index("static func clock(_ seconds: Double) -> String {"):]
+    CLOCK = CLOCK[:CLOCK.index("\n    }")]
+    NATIVE = (ROOT / "tests" / "native" / "api_main.swift").read_text()
+
+    def test_the_duration_is_rounded_once_and_the_branch_comes_from_it(self) -> None:
+        self.assertNotIn("Int(seconds)", self.CLOCK,
+                         "the minutes are truncated again: both parts must come from one rounding")
+        self.assertEqual(self.CLOCK.count(".rounded()"), 1,
+                         "the duration must be rounded exactly once")
+        # The scale is chosen from the same rounded value, so a duration can never be reported at a
+        # scale it has not reached (59.97 s once read "60.0 s").
+        self.assertIn("if whole < 60", self.CLOCK,
+                      "the seconds/minutes branch must read the rounded value, not the raw one")
+
+    def test_the_seconds_are_never_dropped(self) -> None:
+        self.assertNotIn("rest == 0 ?", self.CLOCK,
+                         "a zero remainder must not swallow the seconds: 1 min 0 s, not 1 min")
+        # The minutes branch states both parts, and the hours branch states all three.
+        self.assertIn('"\\(minutes) min \\(rest) s"', self.CLOCK)
+        self.assertIn('"\\(hours) h \\(minutes) min \\(rest) s"', self.CLOCK,
+                      "past an hour the minutes must not run up to 127")
+
+    def test_the_exact_table_runs_against_the_real_formatter(self) -> None:
+        """The table is the contract; this is the gate that keeps the table, and its coverage."""
+        table = self.NATIVE[self.NATIVE.index("let clockTable: [(Double, String)]"):]
+        table = table[:table.index("\n        ]")]
+        self.assertIn("NativeJob.clock(seconds) == expected", self.NATIVE,
+                      "the table must be compared against the real formatter, not a copy of it")
+        # Every boundary the old implementation got wrong, including the one it never reached.
+        for probe in ("59.4", "59.9", "59.97", "60.0", "60.4", "119.7", "120.4", "125.0",
+                      "3599.6", "3600.4", "7623.0"):
+            self.assertIn(f"({probe},", table, f"the exact table no longer covers {probe} s")
+        # ...and the property, which is what catches a boundary nobody wrote down.
+        self.assertIn("lost <=", self.NATIVE,
+                      "the half-second-loss property must be checked across the whole range")
+
+    def test_both_labels_use_the_one_formatter(self) -> None:
+        """`took …` and `running …` are the same measurement at different moments."""
+        suffix = API[API.index("static func generationSuffix"):]
+        suffix = suffix[:suffix.index("\n    }")]
+        self.assertEqual(suffix.count("clock("), 2,
+                         "both the finished and the running label must use the one formatter")
 
 
 if __name__ == "__main__":

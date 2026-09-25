@@ -20,7 +20,7 @@ enum HistoryTab: Hashable, Identifiable {
     case studio(StudioFunction)
 
     static let allCases: [HistoryTab] = [.all] + StudioFunction.allCases
-        .filter { $0.hasBatchHistory }
+        .filter { $0.hasHistoryTab }
         .map(HistoryTab.studio)
 
     var studio: StudioFunction? {
@@ -988,6 +988,14 @@ struct StudioContent: View {
                                 Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
                             }
                         }
+                        // The row every other workspace page ends with: where models are installed
+                        // and stored is not this page's business, and the page that owns it is one
+                        // click away. Chat was the only form without it, which is the difference
+                        // the owner saw when he put the five pages side by side.
+                        Divider().padding(.top, 8)
+                        Text("Model installation and storage are managed centrally.").font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Manage Chat Models") { modelFilter = "Chat"; studio.select(.models) }
                     }.padding(.trailing, 20).padding(.bottom, 20)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
                 // What you said and what the model answered, on the right, in the house shape the
@@ -1016,6 +1024,15 @@ struct StudioContent: View {
                                             .font(.caption).foregroundStyle(.secondary)
                                         Text(turn.content).textSelection(.enabled)
                                             .fixedSize(horizontal: false, vertical: true)
+                                        // A message that got no reply says so, under the message
+                                        // itself. The alternative the page used to offer was
+                                        // silence: the turn was not even in the transcript.
+                                        if let failure = turn.failure {
+                                            Label(failure, systemImage: "exclamationmark.triangle")
+                                                .font(.caption).foregroundStyle(.orange)
+                                                .textSelection(.enabled)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(10)
@@ -2315,6 +2332,22 @@ struct StudioContent: View {
                 .frame(maxWidth: 420, alignment: .leading)
                 .accessibilityLabel("History filter")
                 if workspace.transcribing { transcriptionActivity }
+                // A tab for a Studio the Hub files nothing for is not nothing to show: it is the
+                // one place the owner asked to be reminded from. It says exactly that - no rows, no
+                // controls and no date - and which Studio it is comes from the tab, never from a
+                // name written here.
+                if let studio = historyTab.studio, !studio.hasBatchHistory {
+                    let name = StudioPage.page(for: studio)?.title ?? studio.rawValue
+                    sectionTitle(name)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: studio.symbol).font(.title3).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(name) Studio is not in this build yet.").font(.headline)
+                            Text("When it ships, every finished clip will be listed here, newest first, with the model that made it, its length and how long it took. Until then this tab lists nothing.")
+                                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }.padding(.top, 4)
+                }
                 // One section per Studio that has a history, derived from the Studio list rather
                 // than written out here: a Studio missing from a hand-written section was simply
                 // absent from Jobs with nothing saying so.
@@ -2393,6 +2426,53 @@ struct StudioContent: View {
         }
     }
 
+    /// A Chat answer is text, so the row is a text row: what was asked, what came back, and the
+    /// two things worth doing with an answer - keeping it and copying it.
+    ///
+    /// It is not drawn with the audio, image or subtitle rows: those offer Play, Preview or Open
+    /// Transcript for an artifact, and a completion has no file to open. The Hub records the answer
+    /// itself as the item's text, so this shows it and saves it directly.
+    private func chatJobRow(_ job: NativeJob) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: active(job.state) ? "bubble.left.and.bubble.right"
+                      : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(stateColor(job.state))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        // The model's own published label, which carries its quantization - the
+                        // same name the picker on the Chat page offered.
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
+                    if job.state == "done", !job.answer.isEmpty {
+                        Text(job.answer)
+                            .lineLimit(8)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .controlBackgroundColor),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                Spacer()
+                // Only a real answer has anything to copy or save. A failed attempt offers
+                // neither, because there is nothing there to offer.
+                if job.state == "done", !job.answer.isEmpty {
+                    Button("Copy Answer") { copyAnswer(job) }
+                    Button("Save…") { saveAnswer(job) }
+                }
+            }
+            if let error = job.error, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+
     /// One history row, drawn by the Studio that produced it. The switch is exhaustive over
     /// `StudioFunction`, so a new Studio has to be given a row here rather than quietly showing
     /// an audio row for something that is not audio.
@@ -2403,8 +2483,10 @@ struct StudioContent: View {
         case .audio: jobRow(job, compact: false)
         case .music: musicJobRow(job)
         case .transcription: subtitleJobRow(job)
-        case .chat, .video:
-            // No batch history, so `jobHistories` never yields one of these.
+        case .chat: chatJobRow(job)
+        case .video:
+            // No batch history, so `jobHistories` never yields one of these. The Video tab says
+            // that in its own words rather than drawing a row for work that does not exist.
             EmptyView()
         }
     }
@@ -3898,6 +3980,24 @@ struct StudioContent: View {
             do { try await workspace.saveAudio(job, to: url) }
             catch { fileActionError = error.localizedDescription }
         }
+    }
+    /// Copying is the whole point of an answer: it is on its way somewhere else.
+    private func copyAnswer(_ job: NativeJob) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(job.answer, forType: .string)
+    }
+    /// Save the answer the Hub recorded.
+    ///
+    /// There is no artifact to fetch and nothing to acknowledge: a Chat worker streams its
+    /// completion and keeps no file, so the Hub records the answer itself as the item's text, and
+    /// the bytes written here are the bytes on screen.
+    private func saveAnswer(_ job: NativeJob) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "chat-\(job.id).txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try job.answer.write(to: url, atomically: true, encoding: .utf8) }
+        catch { fileActionError = error.localizedDescription }
     }
     private func saveMusic(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "music-\(job.id).wav"; panel.allowedContentTypes = [.wav]

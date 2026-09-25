@@ -689,6 +689,13 @@ struct NativeChatTurn: Identifiable, Equatable {
     let id: String
     let role: String
     var content: String
+    /// Why this turn has no reply, when it has none.
+    ///
+    /// A failed request is marked on the operator's own turn rather than answered with a model turn
+    /// that never happened - the transcript has to be able to say "this one got no answer" without
+    /// inventing one. Display only: the wire keeps the two roles it has always had, and this field
+    /// is never sent to the Hub.
+    var failure: String?
 }
 
 struct NativeModelStats: Decodable, Equatable, Identifiable {
@@ -723,6 +730,11 @@ struct NativeJob: Identifiable, Equatable {
     var runningSeconds: Double? = nil
     /// The studio's own label for the phase it is in ("DiT sampling"), when it reports one.
     var progressStage: String? = nil
+    /// What a Chat completion answered. Empty for every other Studio, whose result is a file.
+    ///
+    /// A Chat answer is text and nothing else: the Hub records it as the item's `text` rather than
+    /// pointing at a worker artifact, because the worker streams its completion and keeps no file.
+    var answer: String = ""
     /// Which item in the batch this row is. Single-item app submissions are always 0, but the
     /// Jobs page can show a batch another client submitted, so the discard route is addressed with
     /// the index the Hub actually reported.
@@ -748,12 +760,27 @@ struct NativeJob: Identifiable, Equatable {
         return ""
     }
 
-    /// Minutes and seconds once it is long enough to be worth reading that way.
+    /// How long something took, at the scale it actually reached.
+    ///
+    /// One rounding, and every part comes from that one value. The previous version truncated the
+    /// minutes (`Int(seconds) / 60`) and rounded the remainder separately, then dropped the seconds
+    /// when the rounded remainder was zero: 119.7 s reported "1 min" and hid 59.7 of them, and any
+    /// run finishing in the last second before a whole minute also read as a round minute. The
+    /// branch is taken from the same rounded value, so a duration can never be reported at a scale
+    /// it has not reached - 59.97 s is "1 min 0 s", never "60.0 s".
+    ///
+    /// Below a minute the tenths are what the operator watches, so they are kept exactly as they
+    /// were; at and above it the seconds are always stated, and past an hour the minutes are not
+    /// left to run up to 127. The value is clamped before it becomes an `Int`, so a nonsense
+    /// duration cannot trap the app on the way to the screen.
     static func clock(_ seconds: Double) -> String {
-        if seconds < 60 { return String(format: "%.1f s", seconds) }
-        let minutes = Int(seconds) / 60
-        let rest = Int(seconds.rounded()) % 60
-        return rest == 0 ? "\(minutes) min" : "\(minutes) min \(rest) s"
+        guard seconds.isFinite, seconds > 0 else { return "0.0 s" }
+        let whole = Int(min(seconds, 359_999).rounded())
+        if whole < 60 { return String(format: "%.1f s", seconds) }
+        let hours = whole / 3600
+        let minutes = (whole % 3600) / 60
+        let rest = whole % 60
+        return hours > 0 ? "\(hours) h \(minutes) min \(rest) s" : "\(minutes) min \(rest) s"
     }
 
     /// "12.5 s · 1.4 MB · 1024×1024" — only the parts that are known.
@@ -1229,6 +1256,13 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Independent Subtitle studio history, read from the Hub's transcription jobs (durable),
     /// which the packaged Hub now routes to the subtitle worker.
     @Published private(set) var subtitleJobs: [NativeJob] = []
+    /// Chat history, read from the Hub's own record of each Chat-page completion.
+    ///
+    /// A Chat send is synchronous - the app posts, the Hub proxies to the local Chat worker and the
+    /// answer comes back - and it used to leave nothing behind at all, so this list could only ever
+    /// be empty. The Hub now files each attempt as a finished one-item batch, which is what this
+    /// lists, answered or failed.
+    @Published private(set) var chatJobs: [NativeJob] = []
     @Published private(set) var imageConfigurations: [String: NativeImageConfiguration] = [:]
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
     /// Changing the model changes the controls, so the new model's own published defaults are
@@ -1613,6 +1647,10 @@ final class NativeWorkspaceStore: ObservableObject {
         submittingImage = false
         submittingMusic = false
         transcribing = false
+        // Chat belongs in this list for the same reason as the other four: a send whose connection
+        // ends never reaches its own `defer` (that reset is guarded on the connection id), so
+        // without this the Send button stayed disabled for the life of the store after a drop.
+        submittingChat = false
         memoryInventory = nil
         memoryNote = nil
         updatingMemory = false
@@ -1725,6 +1763,7 @@ final class NativeWorkspaceStore: ObservableObject {
             var images: [NativeJob] = []
             var musics: [NativeJob] = []
             var subtitlesFromHub: [NativeJob] = []
+            var chats: [NativeJob] = []
             var unreadable = 0
             // The batch's own `modality` decides where it goes, not a list here that skips
             // anything it has not heard of before the loop: a skipped batch was not shown, not
@@ -1744,7 +1783,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 if let known = finishedJobCache[batch.id] {
                     finished[batch.id] = known
                     Self.file(known, for: function, images: &images, musics: &musics,
-                              history: &history, subtitles: &subtitlesFromHub)
+                              history: &history, subtitles: &subtitlesFromHub, chats: &chats)
                     continue
                 }
                 do {
@@ -1753,7 +1792,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     let job = Self.mapHubJob(detail)
                     if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
                     Self.file(job, for: function, images: &images, musics: &musics,
-                              history: &history, subtitles: &subtitlesFromHub)
+                              history: &history, subtitles: &subtitlesFromHub, chats: &chats)
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
                     // is a convenience over the Hub's history, and losing it should not read as the
@@ -1796,6 +1835,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     error: nil))
             }
             subtitleJobs = subtitles.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            chatJobs = chats.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
             for (runID, repo) in hubDownloadRuns {
                 // A download that has finished and been forgotten by the Hub is not a reason to
@@ -2020,29 +2060,71 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// Send the current message to the local Chat worker and append the reply.
+    ///
+    /// The operator's own turn goes into the transcript *before* the request leaves. It used to be
+    /// appended after the reply arrived, so for the whole time the worker was thinking the pane
+    /// still read "No messages yet" and the message the operator had just sent was nowhere on
+    /// screen - while the editor kept the text, which made a slow worker look like a dead button.
+    ///
+    /// Every mutation is looked up by the turn's own id, so a completion that lands after the
+    /// transcript has moved on cannot append a second copy of anything or attach a reply to
+    /// somebody else's prompt; and the `submittingChat` gate stays, so a second send while one is
+    /// in flight is refused rather than queued behind it.
     func sendChat() async {
         guard !submittingChat, let requestConnection = connectionID else { return }
         let prompt = chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { error = "Enter a message."; return }
+        let turn = NativeChatTurn(id: UUID().uuidString, role: "user", content: prompt)
+        chatTurns.append(turn)
+        chatPrompt = ""
+        submittingChat = true
+        defer { if connectionID == requestConnection { submittingChat = false } }
         do {
-            submittingChat = true
-            defer { if connectionID == requestConnection { submittingChat = false } }
-            var messages = chatTurns.map { HubChatMessage(role: $0.role, content: $0.content) }
-            messages.append(HubChatMessage(role: "user", content: prompt))
+            // The transcript *is* the conversation, and the turn just appended is the message being
+            // sent, so this is the same body the Hub has always been given. `failure` never reaches
+            // the wire: a marked turn is still a real message from the operator, sent as one.
+            let messages = chatTurns.map { HubChatMessage(role: $0.role, content: $0.content) }
             let reply: HubChatCompletion = try await sendHubJSON(
                 ["api", "hub", "chat", "completions"],
-                body: HubChatRequest(model: "", messages: messages, stream: false))
-            guard connectionID == requestConnection else { return }
+                // The model the operator chose, by the id the worker itself publishes. Sending an
+                // empty string meant the worker fell back to whatever it was started with, so the
+                // picker above Send chose nothing and the Hub had no model to gate or dispatch by.
+                // With nothing selected the field is left out entirely, which is the same request
+                // this page has always made - never a name the worker would refuse.
+                body: HubChatRequest(model: chatModel.isEmpty ? nil : chatModel,
+                                     messages: messages, stream: false))
+            guard connectionID == requestConnection else {
+                // The transcript outlived the connection it was sent on, so this reply may be an
+                // answer from a Hub the app is no longer talking to. Say so rather than dropping
+                // it silently or filing it under a transcript it does not belong to.
+                markChatTurnFailed(turn.id, "No reply. The connection to the local Hub ended before an answer arrived.")
+                return
+            }
             guard let content = reply.choices.first?.message.content, !content.isEmpty else {
                 throw NativeAPIError.message("The local Chat worker returned no message.")
             }
-            chatTurns.append(NativeChatTurn(id: UUID().uuidString, role: "user", content: prompt))
-            chatTurns.append(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content))
-            chatPrompt = ""
+            guard let answered = chatTurns.firstIndex(where: { $0.id == turn.id }) else { return }
+            chatTurns.insert(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content),
+                             at: answered + 1)
             error = nil
         } catch {
-            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Chat") }
+            // The transcript tells the truth about what happened: the attempt stays, marked as one
+            // that got no reply, and nothing is invented to fill the gap. The page banner is only
+            // for the live connection's own failures - a cancelled send is not the Hub breaking.
+            markChatTurnFailed(turn.id, "No reply. \(Self.describe(error))")
+            if connectionID == requestConnection, !Self.isCancellation(error) {
+                self.error = Self.actionable(error, action: "Chat")
+            }
         }
+    }
+
+    /// Mark the operator's turn as one that got no reply, by id.
+    ///
+    /// Idempotent by construction: a turn that is no longer in the transcript (the operator cleared
+    /// it) is left alone, and nothing is ever appended, so a late completion cannot double-append.
+    private func markChatTurnFailed(_ id: String, _ reason: String) {
+        guard let index = chatTurns.firstIndex(where: { $0.id == id }) else { return }
+        chatTurns[index].failure = reason
     }
 
     func clearChat() {
@@ -4580,13 +4662,15 @@ final class NativeWorkspaceStore: ObservableObject {
     /// engine) has its batches named in the startup note rather than dropped in silence.
     private static func file(_ job: NativeJob, for function: StudioFunction,
                              images: inout [NativeJob], musics: inout [NativeJob],
-                             history: inout [NativeJob], subtitles: inout [NativeJob]) {
+                             history: inout [NativeJob], subtitles: inout [NativeJob],
+                             chats: inout [NativeJob]) {
         switch function {
         case .image: images.append(job)
         case .music: musics.append(job)
         case .transcription: subtitles.append(job)
         case .audio: history.append(job)
-        case .chat, .video:
+        case .chat: chats.append(job)
+        case .video:
             // Unreachable: `refresh` files only Studios that publish a batch history. Named here
             // so adding a Studio case is a compile-time question, not a silent misfiling.
             break
@@ -4782,7 +4866,8 @@ final class NativeWorkspaceStore: ObservableObject {
         case .image: return imageJobs
         case .music: return musicJobs
         case .transcription: return subtitleJobs
-        case .chat, .video: return []
+        case .chat: return chatJobs
+        case .video: return []
         }
     }
 
@@ -5118,6 +5203,7 @@ final class NativeWorkspaceStore: ObservableObject {
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
             progressStage: item?.progressStage,
+            answer: item?.text ?? "",
             itemIndex: item?.index ?? 0)
     }
 
@@ -5879,7 +5965,12 @@ private struct GenerationSpeaker: Decodable { let id: String }
 private struct JobsResponse: Decodable { let jobs: [JobWire] }
 private struct HubJobsResponse: Decodable { let batches: [HubJobSummary] }
 private struct HubChatMessage: Codable { let role: String; let content: String }
-private struct HubChatRequest: Encodable { let model: String; let messages: [HubChatMessage]; let stream: Bool }
+/// `model` is optional on purpose: the synthesized encoder writes nothing for a `nil`, so "no model
+/// chosen" is an absent field rather than an empty string. The shipped chat worker reads
+/// `body.get("model")` and treats a falsy value as "serve the model I was started with", which is
+/// why an empty string could never be told apart from a real choice - the Hub had nothing to gate
+/// or dispatch by, and a second chat model could not be addressed at all.
+private struct HubChatRequest: Encodable { let model: String?; let messages: [HubChatMessage]; let stream: Bool }
 private struct HubChatCompletion: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable { let content: String }
@@ -5902,6 +5993,13 @@ private struct HubJobItem: Decodable {
     /// The phase label the studio reported with its progress, when it reports one.
     let progressStage: String?
     let prompt: String?
+    /// The answer a Chat completion produced, when the batch is a Chat one.
+    ///
+    /// The Hub writes the assistant's text here (`PAGE_ANSWER_FIELD` in the Hub's own chat job
+    /// module) because a Chat worker streams its answer and keeps no file, so the item *is* the
+    /// artifact. Only `chatJobRow` reads this: for a Voice item the same key has carried the script
+    /// the operator typed, and nothing may show that as an answer.
+    let text: String?
     let artifactUrl: String?
     let error: String?
     let bytes: Int64?

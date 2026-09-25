@@ -28,12 +28,29 @@ enum StudioFunction: String, CaseIterable, Identifiable {
         }
     }
     /// Whether the Hub files finished batches for this Studio, which is what the Jobs page and
-    /// its history tabs list. Chat answers a prompt directly and keeps its own transcript, so it
-    /// has no Hub batch history; a new Studio has to answer this before its jobs can be missed.
+    /// its history tabs list. A Studio answers this before its jobs can be missed.
+    ///
+    /// Chat joined this list when the Hub began writing each Chat-page completion down as a
+    /// finished one-item batch: a Chat answer is work the operator may want to find again, so it
+    /// is listed like every other Studio's. Video has no engine and produces nothing yet.
     var hasBatchHistory: Bool {
         switch self {
-        case .audio, .transcription, .image, .music: return true
-        case .video, .chat: return false
+        case .audio, .transcription, .image, .music, .chat: return true
+        case .video: return false
+        }
+    }
+
+    /// Whether this Studio gets a tab on the Jobs page.
+    ///
+    /// The owner asked for Video to be visible now - "add one for video as a placeholder now so we
+    /// don't forget about it" - rather than absent until the day it ships. A tab is not a claim
+    /// that work exists: selecting it says what video will be and lists nothing, which is why this
+    /// is not `hasBatchHistory`. Every Studio but Video answers with its batch history, so a new
+    /// Studio still arrives with a tab and with rows.
+    var hasHistoryTab: Bool {
+        switch self {
+        case .video: return true
+        case .audio, .transcription, .image, .music, .chat: return hasBatchHistory
         }
     }
 }

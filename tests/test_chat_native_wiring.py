@@ -69,6 +69,25 @@ class NativeChatWiringTests(unittest.TestCase):
         fields = set(re.findall(r"let ([a-zA-Z]+):", request.group(1)))
         self.assertEqual(fields, {"model", "messages", "stream"})
 
+    def test_the_chat_request_names_the_model_the_operator_chose(self) -> None:
+        """`model: ""` let the worker decide, so a second chat model could not be addressed.
+
+        The shipped chat worker reads a falsy `model` as "serve the model I was started with", so
+        an empty string was indistinguishable from a real choice: the picker above Send chose
+        nothing, and the Hub had no model to gate or dispatch by. The chosen id goes on the wire,
+        and with nothing chosen the field is left out rather than sent empty.
+        """
+        method = re.search(r"func sendChat\(\) async \{.*?\n    \}", API, re.S)
+        self.assertIsNotNone(method, "sendChat not found")
+        self.assertIn("chatModel.isEmpty ? nil : chatModel", method.group(0),
+                      "the chosen model must go on the wire, and an unset one must be omitted")
+        self.assertNotIn('model: ""', method.group(0),
+                         "an empty model string is exactly what the worker silently ignores")
+        request = re.search(r"private struct HubChatRequest: Encodable \{(.*?)\}", API, re.S)
+        self.assertIn("let model: String?", request.group(1),
+                      "the field must be optional: the encoder omits a nil, and cannot omit a "
+                      "non-optional string")
+
     def test_the_chat_response_reads_the_openai_message_content(self) -> None:
         completion = re.search(r"private struct HubChatCompletion: Decodable \{(.*?)\n\}", API, re.S)
         self.assertIsNotNone(completion, "HubChatCompletion not found")

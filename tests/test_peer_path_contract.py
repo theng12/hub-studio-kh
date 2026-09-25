@@ -298,16 +298,25 @@ class JobRowContractTests(unittest.TestCase):
                      if "jobRow(" in line and "subtitle" in line.lower()]
         self.assertFalse(offenders, "the audio row was given subtitle work: " + str(offenders))
 
-    def test_the_subtitle_row_offers_no_playback(self):
+    def _subtitle_row(self):
+        """The subtitle row's own body, up to the next declaration.
+
+        This used to run to `private func jobRow(`, which was simply the next function when the
+        subtitle row was written. The Chat row now sits between them, and the old slice read the
+        Chat row's Save button as the subtitle row's - the invariant is about this row, so the
+        slice has to end with the row rather than with whichever declaration happened to follow it.
+        """
         body = self.VIEWS[self.VIEWS.index("private func subtitleJobRow"):]
-        body = body[:body.index("private func jobRow(")]
+        return body[:body.index("\n    private func", 10)]
+
+    def test_the_subtitle_row_offers_no_playback(self):
+        body = self._subtitle_row()
         for forbidden in ('Button("Play")', 'Button("Save…")', "saveAudio", "workspace.play("):
             self.assertNotIn(forbidden, body,
                              f"the subtitle row must not offer {forbidden}")
 
     def test_the_subtitle_row_opens_the_transcript(self):
-        body = self.VIEWS[self.VIEWS.index("private func subtitleJobRow"):]
-        body = body[:body.index("private func jobRow(")]
+        body = self._subtitle_row()
         self.assertIn('Button("Open Transcript")', body)
         self.assertIn("studio.select(.transcription)", body)
 
