@@ -151,6 +151,27 @@ failed to load, and makes every Mac look like the same build.
   worker cannot reintroduce the defect by omission.
 - `tests/test_worker_version_reporting.py` pins both halves.
 
+## A document names the build that has the behaviour — 2026-09-25
+
+A handoff written while the work was in flight described `--listen-auto`, `--fleet-mode`, the bind
+on `/api/health` and `lane_contract.structured_output` as things a reader could rely on. **None of
+them were in the released build.** GatewayKH diagnosed an unreachable fleet against those
+promises, verified the installed bundle instead of the checkout, and found the same version string
+**thirteen commits apart**. The fleet's five nodes had been unreachable the whole time.
+
+This is the third time in two days that a claim outran the artefact — a tracker row said a field
+was "live on every chat row" when it was in an unpushed working tree, and a review recorded "the
+app ignores the warning" where the app had rendered it all along.
+
+- **"It is implemented" and "it is in the build you are running" are different claims.** The second
+  is the one an operator acts on, and it is the only one worth sending.
+- A document describing behaviour that is not in the current release says so **at the top**, with
+  the version that will have it and the commit that adds it.
+- Check against the **installed bundle** when the question is "does this Mac have it", not the
+  checkout. `strings`/`grep` on `/Applications/Studio Hub.app` settles it; `git log` does not.
+- The escape hatch is unchanged and is what keeps this cheap: **if a document disagrees with the
+  code, the code wins and the document gets fixed.**
+
 ## One lane, one published contract — 2026-09-25
 
 A scheduler must be able to ask a lane for work without reading its source and without a release

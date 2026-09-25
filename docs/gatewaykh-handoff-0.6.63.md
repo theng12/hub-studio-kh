@@ -1,5 +1,29 @@
 # Studio Hub KH 0.6.63 → GatewayKH
 
+> ## ⚠️ Read this before the sections below
+>
+> **This document describes behaviour that is NOT in 0.6.63.** It was written as the release
+> notes for a build that had not been cut, and GatewayKH spent real time diagnosing a fleet
+> against promises the running binary could not keep. Verified against the installed bundle, not
+> the checkout: the same version string, **thirteen commits apart**.
+>
+> | Documented below | Commit | In 0.6.63 (`a4a78dc`)? | Ships in |
+> |---|---|---|---|
+> | `bind` published on `/api/health` | `154f0b4` | **No** — returns only `{ok, workers, role}` | 0.6.64 |
+> | Listen on this Mac's own networks automatically | `7fcb0fb` | **No** | 0.6.64 |
+> | `--listen-auto` (the named setter) | `7fcb0fb` | **No** — only the old `--listen-host` | 0.6.64 |
+> | `--fleet-mode` | `ef679e1` | **No** — flag absent from the installed binary | 0.6.64 |
+> | `lane_contract.structured_output` | `363e50e` | **No** | 0.6.64 |
+> | Chat dispatchable by a Fleet credential | `7267e62` | **Yes** | 0.6.63 |
+> | Per-model defaults; the Models tab | `308ff36`, `3e62bc8`, `f8efed4` | **No** | 0.6.64 |
+>
+> **The rule this produced, in `AGENTS.md`:** a document that describes behaviour names the
+> build that has it. "It is implemented" and "it is in the build you are running" are different
+> claims, and the second is the one an operator acts on.
+>
+> Everything below is accurate as a description of the **next** build. Nothing here needs a
+> GatewayKH release; it needs Studio Hub 0.6.64 on the Macs.
+
 **For:** the GatewayKH session. **From:** Studio Hub KH. **Date:** 2026-09-25.
 
 This is the "stuff to send" that goes with the prompt: everything Studio Hub KH changed that
