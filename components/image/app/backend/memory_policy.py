@@ -1,13 +1,15 @@
-"""Memory policy for the standalone Image worker.
+"""Memory policy for the standalone Image worker — the release half of it.
 
-Image is the one Studio with nothing to configure. A registered model is constructed inside
+Image has no release policy to configure. A registered model is constructed inside
 :meth:`GenerationManager._run` and dropped when that call returns, so there is no cross-job
 residency and no idle timer that could ever fire — the model is released after every job by
 construction.
 
 What *is* per-model is the mflux memory configuration (``generation.MemoryPolicy``): which
-host sizes run a model in its bounded low-RAM mode. That choice belongs to the job, not to
-this endpoint, so this module only reports residency: which model a running job loaded.
+host sizes run a model in its bounded low-RAM mode. Which configuration the next job actually
+loads with is an operator setting of its own (``loading_mode``, ``GET/PUT /api/loading-mode``)
+and deliberately not part of this fixed release policy, so this module only reports
+residency: which model a running job loaded.
 
 It still publishes the fleet contract (``GET /api/memory-policy``,
 ``PUT /api/memory-policy``, ``POST /api/memory/release``) that the Hub's

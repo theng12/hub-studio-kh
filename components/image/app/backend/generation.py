@@ -28,6 +28,11 @@ from uuid import uuid4
 
 from PIL import Image
 
+from . import loading_mode
+from .loading_mode import DEFAULT_MODE as DEFAULT_LOADING_MODE
+from .loading_mode import MODE_AUTO, MODE_FULL, MODE_LOW
+from .loading_mode import MODES as LOADING_MODES
+
 
 # Where a model's weights live inside an installed package folder.
 #
@@ -82,8 +87,10 @@ class MemoryPolicy:
     """The mflux memory knobs one model uses, and when.
 
     ``low_ram_below_bytes=None`` means this model needs none of them: it is loaded exactly
-    the way it always was.  When a host is below the threshold, the CLI's own ``--low-ram``
-    mapping is applied (see :func:`apply_memory_plan`).
+    the way it always was, and it has one loading mode.  ``single_mode_reason`` is then the
+    model's own explanation of that fact, published as the catalog's ``loading_modes.reason``
+    so the app can explain the control it is not offering instead of implying the
+    machine-wide ``loading_mode`` setting applies.
     """
     low_ram_below_bytes: int | None = None
     # mflux's ``--low-ram`` implies ``--mlx-cache-limit-gb 1``; kept as a field so the two can
@@ -92,6 +99,8 @@ class MemoryPolicy:
     # ``--low-ram`` already installs mflux's default tiling (512-pixel tiles).  An explicit
     # smaller tile is the extra lever for the 8 GB tier, which is unmeasured.
     low_ram_vae_tile_size: int | None = None
+    # Why this model declares no bounded configuration, in the model's own terms.
+    single_mode_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,8 +149,13 @@ FLUX2_KLEIN = ImageModel(
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
     # No memory knobs on purpose.  This model is qualified at 16 GB and has run thousands of
     # generations on the owner's 8 GB Macs; adding a knob would be an unverified change to a
-    # verified path.
-    memory=MemoryPolicy(),
+    # verified path.  `single_mode_reason` publishes that in the model's own terms, so the
+    # catalog can say why the machine-wide `loading_mode` setting does not apply here instead
+    # of offering a bounded configuration this model does not have.
+    memory=MemoryPolicy(single_mode_reason=(
+        'No memory knobs on purpose: this model is qualified at 16 GB and has run thousands '
+        "of generations on the owner's 8 GB Macs, and adding an mflux memory knob would be "
+        'an unverified change to a verified path.')),
     qualification={
         'historical_source_workload': '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
         'packaged_inference': 'pending',
@@ -208,14 +222,25 @@ Z_IMAGE_TURBO = ImageModel(
         'packaged_inference': 'pending',
     },
     # Two settings of the same model, measured the same way. Both are published because the
-    # memory mode changes the answer by 27 % and a scheduler reading one number would set the
+    # memory mode changes the answer by 42 % and a scheduler reading one number would set the
     # wrong deadline for whichever mode this host selects.
+    #
+    # Both figures are the ones the qualification record states, and each names it. The registry
+    # published 185.61 s for the default configuration from 0.6.61 until 0.6.63, in a row whose
+    # `scene` named the record's own scene; the record says 166 s, the constant above says 166 s,
+    # `README-8gb-z-image.md` says 166-236 s and the 0.6.60 notes say 166 s / 236 s. Nothing in
+    # the tree stored the 185.61 s figure, so the registry was the only place it existed - and a
+    # number with no artefact behind it, disagreeing with the artefact that does exist, is the
+    # thing this project refuses to publish. Where a stored record is found for a third run, it
+    # belongs here as its own row with its own `source`, not as an edit to these.
     measured_runtime={
         'measured': [
-            {'seconds': 185.61, 'steps': 9, 'memory_mode': 'default',
-             'scene': '1280x720, 9 steps, seed 42'},
-            {'seconds': 235.53, 'steps': 9, 'memory_mode': 'low_ram',
-             'scene': '1280x720, 9 steps, seed 42'},
+            {'seconds': 166, 'steps': 9, 'memory_mode': 'default',
+             'scene': '1280x720, 9 steps, seed 42',
+             'source': 'qualification/z-image-turbo-2026-09-24.md, "Generation time [M]"'},
+            {'seconds': 236, 'steps': 9, 'memory_mode': 'low_ram',
+             'scene': '1280x720, 9 steps, seed 42',
+             'source': 'qualification/z-image-turbo-2026-09-24.md, "Generation time [M]"'},
         ],
         'measured_on': '32 GiB M2 Max, mflux 0.20.0, 4-bit pack',
         'evidence': 'measured',
@@ -269,20 +294,40 @@ def host_memory_bytes() -> int:
         return 0
 
 
-def memory_plan(model: ImageModel, total_memory_bytes: int) -> dict:
-    """The mflux memory knobs this host gets for this model.
+def memory_plan(model: ImageModel, total_memory_bytes: int,
+                mode: str = DEFAULT_LOADING_MODE) -> dict:
+    """The mflux memory knobs this host gets for this model, under this machine's setting.
 
-    Read-only projection of the model's :class:`MemoryPolicy` and the Mac's actual memory —
-    the same decision the CLI makes from ``--low-ram``/``--mlx-cache-limit-gb``/
-    ``--vae-tiling``/``--vae-tile-size``, but chosen from the host instead of typed.
+    Read-only projection of the model's :class:`MemoryPolicy`, the Mac's actual memory and the
+    operator's per-machine ``loading_mode`` choice — the same decision the CLI makes from
+    ``--low-ram``/``--mlx-cache-limit-gb``/``--vae-tiling``/``--vae-tile-size``, but chosen
+    from the host instead of typed.
+
+    ``mode`` is that choice: ``auto`` keeps the model's own threshold decision, ``low`` forces
+    the bounded configuration and ``full`` forces the default. Forcing ``low`` cannot invent a
+    bounded configuration a model does not declare — a model with no
+    ``low_ram_below_bytes`` has one loading mode, so it stays on the default and its catalog
+    entry publishes that the setting does not apply (see :func:`loading_modes`).
     """
+    if mode not in LOADING_MODES:
+        raise ValueError(
+            f'unknown memory mode {mode!r}; must be one of: {", ".join(LOADING_MODES)}')
     policy = model.memory
-    low_ram = bool(
-        policy.low_ram_below_bytes is not None
-        and 0 < total_memory_bytes < policy.low_ram_below_bytes
-    )
+    if policy.low_ram_below_bytes is None:
+        low_ram = False
+    elif mode == MODE_LOW:
+        low_ram = True
+    elif mode == MODE_FULL:
+        low_ram = False
+    elif mode == MODE_AUTO:
+        low_ram = 0 < total_memory_bytes < policy.low_ram_below_bytes
+    else:  # unreachable while the vocabulary above is the only source of ids
+        raise ValueError(f'unhandled memory mode {mode!r}')
     return {
         'mode': 'low-ram' if low_ram else 'default',
+        # The operator's choice travels with the plan: the catalog publishes it as `selected`
+        # and the job receipt records it, so a configuration can be traced to what asked for it.
+        'requested_mode': mode,
         'low_ram': low_ram,
         'mlx_cache_limit_gb': policy.low_ram_cache_limit_gb if low_ram else None,
         'vae_tiling': low_ram,
@@ -317,6 +362,184 @@ def apply_memory_plan(instance: object, plan: dict) -> object | None:
     args = Namespace(low_ram=plan['low_ram'], mlx_cache_limit_gb=plan['mlx_cache_limit_gb'],
                      vae_tiling=plan['vae_tiling'], vae_tile_size=plan['vae_tile_size'])
     return register(args=args, model=instance)
+
+
+# The two configurations a bounded model can run, named exactly as `measured_runtime`'s rows
+# label them (`memory_mode`) and as `qualification.measured_peak_gb` keys them. A measurement
+# row with no `memory_mode` label measured the default configuration — the only one a model
+# with no bounded mode has.
+DEFAULT_CONFIGURATION = 'default'
+LOW_RAM_CONFIGURATION = 'low_ram'
+
+
+def _is_number(value: object) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def _stated_measurement(peak: object, seconds: object) -> dict:
+    """One configuration's measured facts, ``None`` where the model states nothing."""
+    return {'peak_gb': float(peak) if _is_number(peak) else None,
+            'seconds': float(seconds) if _is_number(seconds) else None}
+
+
+def _stated_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _stated_memory_measurements(model: ImageModel) -> dict:
+    """Every memory measurement this model itself states, and where each one came from.
+
+    Peaks come from the model's own ``qualification['measured_peak_gb']``; runtimes come from
+    its published ``measured_runtime`` rows, matched on the row's own ``memory_mode`` label. A
+    fact the model does not state is ``None`` here, and every sentence built from these facts
+    says so rather than estimating: a number the model did not state must never be published.
+    """
+    peaks = model.qualification.get('measured_peak_gb')
+    peaks = peaks if isinstance(peaks, dict) else {}
+    runtime = model.measured_runtime if isinstance(model.measured_runtime, dict) else {}
+    rows = runtime.get('measured')
+    rows = rows if isinstance(rows, list) else []
+    seconds: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = row.get('memory_mode') or DEFAULT_CONFIGURATION
+        if label in seconds or not _is_number(row.get('seconds')):
+            continue
+        seconds[label] = float(row['seconds'])
+    scenes = [_stated_text(row.get('scene')) for row in rows if isinstance(row, dict)]
+    scene = next((row.get('scene') for row in rows if isinstance(row, dict)
+                  and row.get('memory_mode') == LOW_RAM_CONFIGURATION
+                  and _stated_text(row.get('scene'))), None)
+    return {
+        DEFAULT_CONFIGURATION: _stated_measurement(peaks.get(DEFAULT_CONFIGURATION),
+                                                   seconds.get(DEFAULT_CONFIGURATION)),
+        LOW_RAM_CONFIGURATION: _stated_measurement(peaks.get(LOW_RAM_CONFIGURATION),
+                                                   seconds.get(LOW_RAM_CONFIGURATION)),
+        # Where those numbers came from, published beside them rather than left implied.
+        'measured_on': (_stated_text(runtime.get('measured_on'))
+                        or _stated_text(model.qualification.get('measured_on'))),
+        'evidence': _stated_text(runtime.get('evidence')),
+        'scene': _stated_text(scene) or next((value for value in scenes if value), None),
+        'source': (f'generation.MODELS[{model.repo!r}].qualification.measured_peak_gb and '
+                   f'.measured_runtime.measured'),
+        'note': None,
+    }
+
+
+def _missing_measurement_note(model: ImageModel, measured: dict, supported: bool) -> str | None:
+    """What this model does not state, so a reader is never left to assume a number."""
+    missing = []
+    default = measured[DEFAULT_CONFIGURATION]
+    if default['peak_gb'] is None:
+        missing.append('measured peak for the default configuration')
+    if default['seconds'] is None:
+        missing.append('measured runtime for the default configuration')
+    if supported:
+        low_ram = measured[LOW_RAM_CONFIGURATION]
+        if low_ram['peak_gb'] is None:
+            missing.append('measured peak for the bounded configuration')
+        if low_ram['seconds'] is None:
+            missing.append('measured runtime for the bounded configuration')
+    if not missing:
+        return None
+    return (f'{model.label} states no ' + ', no '.join(missing)
+            + '; no number is estimated here.')
+
+
+def _peak_clause(chosen: dict, other: dict, other_name: str) -> str:
+    if chosen['peak_gb'] is not None and other['peak_gb'] is not None:
+        return f"about {chosen['peak_gb']:.1f} GB peak instead of {other['peak_gb']:.1f} GB"
+    if chosen['peak_gb'] is not None:
+        return (f"about {chosen['peak_gb']:.1f} GB peak; the model states no measured peak "
+                f"for the {other_name} configuration")
+    if other['peak_gb'] is not None:
+        return (f"the {other_name} configuration peaks at about {other['peak_gb']:.1f} GB; "
+                f"the model states no measured peak for this one")
+    return 'no measured peak is stated for either configuration'
+
+
+def _seconds_clause(chosen: dict, other: dict, other_name: str) -> str:
+    if chosen['seconds'] is not None and other['seconds'] is not None:
+        return f"about {chosen['seconds']:.0f} s instead of {other['seconds']:.0f} s"
+    if chosen['seconds'] is not None:
+        return (f"about {chosen['seconds']:.0f} s; the model states no measured runtime for "
+                f"the {other_name} configuration")
+    if other['seconds'] is not None:
+        return (f"the {other_name} configuration takes about {other['seconds']:.0f} s; the "
+                f"model states no measured runtime for this one")
+    return 'no measured runtime is stated for either configuration'
+
+
+def _measured_location(measured: dict) -> str:
+    scene, where = measured.get('scene'), measured.get('measured_on')
+    if scene and where:
+        return f' at {scene}, measured on {where}'
+    if scene:
+        return f' at {scene}'
+    if where:
+        return f', measured on {where}'
+    return ''
+
+
+def _loading_mode_detail(mode: str, measured: dict, policy: MemoryPolicy) -> str:
+    """One option's detail, in the model's own measured numbers and nothing else."""
+    default = measured[DEFAULT_CONFIGURATION]
+    low_ram = measured[LOW_RAM_CONFIGURATION]
+    location = _measured_location(measured)
+    if mode == MODE_LOW:
+        return (f"Runs mflux's bounded configuration: "
+                f"{_peak_clause(low_ram, default, 'default')}, and "
+                f"{_seconds_clause(low_ram, default, 'default')}{location}.")
+    if mode == MODE_FULL:
+        return (f"Runs mflux's default configuration: "
+                f"{_peak_clause(default, low_ram, 'bounded low-RAM')}, and "
+                f"{_seconds_clause(default, low_ram, 'bounded low-RAM')}{location}.")
+    return (f"Chooses from this Mac's unified memory: the bounded configuration below "
+            f"{policy.low_ram_below_bytes / 1e9:g} GB, the default at or above it. The trade: "
+            f"{_peak_clause(low_ram, default, 'default')}, and "
+            f"{_seconds_clause(low_ram, default, 'default')}{location}.")
+
+
+def loading_modes(model: ImageModel, total_memory_bytes: int, selected: str) -> dict:
+    """The machine-wide ``loading_mode`` setting as it applies to one model on this Mac.
+
+    ``selected`` is the operator's persisted choice; ``effective`` is what
+    :func:`memory_plan` will actually do for this model's next job on this host, so an
+    operator can see that ``auto`` chose the bounded configuration here. ``options`` is empty
+    exactly when the model's own :class:`MemoryPolicy` declares no bounded configuration - the
+    model has one loading mode, and ``reason`` says so in the model's own terms instead of
+    offering a control :func:`apply_memory_plan` would discard.
+    """
+    policy = model.memory
+    plan = memory_plan(model, total_memory_bytes, selected)
+    supported = policy.low_ram_below_bytes is not None
+    measured = _stated_memory_measurements(model)
+    measured['note'] = _missing_measurement_note(model, measured, supported)
+    if supported:
+        options = [{'id': mode, 'label': spec['label'],
+                    'detail': _loading_mode_detail(mode, measured, policy)}
+                   for mode, spec in LOADING_MODES.items()]
+        reason = None
+    else:
+        options = []
+        why = policy.single_mode_reason or (
+            f'{model.label} declares no bounded low-RAM configuration, so it has one '
+            f'loading mode.')
+        reason = f'{why} This machine-wide setting does not change how it loads.'
+        if plan['requested_mode'] != DEFAULT_LOADING_MODE:
+            reason = (f'{reason} The setting is {plan["requested_mode"]!r} on this Mac; this '
+                      f'model still loads its default configuration.')
+    return {
+        'supported': supported,
+        'selected': plan['requested_mode'],
+        'effective': plan['mode'],
+        'threshold_bytes': policy.low_ram_below_bytes,
+        'options': options,
+        'measured': measured,
+        'reason': reason,
+    }
 
 
 def _loaded_mlx():
@@ -776,7 +999,7 @@ class GenerationManager:
                'width': None, 'height': None, 'steps': None, 'resolved_seed': None,
                'media_type': None, 'error': None, 'error_code': None,
                'model_revision': params['model_revision'], 'runtime_revision': self.runtime_sha256,
-               'memory_mode': None, 'peak_mlx_bytes': None,
+               'memory_mode': None, 'loading_mode_setting': None, 'peak_mlx_bytes': None,
                'worker_id': 'image', 'machine_id': self.machine, 'acknowledged': False}
         with self.lock:
             self.jobs[job_id] = job
@@ -863,10 +1086,15 @@ class GenerationManager:
                 seed = job['params']['seed']
                 if seed == -1:
                     seed = random.randint(0, 2**32 - 1)
-                plan = memory_plan(model, self.total_memory_bytes)
+                plan = memory_plan(model, self.total_memory_bytes,
+                                   loading_mode.current(self.data))
                 with self.lock:
                     job['resolved_seed'] = seed
+                    # What actually ran, and which machine-wide setting asked for it: `auto`
+                    # choosing the bounded configuration here is a different fact from an
+                    # operator forcing it, and a job receipt should not conflate the two.
                     job['memory_mode'] = plan['mode']
+                    job['loading_mode_setting'] = plan['requested_mode']
                     self._persist()
                 # Pinned mflux 0.20.0 path, dispatched from the registry. ST-01's verified
                 # package adds one model/ prefix to every pack (see WEIGHTS_SUBDIRECTORY).

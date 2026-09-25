@@ -67,10 +67,12 @@ keys ship; a reader that wants to know how to *ask for work* reads `lane_contrac
   },
   "runtime_seconds": {
     "measured": [
-      {"seconds": 185.61, "steps": 9, "memory_mode": "default",
-       "scene": "1280x720, 9 steps, seed 42"},
-      {"seconds": 235.53, "steps": 9, "memory_mode": "low_ram",
-       "scene": "1280x720, 9 steps, seed 42"}
+      {"seconds": 166, "steps": 9, "memory_mode": "default",
+       "scene": "1280x720, 9 steps, seed 42",
+       "source": "qualification/z-image-turbo-2026-09-24.md, \"Generation time [M]\""},
+      {"seconds": 236, "steps": 9, "memory_mode": "low_ram",
+       "scene": "1280x720, 9 steps, seed 42",
+       "source": "qualification/z-image-turbo-2026-09-24.md, \"Generation time [M]\""}
     ],
     "measured_on": "32 GiB M2 Max, mflux 0.20.0, 4-bit pack",
     "evidence": "measured"

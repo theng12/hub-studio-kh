@@ -10,9 +10,9 @@ import subprocess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import memory_policy
+from . import loading_mode, memory_policy
 from .generation import (MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES, SIZE_PRESETS,
-                         GenerationManager, final_matches, lane_contract, memory_plan,
+                         GenerationManager, final_matches, lane_contract, loading_modes,
                          missing_runtime_model_reason)
 
 from components import app_version
@@ -103,7 +103,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         """The optional private activity contract the Hub polls after health."""
         return manager.activity_snapshot()
 
-    def catalog_entry(model) -> dict:
+    def catalog_entry(model, selected: str) -> dict:
         """One registered model, described entirely by its own registry entry.
 
         The app merges this list with the Hub's model packages and keys on `repo`, so a
@@ -117,7 +117,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                  for ratio, (width, height) in SIZE_PRESETS.items()]
         ready = state['ready']
         files = state['files']
-        plan = memory_plan(model, manager.total_memory_bytes)
+        # How this machine's loading-size setting resolves for this model, from the model's own
+        # MemoryPolicy: `selected` is the operator's choice, `effective` is what the next job
+        # will actually load, and a model with no bounded configuration publishes no options.
+        modes = loading_modes(model, manager.total_memory_bytes, selected)
         return {
             'label': model.label, 'name': model.label, 'repo': model.repo,
             'model_id': model.repo, 'family': model.family, 'modality': 'image',
@@ -146,11 +149,16 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # Bytes, not rounded GB, so the app can format it the way the rest of the fleet
             # contract does.
             'memory_policy': {
-                'mode_for_this_host': plan['mode'],
-                'total_memory_bytes': plan['total_memory_bytes'],
-                'low_ram_below_bytes': plan['low_ram_below_bytes'],
+                'mode_for_this_host': modes['effective'],
+                'total_memory_bytes': manager.total_memory_bytes,
+                'low_ram_below_bytes': modes['threshold_bytes'],
                 'measured_peak_gb': model.qualification.get('measured_peak_gb'),
             },
+            # The machine-wide loading-size setting, per model: whether this model has a
+            # bounded configuration to choose, which one this Mac's setting selects, and the
+            # measured trade of each option in this model's own numbers. Empty `options` with
+            # a `reason` is a model that has one loading mode, not a missing answer.
+            'loading_modes': modes,
             'cache': {'state': 'cached' if files['state'] == 'files_verified' else files['state']},
             'readiness': {'ready': ready, 'files': files, 'host': host,
                           'reason': None if ready else files.get('reason') or host.get('reason')},
@@ -207,7 +215,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
 
     @app.get('/api/catalog')
     def catalog() -> dict:
-        entries = [catalog_entry(model) for model in MODELS.values()]
+        # One read of the machine-wide setting for the whole catalog, so every row answers the
+        # same question and a change mid-response cannot make two models disagree.
+        selected = loading_mode.current(manager.data)
+        entries = [catalog_entry(model, selected) for model in MODELS.values()]
         # The manifests are already read (`load_image_manifests`) and a registered model whose
         # manifest is missing reports itself per model; this is the other direction, published
         # instead of absent.
@@ -286,6 +297,32 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             return memory_policy.release(manager)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
+
+    # ── loading-size setting (`loading_mode`) ───────────────────────────────
+    # Deliberately separate from `/api/memory-policy` above: that is the release policy, and
+    # Image's answer there is fixed. This is which mflux memory *configuration* the next job
+    # loads with - `auto`, `low` or `full`. It is a setting, not a per-model fact: what each
+    # model does with it (and whether it has a bounded configuration at all) is published per
+    # model in the catalog's `loading_modes`, derived from the model's own MemoryPolicy.
+
+    def loading_mode_status() -> dict:
+        selected = loading_mode.current(manager.data)
+        return loading_mode.status(
+            manager.data, manager.total_memory_bytes,
+            [(model.repo, loading_modes(model, manager.total_memory_bytes, selected))
+             for model in MODELS.values()])
+
+    @app.get('/api/loading-mode')
+    def get_loading_mode() -> dict:
+        return loading_mode_status()
+
+    @app.put('/api/loading-mode')
+    def put_loading_mode(body: dict | None = None) -> dict:
+        try:
+            loading_mode.save(manager.data, (body or {}).get('mode'))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return loading_mode_status()
 
     return app
 
