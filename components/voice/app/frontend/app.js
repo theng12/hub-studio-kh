@@ -323,7 +323,10 @@ function studio() {
       dirty: false,
     },
     memoryPolicy: {
-      mode: "performance", default_mode: "performance", idle_seconds: null,
+      // Placeholders until the first fetch fills them in; the card is hidden until then.
+      // `auto` is what a fresh install selects, and `options` is the list the picker renders
+      // — empty here so the x-for has something iterable before the worker answers.
+      mode: "auto", default_mode: "auto", idle_seconds: null, options: [],
       loaded_models: [], model_idle_seconds: null, next_release_at: null,
       last_release_at: null, last_release_reason: null, release_count: 0,
       // A release count is only readable next to the process start it was
@@ -331,7 +334,7 @@ function studio() {
       counters_since: null, process: { started_at: null, uptime_seconds: null },
       process_title: "Voice Studio Mac", process_title_applied: false,
       loaded: false, busy: false, message: "", messageKind: "info",
-      draft: { mode: "performance" }, dirty: false,
+      draft: { mode: "auto" }, dirty: false,
     },
 
     // ──────── network/connectivity (where the API can be reached) ────────

@@ -212,9 +212,8 @@ def _stage_hub(context: dict) -> dict | None:
     resources = context['resources']
     hub = resources / 'components/hub'
     copy_tracked_tree(ROOT / 'components/hub', hub)
-    (resources / 'components').mkdir(parents=True, exist_ok=True)
-    for module in shared_components_modules(ROOT / 'components'):
-        shutil.copyfile(module, resources / 'components' / module.name)
+    # `Resources/components/*.py` — the shared modules — is already staged by `stage()`, for
+    # every bundle, so there is one place that decides what the workers can import.
     copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
     shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
     provenance = context['hub_provenance']
@@ -468,6 +467,14 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
     # The shared private-worker lifecycle every wrapper imports; not a component of its own.
     shutil.copyfile(ROOT / 'packaging/voice_worker.py', resources / 'voice_worker.py')
+    # The top-level modules under `components/` that workers import by package path. Staged for
+    # every bundle, Hub or Voice-alone, because the Voice worker imports one of them too now
+    # (its memory policy reads the shared mode table and `auto` rule from
+    # `components/memory_modes.py`), and a Voice-only artifact without `Resources/components/`
+    # would fail at import rather than at build time.
+    (resources / 'components').mkdir(parents=True, exist_ok=True)
+    for module in shared_components_modules(ROOT / 'components'):
+        shutil.copyfile(module, resources / 'components' / module.name)
     runtime_hash = tree_digest(resources / 'runtimes/voice')
     context = {
         'resources': resources, 'runtime_hash': runtime_hash, 'include_hub': include_hub,

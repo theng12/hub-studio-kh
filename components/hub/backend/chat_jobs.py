@@ -12,6 +12,7 @@ This module owns both Chat lanes:
 import asyncio
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -835,7 +836,10 @@ def restore_batches() -> int:
 #   with, when the request named none), `created_at` is the Hub's receipt time;
 # * the batch holds exactly one item, and that item's `state` is "done" with the answer or "error"
 #   with the reason - never a failure dressed as a completion;
-# * `runtime_s` and `finished_at` are measured by the Hub around the proxied call.
+# * `runtime_s` and `finished_at` are measured by the Hub around the proxied call;
+# * `generation_s` is the *worker's* own stated generation time, kept beside `runtime_s` rather
+#   than folded into it - the round trip includes the model load on a cold turn, so the two are
+#   different facts and only one of them is the model's speed.
 #
 # **The answer is the item's `text`, and the item is the artifact.** A Chat worker streams its
 # completion over the response and keeps no file, so there is no worker artifact for the Hub to
@@ -879,11 +883,48 @@ def _usage(value: object) -> dict | None:
     return {field: value[field] for field in fields}
 
 
-def _streamed_completion(content: bytes) -> tuple[str, dict | None, str | None]:
-    """The answer, usage and completion id an OpenAI-shaped SSE stream carries."""
+def _generation_seconds(value: object) -> float | None:
+    """The worker's own stated generation time, or ``None`` when it stated no usable one.
+
+    Read from ``studio_hub.elapsed_seconds``, the field the worker's generation time travels in
+    on both the buffered body and the streamed final chunk. Never derived from the Hub's own
+    round trip: ``runtime_s`` is measured around the whole proxied call and includes the model
+    load on a cold turn, so a rate computed from it would understate the model on exactly the
+    first reply and quietly change meaning on the second.
+
+    A number the worker did not state stays absent: anything that is not a finite, strictly
+    positive JSON number - a string, a bool, zero, a negative, NaN, Infinity - records ``None``
+    rather than being coerced into one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        stated = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return stated if math.isfinite(stated) and stated > 0 else None
+
+
+def _stated_generation_seconds(payload: dict) -> float | None:
+    """``studio_hub.elapsed_seconds`` from one response body, validated."""
+    studio_hub = payload.get("studio_hub")
+    if not isinstance(studio_hub, dict):
+        return None
+    return _generation_seconds(studio_hub.get("elapsed_seconds"))
+
+
+def _streamed_completion(content: bytes) -> tuple[str, dict | None, str | None, float | None]:
+    """The answer, usage, completion id and stated generation time an OpenAI-shaped SSE stream
+    carries.
+
+    The generation time is the last one the stream states: the engine writes its measured window
+    into the final chunk, after the tokens, so a stream that ends early states none and records
+    none.
+    """
     parts: list[str] = []
     usage = None
     job_id = None
+    generation_s = None
     for line in content.decode("utf-8", "replace").splitlines():
         line = line.strip()
         if not line.startswith("data:"):
@@ -901,29 +942,34 @@ def _streamed_completion(content: bytes) -> tuple[str, dict | None, str | None]:
             job_id = chunk["id"]
         if isinstance(chunk.get("usage"), dict):
             usage = chunk["usage"]
+        if isinstance(chunk.get("studio_hub"), dict):
+            generation_s = _generation_seconds(chunk["studio_hub"].get("elapsed_seconds"))
         for choice in chunk.get("choices") or []:
             delta = (choice or {}).get("delta") if isinstance(choice, dict) else None
             text = (delta or {}).get("content")
             if isinstance(text, str):
                 parts.append(text)
-    return "".join(parts), usage, job_id
+    return "".join(parts), usage, job_id, generation_s
 
 
-def _buffered_completion(content: bytes) -> tuple[str | None, dict | None, str | None, str]:
-    """The answer, usage, completion id and model a buffered completion response states."""
+def _buffered_completion(content: bytes
+                         ) -> tuple[str | None, dict | None, str | None, str, float | None]:
+    """The answer, usage, completion id, model and stated generation time a buffered response
+    states."""
     try:
         payload = json.loads(content.decode("utf-8", "replace"))
     except ValueError:
-        return None, None, None, ""
+        return None, None, None, "", None
     if not isinstance(payload, dict):
-        return None, None, None, ""
+        return None, None, None, "", None
     choices = payload.get("choices")
     message = ((choices or [{}])[0] or {}).get("message") if isinstance(choices, list) else None
     answer = (message or {}).get("content")
     model = payload.get("model")
     return (answer if isinstance(answer, str) else None, payload.get("usage"),
             payload.get("id") if isinstance(payload.get("id"), str) else None,
-            str(model).strip() if isinstance(model, str) else "")
+            str(model).strip() if isinstance(model, str) else "",
+            _stated_generation_seconds(payload))
 
 
 def _failure_detail(content: bytes) -> str:
@@ -948,24 +994,28 @@ def _failure_detail(content: bytes) -> str:
 
 
 def completion_outcome(*, status_code: int, content_type: str, content: bytes
-                       ) -> tuple[str | None, dict | None, str | None, str, str | None, str | None]:
+                       ) -> tuple[str | None, dict | None, str | None, str, str | None, str | None,
+                                float | None]:
     """Classify one Chat worker response as an answer or a failure.
 
-    Returns ``(answer, usage, worker_job_id, model, error, error_code)``. Exactly one of
-    ``answer`` and ``error`` is set: a response with no answer is a failure with the reason the
-    worker stated, never an empty completion.
+    Returns ``(answer, usage, worker_job_id, model, error, error_code, generation_s)``. Exactly
+    one of ``answer`` and ``error`` is set: a response with no answer is a failure with the reason
+    the worker stated, never an empty completion. ``generation_s`` is the worker's own stated
+    generation time, or ``None`` when it stated none - an absence, never a number this Hub
+    inferred.
     """
     if status_code >= 400:
         return (None, None, None, "",
                 _failure_detail(content) or f"Chat worker returned HTTP {status_code}",
-                "CHAT_COMPLETION_FAILED")
+                "CHAT_COMPLETION_FAILED", None)
     if "text/event-stream" in (content_type or "").lower():
-        answer, usage, job_id = _streamed_completion(content)
-        return (answer or None, usage, job_id, "", None, None)
-    answer, usage, job_id, model = _buffered_completion(content)
+        answer, usage, job_id, generation_s = _streamed_completion(content)
+        return (answer or None, usage, job_id, "", None, None, generation_s)
+    answer, usage, job_id, model, generation_s = _buffered_completion(content)
     if not (answer or "").strip():
-        return (None, usage, job_id, model, "Chat worker returned no answer", "CHAT_EMPTY_ANSWER")
-    return (answer, usage, job_id, model, None, None)
+        return (None, usage, job_id, model, "Chat worker returned no answer",
+                "CHAT_EMPTY_ANSWER", generation_s)
+    return (answer, usage, job_id, model, None, None, generation_s)
 
 
 def record_page_completion(*, request_body: bytes = b"", started_at: float, runtime_s: float,
@@ -978,11 +1028,18 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
     Called by the Hub's own completion route once the proxied attempt has settled, including when
     it settled with a failure: a dispatched attempt that produced no answer is recorded as
     ``error`` with the reason, exactly like a failed generation in any other studio.
+
+    The item carries the two timings as distinct facts: ``runtime_s``, this Hub's own measured
+    round trip around the proxied call, and ``generation_s``, the time the worker stated *it*
+    spent generating (or ``None`` when it stated none). No rate is computed here -
+    ``usage.completion_tokens`` over ``generation_s`` is a display concern, and a second
+    definition of it in the backend is a second thing that can disagree with the app's.
     """
     model, prompt = _request_facts(request_body)
     usage = None
     worker_job_id = None
     model_revision = None
+    generation_s = None
     error = None
     error_code = None
     answer = None
@@ -996,7 +1053,8 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         else:
             error = f"Chat worker could not be reached: {failure_detail}".strip()
     else:
-        answer, usage, worker_job_id, stated_model, error, error_code = completion_outcome(
+        (answer, usage, worker_job_id, stated_model, error, error_code,
+         generation_s) = completion_outcome(
             status_code=status_code, content_type=content_type, content=content)
         if not model:
             model = stated_model
@@ -1016,6 +1074,8 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         "run_started": started_at,
         "runtime_s": runtime_s,
         "duration_s": runtime_s,
+        # The worker's own stated generation time, beside - never derived from - the round trip.
+        "generation_s": generation_s,
         "finished_at": finished_at,
         "progress": 1.0,
         "last_progress_at": finished_at,

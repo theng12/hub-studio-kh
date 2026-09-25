@@ -1395,7 +1395,8 @@ class SubtitleMemoryPolicyTests(SubtitleFixture):
     # The names every Studio in the fleet publishes, and the fields the Hub reads back.
     FLEET_PATHS = {'get': '/api/memory-policy', 'put': '/api/memory-policy',
                    'release': '/api/memory/release'}
-    FLEET_FIELDS = {'mode', 'default_mode', 'idle_seconds', 'options', 'loaded_models',
+    FLEET_FIELDS = {'mode', 'resolved_mode', 'default_mode', 'idle_seconds', 'machine_mode',
+                    'options', 'loaded_models',
                     'model_idle_seconds', 'active_work', 'busy', 'next_release_at',
                     'last_release_at', 'last_release_reason', 'last_release_details',
                     'last_error', 'release_count', 'counters_since'}
@@ -1408,22 +1409,38 @@ class SubtitleMemoryPolicyTests(SubtitleFixture):
         self.headers = {'X-Hub-Token': TOKEN}
 
     def test_modes_match_the_voice_worker(self) -> None:
+        from components import memory_modes
         from components.subtitle.app.backend import memory_policy
 
-        self.assertEqual(set(memory_policy.MODES),
-                         {'performance', 'balanced', 'memory_saver', 'immediate'})
+        self.assertIs(memory_policy.MODES, memory_modes.MODES)
+        self.assertEqual(list(memory_policy.MODES),
+                         ['auto', 'performance', 'balanced', 'memory_saver', 'immediate'])
         self.assertIsNone(memory_policy.MODES['performance']['idle_seconds'])
         self.assertEqual(memory_policy.MODES['immediate']['idle_seconds'], 0)
+        self.assertEqual(memory_policy.DEFAULT_MODE, 'auto')
 
-    def test_small_machines_default_to_immediate_release(self) -> None:
+    def test_auto_resolves_to_this_machines_mode(self) -> None:
+        """The rule that used to live in `default_mode`, now Auto's answer.
+
+        `default_mode()` is the *selection* (`auto`); what auto means here is
+        `machine_mode()`/`resolved_mode()`, and a machine that cannot measure its memory
+        resolves to `immediate` — it must not hold a model it cannot prove fits.
+        """
         from components.subtitle.app.backend import memory_policy
 
         original = memory_policy.machine_bytes
         try:
             memory_policy.machine_bytes = lambda: 8 * 1024**3
-            self.assertEqual(memory_policy.default_mode(), 'immediate')
+            self.assertEqual(memory_policy.default_mode(), 'auto')
+            self.assertEqual(memory_policy.machine_mode(), 'immediate')
+            self.assertEqual(memory_policy.resolved_mode('auto'), 'immediate')
+            self.assertEqual(memory_policy.idle_seconds('auto'), 0)
             memory_policy.machine_bytes = lambda: 32 * 1024**3
-            self.assertEqual(memory_policy.default_mode(), 'balanced')
+            self.assertEqual(memory_policy.machine_mode(), 'balanced')
+            self.assertEqual(memory_policy.resolved_mode('auto'), 'balanced')
+            self.assertEqual(memory_policy.idle_seconds('auto'), 600)
+            memory_policy.machine_bytes = lambda: 0
+            self.assertEqual(memory_policy.machine_mode(), 'immediate')
         finally:
             memory_policy.machine_bytes = original
 
@@ -1459,7 +1476,11 @@ class SubtitleMemoryPolicyTests(SubtitleFixture):
         self.assertTrue(self.FLEET_FIELDS <= set(payload),
                         f'missing fleet fields: {sorted(self.FLEET_FIELDS - set(payload))}')
         self.assertEqual([row['mode'] for row in payload['options']],
-                         ['performance', 'balanced', 'memory_saver', 'immediate'])
+                         ['auto', 'performance', 'balanced', 'memory_saver', 'immediate'])
+        self.assertIsNotNone(payload['idle_seconds'],
+                             'auto must publish the resolved threshold, never None')
+        self.assertIn(payload['resolved_mode'], {'balanced', 'immediate'})
+        self.assertEqual(payload['resolved_mode'], payload['machine_mode'])
 
         saved = self.client.put(self.FLEET_PATHS['put'], headers=self.headers,
                                 json={'mode': 'memory_saver'})

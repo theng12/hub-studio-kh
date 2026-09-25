@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from components import memory_modes
+
 from . import peers, vocabulary
 from .registry import label_for
 
@@ -27,19 +29,21 @@ from .registry import label_for
 # a packaged fleet: both admission rules (`registry.TRACKED_MODALITIES`, `fleet_nodes._studios`)
 # refuse either modality, so such a studio cannot appear here today.
 SUPPORTED_MODALITIES = frozenset(vocabulary.WORKER_FOR_MODALITY) | {"render", "video"}
-# Hub validates mode names and renders their labels. Each Studio owns and reports
-# the actual idle threshold, so keeping a second table here would risk drift.
-MODES = {
-    "performance": {"label": "Performance"},
-    "balanced": {"label": "Balanced"},
-    "memory_saver": {"label": "Memory Saver"},
-    "immediate": {"label": "Immediate"},
-}
-# A five-machine production pressure run on 2026-08-09 showed that waiting to
-# release an idle model can stall the next sibling Studio even on 16 GB. Hub's
-# bulk draft therefore matches the Image and Voice fresh-install default. Each
-# Studio still owns its saved policy and reports its resolved default.
-DEFAULT_MODE = "immediate"
+# Hub validates mode names and renders their labels, and deliberately carries no thresholds:
+# each Studio owns the idle window it actually runs with and reports it back in its own
+# `status()`, so a second table of numbers here could only disagree with the worker that
+# enforces them. The names and labels come from the one shared table
+# (`components/memory_modes.py`) rather than a hand-written list, so `auto` — or a sixth
+# mode added later — cannot exist in every Studio and nowhere in the Hub.
+MODES = {mode: {"label": value["label"]} for mode, value in memory_modes.MODES.items()}
+# The Hub's bulk draft is the same selection a fresh install makes: `auto`. The Hub does not
+# resolve it and must not try to — the rule and its 16 GiB line live in
+# `components/memory_modes.py`, and each Studio answers for its own Mac. That is the whole
+# reason one draft can be right on an 8 GB and a 32 GB Mac at once: the 8 GB machine behaves
+# as `immediate`, the 32 GB machine as `balanced`, and neither is a special case here. A
+# Studio that has already chosen keeps its saved policy; this is only what the Hub offers to
+# a Studio the operator has not set, and what the Settings screen shows as the default.
+DEFAULT_MODE = memory_modes.DEFAULT_MODE
 REQUEST_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
 

@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from components import memory_modes
+
 from . import paths
 
 from fastapi import HTTPException
@@ -16,35 +18,51 @@ from . import restart_health
 
 
 SETTINGS_FILE = paths.data_path("memory_policy.json")
-MODES = {
-    "performance": {"idle_seconds": None, "label": "Performance"},
-    "balanced": {"idle_seconds": 600, "label": "Balanced"},
-    "memory_saver": {"idle_seconds": 120, "label": "Memory Saver"},
-    "immediate": {"idle_seconds": 0, "label": "Immediate"},
-}
-# "performance" pins a loaded model in unified memory forever. That is a fine
-# default for an app that owns its machine — and a bad one for the deployment
-# that actually exists, where 3-5 Studios share a single 8 GB Mac and none of
-# them knows the others are resident. Each Studio ships this same skeleton with
-# this same default, so every one of them independently concluded that holding
-# its model forever was free.
+# The mode table and the `auto` rule are shared with every other Studio and the Hub
+# (`components/memory_modes.py`) rather than copied here: `auto`'s answer is the contract,
+# and five hand-maintained copies of it is how the studios would come to disagree.
+MODES = memory_modes.MODES
+# A fresh install selects `auto`, which this Mac answers for itself: `balanced` at 16 GiB
+# of unified memory and above, `immediate` below it. The old default was `immediate` on
+# every machine, for a deployment where 3-5 Studios share one 8 GB Mac — measured on the
+# fleet 2026-08-07, 16 of 19 machines below the memory guard's 3.2 GB floor with 1.5-4.4 GB
+# of swap burned. That answer is right on that tier and wrong on a 16/24/32 GB Mac, where
+# it pays a model reload per job to free memory nobody was short of. `auto` is both.
 #
-# Measured on the fleet 2026-08-07: 16 of 19 machines sat below the memory
-# guard's 3.2 GB floor with 1.5-4.4 GB of swap burned and could not start a job
-# at all. The idle-release thread was running the whole time — it just had
-# nothing to do, because idle_seconds is None in this mode.
-#
-# A five-machine production pressure run on 2026-08-09 showed that waiting even
-# two minutes is too long for a Mac that must switch between sibling Studios.
-# Image throughput was unchanged, while the following Voice job on an M4 16 GB
-# fell from 52.7 s to 4.0 s once the prior Studio released immediately. An
-# operator's explicit choice, persisted in memory_policy.json, always wins.
-DEFAULT_MODE = "immediate"
+# A machine whose memory cannot be measured resolves to `immediate`: a Mac that cannot
+# prove it has room must not hold a model. An operator's explicit choice, persisted in
+# memory_policy.json, always wins over all of this.
+DEFAULT_MODE = memory_modes.DEFAULT_MODE
 
 
 def default_mode() -> str:
-    """Mode to use when the operator has not chosen one."""
+    """The mode selected when the operator has not chosen one: ``auto``."""
     return DEFAULT_MODE
+
+
+def machine_bytes() -> int:
+    """This Mac's unified memory in bytes, through the one reader every Studio shares."""
+    return memory_modes.machine_bytes()
+
+
+def machine_mode() -> str:
+    """What ``auto`` resolves to on this Mac: ``balanced`` or ``immediate``."""
+    return memory_modes.machine_mode(machine_bytes())
+
+
+def resolved_mode(mode: str) -> str:
+    """The mode actually in force, with ``auto`` answered by this machine."""
+    return memory_modes.resolved_mode(mode, machine_mode())
+
+
+def idle_seconds(mode: str) -> int | None:
+    """The threshold ``mode`` runs with; never ``None`` for ``auto``."""
+    return memory_modes.idle_seconds(mode, machine_mode())
+
+
+def options() -> list[dict]:
+    """The five modes, each with its own resolved threshold and a sentence to act on."""
+    return memory_modes.options(machine_mode())
 
 
 CHECK_INTERVAL_SECONDS = 5
@@ -167,7 +185,9 @@ def run_due_release(now: float | None = None) -> dict | None:
     current = time.time() if now is None else float(now)
     with _LOCK:
         mode = _read()["mode"]
-        threshold = MODES[mode]["idle_seconds"]
+        # The threshold the selected mode actually runs with: for `auto` this is this
+        # Mac's answer, so the timer idles out exactly where `status()` says it will.
+        threshold = MODES[resolved_mode(mode)]["idle_seconds"]
         loaded = _loaded_models()
         activity = _last_activity()
         if threshold is None or not loaded or _active() or _RELEASING or activity is None:
@@ -183,7 +203,9 @@ def run_due_release(now: float | None = None) -> dict | None:
 def status() -> dict:
     with _LOCK:
         mode = _read()["mode"]
-        threshold = MODES[mode]["idle_seconds"]
+        machine = machine_mode()
+        resolved = memory_modes.resolved_mode(mode, machine)
+        threshold = MODES[resolved]["idle_seconds"]
         loaded = _loaded_models()
         activity = _last_activity()
         idle = max(0.0, time.time() - activity) if loaded and activity is not None else None
@@ -193,9 +215,16 @@ def status() -> dict:
         active = _active()
         return {
             "mode": mode,
+            # What the selected mode is actually doing here. `mode` may be "auto"; this is
+            # the mode in force, and `idle_seconds` is its threshold — never None for auto,
+            # because a UI reading None renders "keeps the model loaded until you release
+            # it", which would be a lie about a machine that is about to release.
+            "resolved_mode": resolved,
             "default_mode": default_mode(),
             "idle_seconds": threshold,
-            "options": [{"mode": key, **value} for key, value in MODES.items()],
+            "machine_mode": machine,
+            "machine_bytes": machine_bytes(),
+            "options": memory_modes.options(machine),
             "loaded_models": loaded,
             "model_idle_seconds": idle,
             "active_work": active,

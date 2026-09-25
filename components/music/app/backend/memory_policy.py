@@ -43,50 +43,69 @@ import threading
 import time
 from pathlib import Path
 
-# The same modes, ids, labels and thresholds as the Voice worker, so one per-device choice
-# means the same thing in Settings on every Studio row. `tests/test_memory_policy_contract.py`
-# asserts this table equals Voice's entry for entry, instead of trusting a copy.
-MODES = {
-    "performance": {"idle_seconds": None, "label": "Performance"},
-    "balanced": {"idle_seconds": 600, "label": "Balanced"},
-    "memory_saver": {"idle_seconds": 120, "label": "Memory Saver"},
-    "immediate": {"idle_seconds": 0, "label": "Immediate"},
-}
-# "performance" pins a loaded model in unified memory forever. That is a fine default for
-# an app that owns its machine - and a bad one for the deployment that actually exists,
+from components import memory_modes
+
+# The same modes, ids, labels and thresholds as the Voice worker, from the one table every
+# Studio imports (`components/memory_modes.py`): `tests/test_memory_policy_contract.py`
+# proves the agreement rather than trusting a copy, and there is no copy to drift.
+MODES = memory_modes.MODES
+# `auto` is the fresh-install default: `balanced` at 16 GiB of unified memory and above,
+# `immediate` below it. The old default was `immediate` everywhere, chosen for a deployment
 # where 3-5 Studios share a single 8 GB Mac and none of them knows the others are resident.
-# Each Studio ships this same skeleton with this same default, so every one of them
-# independently concluded that holding its model forever was free.
 #
 # Measured on the fleet 2026-08-07: 16 of 19 machines sat below the memory guard's 3.2 GB
 # floor with 1.5-4.4 GB of swap burned and could not start a job at all. The idle-release
 # thread was running the whole time - it just had nothing to do, because idle_seconds is
-# None in this mode.
+# None in the mode that never releases.
 #
 # A five-machine production pressure run on 2026-08-09 showed that waiting even two minutes
-# is too long for a Mac that must switch between sibling Studios. Image throughput was
-# unchanged, while the following Voice job on an M4 16 GB fell from 52.7 s to 4.0 s once
-# the prior Studio released immediately. An operator's explicit choice, persisted in
-# memory_policy.json, always wins.
-#
-# Music keeps that default, and the cost is real enough to state in the same place: the
+# is too long for a Mac that must switch between sibling Studios: the following Voice job on
+# an M4 16 GB fell from 52.7 s to 4.0 s once the prior Studio released immediately. That is
+# the 8 GB tier's answer, and `auto` gives it there. On the machines where `immediate` is
+# the wrong trade the cost is real and stated here rather than left implicit: the
 # catalogue's own words for ACE-Step 1.5 Turbo are "First generation on a cold worker pays
 # a one-time ~3 minute model load" (components/music/app/backend/catalog.py, family
 # "ace-step-1.5"), and the repository's own warm-timing evidence measured three consecutive
 # 30 s renders at 106.25 s / 32.93 s / 42.76 s
 # (qualification/evidence/r07-2026-09-21/ace-step-warm-timing.json) - so on that host the
 # first job carried roughly 63-73 s of load that the next two did not. `immediate` therefore
-# costs one model load per job, while `balanced` (600 s) would pay it once for a session of
-# takes. That is a trade the owner should decide, not this module: the shipped default stays
-# identical to every other Studio, and the recommendation (Balanced on the 16 GB and larger
-# machines, Immediate on the 8 GB tier) is recorded in the task report rather than silently
-# applied here.
-DEFAULT_MODE = "immediate"
+# costs one model load per job, while `balanced` (600 s) pays it once for a session of
+# takes. `auto` picks per machine, and a machine whose memory cannot be measured gets
+# `immediate`: a Mac that cannot prove it has room must not hold a model.
+#
+# An operator's explicit choice, persisted in memory_policy.json, always wins over all of
+# this.
+DEFAULT_MODE = memory_modes.DEFAULT_MODE
 
 
 def default_mode() -> str:
-    """Mode to use when the operator has not chosen one."""
+    """The mode selected when the operator has not chosen one: ``auto``."""
     return DEFAULT_MODE
+
+
+def machine_bytes() -> int:
+    """This Mac's unified memory in bytes, through the one reader every Studio shares."""
+    return memory_modes.machine_bytes()
+
+
+def machine_mode() -> str:
+    """What ``auto`` resolves to on this Mac: ``balanced`` or ``immediate``."""
+    return memory_modes.machine_mode(machine_bytes())
+
+
+def resolved_mode(mode: str) -> str:
+    """The mode actually in force, with ``auto`` answered by this machine."""
+    return memory_modes.resolved_mode(mode, machine_mode())
+
+
+def idle_seconds(mode: str) -> int | None:
+    """The threshold ``mode`` runs with; never ``None`` for ``auto``."""
+    return memory_modes.idle_seconds(mode, machine_mode())
+
+
+def options() -> list[dict]:
+    """The five modes, each with its own resolved threshold and a sentence to act on."""
+    return memory_modes.options(machine_mode())
 
 
 CHECK_INTERVAL_SECONDS = 5
@@ -275,12 +294,13 @@ def run_due_release(now: float | None = None) -> dict | None:
 
     ``None`` means never (Performance).  Nothing here can preempt a job: a queued or
     running job returns before the threshold is even read, and `_release` refuses again
-    under the inference lock.
+    under the inference lock.  The threshold is the one actually in force, so `auto` idles
+    out exactly where `status()` says it will.
     """
     current = time.time() if now is None else float(now)
     with _LOCK:
         mode = _mode()
-        threshold = MODES[mode]["idle_seconds"]
+        threshold = MODES[resolved_mode(mode)]["idle_seconds"]
         loaded = _loaded_models()
         activity = _idle_since()
         if threshold is None or not loaded or _active() or _RELEASING or activity is None:
@@ -298,7 +318,9 @@ def run_due_release(now: float | None = None) -> dict | None:
 def status() -> dict:
     with _LOCK:
         mode = _mode()
-        threshold = MODES[mode]["idle_seconds"]
+        machine = machine_mode()
+        resolved = memory_modes.resolved_mode(mode, machine)
+        threshold = MODES[resolved]["idle_seconds"]
         loaded = _loaded_models()
         activity = _idle_since()
         idle = max(0.0, time.time() - activity) if loaded and activity is not None else None
@@ -308,10 +330,18 @@ def status() -> dict:
         active = _active()
         return {
             "mode": mode,
+            # The resolution, not just the name: `mode` may be "auto", `resolved_mode` is
+            # what is actually in force here, and `idle_seconds` is its threshold — never
+            # None for auto, which a UI would otherwise render as "keeps the model loaded
+            # until you release it".
+            "resolved_mode": resolved,
             "default_mode": default_mode(),
             "idle_seconds": threshold,
-            # The four modes and their labels, in the order every Studio publishes them.
-            "options": [{"mode": key, **value} for key, value in MODES.items()],
+            "machine_mode": machine,
+            "machine_bytes": machine_bytes(),
+            # The five modes and their labels, in the order every Studio publishes them.
+            # Each option carries its own resolved threshold and an actionable sentence.
+            "options": memory_modes.options(machine),
             "loaded_models": loaded,
             "model_idle_seconds": idle,
             "active_work": active,

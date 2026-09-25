@@ -121,25 +121,70 @@ def test_memory_api_frontend_and_process_title(tmp_path, monkeypatch):
     html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (root / "frontend" / "app.js").read_text(encoding="utf-8")
     assert "Release Memory / Unload Model" in html
-    # The "· default" badge is no longer hardcoded onto Performance: since
-    # v1.32.3 the default follows the host's memory, so the label is bound
-    # to whatever the backend reports.
-    assert "Performance" in html
-    assert "memoryPolicy.default_mode==='performance'" in html
+    assert "Model memory" in html
+    # The picker renders the worker's own option list, so the default badge follows whatever
+    # the backend reports instead of being hardcoded onto one mode.
+    assert "memoryPolicy.options" in html
+    assert "memoryPolicy.default_mode===option.mode" in html
     assert 'fetch("/api/memory-policy"' in script
     assert 'fetch("/api/memory/release"' in script
     assert PROCESS_TITLE == "Voice Studio Mac"
 
 
-def test_shipped_default_releases_after_each_job() -> None:
-    """The idle-release thread ran on every fleet machine and did nothing,
-    because the shipped default was "performance" (idle_seconds=None). Each
-    Studio ships this same skeleton, so on a shared 8 GB Mac 3-5 of them each
-    independently pinned a model forever: 16 of 19 machines could not start a
-    job. A default that never releases is not a default."""
-    assert memory_policy.DEFAULT_MODE == "immediate"
-    assert memory_policy.MODES[memory_policy.DEFAULT_MODE]["idle_seconds"] == 0
-    assert memory_policy.default_mode() == "immediate"
+def test_shipped_default_is_answered_by_this_machine(monkeypatch) -> None:
+    """The idle-release thread ran on every fleet machine and did nothing, because the
+    shipped default was "performance" (idle_seconds=None). Each Studio ships this same
+    skeleton, so on a shared 8 GB Mac 3-5 of them each independently pinned a model
+    forever: 16 of 19 machines could not start a job. A default that never releases is not
+    a default — and neither is one fixed window for every machine, which is why the default
+    is `auto`: `balanced` at 16 GiB of unified memory and above, `immediate` below it, so a
+    machine that cannot hold a model does not try to."""
+    import components.memory_modes as memory_modes
+
+    assert memory_policy.DEFAULT_MODE == "auto"
+    assert memory_policy.default_mode() == "auto"
+    assert memory_policy.MODES is memory_modes.MODES
+    # `auto` itself has no threshold; what it runs with is published resolved, never None.
+    assert memory_policy.MODES["auto"]["idle_seconds"] is None
+    monkeypatch.setattr(memory_policy, "machine_bytes", lambda: 8 * 1024**3)
+    assert memory_policy.machine_mode() == "immediate"
+    assert memory_policy.idle_seconds("auto") == 0
+    monkeypatch.setattr(memory_policy, "machine_bytes", lambda: 32 * 1024**3)
+    assert memory_policy.machine_mode() == "balanced"
+    assert memory_policy.idle_seconds("auto") == 600
+
+
+def test_auto_releases_on_this_machines_window(tmp_path, monkeypatch):
+    """`auto` drives the real release path at the threshold this Mac resolves to."""
+    gen, stt = GenerationManager(), TranscriptionManager()
+    _reset(monkeypatch, tmp_path, gen, stt)
+    memory_policy.save("auto")
+    monkeypatch.setattr(memory_policy, "machine_bytes", lambda: 32 * 1024**3)
+
+    status = memory_policy.status()
+    assert status["mode"] == "auto"
+    assert status["resolved_mode"] == "balanced"
+    assert status["idle_seconds"] == 600
+    assert memory_policy.run_due_release(now=699) is None
+    assert memory_policy.run_due_release(now=700) is not None
+    assert gen.releases == stt.releases == 1
+
+
+def test_auto_releases_at_once_below_the_balanced_tier(tmp_path, monkeypatch):
+    """An 8 GB Mac keeps the old immediate behaviour: no model held between jobs."""
+    gen, stt = GenerationManager(), TranscriptionManager()
+    _reset(monkeypatch, tmp_path, gen, stt)
+    memory_policy.save("auto")
+    monkeypatch.setattr(memory_policy, "machine_bytes", lambda: 8 * 1024**3)
+
+    status = memory_policy.status()
+    assert status["mode"] == "auto"
+    assert status["resolved_mode"] == "immediate"
+    assert status["idle_seconds"] == 0
+    released = memory_policy.run_due_release(now=700)
+    assert released is not None, "an 8 GB Mac must release as soon as a job is idle"
+    assert released["last_release_reason"] == "automatic:auto"
+    assert gen.releases == stt.releases == 1
 
 
 def test_operator_choice_still_wins_over_the_machine_default(monkeypatch, tmp_path) -> None:
@@ -151,15 +196,22 @@ def test_operator_choice_still_wins_over_the_machine_default(monkeypatch, tmp_pa
     assert memory_policy._read()["mode"] == "performance"
 
 
-def test_ui_does_not_hardcode_performance_as_the_default() -> None:
-    """The mode picker said "Performance · default". Since v1.32.3 the default is
-    chosen from the host's memory, so a hardcoded label is simply wrong on every
-    8 GB machine. The badge must follow whatever the backend reports."""
+def test_ui_does_not_hardcode_the_mode_list_or_the_default() -> None:
+    """The picker is the worker's own option list, not a second copy of the table.
+
+    A mode list kept in the page is how the fifth mode becomes unselectable in the browser
+    UI while the API reports it as the default, and how the " · default" badge lands on a
+    mode the backend has stopped defaulting to.
+    """
     markup = (Path(__file__).resolve().parents[1]
               / "frontend" / "index.html").read_text(encoding="utf-8")
     assert "Performance · default" not in markup
+    assert 'x-for="option in memoryPolicy.options"' in markup
+    assert "memoryPolicy.default_mode===option.mode" in markup
+    assert "option.detail" in markup, "each mode's sentence comes from the worker"
     for mode in ("performance", "balanced", "memory_saver", "immediate"):
-        assert f"memoryPolicy.default_mode==='{mode}'" in markup
+        assert f'value="{mode}"' not in markup, (
+            f"{mode} is hardcoded in the picker instead of rendered from options")
 
 
 def test_psutil_is_a_base_dependency_not_only_a_generation_extra() -> None:

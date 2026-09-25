@@ -60,18 +60,24 @@ def _describe(value: object) -> str:
 
 
 class _StreamDone:
-    """Sentinel for the end of a stream: `StopIteration` cannot cross a thread boundary."""
+    """Sentinel for the end of a stream: `StopIteration` cannot cross a thread boundary.
 
+    ``stated`` carries the generator's own return value across that boundary - for the Chat
+    engine, the generation window it measured (``ChatEngine.stream``). It is ``None`` for a
+    stream that ended without stating one, so the route publishes no number rather than a
+    default.
+    """
 
-_STREAM_DONE = _StreamDone()
+    def __init__(self, stated: float | None = None) -> None:
+        self.stated = stated
 
 
 def _next_or_done(iterator):
     """One step of a sync generator, run in a worker thread by the streaming route."""
     try:
         return next(iterator)
-    except StopIteration:
-        return _STREAM_DONE
+    except StopIteration as stop:
+        return _StreamDone(stop.value)
 
 
 class _OwnerCredentialMiddleware:
@@ -599,6 +605,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             # `finally` is what handles a client that disconnects mid-stream: the generation was
             # never delivered, so it is cancelled rather than claimed as a completion.
             final_state, final_error = "cancelled", "client_disconnected"
+            # The generation window the engine measured, stated by the stream itself when it
+            # ends - measured in the engine, never around this route, or it would include the
+            # model load and mean something different from the buffered path's. `None` when the
+            # engine stated none, and then no `studio_hub` block is published at all.
+            generation_seconds: float | None = None
             # This generator is async on purpose. Starlette never closes a route generator
             # itself, so a *sync* generator abandoned by a disconnecting client stays suspended
             # holding the engine's model lock for the life of the process - every later request
@@ -608,9 +619,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             stream = engine.stream(messages, **parameters)
             try:
                 while True:
-                    delta = await run_in_threadpool(_next_or_done, stream)
-                    if delta is _STREAM_DONE:
+                    outcome = await run_in_threadpool(_next_or_done, stream)
+                    if isinstance(outcome, _StreamDone):
+                        generation_seconds = outcome.stated
                         break
+                    delta = outcome
                     if not delta:
                         continue
                     collected.append(delta)
@@ -639,6 +652,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                      "model": engine.model_id,
                      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                      "usage": _usage(engine, prompt_tokens, "".join(collected))}
+            if generation_seconds is not None:
+                # The same field, with the same meaning, as the buffered path's: the time the
+                # engine spent generating. The Hub records it as `generation_s`; the rate itself
+                # is derived where it is displayed, not here.
+                final["studio_hub"] = {"elapsed_seconds": generation_seconds}
             yield f"data: {json.dumps(final)}\n\n"
             yield "data: [DONE]\n\n"
 

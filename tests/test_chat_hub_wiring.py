@@ -32,6 +32,10 @@ from components.hub.backend import activity
 
 MODEL = "mlx-community/Qwen3.5-9B-4bit"
 
+# A default that is not a value: it lets a test say "the worker stated nothing at all", which is
+# a different response body from "the worker stated null" - and both must record `None`.
+_MISSING = object()
+
 
 class ChatHubWiringTests(unittest.TestCase):
     def test_chat_is_a_valid_activity_studio(self) -> None:
@@ -491,6 +495,83 @@ class ChatCompletionJobTests(_PackagedHub, unittest.TestCase):
         self.assertEqual(item["studio_job_id"], "chatcmpl-stream")
         self.assertEqual(item["usage"]["total_tokens"], 4)
 
+    def test_a_streamed_completion_records_the_final_chunks_generation_time(self) -> None:
+        from fastapi.testclient import TestClient
+
+        self.stub.payload = None
+        self.stub.content_type = "text/event-stream"
+        self.stub.raw = (
+            b'data: {"id": "chatcmpl-stream", "choices": [{"delta": {"content": "Phnom"}}]}\n\n'
+            b'data: {"id": "chatcmpl-stream", "choices": [{"index": 0, "delta": {}, '
+            b'"finish_reason": "stop"}], "usage": '
+            b'{"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},'
+            b' "studio_hub": {"elapsed_seconds": 4.5}}\n\n'
+            b'data: [DONE]\n\n')
+        with TestClient(self.app) as client:
+            sent = self.send(client, {"model": MODEL, "stream": True,
+                                      "messages": [{"role": "user", "content": "capital?"}]})
+            self.assertEqual(sent.status_code, 200, sent.text)
+            row = client.get("/api/hub/jobs",
+                             headers=self.owner_headers()).json()["batches"][0]
+            item = client.get(f"/api/hub/jobs/{row['id']}",
+                              headers=self.owner_headers()).json()["items"][0]
+        self.assertEqual(item["generation_s"], 4.5,
+                         "the engine's own measured window did not reach the job record")
+        self.assertNotEqual(item["generation_s"], item["runtime_s"],
+                            "the streamed record has one measurement where it needs two")
+        self.assertEqual(item["usage"]["completion_tokens"], 2)
+        self.assertEqual(item["text"], "Phnom")
+
+    def test_the_workers_own_generation_time_is_recorded_beside_the_round_trip(self) -> None:
+        from fastapi.testclient import TestClient
+
+        # The round trip is deliberately made much slower than the number the worker states.
+        # Deriving `generation_s` from `runtime_s` is what this fails on: on a cold turn the
+        # round trip carries the model load, and a rate computed from it would understate the
+        # model on exactly the reply the owner is measuring.
+        self.stub.hold = True
+        threading.Timer(0.4, self.stub.release.set).start()
+        self.stub.payload = {
+            "id": "chatcmpl-timed", "object": "chat.completion", "model": MODEL,
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": self.ANSWER}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            "studio_hub": {"elapsed_seconds": 0.25, "json_valid": None, "repairs": 0},
+        }
+        with TestClient(self.app) as client:
+            sent = self.send(client)
+            self.assertEqual(sent.status_code, 200, sent.text)
+            row = client.get("/api/hub/jobs",
+                             headers=self.owner_headers()).json()["batches"][0]
+            item = client.get(f"/api/hub/jobs/{row['id']}",
+                              headers=self.owner_headers()).json()["items"][0]
+        self.assertEqual(item["generation_s"], 0.25)
+        self.assertEqual(item["usage"]["completion_tokens"], 7)
+        self.assertGreaterEqual(item["runtime_s"], 0.35)
+        self.assertNotEqual(item["generation_s"], item["runtime_s"],
+                            "the two numbers are the same fact recorded twice")
+
+    def test_a_completion_that_states_no_generation_time_records_none(self) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.app) as client:
+            self.assertEqual(self.send(client).status_code, 200)
+            row = client.get("/api/hub/jobs",
+                             headers=self.owner_headers()).json()["batches"][0]
+            item = client.get(f"/api/hub/jobs/{row['id']}",
+                              headers=self.owner_headers()).json()["items"][0]
+            artifact = client.get(item["artifact_url"], headers=self.owner_headers())
+        self.assertIsNone(item["generation_s"],
+                          "the Hub published a generation time the worker never stated")
+        # An absent measurement is not a failed job: the answer is recorded normally and the
+        # artifact route still serves it.
+        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["text"], self.ANSWER)
+        self.assertEqual(item["usage"]["completion_tokens"], 7)
+        self.assertEqual(item["terminal_result"]["status"], "succeeded")
+        self.assertEqual(artifact.status_code, 200, artifact.text)
+        self.assertEqual(artifact.text, self.ANSWER)
+
     def test_a_request_that_names_no_model_is_recorded_under_the_one_that_answered(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -512,6 +593,210 @@ class ChatCompletionJobTests(_PackagedHub, unittest.TestCase):
             self.assertEqual(refused.status_code, 409, refused.text)
             self.assertEqual(
                 client.get("/api/hub/jobs", headers=self.owner_headers()).json()["batches"], [])
+
+
+class ChatGenerationRecordTests(unittest.TestCase):
+    """`generation_s` is the worker's own stated number, or nothing at all.
+
+    The rate the app shows is the stated `usage.completion_tokens` over this number, so a value
+    the worker did not state - or stated as something that is not a finite, strictly positive
+    number - has to stay absent rather than become a plausible-looking measurement no model
+    made. `runtime_s` is the Hub's own round trip and is asserted separately in every case: the
+    two are different facts and neither may be derived from the other.
+    """
+
+    ANSWER = "Low water is at 04:12."
+    RUNTIME_S = 9.5
+
+    def record(self, body: bytes, *, content_type: str = "application/json") -> dict:
+        from components.hub.backend import chat_jobs, ledger
+
+        with tempfile.TemporaryDirectory(prefix="studiohub-chat-generation-") as state:
+            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                return chat_jobs.record_page_completion(
+                    request_body=(b'{"model": "mlx-community/Qwen3.5-9B-4bit", "messages": '
+                                  b'[{"role": "user", "content": "when is low tide?"}]}'),
+                    started_at=time.time() - self.RUNTIME_S, runtime_s=self.RUNTIME_S,
+                    worker_id="chat", machine="local", status_code=200,
+                    content_type=content_type, content=body)
+
+    def buffered(self, elapsed=_MISSING) -> bytes:
+        body = {"id": "chatcmpl-1", "model": "mlx-community/Qwen3.5-9B-4bit",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": self.ANSWER}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10}}
+        if elapsed is not _MISSING:
+            body["studio_hub"] = {"elapsed_seconds": elapsed, "json_valid": None, "repairs": 0}
+        return json.dumps(body).encode()
+
+    @staticmethod
+    def streamed(final: dict | None) -> bytes:
+        lines = [b'data: {"id": "chatcmpl-stream", "choices": [{"delta": {"content": "hi"}}]}']
+        if final is not None:
+            lines.append(b"data: " + json.dumps(final).encode())
+        lines.append(b"data: [DONE]")
+        return b"\n\n".join(lines) + b"\n\n"
+
+    @staticmethod
+    def stream_final(elapsed=_MISSING) -> dict:
+        final = {"id": "chatcmpl-stream",
+                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+        if elapsed is not _MISSING:
+            final["studio_hub"] = {"elapsed_seconds": elapsed}
+        return final
+
+    def test_a_stated_generation_time_is_recorded_as_stated(self) -> None:
+        item = self.record(self.buffered(2.5))["items"][0]
+        self.assertEqual(item["generation_s"], 2.5)
+        self.assertEqual(item["runtime_s"], self.RUNTIME_S,
+                         "the Hub's own round trip was replaced by the worker's number")
+        self.assertNotEqual(item["generation_s"], item["runtime_s"])
+        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["text"], self.ANSWER)
+        self.assertEqual(item["usage"]["completion_tokens"], 7)
+
+    def test_a_whole_number_states_the_same_number(self) -> None:
+        self.assertEqual(self.record(self.buffered(3))["items"][0]["generation_s"], 3)
+
+    def test_no_stated_generation_time_is_none_and_the_answer_is_still_recorded(self) -> None:
+        item = self.record(self.buffered())["items"][0]
+        self.assertIsNone(item["generation_s"])
+        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["text"], self.ANSWER)
+        self.assertEqual(item["usage"], {"prompt_tokens": 3, "completion_tokens": 7,
+                                         "total_tokens": 10})
+
+    def test_a_nonsense_generation_time_is_not_a_number(self) -> None:
+        # `NaN` and `Infinity` are what a worker with a broken clock would actually put on the
+        # wire (`json.dumps` writes those tokens), so they are sent as bytes rather than as
+        # values a Python caller could have filtered first.
+        for stated in ("3.2", -1.0, -0.001, 0, 0.0, float("nan"), float("inf"), float("-inf"),
+                       True, False, None, [], {}, 10 ** 400):
+            with self.subTest(stated=stated):
+                item = self.record(self.buffered(stated))["items"][0]
+                self.assertIsNone(
+                    item["generation_s"],
+                    f"elapsed_seconds={stated!r} became a number the worker never stated")
+                self.assertEqual(item["state"], "done")
+                self.assertEqual(item["text"], self.ANSWER)
+                self.assertEqual(item["usage"]["completion_tokens"], 7)
+
+    def test_a_stated_generation_time_survives_an_empty_answer(self) -> None:
+        # The worker did generate and did say how long it took; it produced no text. The item is
+        # an error and carries no answer, and the facts the worker stated - usage and generation
+        # time - are kept rather than dropped because the outcome was a failure.
+        body = json.loads(self.buffered(1.5))
+        body["choices"][0]["message"]["content"] = "   "
+        item = self.record(json.dumps(body).encode())["items"][0]
+        self.assertEqual(item["state"], "error")
+        self.assertEqual(item["error_code"], "CHAT_EMPTY_ANSWER")
+        self.assertIsNone(item["text"])
+        self.assertEqual(item["generation_s"], 1.5)
+
+    def test_a_studio_hub_that_is_not_an_object_states_nothing(self) -> None:
+        body = json.loads(self.buffered())
+        body["studio_hub"] = "elapsed_seconds: 2.5"
+        self.assertIsNone(self.record(json.dumps(body).encode())["items"][0]["generation_s"])
+
+    def test_the_streamed_final_chunk_is_where_the_number_is_read_from(self) -> None:
+        item = self.record(self.streamed(self.stream_final(6.25)),
+                           content_type="text/event-stream")["items"][0]
+        self.assertEqual(item["generation_s"], 6.25)
+        self.assertEqual(item["runtime_s"], self.RUNTIME_S)
+        self.assertNotEqual(item["generation_s"], item["runtime_s"])
+        self.assertEqual(item["text"], "hi")
+        self.assertEqual(item["usage"]["completion_tokens"], 1)
+
+    def test_a_stream_that_states_no_generation_time_records_none(self) -> None:
+        item = self.record(self.streamed(self.stream_final()),
+                           content_type="text/event-stream")["items"][0]
+        self.assertIsNone(item["generation_s"])
+        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["text"], "hi")
+
+    def test_a_stream_that_states_a_nonsense_generation_time_records_none(self) -> None:
+        for stated in ("fast", -2, 0, float("nan"), float("inf")):
+            with self.subTest(stated=stated):
+                item = self.record(self.streamed(self.stream_final(stated)),
+                                   content_type="text/event-stream")["items"][0]
+                self.assertIsNone(item["generation_s"])
+                self.assertEqual(item["state"], "done")
+                self.assertEqual(item["text"], "hi")
+
+    def test_a_stream_with_no_final_chunk_states_nothing(self) -> None:
+        item = self.record(self.streamed(None),
+                           content_type="text/event-stream")["items"][0]
+        self.assertIsNone(item["generation_s"])
+        self.assertEqual(item["text"], "hi")
+
+
+class ChatPackUsageEvidenceTests(unittest.TestCase):
+    """The Chat lane records token usage that is whole counts and adds up, or records none.
+
+    `usage.completion_tokens` is the numerator of the rate the app shows and `generation_s` the
+    denominator, so a usage that is a float, a negative, a bool or a total below its own parts
+    is refused at the door rather than recorded as a count - a rate built on it could not be
+    true. This is the rule the Hub's dispatched-pack path already enforced; the page path's own
+    recording is asserted separately above.
+    """
+
+    def _run_pack(self, usage: dict) -> dict:
+        from components.hub.backend import chat_jobs, ledger
+
+        payload = {"id": "chatcmpl-pack", "model": MODEL,
+                   "choices": [{"index": 0, "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "hello"}}],
+                   "usage": usage}
+
+        async def run() -> dict:
+            client = httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=payload)))
+            monitor = type("Monitor", (), {"_client": client})()
+            studio = {"id": "chat", "modality": "chat", "machine": "local",
+                      "hub_token": "worker-token", "host": "127.0.0.1", "port": 1}
+            pack = {"index": 0, "pack_id": "pack-1", "scene_ids": ["scene-1"],
+                    "messages": [{"role": "user", "content": "hi"}], "params": {},
+                    "state": "running", "tries": 1, "studio": "chat",
+                    "duration_seconds": None, "error": None, "results": {}, "usage": None,
+                    "model_revision": None, "raw_responses": [], "started_at": None,
+                    "finished_at": None, "retry_at": None}
+            batch = {"id": "batch-1", "model": MODEL, "kind": "completion", "cancelled": False,
+                     "created_at": time.time(), "idempotency_key": "k", "packs": [pack]}
+            try:
+                with tempfile.TemporaryDirectory(prefix="studiohub-chat-pack-") as state:
+                    with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                        await chat_jobs._run_pack(monitor, batch, pack, studio, "chat:owner")
+            finally:
+                await client.aclose()
+                chat_jobs.busy_studios.discard("chat")
+            return pack
+
+        return asyncio.run(run())
+
+    def test_whole_counts_that_add_up_are_recorded_exactly(self) -> None:
+        pack = self._run_pack({"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10})
+        self.assertEqual(pack["state"], "done")
+        self.assertEqual(pack["usage"], {"prompt_tokens": 3, "completion_tokens": 7,
+                                         "total_tokens": 10})
+
+    def test_counts_that_are_not_whole_non_negative_numbers_are_refused(self) -> None:
+        for usage in ({"prompt_tokens": 3, "completion_tokens": 2.5, "total_tokens": 5.5},
+                      {"prompt_tokens": -1, "completion_tokens": 2, "total_tokens": 1},
+                      {"prompt_tokens": 3, "completion_tokens": True, "total_tokens": 4},
+                      {"prompt_tokens": "3", "completion_tokens": 2, "total_tokens": 5},
+                      {"prompt_tokens": 3, "completion_tokens": 2}):
+            with self.subTest(usage=usage):
+                pack = self._run_pack(usage)
+                self.assertIsNone(pack["usage"], "an unusable count was recorded as a fact")
+                self.assertEqual(pack["state"], "error")
+                self.assertIn("invalid token usage evidence", pack["error"])
+
+    def test_a_total_below_its_own_parts_is_refused(self) -> None:
+        pack = self._run_pack({"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 4})
+        self.assertIsNone(pack["usage"])
+        self.assertEqual(pack["state"], "error")
+        self.assertIn("inconsistent token usage evidence", pack["error"])
 
 
 class PeerLeaseDisconnectTests(_PackagedHub, unittest.TestCase):

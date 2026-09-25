@@ -15,6 +15,12 @@ The status payload deliberately publishes the same field names the Voice worker 
 decides whether a release actually freed anything by reading ``loaded_model``/
 ``loaded_models``/``loaded_pipeline`` back out of the response. A Studio that publishes a
 different vocabulary is silently counted as released while still holding its model.
+
+The mode table and the ``auto`` rule come from :mod:`components.memory_modes`, the one
+place they are written down. ``auto`` is the fresh-install default and this module is where
+the machine's answer was first spelled out — it used to be ``default_mode()``; it is now
+:func:`machine_mode`, published as ``machine_mode``/``resolved_mode`` beside the selected
+``mode`` so a reader never has to re-derive it.
 """
 from __future__ import annotations
 
@@ -24,14 +30,16 @@ import threading
 import time
 from pathlib import Path
 
-# Same modes and labels as the Voice worker so one per-device choice means the same thing
-# across the app.
-MODES = {
-    'performance': {'idle_seconds': None, 'label': 'Performance'},
-    'balanced': {'idle_seconds': 600, 'label': 'Balanced'},
-    'memory_saver': {'idle_seconds': 120, 'label': 'Memory Saver'},
-    'immediate': {'idle_seconds': 0, 'label': 'Immediate'},
-}
+from components import memory_modes
+
+# Same modes, labels and thresholds as every other Studio, from the one table they share, so
+# one per-device choice means the same thing across the app and a sixth mode cannot exist in
+# one worker and not another.
+MODES = memory_modes.MODES
+# `auto`: `balanced` at 16 GiB of unified memory and above, `immediate` below it. Unchanged
+# behaviour for an operator who has already chosen — this is only what a machine that has
+# never chosen now selects.
+DEFAULT_MODE = memory_modes.DEFAULT_MODE
 CHECK_INTERVAL_SECONDS = 5
 
 # Provenance for every counter below. Each starts at zero on process start, while job
@@ -66,22 +74,43 @@ def settings_file() -> Path:
 
 
 def machine_bytes() -> int:
-    try:
-        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-    except (ValueError, OSError, AttributeError):
-        return 0
+    """This Mac's unified memory in bytes, through the one reader every Studio shares."""
+    return memory_modes.machine_bytes()
+
+
+def machine_mode() -> str:
+    """What ``auto`` resolves to on this Mac.
+
+    Small machines must not hold a model between jobs; large ones can afford the reload
+    saving. This is the rule that used to live in :func:`default_mode`, and it is what
+    ``auto`` answers with. A Mac whose memory cannot be measured resolves to ``immediate``:
+    a machine that cannot prove it has room must not hold a model.
+    """
+    return memory_modes.machine_mode(machine_bytes())
+
+
+def resolved_mode(mode: str) -> str:
+    """The mode actually in force, with ``auto`` answered by this machine."""
+    return memory_modes.resolved_mode(mode, machine_mode())
+
+
+def idle_seconds(mode: str) -> int | None:
+    """The threshold ``mode`` runs with; never ``None`` for ``auto``."""
+    return memory_modes.idle_seconds(mode, machine_mode())
+
+
+def options() -> list[dict]:
+    """The five modes, each with its own resolved threshold and a sentence to act on."""
+    return memory_modes.options(machine_mode())
 
 
 def default_mode() -> str:
-    """Mode used when the operator has not chosen one.
+    """The mode selected when the operator has not chosen one: ``auto``.
 
-    Small machines must not hold a model between jobs; large ones can afford the reload
-    saving. An explicit operator choice always wins.
+    An explicit operator choice always wins; this is only what a machine that has never
+    chosen selects.
     """
-    total = machine_bytes()
-    if total and total < 16 * 1024**3:
-        return 'immediate'
-    return 'balanced'
+    return DEFAULT_MODE
 
 
 def _mode() -> str:
@@ -128,14 +157,16 @@ def note_activity() -> None:
 
 def status() -> dict:
     mode = _mode()
-    idle_seconds = MODES[mode]['idle_seconds']
+    machine = machine_mode()
+    resolved = memory_modes.resolved_mode(mode, machine)
+    threshold = MODES[resolved]['idle_seconds']
     loaded = _loaded_models()
     active = _active()
     last = _idle_since()
     idle = max(0.0, time.time() - last) if loaded and last is not None else None
     due_at = None
-    if idle_seconds is not None and idle is not None:
-        due_at = time.time() + max(0, idle_seconds - idle)
+    if threshold is not None and idle is not None:
+        due_at = time.time() + max(0, threshold - idle)
     with _LOCK:
         release_count = _RELEASE_COUNT
         last_release_at = _LAST_RELEASE_AT
@@ -144,11 +175,19 @@ def status() -> dict:
         last_error = _LAST_ERROR
     return {
         'mode': mode,
+        # The resolution, not just the name: `mode` may be "auto", `resolved_mode` is what
+        # is actually in force here, and `idle_seconds` is its threshold — never None for
+        # auto, which a UI would otherwise render as "keeps the model loaded until you
+        # release it".
+        'resolved_mode': resolved,
         'default_mode': default_mode(),
-        'idle_seconds': idle_seconds,
+        'idle_seconds': threshold,
+        'machine_mode': machine,
+        'machine_bytes': machine_bytes(),
         # Both spellings are published on purpose: `options` is the fleet contract the Hub
-        # and the native Settings screen read, `modes` is the older label map.
-        'options': [{'mode': key, **value} for key, value in MODES.items()],
+        # and the native Settings screen read, `modes` is the older label map. Each option
+        # carries its own resolved threshold and an actionable sentence.
+        'options': memory_modes.options(machine),
         'modes': {key: value['label'] for key, value in MODES.items()},
         'loaded_models': loaded,
         'model_idle_seconds': idle,
@@ -234,11 +273,14 @@ def _loop() -> None:
     while True:
         time.sleep(CHECK_INTERVAL_SECONDS)
         try:
-            idle_seconds = MODES[_mode()]['idle_seconds']
-            if idle_seconds is None or not _resident() or _active():
+            mode = _mode()
+            # The threshold actually in force: `auto` answers with this Mac's mode, so the
+            # timer idles out exactly where `status()` says it will.
+            threshold = MODES[resolved_mode(mode)]['idle_seconds']
+            if threshold is None or not _resident() or _active():
                 continue
             last = _idle_since()
-            if last is None or (time.time() - last) < idle_seconds:
+            if last is None or (time.time() - last) < threshold:
                 continue
             release_now('idle')
         except Exception:

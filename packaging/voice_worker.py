@@ -205,6 +205,13 @@ def main() -> None:
                           'version': release.get('version'), 'offline': args.offline}))
         return
     sys.path.insert(0, str(source))
+    # `components/` sits beside this script in the bundle, and the shared modules the workers
+    # import by package path live there (`components/memory_modes.py` is the memory-mode table
+    # and the `auto` rule every Studio answers from; `components/app_version.py` and
+    # `components/model_packages.py` are the same shape). Appended rather than prepended, so
+    # the Voice tree and the runtime keep precedence and nothing in the bundle's top level can
+    # shadow a third-party module.
+    sys.path.append(str(resources))
     os.chdir(data)
     run_server('backend.main:app', args.port, ready_file, str(release.get('version', '')),
                args.parent_pid, worker_pgid)

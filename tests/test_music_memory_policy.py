@@ -118,16 +118,20 @@ class MusicMemoryPolicyTests(unittest.TestCase):
     # -- the table and the default ------------------------------------------
     def test_the_mode_table_and_default_are_the_voice_workers_verbatim(self) -> None:
         """One per-device choice must mean the same thing on every Studio row."""
+        from components import memory_modes
         from components.voice.app.backend import memory_policy as voice
 
-        self.assertEqual(memory_policy.MODES, voice.MODES)
+        self.assertIs(memory_policy.MODES, memory_modes.MODES)
+        self.assertIs(memory_policy.MODES, voice.MODES,
+                      "the table is shared, not copied")
         self.assertEqual(memory_policy.DEFAULT_MODE, voice.DEFAULT_MODE)
-        self.assertEqual(memory_policy.default_mode(), voice.default_mode())
+        self.assertEqual(memory_policy.DEFAULT_MODE, "auto")
+        self.assertEqual(memory_policy.default_mode(), "auto")
         self.assertEqual(memory_policy.CHECK_INTERVAL_SECONDS,
                          voice.CHECK_INTERVAL_SECONDS)
         self.assertEqual(
             [option["mode"] for option in memory_policy.status()["options"]],
-            ["performance", "balanced", "memory_saver", "immediate"])
+            ["auto", "performance", "balanced", "memory_saver", "immediate"])
 
     def test_an_unknown_mode_is_refused_by_name_and_nothing_is_written(self) -> None:
         memory_policy.save("memory_saver")
@@ -236,6 +240,49 @@ class MusicMemoryPolicyTests(unittest.TestCase):
         self.assertIsNotNone(released)
         self.assertEqual(released["last_release_reason"], "idle:immediate")
 
+    def test_auto_releases_on_the_window_this_machine_resolves_to(self) -> None:
+        """`auto` is the shipped default, so these are the two real machine behaviours."""
+        engine = self.resident()
+        idle_since = time.time() - 10_000
+        memory_policy._LAST_ACTIVITY = idle_since
+        memory_policy.save("auto")
+
+        with mock.patch.object(memory_policy, "machine_bytes", lambda: 32 * 1024**3):
+            status = memory_policy.status()
+            self.assertEqual(status["mode"], "auto")
+            self.assertEqual(status["resolved_mode"], "balanced")
+            self.assertEqual(status["idle_seconds"], 600)
+            self.assertIsNone(memory_policy.run_due_release(now=idle_since + 599),
+                              "599 s of idle is not the balanced window")
+            released = memory_policy.run_due_release(now=idle_since + 600)
+            self.assertIsNotNone(released)
+        self.assertEqual(released["last_release_reason"], "idle:auto")
+        self.assertEqual(engine.discards, 1)
+
+    def test_auto_releases_at_once_below_the_balanced_tier(self) -> None:
+        """An 8 GB Mac keeps the old immediate behaviour: no model held between jobs."""
+        engine = self.resident()
+        idle_since = time.time() - 10_000
+        memory_policy._LAST_ACTIVITY = idle_since
+        memory_policy.save("auto")
+
+        with mock.patch.object(memory_policy, "machine_bytes", lambda: 8 * 1024**3):
+            status = memory_policy.status()
+            self.assertEqual(status["resolved_mode"], "immediate")
+            self.assertEqual(status["idle_seconds"], 0)
+            released = memory_policy.run_due_release(now=idle_since)
+        self.assertIsNotNone(released)
+        self.assertEqual(released["last_release_reason"], "idle:auto")
+        self.assertEqual(engine.discards, 1)
+
+    def test_an_unmeasurable_machine_resolves_to_immediate(self) -> None:
+        """A Mac that cannot prove it has room must not hold a model."""
+        self.resident()
+        memory_policy.save("auto")
+        with mock.patch.object(memory_policy, "machine_bytes", lambda: 0):
+            self.assertEqual(memory_policy.machine_mode(), "immediate")
+            self.assertEqual(memory_policy.status()["idle_seconds"], 0)
+
     def test_the_idle_timer_never_preempts_a_running_job(self) -> None:
         engine = self.resident()
         idle_since = time.time() - 10_000
@@ -290,10 +337,15 @@ class MusicMemoryRouteTests(unittest.TestCase):
         response = self.client.get("/api/memory-policy", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         row = response.json()
-        self.assertEqual(row["mode"], "immediate")
-        self.assertEqual(row["default_mode"], "immediate")
+        # A fresh Music install selects `auto`, and the row publishes what that resolves to
+        # on this Mac — for `auto`, `idle_seconds` is never None.
+        self.assertEqual(row["mode"], "auto")
+        self.assertEqual(row["default_mode"], "auto")
+        self.assertEqual(row["resolved_mode"], row["machine_mode"])
+        self.assertIn(row["resolved_mode"], {"balanced", "immediate"})
+        self.assertIsNotNone(row["idle_seconds"])
         self.assertEqual([option["mode"] for option in row["options"]],
-                         ["performance", "balanced", "memory_saver", "immediate"])
+                         ["auto", "performance", "balanced", "memory_saver", "immediate"])
         self.assertEqual(row["loaded_models"], [])
 
         bad = self.client.put("/api/memory-policy", json={"mode": "overnight"},
@@ -302,7 +354,7 @@ class MusicMemoryRouteTests(unittest.TestCase):
         self.assertIn("overnight", bad.json()["detail"])
         self.assertEqual(
             self.client.get("/api/memory-policy", headers=self.headers).json()["mode"],
-            "immediate")
+            "auto")
 
         changed = self.client.put("/api/memory-policy", json={"mode": "memory_saver"},
                                   headers=self.headers)

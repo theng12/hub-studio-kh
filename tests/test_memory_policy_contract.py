@@ -11,17 +11,27 @@ component's tests:
 
 This module owns the seam: the controller's behaviour against a stub fleet, and the Hub
 routes the app calls.
+
+Since the fifth mode, ``auto``, this module also owns the *rule*: every Studio used to
+default to ``immediate`` and each carried its own copy of the four-mode table. ``auto``
+resolves per machine (``balanced`` at 16 GiB of unified memory and above, ``immediate``
+below it, and ``immediate`` when the memory cannot be measured at all), so the answer is
+driven here through each worker's own resolution function on both machine sizes rather than
+restated as a literal in four files.
 """
 from __future__ import annotations
 
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -42,9 +52,20 @@ def memory_control():
     return module
 
 
-# The Hub's MODES table carries labels only: each Studio owns its own threshold. The stub
-# needs the real thresholds to answer the way a Studio does.
-IDLE_SECONDS = {'performance': None, 'balanced': 600, 'memory_saver': 120, 'immediate': 0}
+def shared_modes():
+    """The one table and rule every Studio and the Hub read.
+
+    Imported by name rather than restated: this module proves the workers *share* it, so a
+    copy of the 16 GiB threshold in a test would be a fifth place for it to be wrong.
+    """
+    from components import memory_modes as module
+    return module
+
+
+# The thresholds a stub Studio answers with, from the shared table — the Hub's own MODES
+# table carries labels only, because each Studio owns the window it actually runs with.
+IDLE_SECONDS = {mode: entry['idle_seconds']
+                for mode, entry in shared_modes().MODES.items()}
 
 
 class FakeResponse:
@@ -65,25 +86,30 @@ class StubStudio:
     """One in-process Studio that answers the fleet memory contract.
 
     ``fixed`` stands in for the Image worker, which releases its model after every job and
-    therefore has no idle mode to change.
+    therefore has no idle mode to change. ``machine`` is what ``auto`` answers on this stub's
+    Mac, so the stub publishes the resolution the way a real Studio does.
     """
 
     def __init__(self, mode: str = 'immediate', *, fixed: bool = False,
-                 loaded: list[list[str]] | None = None, busy: bool = False):
+                 loaded: list[list[str]] | None = None, busy: bool = False,
+                 machine: str = 'immediate'):
         self.mode = mode
         self.fixed = fixed
         self.loaded = loaded or []
         self.busy = busy
+        self.machine = machine
         self.puts: list[dict] = []
         self.releases = 0
 
     def policy(self) -> dict:
+        resolved = self.machine if self.mode == 'auto' else self.mode
         return {
             'mode': self.mode,
-            'default_mode': 'immediate',
-            'idle_seconds': IDLE_SECONDS[self.mode],
-            'options': [{'mode': key, **value}
-                    for key, value in memory_control().MODES.items()],
+            'resolved_mode': resolved,
+            'default_mode': shared_modes().DEFAULT_MODE,
+            'idle_seconds': IDLE_SECONDS[resolved],
+            'machine_mode': self.machine,
+            'options': shared_modes().options(self.machine),
             'loaded_models': self.loaded,
             'model_idle_seconds': 0.0 if self.loaded else None,
             'active_work': self.busy,
@@ -174,6 +200,24 @@ class FleetTargetTests(PackagedMachine):
     def test_an_unrelated_modality_is_left_alone(self) -> None:
         control, _ = build_fleet(('voice', 'voice', 51102), ('render', 'render', 51109))
         self.assertEqual([row['id'] for row in control.targets()], ['render', 'voice'])
+
+    def test_the_hub_offers_the_same_five_modes_and_drafts_auto(self) -> None:
+        """The Hub renders labels and validates names; it must not carry its own list.
+
+        Each Studio owns the window it runs with, so the Hub's table has no thresholds — but
+        the names and labels are the shared table's, so `auto` cannot exist in every Studio
+        and nowhere in the Hub.
+        """
+        hub = memory_control()
+        shared = shared_modes()
+        self.assertEqual(list(hub.MODES), list(shared.MODES))
+        for mode, entry in hub.MODES.items():
+            with self.subTest(mode=mode):
+                self.assertEqual(entry['label'], shared.MODES[mode]['label'])
+                self.assertNotIn('idle_seconds', entry,
+                                 "the Hub must not restate a threshold it does not enforce")
+        self.assertEqual(hub.DEFAULT_MODE, 'auto')
+        self.assertEqual(hub.DEFAULT_MODE, shared.DEFAULT_MODE)
 
 
 class FleetReleaseTests(PackagedMachine):
@@ -321,6 +365,24 @@ class FleetSetModeTests(PackagedMachine):
         self.assertEqual(stubs['subtitle'].puts, [{'mode': 'memory_saver'}])
         self.assertEqual(stubs['subtitle'].mode, 'memory_saver')
 
+    def test_set_mode_auto_reaches_every_changeable_studio_and_settles_a_fixed_one(self) -> None:
+        """The new default is a real selection an operator can make — and Image stays fixed."""
+        control, stubs = build_fleet(('image', 'image', 51101),
+                                     ('voice', 'voice', 51102),
+                                     ('subtitle', 'transcription', 51103))
+        stubs['image'].fixed = True
+        result = asyncio.run(control.set_mode('auto'))
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['mode'], 'auto')
+        self.assertEqual(stubs['image'].puts, [], 'the fixed Studio must not be asked')
+        self.assertEqual([row['result'] for row in result['results'] if row['id'] == 'image'],
+                         ['fixed'])
+        self.assertEqual(stubs['voice'].puts, [{'mode': 'auto'}])
+        self.assertEqual(stubs['subtitle'].puts, [{'mode': 'auto'}])
+        # And the answer that comes back is the studio's resolution, not the Hub's guess.
+        self.assertEqual(stubs['voice'].policy()['mode'], 'auto')
+        self.assertEqual(stubs['voice'].policy()['resolved_mode'], 'immediate')
+
     def test_a_fixed_studio_is_reported_not_changed(self) -> None:
         """Image has no idle timer; asking it to change would fail the whole operation."""
         control, stubs = build_fleet(('image', 'image', 51101),
@@ -435,6 +497,11 @@ with TestClient(app) as client:
     changed = client.put('/api/hub/memory/policy', json={'mode': 'memory_saver'}, headers=auth)
     out['change_status'] = changed.status_code
     out['change'] = changed.json()
+    # The fifth mode must survive the same route: the Hub validates mode names from its own
+    # table, so a studio the operator sets to `auto` must not come back "invalid policy".
+    auto = client.put('/api/hub/memory/policy', json={'mode': 'auto'}, headers=auth)
+    out['auto_status'] = auto.status_code
+    out['auto'] = auto.json()
     bad = client.put('/api/hub/memory/policy', json={'mode': 'overnight'}, headers=auth)
     out['bad_status'] = bad.status_code
     out['bad_detail'] = bad.json().get('detail')
@@ -524,6 +591,14 @@ print(json.dumps(out))
         self.assertEqual(change['results'][0]['result'], 'fixed')
         self.assertEqual(out['worker']['puts'], 0)
 
+        # `auto` is a valid mode on the same route. A Hub that refused it would make the new
+        # default unreachable from the Settings screen.
+        self.assertEqual(out['auto_status'], 200)
+        self.assertEqual(out['auto']['mode'], 'auto')
+        self.assertEqual(out['auto']['results'][0]['result'], 'fixed',
+                         'a fixed Studio is settled, not sent a request it must reject')
+        self.assertEqual(out['worker']['puts'], 0)
+
         self.assertEqual(out['bad_status'], 400)
         self.assertIn('mode must be one of', out['bad_detail'])
         self.assertEqual(out['empty_status'], 400)
@@ -590,18 +665,29 @@ class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
                 self.assertTrue((worker.parent / "memory_policy.py").is_file(),
                                 f"{name} has no memory_policy.py for the Hub to read")
 
-    def test_every_changeable_studio_publishes_voices_mode_table(self) -> None:
-        """The four modes and their thresholds cannot drift between Studios."""
+    def test_every_changeable_studio_publishes_the_one_mode_table(self) -> None:
+        """The five modes and their thresholds cannot drift between Studios.
+
+        Identity, not equality: a worker that copied the table would pass an equality check
+        today and be free to disagree tomorrow, which is the defect the fifth mode would
+        otherwise introduce — `auto`'s answer *is* the contract, so there is one copy of it.
+        """
+        shared = shared_modes()
         voice = importlib.import_module("components.voice.app.backend.memory_policy")
+        self.assertEqual(list(shared.MODES),
+                         ["auto", "performance", "balanced", "memory_saver", "immediate"])
         for name, module in studio_policy_modules().items():
             if getattr(module, "FIXED", False):
                 continue
             with self.subTest(studio=name):
-                self.assertEqual(module.MODES, voice.MODES,
-                                 f"{name}'s modes no longer match Voice's")
-                if hasattr(module, "DEFAULT_MODE"):
-                    self.assertEqual(module.DEFAULT_MODE, voice.DEFAULT_MODE,
-                                     f"{name}'s default no longer matches Voice's")
+                self.assertIs(module.MODES, shared.MODES,
+                              f"{name} carries its own copy of the mode table")
+                self.assertEqual(module.DEFAULT_MODE, shared.DEFAULT_MODE)
+                self.assertEqual(module.DEFAULT_MODE, "auto",
+                                 f"{name}'s default is not the fifth mode")
+                self.assertEqual(module.default_mode(), "auto",
+                                 f"{name} does not select the default")
+                self.assertEqual(module.MODES, voice.MODES)
 
     def test_image_is_the_only_fixed_policy_and_keeps_its_single_mode(self) -> None:
         """Image is deliberately correct as it stands: mflux exits after every job.
@@ -633,17 +719,274 @@ class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
         self.assertEqual(row["release_policy"],
                          "The model is released when each job finishes.")
 
-    def test_music_publishes_the_four_modes_and_the_shared_default(self) -> None:
+    def test_music_publishes_the_five_modes_and_the_shared_default(self) -> None:
         """The regression this contract exists to catch: Music had no policy at all."""
         music = studio_policy_modules()["music"]
-        voice = importlib.import_module("components.voice.app.backend.memory_policy")
+        shared = shared_modes()
         self.assertFalse(getattr(music, "FIXED", False))
-        self.assertEqual(music.MODES, voice.MODES)
-        self.assertEqual(music.DEFAULT_MODE, "immediate")
+        self.assertIs(music.MODES, shared.MODES)
+        self.assertEqual(music.DEFAULT_MODE, "auto")
+        self.assertIsNone(music.MODES["auto"]["idle_seconds"],
+                          "auto has no threshold of its own; the machine's answer is "
+                          "published resolved")
         self.assertEqual(music.MODES["performance"]["idle_seconds"], None)
         self.assertEqual(music.MODES["balanced"]["idle_seconds"], 600)
         self.assertEqual(music.MODES["memory_saver"]["idle_seconds"], 120)
         self.assertEqual(music.MODES["immediate"]["idle_seconds"], 0)
+
+
+class _PolicyEngine:
+    """The minimum a real ``MemoryPolicy`` reads, for driving Chat's status()."""
+
+    model_id = "mlx-community/Qwen3.5-9B-4bit"
+
+    def __init__(self, *, loaded: bool = False, busy: bool = False, idle_for: float = 0.0):
+        self._loaded = loaded
+        self._busy = busy
+        self._last = time.time() - idle_for
+
+    def loaded(self) -> bool:
+        return self._loaded
+
+    def status(self) -> dict:
+        return {"busy": self._busy}
+
+    def last_activity_at(self) -> float:
+        return self._last
+
+    def release(self, *, reason: str = "manual") -> dict:
+        if self._busy:
+            raise RuntimeError("a generation is running; release was refused")
+        was, self._loaded = self._loaded, False
+        return {"released": was, "reason": reason}
+
+
+def changeable_policy_modules() -> dict:
+    """Every Studio that has a real residency choice, by component name."""
+    return {name: module for name, module in studio_policy_modules().items()
+            if not getattr(module, "FIXED", False)}
+
+
+def worker_status(module, name: str, directory: Path, total_bytes: int) -> dict:
+    """One worker's real ``status()``, with this machine's memory injected.
+
+    The reading is injected at the worker's own ``machine_bytes`` — the seam the rule is
+    written against — rather than by reimplementing the rule here.
+    """
+    settings = Path(directory) / "memory_policy.json"
+    with patch.object(module, "machine_bytes", lambda: total_bytes):
+        if name == "chat":
+            return module.MemoryPolicy(Path(directory), _PolicyEngine()).status()
+        if name == "voice":
+            with patch.object(module, "SETTINGS_FILE", settings), \
+                 patch.object(module, "_GEN_MANAGER", None), \
+                 patch.object(module, "_STT_MANAGER", None):
+                return module.status()
+        with patch.object(module, "settings_file", lambda: settings), \
+             patch.object(module, "_MANAGER", None):
+            return module.status()
+
+
+def selected_mode(module, name: str, settings: Path, directory: Path) -> str:
+    """The mode one worker selects from a settings file, through its own reader."""
+    if name == "chat":
+        policy = module.MemoryPolicy(directory, _PolicyEngine())
+        policy._settings = settings
+        return policy.mode()
+    if name == "voice":
+        with patch.object(module, "SETTINGS_FILE", settings):
+            return module._read()["mode"]
+    with patch.object(module, "settings_file", lambda: settings):
+        return module._mode()
+
+
+class AutoIsAnsweredByThisMachine(unittest.TestCase):
+    """`auto` is the default, and this machine — not a literal in four files — answers it.
+
+    The rule: at 16 GiB of unified memory and above `auto` behaves as `balanced`; below it
+    as `immediate`; a machine whose memory cannot be measured must not hold a model, so it
+    gets `immediate` too. Every case below is driven through each worker's own function.
+    """
+
+    # (unified memory in bytes, the mode auto must resolve to)
+    MACHINES = ((8, "immediate"), (15, "immediate"),
+                (16, "balanced"), (24, "balanced"), (32, "balanced"))
+
+    def test_auto_resolves_per_machine_in_every_worker(self) -> None:
+        modules = changeable_policy_modules()
+        self.assertGreaterEqual(len(modules), 4, "the walk found fewer workers than ship")
+        for name, module in modules.items():
+            for gib, expected in self.MACHINES:
+                with self.subTest(studio=name, gib=gib):
+                    total = gib * 1024**3
+                    with patch.object(module, "machine_bytes", lambda t=total: t):
+                        self.assertEqual(module.machine_mode(), expected)
+                        self.assertEqual(module.resolved_mode("auto"), expected)
+                        self.assertEqual(
+                            module.idle_seconds("auto"),
+                            600 if expected == "balanced" else 0,
+                            f"{name} runs auto with the wrong window")
+
+    def test_an_unmeasurable_machine_never_holds_a_model(self) -> None:
+        """A Mac that cannot prove it has room resolves to immediate, never balanced."""
+        for name, module in changeable_policy_modules().items():
+            with self.subTest(studio=name):
+                with patch.object(module, "machine_bytes", lambda: 0):
+                    self.assertEqual(module.machine_mode(), "immediate")
+                    self.assertEqual(module.resolved_mode("auto"), "immediate")
+                    self.assertEqual(module.idle_seconds("auto"), 0)
+        # And the shared reader itself: an unreadable page count is 0, not a guess. A larger
+        # machine is what `balanced` costs, so guessing high is the expensive direction.
+        with patch.object(shared_modes().os, "sysconf",
+                          side_effect=ValueError("no sysconf here")):
+            self.assertEqual(shared_modes().machine_bytes(), 0)
+            self.assertEqual(shared_modes().machine_mode(), "immediate")
+
+    def test_status_publishes_the_resolution_not_just_the_name(self) -> None:
+        """`idle_seconds` is never None for auto: a UI reading None renders a lie."""
+        modules = changeable_policy_modules()
+        with tempfile.TemporaryDirectory() as temporary:
+            for name, module in modules.items():
+                for gib, expected in ((8, "immediate"), (32, "balanced")):
+                    with self.subTest(studio=name, gib=gib):
+                        row = worker_status(module, name, Path(temporary), gib * 1024**3)
+                        self.assertEqual(row["mode"], "auto")
+                        self.assertEqual(row["resolved_mode"], expected)
+                        self.assertEqual(row["machine_mode"], expected)
+                        self.assertEqual(row["idle_seconds"],
+                                         600 if expected == "balanced" else 0)
+                        self.assertIsNotNone(row["idle_seconds"])
+                        # The fields the Hub and the app already read must survive the
+                        # fifth mode; a Studio that drops one is counted as released while
+                        # still holding its model.
+                        for field in ("loaded_models", "model_idle_seconds", "active_work",
+                                      "busy", "next_release_at", "last_release_at",
+                                      "last_release_reason", "last_release_details",
+                                      "last_error", "release_count", "counters_since",
+                                      "default_mode", "machine_bytes"):
+                            self.assertIn(field, row, f"{name} dropped {field}")
+
+    def test_every_option_carries_its_own_resolved_threshold_and_a_sentence(self) -> None:
+        modules = changeable_policy_modules()
+        with tempfile.TemporaryDirectory() as temporary:
+            for name, module in modules.items():
+                for gib, expected in ((8, "immediate"), (32, "balanced")):
+                    with self.subTest(studio=name, gib=gib):
+                        row = worker_status(module, name, Path(temporary), gib * 1024**3)
+                        options = {option["mode"]: option for option in row["options"]}
+                        self.assertEqual(list(options), list(shared_modes().MODES),
+                                         "options must offer every mode, auto included")
+                        self.assertEqual(options["auto"]["idle_seconds"],
+                                         600 if expected == "balanced" else 0,
+                                         "auto's option must carry the resolved threshold")
+                        self.assertEqual(options["performance"]["idle_seconds"], None)
+                        self.assertEqual(options["balanced"]["idle_seconds"], 600)
+                        self.assertEqual(options["memory_saver"]["idle_seconds"], 120)
+                        self.assertEqual(options["immediate"]["idle_seconds"], 0)
+                        for mode, option in options.items():
+                            self.assertEqual(option["label"],
+                                             shared_modes().MODES[mode]["label"])
+                            self.assertTrue(str(option["detail"]).strip(),
+                                            f"{mode} has no detail for the operator")
+                        # The auto sentence must name this machine's answer and its
+                        # threshold; "Follows this Mac" alone tells the operator nothing.
+                        detail = options["auto"]["detail"]
+                        self.assertIn("Follows this Mac", detail)
+                        if expected == "balanced":
+                            self.assertIn("10 idle minutes", detail)
+                        else:
+                            self.assertIn("as soon as each job finishes", detail)
+
+    def test_an_absent_or_unknown_saved_mode_yields_the_default(self) -> None:
+        """Nothing on disk, or something unreadable, selects `auto` — never a crash."""
+        modules = changeable_policy_modules()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name, module in modules.items():
+                for saved in (None, '{"mode": "overnight"}', "not json at all",
+                              '{"mode": null}'):
+                    with self.subTest(studio=name, saved=saved):
+                        settings = directory / f"{name}.json"
+                        settings.unlink(missing_ok=True)
+                        if saved is not None:
+                            settings.write_text(saved, encoding="utf-8")
+                        self.assertEqual(selected_mode(module, name, settings, directory),
+                                         "auto")
+                        self.assertEqual(module.default_mode(), "auto")
+
+    def test_the_existing_modes_still_mean_exactly_what_they_meant(self) -> None:
+        """A fixed mode is never re-interpreted by the machine, whatever it measures."""
+        for name, module in changeable_policy_modules().items():
+            for gib in (8, 32):
+                with self.subTest(studio=name, gib=gib):
+                    with patch.object(module, "machine_bytes", lambda: gib * 1024**3):
+                        self.assertEqual(module.idle_seconds("immediate"), 0)
+                        self.assertIsNone(module.idle_seconds("performance"))
+                        self.assertEqual(module.idle_seconds("balanced"), 600)
+                        self.assertEqual(module.idle_seconds("memory_saver"), 120)
+                        for mode in ("performance", "balanced", "memory_saver", "immediate"):
+                            self.assertEqual(module.resolved_mode(mode), mode)
+
+    def test_the_auto_rule_is_written_down_once(self) -> None:
+        """No worker restates the threshold or the balanced/immediate choice.
+
+        This is the negative control for the rule: a copy of `16 * 1024**3` or of the
+        `balanced`/`immediate` answer in a Studio's memory policy is the drift this design
+        exists to prevent, and it would still pass every behavioural test above.
+        """
+        shared_source = Path(inspect.getsourcefile(shared_modes())).read_text(encoding="utf-8")
+        self.assertIn("AUTO_BALANCED_MIN_BYTES", shared_source)
+        self.assertIn("16 * 1024**3", shared_source)
+        threshold = re.compile(r"1024\s*\*\*\s*3|1024\s*\*\s*3|16\s*\*\s*1024")
+        for name, module in changeable_policy_modules().items():
+            source = Path(inspect.getsourcefile(module)).read_text(encoding="utf-8")
+            with self.subTest(studio=name):
+                self.assertIsNone(threshold.search(source),
+                                  f"{name} restates the 16 GiB threshold instead of "
+                                  f"importing components/memory_modes.py")
+
+    def test_the_shared_table_is_staged_into_every_bundle(self) -> None:
+        """The Voice worker imports it too, so it must ship in a Voice-alone artifact."""
+        spec = importlib.util.spec_from_file_location(
+            "stage_voice_for_memory_test", PROJECT_ROOT / "packaging" / "stage_voice.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        staged = {path.name for path in module.shared_components_modules(
+            PROJECT_ROOT / "components")}
+        self.assertIn("memory_modes.py", staged,
+                      "the mode table and auto rule must be staged, or every worker fails "
+                      "at import in the bundle")
+
+
+class AutoNeverPreemptsWork(unittest.TestCase):
+    """`auto` chooses a threshold. It cannot override the refusal that protects a job."""
+
+    def test_a_busy_model_is_not_idle_released_under_auto(self) -> None:
+        from components.chat.app.backend import memory_policy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            engine = _PolicyEngine(loaded=True, busy=True, idle_for=10_000)
+            policy = memory_policy.MemoryPolicy(Path(temporary), engine)
+            self.assertEqual(policy.mode(), "auto")
+            with patch.object(memory_policy, "machine_bytes", lambda: 32 * 1024**3):
+                self.assertEqual(policy.resolved_mode(), "balanced")
+                self.assertEqual(policy.idle_seconds(), 600)
+                # Well past the 600 s window, and still refused: the job is not preempted.
+                policy.tick()
+            self.assertTrue(engine.loaded(), "auto released a model out from under a job")
+
+    def test_a_busy_subtitle_model_is_not_released_under_auto(self) -> None:
+        from components.subtitle.app.backend import memory_policy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            settings = Path(temporary) / "memory_policy.json"
+            with patch.object(memory_policy, "settings_file", lambda: settings), \
+                 patch.object(memory_policy, "machine_bytes", lambda: 32 * 1024**3), \
+                 patch.object(memory_policy, "_MANAGER", None), \
+                 patch.object(memory_policy, "_active", return_value=True):
+                self.assertEqual(memory_policy.status()["mode"], "auto")
+                with self.assertRaisesRegex(RuntimeError, "active"):
+                    memory_policy.release_now("idle")
 
 
 class _VerifiedPackageCache:
@@ -734,8 +1077,10 @@ class MusicRowThroughTheHubController(PackagedMachine):
 
         return memory_control().FleetMemoryControl(Monitor(), client=Client())
 
-    def test_the_music_row_is_ready_with_four_modes(self) -> None:
-        inventory = asyncio.run(self.control().inventory())
+    def test_the_music_row_is_ready_with_the_five_modes_and_resolves_auto(self) -> None:
+        """The row the Settings screen reads, on a Mac with room to hold a model."""
+        with patch.object(self.memory_policy, "machine_bytes", lambda: 32 * 1024 ** 3):
+            inventory = asyncio.run(self.control().inventory())
         row = inventory["studios"][0]
         self.assertEqual(row["id"], "music")
         self.assertEqual(row["state"], "ready", row.get("detail"))
@@ -745,13 +1090,21 @@ class MusicRowThroughTheHubController(PackagedMachine):
         self.assertTrue(row["supported"])
         self.assertIsNone(row["detail"])
         policy = row["policy"]
-        self.assertEqual(policy["mode"], "immediate")
-        self.assertEqual(policy["default_mode"], "immediate")
-        self.assertEqual(policy["idle_seconds"], 0)
+        # A fresh Music install selects `auto`; the row publishes what that means on this Mac
+        # rather than making the Hub re-derive it.
+        self.assertEqual(policy["mode"], "auto")
+        self.assertEqual(policy["default_mode"], "auto")
+        self.assertEqual(policy["resolved_mode"], "balanced")
+        self.assertEqual(policy["machine_mode"], "balanced")
+        self.assertEqual(policy["idle_seconds"], 600)
         self.assertEqual([option["mode"] for option in policy["options"]],
-                         ["performance", "balanced", "memory_saver", "immediate"])
+                         ["auto", "performance", "balanced", "memory_saver", "immediate"])
         self.assertEqual([option["label"] for option in policy["options"]],
-                         ["Performance", "Balanced", "Memory Saver", "Immediate"])
+                         ["Auto", "Performance", "Balanced", "Memory Saver", "Immediate"])
+        auto = policy["options"][0]
+        self.assertEqual(auto["idle_seconds"], 600,
+                         "auto's option must carry the resolved threshold, not None")
+        self.assertIn("10 idle minutes", auto["detail"])
 
     def test_set_mode_changes_the_music_policy_and_the_hub_reads_it_back(self) -> None:
         control = self.control()

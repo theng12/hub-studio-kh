@@ -128,16 +128,44 @@ class _FakeEngine:
 
 
 class MemoryPolicyTests(unittest.TestCase):
-    def test_default_mode_is_immediate_and_shape_is_complete(self) -> None:
+    def test_default_mode_is_auto_and_shape_is_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine())
             status = policy.status()
-            self.assertEqual(status["mode"], "immediate")
-            self.assertEqual(status["default_mode"], "immediate")
-            self.assertEqual({option["mode"] for option in status["options"]},
-                             {"performance", "balanced", "memory_saver", "immediate"})
+            # A machine that has never chosen selects `auto`, and the payload publishes what
+            # that resolves to here rather than making a reader re-derive it.
+            self.assertEqual(status["mode"], "auto")
+            self.assertEqual(status["default_mode"], "auto")
+            self.assertEqual(status["resolved_mode"], policy.machine_mode())
+            self.assertIn(status["resolved_mode"], {"balanced", "immediate"})
+            self.assertIsNotNone(status["idle_seconds"])
+            self.assertEqual([option["mode"] for option in status["options"]],
+                             ["auto", "performance", "balanced", "memory_saver", "immediate"])
+            for option in status["options"]:
+                self.assertTrue(str(option["detail"]).strip(), option)
+                self.assertIn("label", option)
+                self.assertIn("idle_seconds", option)
             self.assertIn("resident", status)
             self.assertIn("machine_bytes", status)
+
+    def test_auto_resolves_per_machine_through_the_class(self) -> None:
+        """The class is the chat contract; its answer must be the shared rule's."""
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine())
+            original = memory_policy_module.machine_bytes
+            try:
+                memory_policy_module.machine_bytes = lambda: 8 * 1024 ** 3
+                self.assertEqual(policy.machine_mode(), "immediate")
+                self.assertEqual(policy.resolved_mode(), "immediate")
+                self.assertEqual(policy.idle_seconds(), 0)
+                memory_policy_module.machine_bytes = lambda: 32 * 1024 ** 3
+                self.assertEqual(policy.machine_mode(), "balanced")
+                self.assertEqual(policy.resolved_mode(), "balanced")
+                self.assertEqual(policy.idle_seconds(), 600)
+                memory_policy_module.machine_bytes = lambda: 0
+                self.assertEqual(policy.machine_mode(), "immediate")
+            finally:
+                memory_policy_module.machine_bytes = original
 
     def test_invalid_mode_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,10 +187,37 @@ class MemoryPolicyTests(unittest.TestCase):
             engine._loaded = True
             engine._last_activity = time.time() - 10
             policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            # `auto` would hold this model on a 16 GB or larger Mac; the mode under test is
+            # immediate, so it is selected explicitly.
+            policy.save("immediate")
             policy.tick()
             self.assertFalse(engine.loaded())
             self.assertEqual(policy.status()["last_release_reason"], "idle")
             self.assertEqual(policy.status()["release_count"], 1)
+
+    def test_auto_releases_on_the_window_this_machine_resolves_to(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = _FakeEngine()
+            engine._loaded = True
+            engine._last_activity = time.time() - 700
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            self.assertEqual(policy.mode(), "auto")
+            original = memory_policy_module.machine_bytes
+            try:
+                # A 32 GB Mac holds the model for the balanced window: 700 s idle releases.
+                memory_policy_module.machine_bytes = lambda: 32 * 1024 ** 3
+                policy.tick()
+                self.assertFalse(engine.loaded())
+                self.assertEqual(policy.status()["release_count"], 1)
+
+                # An 8 GB Mac releases as soon as the job is done; 10 s idle is enough.
+                engine._loaded = True
+                engine._last_activity = time.time() - 10
+                memory_policy_module.machine_bytes = lambda: 8 * 1024 ** 3
+                policy.tick()
+                self.assertFalse(engine.loaded())
+            finally:
+                memory_policy_module.machine_bytes = original
 
     def test_performance_mode_never_idle_releases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,6 +236,7 @@ class MemoryPolicyTests(unittest.TestCase):
             engine._busy = True
             engine._last_activity = time.time() - 10
             policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            policy.save("immediate")
             policy.tick()
             self.assertTrue(engine.loaded())
 
@@ -888,6 +944,149 @@ class StreamLockTests(unittest.TestCase):
             status = engine.status()
             self.assertEqual((status["streams_started"], status["streams_finished"]), (2, 2),
                              "the two streams did not each release their own hold exactly once")
+
+
+class GenerationTimeTests(unittest.TestCase):
+    """The worker states how long it *generated*, never how long the request took.
+
+    Both paths must mean the same thing by it: `complete()`'s `elapsed_seconds` and the value
+    `stream()` returns both start after the model is resident, so a cold turn's model load is in
+    neither. The rate the app shows is the stated `usage.completion_tokens` over this number; a
+    number that included the load would understate the model on exactly the first reply and then
+    change meaning on the second.
+
+    Each test pins that by measuring the load: a monkeypatched slow `_load_locked` (a slow
+    `mlx_lm.load`) has to happen - the wall clock proves it did - while the number the worker
+    states stays far below it.
+    """
+
+    # Long enough for the load to be unmistakable, with the stated window an order of magnitude
+    # below it, so a scheduling stall cannot make a route-measured number look engine-measured.
+    LOAD_SECONDS = 0.5
+    GENERATE_SECONDS = 0.04
+
+    def _engine(self, root: Path) -> ChatEngine:
+        model_dir = root / "model"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps({"text_config": {"max_position_embeddings": 262144}}))
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "tokenizer.json").write_text("{}")
+        return ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                          revision="r" * 40)
+
+    def _slow_load(self):
+        def load(*args, **kwargs):
+            time.sleep(self.LOAD_SECONDS)
+            return object(), _TemplateTokenizer()
+        return load
+
+    def _slow_stream(self, pieces=("Phnom", " Penh")):
+        def stream_generate(*args, **kwargs):
+            for piece in pieces:
+                time.sleep(self.GENERATE_SECONDS)
+                yield type("R", (), {"text": piece})()
+        return stream_generate
+
+    @staticmethod
+    def _consume(stream) -> tuple[list[str], float | None]:
+        """Consume a stream, returning its chunks and the window it *returned*.
+
+        The return value is the streaming path's measurement; a consumer that only iterates (and
+        so never reads it) simply states none.
+        """
+        chunks: list[str] = []
+        while True:
+            try:
+                chunks.append(next(stream))
+            except StopIteration as stop:
+                return chunks, stop.value
+
+    def test_a_completion_states_generation_time_and_not_the_model_load(self) -> None:
+        def slow_generate(*args, **kwargs):
+            time.sleep(self.GENERATE_SECONDS)
+            return "served"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            started = time.time()
+            with mock.patch("mlx_lm.load", self._slow_load()), \
+                    mock.patch("mlx_lm.generate", slow_generate):
+                outcome = engine.complete([{"role": "user", "content": "hi"}], max_tokens=8)
+            wall = time.time() - started
+        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
+        self.assertGreaterEqual(outcome["elapsed_seconds"], self.GENERATE_SECONDS * 0.5,
+                                "the generation itself is not in the stated time")
+        self.assertLess(
+            outcome["elapsed_seconds"], self.LOAD_SECONDS / 2,
+            "the model load is inside the stated generation time: a rate derived from it would "
+            "understate the model on the turn the owner is measuring")
+
+    def test_a_stream_returns_the_generation_window_it_measured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            started = time.time()
+            with mock.patch("mlx_lm.load", self._slow_load()), \
+                    mock.patch("mlx_lm.stream_generate", self._slow_stream()):
+                chunks, stated = self._consume(
+                    engine.stream([{"role": "user", "content": "hi"}], max_tokens=8))
+            wall = time.time() - started
+        self.assertEqual(chunks, ["Phnom", " Penh"])
+        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
+        self.assertIsInstance(stated, float, "the stream stated no generation window")
+        self.assertGreaterEqual(stated, self.GENERATE_SECONDS * 0.5)
+        self.assertLess(stated, self.LOAD_SECONDS / 2,
+                        "the model load is inside the stream's stated generation window")
+
+    def test_the_streamed_final_chunk_states_the_engines_own_measured_elapsed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp))
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            app = create_app(engine, policy, TOKEN, "a" * 64)
+            started = time.time()
+            # The prompt pre-flight is bypassed so the slow load happens *inside* `stream()`, on
+            # the first step the route takes - the one case a window measured by the route would
+            # pick the load up in. The engine's own window starts after the model is resident and
+            # must not contain it.
+            with mock.patch.object(ChatEngine, "check_prompt_fits", lambda *a, **k: None), \
+                    mock.patch("mlx_lm.load", self._slow_load()), \
+                    mock.patch("mlx_lm.stream_generate", self._slow_stream()):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                        json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
+            wall = time.time() - started
+        self.assertEqual(response.status_code, 200, response.text)
+        events = [line[len("data:"):].strip() for line in response.text.splitlines()
+                  if line.startswith("data:")]
+        self.assertEqual(events[-1], "[DONE]")
+        final = json.loads(events[-2])
+        self.assertEqual(final["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(final["usage"]["completion_tokens"], 2)
+        stated = final["studio_hub"]["elapsed_seconds"]
+        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
+        self.assertGreaterEqual(stated, self.GENERATE_SECONDS * 0.5)
+        self.assertLess(stated, self.LOAD_SECONDS / 2,
+                        "the route published a number measured around the stream rather than "
+                        "the engine's own generation window")
+
+    def test_a_stream_that_states_no_window_publishes_no_number(self) -> None:
+        # `_FakeEngine.stream` returns nothing at all. A worker whose engine measures nothing
+        # must publish nothing: the route does not fill the gap with a round trip of its own.
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True))
+            app = create_app(_FakeEngine(verified=True), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                    json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        events = [line[len("data:"):].strip() for line in response.text.splitlines()
+                  if line.startswith("data:")]
+        final = json.loads(events[-2])
+        self.assertEqual(final["choices"][0]["finish_reason"], "stop")
+        self.assertNotIn("studio_hub", final,
+                         "a number the engine never stated was published as a measurement")
 
 
 class StreamDisconnectRouteTests(unittest.TestCase):

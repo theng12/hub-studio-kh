@@ -19,7 +19,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Generator
 
 # Conservative default when the model publishes nothing. 4,096 is the floor the app's own
 # long-form budgeting already assumes, not a claim about this model.
@@ -503,7 +503,21 @@ class ChatEngine:
 
     def stream(self, messages: list[dict], *, max_tokens: int | None = None,
                temperature: float = DEFAULT_TEMPERATURE, top_p: float = DEFAULT_TOP_P,
-               response_format=None, seed=None, thinking: bool = False) -> Iterator[str]:
+               response_format=None, seed=None, thinking: bool = False
+               ) -> Generator[str, None, float]:
+        """Stream one completion's text, returning the generation window it measured.
+
+        The generator's **return value** is ``elapsed_seconds`` for this generation: the time
+        spent producing it, started in exactly the place ``complete()`` starts its own (after the
+        model is resident), so "how long the engine spent generating" means the same thing on
+        both paths and anything derived from either is comparable. A cold turn's model load is
+        therefore not in it.
+
+        It is returned with the stream rather than stored on the engine because it belongs to one
+        request: an attribute would be shared state, and the next request could overwrite it
+        between this stream ending and its caller writing the final chunk - publishing another
+        request's number as this one's.
+        """
         # The lock is taken and released explicitly rather than with `with`, because this is a
         # generator: its consumer may abandon it (a client that disconnects mid-SSE), and an
         # abandoned generator is finalised at an arbitrary later moment, on whatever thread drops
@@ -530,6 +544,9 @@ class ChatEngine:
                 self._count_tokens_unlocked(self._prompt(working, thinking=thinking)), budget)
             self._generating = True
             self._last_activity_at = time.time()
+            # Where `complete()` starts its own window: after `_load_locked()`, so a cold turn's
+            # model load is not counted as generation.
+            generation_started = time.time()
             try:
                 from mlx_lm import stream_generate
                 from mlx_lm.sample_utils import make_sampler
@@ -543,6 +560,7 @@ class ChatEngine:
             finally:
                 self._generating = False
                 self._last_activity_at = time.time()
+            return round(max(0.0, time.time() - generation_started), 3)
         finally:
             # Count the ending before the lock is free, so a reader that sees the lock released
             # also sees the counters balanced.
