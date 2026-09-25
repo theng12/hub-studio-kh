@@ -121,6 +121,17 @@ keys ship; a reader that wants to know how to *ask for work* reads `lane_contrac
   and a lane that published one number would set the wrong deadline for whichever mode the host
   selects.
 
+- **`structured_output`** is optional and currently published by the `chat` lane alone. It
+  states **how** a structured answer is guaranteed, which "json_object is supported" does not:
+  `formats`, `enforcement` (`prompt_validate_repair` here), `grammar_constrained`,
+  `repair_attempts`, and a sentence saying what a caller should therefore do. It exists because a
+  downstream consumer was deciding a *client-side* technique — Story Studio's two-pass planning for
+  strict-JSON call sites — and the honest contract is the fact about the lane, not a verdict on the
+  technique: a producer that published `two_pass: true` would be letting one consumer's strategy
+  into the model's data. Absent means "not applicable"; a lane that gains a structured-output
+  guarantee publishes this field rather than a note, because a consumer can match a field and
+  cannot match prose.
+
 **`deadline_seconds` is not in the worker's contract.** The 900 s Gateway Studio named is the
 **Hub's** own peer-proxy request timeout (`standalone.PEER_PROXY_TIMEOUT_S`, used as `httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0)`)
 — one constant for every lane, owned by the party that enforces it. A worker that restated it would

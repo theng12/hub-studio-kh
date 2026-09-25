@@ -400,6 +400,27 @@ def _lane_contract(engine, parameters: list[dict]) -> dict:
                 "runs to completion and a cancelled pack is not evidence that no completion was "
                 "produced"),
         },
+        # How this lane enforces a structured answer, as a fact rather than as prose. A consumer
+        # deciding whether a strict-JSON call site is safe here — Story Studio's outline,
+        # thumbnail-prompt and metadata contracts are exactly that — needs to know *how* the JSON
+        # guarantee is kept, and "json_object is supported" does not say it. This runtime has no
+        # grammar-constrained decoding, so the guarantee is a prompt, a validation and one repair
+        # re-ask; a caller assuming a grammar would treat a repaired answer as a first-try one and
+        # pay for two generations without knowing.
+        #
+        # Absent on every other lane, and absent means "not applicable": only a text lane has a
+        # structured-output guarantee to describe. A lane that gains one publishes this field
+        # rather than a sentence, because a consumer can match a field and cannot match prose.
+        "structured_output": {
+            "formats": ["json_object", "json_schema"],
+            "enforcement": "prompt_validate_repair",
+            "grammar_constrained": False,
+            "repair_attempts": 1,
+            "note": ("the format is requested in the prompt, the answer is validated, and one "
+                     "repair re-ask is made when it does not parse; there is no "
+                     "grammar-constrained decoding in this runtime, so a caller should validate "
+                     "too and should expect a repaired answer to have cost a second generation"),
+        },
     }
 
 
