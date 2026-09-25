@@ -417,6 +417,86 @@ class TranscriptionCapabilityTests(unittest.TestCase):
         self.assertEqual(chosen, {"voice", "subtitle"})
 
 
+class VoiceModeVocabularyTests(unittest.TestCase):
+    """B13 — the Voice worker publishes the modes; the Hub renames them and never re-derives.
+
+    `_voice_modes` used to decide this itself: `"voice-design" in capabilities or "voicedesign"
+    in repo` — the A9 name-substring shape — plus a `"tts" in capabilities` default, so a
+    design-capable model whose repo id did not spell it lost a mode it offers, and a TTS model
+    that declared nothing was advertised as `preset_voice` on the strength of being TTS. The
+    producer now publishes a top-level `modes` array on every row, and these tests hold the Hub
+    to reading it — including for the shipped catalog, so the next producer mode cannot land
+    without the Hub being taught it.
+    """
+
+    def _shipped_rows(self) -> list[dict]:
+        from components.voice.app.backend import catalog as voice_catalog
+
+        rows = [voice_catalog.serialize_model(model) for model in voice_catalog.CATALOG]
+        self.assertTrue(rows, "the shipped Voice catalog is empty")
+        return rows
+
+    def test_every_mode_the_producer_publishes_has_a_hub_control(self) -> None:
+        """The invariant: the producer's vocabulary is covered by the Hub's mapping."""
+        for row in self._shipped_rows():
+            with self.subTest(model=row["repo"]):
+                published = row["modes"]
+                self.assertTrue(
+                    published, "the producer promises a non-empty `modes` array")
+                mapped = capabilities._voice_modes(
+                    {"repo": row["repo"], "modes": published})
+                # Compared through the real table, so this test cannot restate the mapping.
+                self.assertEqual(
+                    mapped,
+                    [capabilities.VOICE_CONTROL_FOR_MODE[mode] for mode in published],
+                )
+                self.assertTrue(
+                    set(mapped) <= set(capabilities.VOICE_CONTROLS),
+                    "a mapped voice control is outside the Hub's published vocabulary",
+                )
+
+    def test_the_hub_vocabulary_is_exactly_the_mapping(self) -> None:
+        self.assertEqual(set(capabilities.VOICE_CONTROLS),
+                         set(capabilities.VOICE_CONTROL_FOR_MODE.values()))
+
+    def test_the_mapping_keeps_the_producers_own_order(self) -> None:
+        """The producer orders cloning→preset→design; the Hub renames without reordering."""
+        self.assertEqual(
+            capabilities._voice_modes(
+                {"repo": "org/voice", "modes": ["design", "cloning"]}),
+            [capabilities.VOICE_CONTROL_FOR_MODE["design"],
+             capabilities.VOICE_CONTROL_FOR_MODE["cloning"]],
+        )
+
+    def test_a_mode_the_hub_does_not_know_fails_by_name_and_file(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            capabilities._voice_modes(
+                {"repo": "org/new-voice", "modes": ["cloning", "beatbox"]})
+        message = str(raised.exception)
+        self.assertIn("'beatbox'", message)
+        self.assertIn("org/new-voice", message)
+        self.assertIn("capabilities.py", message)
+        self.assertIn("components/voice/app/backend/catalog.py", message)
+
+    def test_a_row_with_no_published_modes_is_not_guessed(self) -> None:
+        """This row is what the old derivation turned into `reference_audio_clone`."""
+        row = {"repo": "org/VoiceDesign-9B",
+               "capabilities": ["tts", "voice-cloning", "voice-design"]}
+        capabilities._reported_unpublished_voice_modes.discard(row["repo"])
+        with self.assertLogs("studiohub.capabilities", level="WARNING") as captured:
+            self.assertIsNone(capabilities._voice_modes(row))
+        self.assertTrue(
+            any(row["repo"] in line and "catalog.py" in line for line in captured.output),
+            f"the stale producer was not named in the log: {captured.output}",
+        )
+        controls = capabilities._controls(row, "voice")
+        self.assertNotIn(
+            "voice_modes", controls,
+            "a Voice row with no published modes must publish no mode at all")
+        # Only the mode is withheld; the rest of the row is still described.
+        self.assertEqual(controls["capabilities"], row["capabilities"])
+
+
 class CloudGuardDirectionTests(unittest.TestCase):
     """B12 — anything that names a hosted vendor is refused; an unknown spelling is not."""
 

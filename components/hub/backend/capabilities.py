@@ -7,6 +7,7 @@ content, credentials, local cache paths, or global ownership identifiers.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -109,17 +110,76 @@ def _immutable_runtime_revision(model: dict) -> tuple[str | None, str | None, st
     return None, None, "reported_but_not_immutable" if saw_unverified else "not_reported"
 
 
-def _voice_modes(model: dict) -> list[str]:
-    capabilities = set(_string_list(model.get("capabilities")))
-    repo = str(model.get("repo") or "").lower()
-    modes = []
-    if "voice-cloning" in capabilities:
-        modes.append("reference_audio_clone")
-    if "voice-design" in capabilities or "voicedesign" in repo:
-        modes.append("voice_design")
-    if "tts" in capabilities and not modes:
-        modes.append("preset_voice")
-    return modes
+# The Voice worker's own mode vocabulary -> the Hub's peer-facing control vocabulary. One table,
+# in one place. The Hub's names are closed (audit row C2): GenStudio joins on these strings, so
+# renaming the producer's modes is this module's job and no consumer re-derives them.
+VOICE_CONTROL_FOR_MODE = {
+    "cloning": "reference_audio_clone",
+    "preset": "preset_voice",
+    "design": "voice_design",
+}
+# Derived from the table so the published vocabulary and the mapping cannot drift apart.
+VOICE_CONTROLS = tuple(VOICE_CONTROL_FOR_MODE.values())
+# The producer function that publishes the fact this module reads, named in every refusal so the
+# next person knows which file to update.
+_VOICE_MODE_SOURCE = "components/voice/app/backend/catalog.py::voice_modes"
+# One warning per model per process: this snapshot is polled, and a stale studio would otherwise
+# repeat the same line on every poll.
+_reported_unpublished_voice_modes: set[str] = set()
+
+
+def _voice_modes(model: dict) -> list[str] | None:
+    """The Hub's control names for the voice modes this model publishes.
+
+    The Voice worker publishes a top-level ``modes`` array on every ``/api/catalog`` row, in its
+    own vocabulary (``cloning`` / ``preset`` / ``design``), derived from the model's own published
+    capabilities and its family's own facts
+    (``components/voice/app/backend/catalog.py::voice_modes``). This function only renames that
+    fact into the Hub's peer-facing control vocabulary, in the producer's order.
+
+    It used to derive the answer here instead - ``"voice-design" in capabilities or "voicedesign"
+    in repo``, then ``"tts" in capabilities`` as a preset default - which is the A9 name-substring
+    shape and a silent default in one function. VoxCPM2 4-bit/8-bit/bf16 (MLX) and OmniVoice bf16
+    publish ``design`` without containing that string, so the Hub dropped a mode they offer, and
+    any TTS model declaring nothing else was advertised as ``preset_voice`` on the strength of
+    being TTS at all. Nothing about a model is re-derived here now.
+
+    A mode this table does not know is a vocabulary the Hub has not been taught: it is refused by
+    name, with both files to update, exactly as ``_worker_for_engine`` refuses an unknown engine -
+    never dropped and never approximated.
+
+    A row that publishes no usable ``modes`` array comes from a Voice build that predates the
+    contract. The Hub publishes no mode for it at all (``None``) rather than guessing one, and
+    says so once, naming the model and the file to update. It deliberately does not refuse: a
+    single stale studio must not take ``/api/hub/capabilities`` - and with it every modality's
+    capacity evidence - down for the whole site, which is the 0.6.57 shape. Publishing nothing
+    can never advertise a mode nobody declared, which is the defect this replaces.
+    """
+    repo = str(model.get("repo") or model.get("model_id") or "unknown")[:500]
+    published = model.get("modes")
+    if (not isinstance(published, list) or not published
+            or not all(isinstance(mode, str) for mode in published)):
+        if repo not in _reported_unpublished_voice_modes:
+            _reported_unpublished_voice_modes.add(repo)
+            logging.getLogger("studiohub.capabilities").warning(
+                "the Voice catalog row for %r publishes no usable 'modes' array (%r); the Hub "
+                "publishes no voice mode for it rather than guessing one - %s must publish a "
+                "non-empty 'modes' array of %s",
+                repo, published, _VOICE_MODE_SOURCE, sorted(VOICE_CONTROL_FOR_MODE),
+            )
+        return None
+    controls: list[str] = []
+    for mode in published:
+        control = VOICE_CONTROL_FOR_MODE.get(mode)
+        if control is None:
+            raise ValueError(
+                f"the Voice catalog publishes the voice mode {mode!r} for {repo!r}, which the "
+                f"Hub does not know; add it to VOICE_CONTROL_FOR_MODE in "
+                f"components/hub/backend/capabilities.py and to VOICE_MODES in "
+                f"{_VOICE_MODE_SOURCE}")
+        if control not in controls:
+            controls.append(control)
+    return controls
 
 
 def _controls(model: dict, modality: str) -> dict:
@@ -173,7 +233,11 @@ def _controls(model: dict, modality: str) -> dict:
         if safe_defaults:
             controls["defaults"] = safe_defaults
     if modality == "voice":
-        controls["voice_modes"] = _voice_modes(model)
+        # Absent means the producer published no modes (see `_voice_modes`): the Hub publishes no
+        # mode at all rather than a guessed one.
+        voice_modes = _voice_modes(model)
+        if voice_modes is not None:
+            controls["voice_modes"] = voice_modes
     if modality == "chat" and model.get("verified_token_usage") is True:
         controls["verified_token_usage"] = True
     return controls

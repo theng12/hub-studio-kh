@@ -81,7 +81,8 @@ def test_a_serving_studio_publishes_models_operations_and_supply(fixture_monitor
 def test_a_modality_maps_to_the_peer_operation_vocabulary(fixture_monitor):
     monitor = fixture_monitor
     _serve(monitor, "music", [_row("ACE-Step/Ace-Step1.5")])
-    _serve(monitor, "voice", [_row("mlx-community/VoxCPM2-4bit")])
+    # A Voice row as the worker publishes it now: `modes` is the producer's own fact.
+    _serve(monitor, "voice", [_row("mlx-community/VoxCPM2-4bit", modes=["cloning", "design"])])
     _serve(monitor, "subtitle", [_row("mlx-community/whisper-base-mlx")],
            transcription=True)
 
@@ -93,6 +94,49 @@ def test_a_modality_maps_to_the_peer_operation_vocabulary(fixture_monitor):
     assert "music.generation" in operations["music"]
     assert "voice.tts" in operations["voice"]
     assert "audio.transcription" in operations["subtitle"]
+
+
+def test_a_voice_row_is_offered_in_exactly_the_modes_its_catalog_declared(fixture_monitor):
+    """The Hub renames the producer's `modes`; it does not re-derive them from the row.
+
+    VoxCPM2 4-bit (MLX) publishes `["cloning", "design"]` and declares no `voice-design`
+    capability, so any consumer-side derivation loses the design mode it offers.
+    """
+    from components.hub.backend import capabilities
+
+    monitor = fixture_monitor
+    _serve(monitor, "voice", [_row("mlx-community/VoxCPM2-4bit", modes=["cloning", "design"])])
+
+    snapshot = _build(monitor)
+    worker = next(row for row in snapshot["workers"] if row["service_id"] == "voice")
+    assert worker["models"][0]["controls"]["voice_modes"] == [
+        capabilities.VOICE_CONTROL_FOR_MODE["cloning"],
+        capabilities.VOICE_CONTROL_FOR_MODE["design"],
+    ]
+
+
+def test_a_voice_row_with_unpublished_modes_advertises_no_mode_and_no_failure(
+        fixture_monitor, caplog):
+    """A Voice build that predates the `modes` contract must not blank the site contract.
+
+    Refusing here would take `/api/hub/capabilities` - and every modality's capacity evidence -
+    down because one studio is stale, which is the 0.6.57 shape. The row is still published,
+    with no voice mode advertised at all, and the model and the file to update are named in
+    the log: guessing `preset_voice` is the defect this replaced.
+    """
+    monitor = fixture_monitor
+    _serve(monitor, "voice", [_row("org/voice-worker-from-an-older-release")])
+
+    with caplog.at_level("WARNING", logger="studiohub.capabilities"):
+        snapshot = _build(monitor)
+
+    worker = next(row for row in snapshot["workers"] if row["service_id"] == "voice")
+    assert "voice_modes" not in worker["models"][0]["controls"]
+    assert worker["models"][0]["operation"] == "voice.tts"
+    assert snapshot["capacity"]["by_operation"]["voice.tts"]["workers_total"] == 1
+    assert any("org/voice-worker-from-an-older-release" in record.getMessage()
+               and "components/voice/app/backend/catalog.py" in record.getMessage()
+               for record in caplog.records), caplog.text
 
 
 def test_no_machine_fitting_the_model_is_zero_not_an_invented_value(fixture_monitor):
