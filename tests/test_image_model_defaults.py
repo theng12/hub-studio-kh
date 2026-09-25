@@ -492,5 +492,71 @@ class TheTwoAxesStaySeparateTests(ImageModelDefaultsFixture):
                          loading_mode.SETTINGS_NAME)
 
 
+class TheIgnoredMarkerIsAFieldTests(ImageModelDefaultsFixture):
+    """A parameter the lane accepts and then ignores says so twice: a field and a sentence.
+
+    Z-Image-Turbo runs without classifier-free guidance, so it accepts ``guidance`` and drops it.
+    The app has to explain that control rather than pretend it works — and it must match a
+    *field*, not a sentence, because a consumer keyed to prose stops matching the moment the prose
+    is reworded. The two are published together so they cannot drift apart.
+    """
+
+    def test_every_marked_parameter_says_so_and_every_one_that_says_so_is_marked(self) -> None:
+        for model in MODELS.values():
+            parameters = lane_parameters(model)
+            with self.subTest(repo=model.repo):
+                for parameter in parameters:
+                    marked = parameter.get('ignored') is True
+                    prose = 'ignored' in (parameter.get('note') or '')
+                    self.assertEqual(
+                        marked, prose,
+                        f'{parameter["name"]}: the field a consumer matches and the note a person '
+                        'reads must say the same thing')
+                guidance = next(parameter for parameter in parameters
+                                if parameter['name'] == 'guidance')
+                self.assertEqual(guidance.get('ignored', False), model.guidance_ignored,
+                                 "the row's flag and the parameter's field are one fact")
+        # A guard, so the loop above cannot pass by covering only one shape.
+        ignored = [model.repo for model in MODELS.values() if model.guidance_ignored]
+        self.assertTrue(ignored, 'no registered model exercises the ignored case')
+        self.assertLess(len(ignored), len(MODELS),
+                        'no registered model exercises the not-ignored case')
+
+    def test_a_parameter_with_no_ignored_key_is_not_ignored(self) -> None:
+        for model in MODELS.values():
+            unmarked = [parameter for parameter in lane_parameters(model)
+                        if not parameter.get('ignored')]
+            with self.subTest(repo=model.repo):
+                self.assertTrue(unmarked)
+                for parameter in unmarked:
+                    self.assertNotIn('ignored', parameter,
+                                     'the field is published only when true: absent is not true')
+        # The control: it really is published for the parameter this model ignores.
+        ignored = {parameter['name']: parameter
+                   for parameter in lane_parameters(Z_IMAGE_TURBO)
+                   if parameter.get('ignored')}
+        self.assertEqual(sorted(ignored), ['guidance'])
+        self.assertIs(ignored['guidance']['ignored'], True)
+        self.assertIn('ignored', ignored['guidance']['note'])
+
+    def test_the_catalog_and_the_editor_publish_it_on_the_parameters_own_row(self) -> None:
+        for repo, entry in self.catalog().items():
+            published = {parameter['name']: parameter
+                         for parameter in entry['lane_contract']['parameters']}
+            with self.subTest(repo=repo):
+                self.assertEqual(published['guidance'].get('ignored', False),
+                                 entry['guidance_ignored'],
+                                 "the row's flag and the parameter's field are one fact")
+                for name, parameter in published.items():
+                    self.assertEqual(parameter.get('ignored', False),
+                                     'ignored' in (parameter.get('note') or ''), name)
+        # And it reaches the surface the Models tab renders controls from.
+        for repo, row in self.rows().items():
+            parameters = {parameter['name']: parameter for parameter in row['parameters']}
+            with self.subTest(repo=repo, where='editor'):
+                self.assertEqual(parameters['guidance'].get('ignored', False),
+                                 MODELS[repo].guidance_ignored)
+
+
 if __name__ == '__main__':
     unittest.main()

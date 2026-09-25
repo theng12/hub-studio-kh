@@ -311,6 +311,12 @@ class SubtitleManager:
                 'supports_word_timestamps': entry['supports_word_timestamps'],
                 'supports_long_form': entry['supports_long_form'],
                 'lane_contract': entry['lane_contract'],
+                # The package's own weight format, on the row this route publishes: the app used
+                # to read `readiness.files.weight_files` off the catalog row and join the file
+                # names itself, which is an interpretation standing in for a fact and answers
+                # nothing for a package with no loadable weights. Stated here instead, beside the
+                # readiness it belongs to.
+                'weight_format': entry.get('weight_format'),
                 'recommended': entry['recommended'],
                 'cached': files['state'] == 'files_verified',
                 'ready': entry['readiness']['ready'],

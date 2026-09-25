@@ -449,6 +449,40 @@ class TestAppliedToARequest:
             assert set(generation_defaults) == set(published), row["repo"]
             assert generation_defaults == published, row["repo"]
 
+    def test_every_row_publishes_a_seedable_default_map(self, client):
+        """Not just the model a test happens to name: every registered row carries the object."""
+        rows = client.get("/api/catalog").json()["models"]
+        assert rows
+        for row in rows:
+            assert isinstance(row.get("generation_defaults"), dict), row["repo"]
+            assert "speed" in row["generation_defaults"], row["repo"]
+
+    def test_a_page_that_seeds_from_the_catalog_sends_the_stored_pace(self, client, queued):
+        """A stored default the app cannot read is defeated by the app sending every field.
+
+        The Audio page pre-fills its speed slider from the catalogue's ``generation_defaults`` and
+        sends every field, so the row has to publish the resolved pace: seeded from anything else,
+        the request arrives carrying that other number and wins over the operator's default.
+        """
+        model = catalog.get_model(SECTIONING)
+        parameter = _parameter(model, "speed")
+        stored = _inside(parameter, _row(client, model.repo)["stated"]["speed"])
+        client.put("/api/model-defaults",
+                   json={"repo": model.repo, "values": {"speed": stored}})
+
+        row = next(m for m in client.get("/api/catalog").json()["models"]
+                   if m["repo"] == model.repo)
+        seeded = row["generation_defaults"]["speed"]
+        assert seeded == stored
+        assert seeded == next(p for p in row["lane_contract"]["parameters"]
+                              if p["name"] == "speed")["default"]
+
+        # The page sends every field, so the value it seeded with comes back as an explicit one.
+        response = client.post("/api/generate/txt2speech", json={
+            "repo": model.repo, "text": "The page seeded this pace.", "speed": seeded})
+        assert response.status_code == 200, response.text
+        assert queued[0]["speed"] == stored
+
     def test_the_reference_route_applies_them_the_same_way(self, client, queued, monkeypatch):
         model = catalog.get_model(SECTIONING)
         parameter = _parameter(model, "speed")

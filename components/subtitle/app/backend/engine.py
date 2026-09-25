@@ -63,6 +63,14 @@ CONDITION_ON_PREVIOUS_TEXT = False
 # and Small MLX packages ship ``weights.npz``; Turbo ships ``weights.safetensors``.
 # Report this honestly instead of attempting a load that cannot work.
 SUPPORTED_WEIGHT_GLOBS = ('*.safetensors',)
+# The format the local view builder converts into the supported one. It is a glob here for the
+# same reason the supported one is: the format a package ships is read from these, never from a
+# second list of extension strings that could disagree with the code that loads the file.
+CONVERTIBLE_WEIGHT_GLOBS = ('*.npz',)
+SUPPORTED_WEIGHT_SUFFIXES = tuple(
+    Path(pattern).suffix.lower().lstrip('.') for pattern in SUPPORTED_WEIGHT_GLOBS)
+CONVERTIBLE_WEIGHT_SUFFIXES = tuple(
+    Path(pattern).suffix.lower().lstrip('.') for pattern in CONVERTIBLE_WEIGHT_GLOBS)
 UNSUPPORTED_WEIGHT_NOTE = (
     'mlx-audio Whisper loading supports *.safetensors weights; this pinned '
     'package ships weights.npz, so it is catalog-only on this runtime'
@@ -102,6 +110,27 @@ LANE_CANCEL = {
 }
 LANE_ARTIFACT = {'modality': 'transcription', 'media_type': 'application/json',
                  'extension': 'json', 'per_item': 1}
+
+
+def weight_format(manifest: dict) -> Optional[str]:
+    """The weight format a package states, read from its own file inventory.
+
+    From the manifest rather than from what happens to be verified on this Mac, because the format
+    is a fact about the *package*: a page can state it before the weights are downloaded, and a
+    package that ships only a format this runtime cannot load still says which one it ships -
+    which is exactly the case the old join could not answer, because a package with no loadable
+    weights publishes an empty `weight_files` list.
+
+    A supported format wins when a package declares both, because that is the file a job here
+    would open. ``None`` means the package declares no weight file this worker recognises, which
+    is a different statement from a format it cannot load.
+    """
+    declared = [str(entry.get('path') or '')
+                for entry in (manifest.get('files') or []) if isinstance(entry, dict)]
+    for suffix in (*SUPPORTED_WEIGHT_SUFFIXES, *CONVERTIBLE_WEIGHT_SUFFIXES):
+        if any(Path(name).suffix.lower().lstrip('.') == suffix for name in declared):
+            return suffix
+    return None
 
 
 def subtitle_capabilities(manifest: dict) -> dict:
@@ -472,13 +501,14 @@ class SubtitleEngine:
         else:
             reason = 'the manifest states no model_id to resolve through the shared Voice cache'
         model = folder / 'model'
-        if any(model.glob('*.safetensors')):
+        if any(path for pattern in SUPPORTED_WEIGHT_GLOBS for path in model.glob(pattern)):
             self._view_source[package_id] = {
                 'source': 'library', 'folder': str(model),
                 'reason': (f'the shared Voice cache did not answer ({reason}); the library folder '
                            'already ships *.safetensors weights this runtime can load')}
             return model
-        npz_files = sorted(model.glob('*.npz'))
+        npz_files = sorted(path for pattern in CONVERTIBLE_WEIGHT_GLOBS
+                           for path in model.glob(pattern))
         # This worker carries its own state root name, so accept either.
         state = (os.environ.get('STUDIOHUB_DATA_DIR')
                  or os.environ.get('STUDIOHUB_SUBTITLE_DATA_DIR'))
@@ -564,6 +594,7 @@ class SubtitleEngine:
         except Exception as exc:  # an unreadable library is an explicit state
             return {'state': 'invalid', 'reason': f'{type(exc).__name__}: {exc}',
                     'package_id': package_id, 'revision': location.revision,
+                    'weight_format': weight_format(location.manifest),
                     'runtime_supported': False}
         weights = self._weight_files(location)
         runtime_supported = bool(weights)
@@ -579,6 +610,10 @@ class SubtitleEngine:
                 'processor_folder': str(location.processor_folder)
                 if location.processor_folder.is_dir() else None,
                 'weight_files': [path.name for path in weights],
+                # The format the package ships, stated rather than left for a consumer to infer
+                # from `weight_files` (which is empty for a package this runtime cannot load, and
+                # is the converted view rather than the package when it can).
+                'weight_format': weight_format(location.manifest),
                 'view_source': self._view_source.get(package_id),
                 'runtime_supported': runtime_supported}
 
@@ -660,6 +695,11 @@ class SubtitleEngine:
                 # what the app pre-fills a form from: one map, so the lane contract's `default`
                 # fields, this object and what an omitted form field receives cannot disagree.
                 'generation_defaults': dict(chosen.get(manifest['model_id']) or {}),
+                # The weight format the package states, on the row itself: the app read
+                # `readiness.files.weight_files` and took the extension by joining file names,
+                # which is an interpretation standing in for a fact and answers nothing for a
+                # package with no loadable weights.
+                'weight_format': files.get('weight_format'),
                 'min_total_memory_gb': 8,
                 'qualification': manifest.get('qualification') or {},
             })

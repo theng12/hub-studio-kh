@@ -585,6 +585,18 @@ def lane_parameters(model: ImageModel) -> list[dict]:
     A fresh list of fresh dicts on every call: the caller may set a resolved ``default`` on a
     parameter without that leaking into the next model's contract.
     """
+    guidance = {'name': 'guidance', 'type': 'number', 'required': False,
+                'minimum': model.limits['min_guidance'],
+                'maximum': model.limits['max_guidance'],
+                'default': model.defaults['guidance']}
+    if model.guidance_ignored:
+        # Two halves of one fact, published together so a lane cannot mark one without the other:
+        # `ignored` is the field a consumer matches (a sentence is not a contract, and matching
+        # prose is how a rename silently stops a control being explained), and `note` is what a
+        # person reads. A parameter with no `ignored` key is not ignored — absent is not true.
+        guidance['ignored'] = True
+        guidance['note'] = ('accepted and ignored: this model runs without classifier-free '
+                            'guidance')
     return [
         {'name': 'prompt', 'type': 'string', 'required': True,
          'max_characters': model.limits['max_prompt']},
@@ -596,11 +608,7 @@ def lane_parameters(model: ImageModel) -> list[dict]:
         {'name': 'steps', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_steps'], 'maximum': model.limits['max_steps'],
          'default': model.defaults['steps']},
-        {'name': 'guidance', 'type': 'number', 'required': False,
-         'minimum': model.limits['min_guidance'], 'maximum': model.limits['max_guidance'],
-         'default': model.defaults['guidance'],
-         'note': ('accepted and ignored: this model runs without classifier-free guidance'
-                  if model.guidance_ignored else None)},
+        guidance,
         {'name': 'seed', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
          'default': model.defaults['seed'], 'note': '-1 draws a random seed'},

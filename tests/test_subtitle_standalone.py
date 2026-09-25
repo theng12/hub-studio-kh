@@ -972,6 +972,89 @@ class ModelDefaultsTests(SubtitleFixture):
                          {'mode': 'memory_saver'})
 
 
+class WeightFormatPublicationTests(SubtitleFixture):
+    """The weight format is *stated* on the row the app reads, not inferred from a file list.
+
+    The app read ``readiness.files.weight_files`` off the catalog row and took the extension
+    itself. That is an interpretation standing in for a fact: it answers nothing for a package
+    this runtime cannot load (its ``weight_files`` is empty), it describes the converted view
+    rather than the package once a view exists, and it changes silently when a receipt changes.
+    The row now carries the format the package's own inventory declares.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.manager = self.build_manager()
+        self.client = TestClient(create_app(self.manager, TOKEN))
+        self.headers = {'X-Hub-Token': TOKEN}
+        self.catalog = {entry['package_id']: entry
+                        for entry in self.client.get('/api/catalog',
+                                                     headers=self.headers).json()['models']}
+        self.availability = {model['package_id']: model
+                             for model in self.client.get(
+                                 '/api/transcribe/availability',
+                                 headers=self.headers).json()['models']}
+
+    def declared_weights(self, manifest: dict) -> list[str]:
+        """Every extension the package's own inventory carries, in manifest order."""
+        return [Path(entry['path']).suffix.lstrip('.') for entry in manifest['files']
+                if Path(entry['path']).suffix]
+
+    def test_the_availability_row_states_the_format_the_package_declares(self) -> None:
+        """The row the app reads carries it, and every projection of one package agrees."""
+        for manifest in self.manifests:
+            package_id = manifest['package_id']
+            with self.subTest(package=package_id):
+                stated = self.availability[package_id]['weight_format']
+                self.assertIsNotNone(stated)
+                self.assertIn(stated, self.declared_weights(manifest),
+                              'the format must be one the package itself declares')
+                self.assertEqual(stated, self.catalog[package_id]['weight_format'])
+                self.assertEqual(stated,
+                                 self.catalog[package_id]['readiness']['files']['weight_format'])
+        # The route is the one the Hub and the app read, not just the in-process call.
+        served = {model['package_id']: model.get('weight_format')
+                  for model in self.client.get('/api/transcribe/availability',
+                                               headers=self.headers).json()['models']}
+        self.assertEqual(served, {package_id: model['weight_format']
+                                  for package_id, model in self.availability.items()})
+
+    def test_a_package_this_runtime_cannot_load_still_states_its_format(self) -> None:
+        """The case the old join could not answer: no loadable weights, a format all the same."""
+        not_runnable = [manifest for manifest in self.manifests
+                        if not self.catalog[manifest['package_id']]
+                        ['readiness']['files']['runtime_supported']]
+        self.assertTrue(not_runnable, 'the fixture must carry a package this runtime cannot load')
+        for manifest in not_runnable:
+            package_id = manifest['package_id']
+            with self.subTest(package=package_id):
+                entry = self.catalog[package_id]
+                self.assertEqual(entry['readiness']['files']['weight_files'], [],
+                                 'the old join had nothing to read for this package')
+                self.assertNotIn(entry['weight_format'],
+                                 engine_module.SUPPORTED_WEIGHT_SUFFIXES,
+                                 'this package is the one this runtime cannot open')
+                self.assertIn(entry['weight_format'],
+                              engine_module.CONVERTIBLE_WEIGHT_SUFFIXES)
+                self.assertEqual(self.availability[package_id]['weight_format'],
+                                 entry['weight_format'])
+
+    def test_a_runnable_package_states_the_format_this_runtime_opens(self) -> None:
+        for manifest in self.manifests:
+            package_id = manifest['package_id']
+            files = self.catalog[package_id]['readiness']['files']
+            if not files['runtime_supported']:
+                continue
+            with self.subTest(package=package_id):
+                self.assertEqual(self.catalog[package_id]['weight_format'],
+                                 Path(files['weight_files'][0]).suffix.lstrip('.'))
+
+    def test_a_manifest_stating_no_recognised_weight_names_none(self) -> None:
+        """`None` is "this package declares no weight file I know", not a guessed format."""
+        self.assertIsNone(engine_module.weight_format({'files': [
+            {'path': 'model/config.json'}, {'path': 'README.md'}]}))
+
+
 class CatalogDiscoveryTests(SubtitleFixture):
     """A1 — the worker's catalog is every manifest that *declares* the Subtitle engine.
 
