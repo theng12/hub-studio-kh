@@ -9,6 +9,8 @@ Last updated: 0.6.66 (the tab was filtering the models that could reach the tab,
 
 **The lesson each of the three taught, in one line each.** A published number needs an artefact, so the test opens the file the row names — a scene description is not a source. A shape in a table nobody references is not a contract. And **a guard the runner does not collect is not a guard**: the first version of the SH-18 test class was named `LaneDecidesBoundaryTests`, pytest collected nothing, and the suite reported the same count as before — which is how a boundary goes unguarded while looking guarded.
 
+**SH-15(a) is closed as hardened, not as fixed, and the distinction is deliberate.** The `native/build.sh` cancellation flake was hunted deliberately: **60 runs of the native suite with the pre-fix behaviour restored, and 40 with the fix — 100 runs, zero failures.** So the original occurrence is *unattributed*. Two real timing races were found in the assertion's own test and removed: the hold's semaphore was process-wide (a `signal()` arriving after its hold ended stayed in its count and would release the *next* hold early), and the assertion read the cancellation count once, racing the `stopLoading` callback that arrives on URLSession's own delegate queue. **The code comment says the cause is unproven rather than claiming it.** A later session that sees this message again should read that comment before believing it was fixed.
+
 **0.6.66 in one paragraph.** The owner found the Audio page "dodgy": he had Khmer TTS installed and
 could not see it. It was a **closed loop between two controls** — the voice tabs were the *selected
 model's* modes, and the model picker listed only models publishing *the current tab's* mode — so a

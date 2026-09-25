@@ -60,7 +60,19 @@ final class FixtureProtocol: URLProtocol {
     /// read failure can be told apart from a cancelled one.
     static var voiceListFailureStatus: Int?
     static let voiceListStarted = DispatchSemaphore(value: 0)
-    static let releaseVoiceList = DispatchSemaphore(value: 0)
+    /// One semaphore **per hold**, not one for the process.
+    ///
+    /// It was `static let`, so a `signal()` arriving after its own hold had ended stayed in the
+    /// semaphore's count, and the next hold's `wait` would consume it and return instantly —
+    /// releasing the read before a test could cancel it, with the cancellation then never counted.
+    /// That is a real race and it is removed.
+    ///
+    /// **It is not claimed as the cause of SH-15(a).** That flake was never reproduced: 60 runs of
+    /// this suite with the shared semaphore restored, and 40 with it removed, all passed. Two
+    /// timing races were found in the test this assertion lives in and both are fixed; the original
+    /// occurrence remains unattributed, and the honest record of that is in
+    /// `docs/cross-project-open-items.md`.
+    static var releaseVoiceList = DispatchSemaphore(value: 0)
     static var voiceAudioCalls = 0
     static var voiceDeleteCalls = 0
     static var voiceAddCalls = 0
@@ -228,6 +240,8 @@ final class FixtureProtocol: URLProtocol {
         lock.lock(); defer { lock.unlock() }
         holdNextVoiceList = true
         heldVoiceListStarted = false
+        // A fresh count for this hold, so no earlier signal can release it early.
+        releaseVoiceList = DispatchSemaphore(value: 0)
     }
     static func voiceListHasStarted() -> Bool { lock.lock(); defer { lock.unlock() }; return heldVoiceListStarted }
     static func voiceListCancelCount() -> Int { lock.lock(); defer { lock.unlock() }; return voiceListCancellations }
@@ -2140,6 +2154,13 @@ struct NativeAPITests {
         require(FixtureProtocol.voiceListHasStarted(), "the held voice-library read never started")
         keyedReload.cancel()
         await keyedReload.value
+        // `stopLoading` runs on URLSession's own delegate queue, which can reach the fixture a
+        // moment *after* the awaiting task resumes, so reading the count once races the callback
+        // that increments it. Wait for the effect being asserted, bounded, the same way the "has
+        // started" check above does — a test that asserts an asynchronous effect must wait for it.
+        for _ in 0..<200 where FixtureProtocol.voiceListCancelCount() < 1 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         require(FixtureProtocol.voiceListCancelCount() >= 1,
                 "the in-flight read must have been torn down by the cancellation")
         require(store.voiceError == nil,
