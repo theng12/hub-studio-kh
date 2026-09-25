@@ -2,6 +2,50 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.62 — 2026-09-25
+
+### The Clone tab works the moment you open it
+
+You told me the Clone tab showed no voice picker until you went to the Voices page and clicked "Use
+voice". That was a real bug and this is the fix: your saved voices now load while the app is
+connecting, so the picker is there when you get to it. If the list is ever slow or empty, the tab
+now tells you which it is — reading, empty, or unreadable — instead of claiming the engine is
+broken.
+
+### One place to add a voice
+
+Cloning now only works from a **saved voice**, which is what you asked for. The "choose a clip file"
+picker is gone from the Audio page, along with "Prepare Voice" and "Transcribe Clip". To add a
+voice, press **Add Voice…** on the Audio page — it takes you to the Voices page, which is where
+voices are added and deleted. Then pick it on Audio and generate. Same on every model.
+
+### The tabs tell the truth
+
+Each voice model now says which kinds of voice work it can do, so Audio offers only those tabs. No
+more picking "Design" on a model that can't design. VoxCPM2 offers Clone and Design, the Khmer
+voices offer Preset, Pocket TTS offers Clone and Preset.
+
+### Fixes you won't see but would have felt
+
+- **Choosing a voice to clone from no longer refuses.** The last release made some models demand a
+  formal audited profile; if your model didn't have one, the button just failed. Every model now
+  takes its settings from its own published row instead — VoxCPM2 4-bit was being guessed at 24 kHz
+  and its own row says 48 kHz — and anything genuinely unknown is named rather than invented.
+- **Two runtime numbers are gone rather than wrong.** We were publishing a couple of generation
+  times that only existed in a code comment. If we can't point at the measurement, we don't publish
+  the number. The rest now come from stored records.
+- **The Hub was mislabelling design support.** It decided by looking for "voicedesign" in the
+  model's name, so VoxCPM2 and OmniVoice were advertised without Design, and Pocket TTS was
+  advertised with a Preset mode it doesn't offer in that sense. Fixed at the source.
+- **The voice test harness could never pass, and now can** — it waited for a startup message the
+  engine doesn't print.
+
+### Still yours to do
+
+The **8 GB Z-Image-Turbo test** is ready: one command, instructions in
+`qualification/README-8gb-z-image.md`. Send back the block it prints and the 8 GB tier stops being
+a guess. It's the last unclaimed measurement in the Image work.
+
 ## 0.6.61 — 2026-09-25
 
 ### The models that were there all along

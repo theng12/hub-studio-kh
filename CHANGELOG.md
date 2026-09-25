@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.6.62 — 2026-09-25 · the Clone tab, and the end of guessing a voice's contract
+
+The owner reported that the Audio page's Clone tab showed no voice picker until he went to the
+Voices page and clicked "Use voice". Measured cause: the voice library was read by a task keyed on
+**which tab was showing**, and changing tabs **cancelled** the read in flight. The store treated a
+cancelled read as a failure, so it wiped the list and displayed *"the voice library is unavailable"*
+— an error about the engine, when nothing was wrong with the engine.
+
+**Half of that diagnosis was wrong, and the correction is the interesting part.** I assumed the
+cancellation surfaced as a `CancellationError`; it does not. A cancelled `URLSession` read arrives
+as `URLError -999` (`NSURLErrorCancelled`), and it was being wrapped into a transport error before
+the store ever saw it — so a guard on the wrong error type would have fixed nothing. The library is
+now read **as part of connecting**, once per connection, so no SwiftUI page task is on the critical
+path at all; a cancelled load changes nothing; a real failure keeps the last known list instead of
+destroying it; and the picker says which of *reading / empty / unreadable / no transcripts yet* is
+true rather than asserting the most alarming one.
+
+**Cloning is now library-only, by the owner's decision.** *"I don't want to just drop in any voice
+and starts cloning no. I want to have a button to 'Add Voices' and bring to the voice tab to add
+'voices' to the app. That way it can work across all."* The clip chooser, the reference-clip and
+transcript blocks, `Transcribe Clip` and `Prepare Voice` are gone from the Audio page; the
+saved-voice picker stays, with `Add Voice…` and `Manage Voices` leading to the Voices page, which
+is the one place a voice is added or deleted. The `POST /api/generate/txt2speech/reference` route
+remains for Gateway/GenStudio, which transports source bytes through it.
+
+**The voice tabs now say what each model can actually do.** Every Voice model publishes which modes
+it offers — `cloning`, `preset`, `design` — derived from its own capability row and its family's
+facts, never from its name. The Audio page offers exactly those tabs, so a model that cannot design
+a voice no longer offers a Design tab. A model that publishes none stays listed with no tabs and
+generation blocked, naming what to update; there is deliberately no fallback, because a guessed
+mode is the defect.
+
+**The Hub was keeping a second, wrong copy of that answer.** `capabilities._voice_modes` decided
+design support by checking whether the model's repo name contained `"voicedesign"` — the same
+name-substring shape as the reference-audio bug fixed in 0.6.61 — and defaulted every other TTS
+model to `preset_voice`. Measured against the shipped catalog it was **losing the Design mode** for
+VoxCPM2 4-bit / 8-bit / bf16 (MLX) and OmniVoice bf16 (MLX bfloat16), and **inventing** a Preset
+mode for Pocket TTS 4-bit (MLX 4-bit). It now reads the producer's field through one mapping table
+and fails loudly on a mode it does not know, naming both files to update. Verified on a staged
+bundle: all **13** voice rows serve their modes and the Hub maps every one.
+
+**A9 corrected: the reference contract is derived, not demanded.** The first fix for that row
+replaced a name-substring guess with "a cloning model must have an audited profile", which traded a
+wrong result for **no result** — every un-audited cloning model refused on the upload route. The
+contract now comes from what the model publishes: its own `sample_rate_hz`, its own transcript rule
+from its published guardrails or its family's parameters, marked `profile_audited: false` with a
+source for every value, and a bound nothing publishes recorded as *not published* rather than
+defaulted. VoxCPM2 4-bit (MLX) resolves **48 kHz** where the old guess was 24 kHz. A refusal now
+means a catalogued cloning model published nothing derivable, and it arrives with the missing field
+and both files to fix.
+
+**Two of our own published numbers were deleted rather than kept.** The voice lane's runtimes were a
+hand-kept table whose values existed only as prose in comments. They now come from stored
+measurement records, each row naming the probe it came from — and where no record existed the number
+is **gone**: Pocket TTS 4-bit (MLX 4-bit)'s 0.30 s and VoxCPM2 4-bit (MLX 4-bit)'s 61.9 s / 738.4 s
+are recorded as withheld with their reasons. Same rule we hold the models to.
+
+**The smoke pilot could never have worked, and running it is how that was found.**
+`smoke_voice.py` waited for uvicorn's `Uvicorn running on …` line, which uvicorn does not print when
+the worker supplies its own sockets — so it could never see a worker that had in fact started, and
+reported a startup failure that was not one. It waits on the worker's ready file now and reaches
+`/api/catalog` in about two seconds. The pilot records a shipped model, **Qwen3-TTS-12Hz-0.6B-Base-8bit
+(MLX 8-bit)**, with the tracked reference clip and its transcript, and the parameters were proven
+through the shipped bundle: `done`, a 230,444-byte 24 kHz WAV, 24.26 s.
+
+**A voice-only bundle can now resolve its own facts.** `_stage_voice` staged no `model-manifests/`
+— only the Hub stage did — so a voice-only artifact, which is what the smoke pilot builds, had none:
+a clone failed `QWEN_VALIDATOR_MODEL_UNDECLARED` after its reference had prepared fine, because the
+clone-quality validator reads the model's `requires_packages` from its manifest, and the ASR leg
+could not resolve its Whisper processor. Proved **inert for a shipped bundle** by controlled
+experiment on one tree: staging with and without the added line gives a byte-identical
+`payload_sha256`, `runtime_sha256` and every component's `source_sha256`.
+
+**The 8 GB Z-Image-Turbo 6B MLX 4-bit run is now one command.** `qualification/eight-gb-z-image-run.sh`
+was rewritten so it can be handed to an 8 GB Mac and run unedited, and
+`qualification/README-8gb-z-image.md` is the instruction. Seven harness bugs were found by testing
+it, each of which would have produced a *wrong answer* rather than no answer — a watchdog that killed
+only the timer and left the model running, a stale image from an earlier run that could read as OK,
+a refused run that still created its output folder, a silently truncated results file, a hardcoded
+step count, a version comparison that warned about a correct engine, and a verdict that could label
+an all-OK run "NOT QUALIFIED". A run stopped by the swap or wall cap is `ABORTED` and yields
+INCONCLUSIVE, never "not qualified". **No 8 GB figure is claimed** — that measurement is the owner's
+to run.
+
+**Verification.** `tests/` — **944 passed, 11 skipped**; `tests/hub_regression/cases` — **175
+passed**; `components/voice/app/tests` — **724 passed, 19 skipped**; `bash native/build.sh` and
+`tests/native/pool-probe.sh` green; and a staged bundle was launched to confirm the 13 voice rows
+serve `modes` and the Hub maps them.
+
+**Still open:** the 8 GB tier measurement; `channels` and reference min/max duration are published
+nowhere, so an un-audited cloning model enforces no length bound (the 25 MB upload cap still applies);
+an unexplained shell anomaly where the Audio page's outer `.task` chain never fires in a hosted
+window (the fix no longer depends on it, but a future page should not assume it runs); and
+`capture_model_manifests.py --write` still withholds two multi-source packages rather than
+overwriting them.
+
 ## 0.6.61 — 2026-09-25 · no model needs a code change
 
 The owner's rule, recorded in `AGENTS.md` on 2026-09-24: *"my rule is never hardcoded — everything

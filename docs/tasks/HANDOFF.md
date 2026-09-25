@@ -3,7 +3,7 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.61 (no model needs a code change, 2026-09-25).
+Last updated: 0.6.62 (the Clone tab, and the end of guessing a voice's contract, 2026-09-25).
 
 **0.6.61 — the hardcoding audit, closed. New models are now data.** The owner's rule from
 2026-09-24 (*"my rule is never hardcoded — everything must be dynamic for all generators and
@@ -49,8 +49,8 @@ collection by its own `collect_ignore`, so **run it explicitly**; `bash native/b
 3. A read-only library keeps them named-not-ready with the reason shown in the app instead of
    failing at generation time.
 
-**Since 0.6.61 shipped, HEAD has moved on — and the installed app has not.** Five commits are
-pushed but **not** in `/Applications` or the four kits: the A9 reference derivation (`96eb792`), the
+**0.6.62 ships everything below.** The five commits that were pushed but not installed are in this
+release, so the Clone tab fix is finally in front of the owner. (They were:) the A9 reference derivation (`96eb792`), the
 staging fix and corrections (`3c3d9d0`), the voice `modes`/runtime/smoke work (`1e1873d`), the Clone
 tab rebuild (`c1fde64`), the Hub's voice-mode fix (`849d211`) and the audit row (`1ed03de`). The
 shipped identity is still `f20fd1a`. **A re-release is what puts the Clone tab fix in front of the
