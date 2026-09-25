@@ -605,6 +605,14 @@ class SubtitleEngine:
                           else files['state'], 'snapshot_revision': manifest['revision']},
                 'readiness': {'ready': state['ready'], 'reason': state['reason'],
                               'files': files, 'host': state['host']},
+                # The below-tier warning, in the one place a consumer reads it. It was computed by
+                # `host_eligibility()` and published only inside `readiness.host`, one level down
+                # and under a key no screen reads, so the sentence existed in the payload and could
+                # never appear: the operator would have been told nothing while the app offered a
+                # model this Mac is below the tier for. Every other worker publishes it at the top
+                # level of the row (`image`, `music`, `chat`), and `tests/test_below_tier_warning.py`
+                # now requires a page to render whatever a worker publishes here.
+                'memory_warning': state['host'].get('memory_warning'),
                 'execution_ready': state['ready'],
                 'available': state['ready'],
                 # Published from the manifest, never asserted here: this worker used to claim

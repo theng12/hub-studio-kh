@@ -96,31 +96,60 @@ class EveryPublishedWarningHasAPageTests(unittest.TestCase):
     fails here instead of shipping a sentence that can never appear.
     """
 
+    #: The app's own name for each worker's page, because two of the five differ from the
+    #: component directory — the component is ``subtitle`` and the Studio the operator sees is
+    #: **Transcription** (``selectedTranscriptionModel``), and the component is ``voice`` while the
+    #: page is Audio (``selectedAudioModel``). This was first written as ``worker.capitalize()``,
+    #: which reported the Subtitle page as missing a warning it has rendered all along; a mapping
+    #: that is guessed reports working code as broken. A worker absent from this table fails the
+    #: test, so a sixth Studio has to say what its page is called rather than defaulting to a name
+    #: nothing uses.
+    STUDIO_ACCESSOR = {
+        "chat": "Chat",
+        "image": "Image",
+        "music": "Music",
+        "subtitle": "Transcription",
+        "voice": "Audio",
+    }
+
     def _publishing_workers(self) -> set[str]:
         found = set()
-        for main in sorted((ROOT / "components").glob("*/app/backend/main.py")):
-            text = main.read_text()
-            # A top-level catalog field, i.e. one the app can decode as `memoryWarning`. The
-            # nested `readiness.host.memory_warning` shape (Subtitle's) is deliberately NOT this:
-            # nothing renders it, which is a recorded finding rather than a passing test.
-            if re.search(r'^\s*"memory_warning":\s*\S', text, re.M):
-                found.add(main.relative_to(ROOT).parts[1])
+        # Every module of every worker's backend, not just `main.py`: Subtitle builds its catalog
+        # in `engine.py`, and the first version of this check scanned only `main.py`, so it missed
+        # the one worker the invariant was written for and passed while the defect was live. A
+        # discovery rule that looks in one file is a rule about that file.
+        for module in sorted((ROOT / "components").glob("*/app/backend/*.py")):
+            text = module.read_text()
+            # A catalog field the app can decode as `memoryWarning`. The nested
+            # `readiness.host.memory_warning` shape is deliberately NOT this: it is a level down
+            # under a key no screen reads, and publishing only that is the defect.
+            if re.search(r'^\s*[\'"]memory_warning[\'"]:\s*\S', text, re.M):
+                found.add(module.relative_to(ROOT).parts[1])
         return found
 
     def test_every_worker_that_publishes_a_warning_has_a_page_that_renders_one(self) -> None:
         rendered = set(re.findall(r"selected(\w+)Model\?\.memoryWarning", VIEWS))
-        # The Swift accessor for a studio is `selected<Studio>Model`; map the worker directory to
-        # the studio name the app spells, without a hand-kept list on either side.
         for worker in sorted(self._publishing_workers()):
-            self.assertIn(worker.capitalize(), rendered,
-                          f"components/{worker} publishes `memory_warning` on its catalog row, "
-                          f"but no page renders `selected{worker.capitalize()}Model?.memoryWarning`, "
-                          f"so the operator can never see it (rendered: {sorted(rendered)})")
+            with self.subTest(worker=worker):
+                accessor = self.STUDIO_ACCESSOR.get(worker)
+                self.assertIsNotNone(
+                    accessor,
+                    f"components/{worker} publishes `memory_warning`, and this test does not know "
+                    f"what its page is called — add it to STUDIO_ACCESSOR with the accessor name "
+                    f"the SwiftUI page actually uses")
+                self.assertIn(accessor, rendered,
+                              f"components/{worker} publishes `memory_warning` on its catalog row, "
+                              f"but no page renders `selected{accessor}Model?.memoryWarning`, so "
+                              f"the operator can never see it (rendered: {sorted(rendered)})")
 
-    def test_the_three_shipped_warnings_are_the_ones_renderable(self) -> None:
+    def test_the_four_shipped_warnings_are_the_ones_renderable(self) -> None:
         # A guard on the test itself: if a refactor renames the Swift accessors, the check above
         # would silently pass by finding nothing to compare.
-        self.assertTrue({"Chat", "Image", "Music"} <= set(
+        self.assertEqual(sorted(self._publishing_workers()),
+                         ["chat", "image", "music", "subtitle"],
+                         "the set of workers publishing a below-tier warning has changed; if that "
+                         "is deliberate, update STUDIO_ACCESSOR and this expectation together")
+        self.assertTrue({"Chat", "Image", "Music", "Transcription"} <= set(
             re.findall(r"selected(\w+)Model\?\.memoryWarning", VIEWS)),
             "the render sites this invariant is measured against have been renamed or removed")
 

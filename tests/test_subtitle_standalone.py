@@ -300,6 +300,59 @@ class CatalogContractTests(SubtitleFixture):
         with patch.object(engine_module.platform, 'system', lambda: 'Linux'):
             self.assertFalse(engine_module.host_eligibility()['eligible'])
 
+    def test_the_below_tier_warning_is_published_where_the_app_reads_it(self) -> None:
+        """A sentence nothing renders is not a warning.
+
+        `host_eligibility()` has computed this since the worker shipped, and every catalog row
+        published it only inside `readiness.host` — one level down, under a key no screen reads —
+        so an operator below the tier was told nothing while the app offered the model. `image`,
+        `music` and `chat` all publish it at the **top level** of the row, which is where
+        `NativeModel.memoryWarning` decodes from; this is that same place.
+        """
+        from unittest.mock import patch
+
+        manager = self.build_manager()
+
+        def small_mac(_command, **_kwargs):
+            return str(6 * 1024 ** 3)
+
+        engine_module._MEMORY_CACHE.clear()
+        self.addCleanup(engine_module._MEMORY_CACHE.clear)
+        with patch.object(engine_module.subprocess, 'check_output', small_mac):
+            small = {entry['package_id']: entry for entry in manager.catalog()}
+        self.assertTrue(small, 'the fixture must publish at least one model')
+        for package_id, entry in small.items():
+            with self.subTest(package=package_id):
+                warning = entry.get('memory_warning')
+                self.assertIsInstance(warning, str,
+                                      'a 6 GB Mac must be told it is below the 8 GB tier')
+                self.assertIn('6 GB of unified memory', warning)
+                # One source, not two: the top-level field and the nested host block are the same
+                # sentence, so a consumer reading either cannot be told something different.
+                self.assertEqual(warning, entry['readiness']['host']['memory_warning'])
+
+        engine_module._MEMORY_CACHE.clear()
+        with patch.object(engine_module.subprocess, 'check_output',
+                          lambda *args, **kwargs: str(8 * 1024 ** 3)):
+            qualified = {entry['package_id']: entry for entry in manager.catalog()}
+        for package_id, entry in qualified.items():
+            with self.subTest(package=package_id):
+                self.assertIsNone(entry.get('memory_warning'),
+                                  'a Mac at the tier must be told nothing')
+
+        # Advice, never a gate — and this is the assertion that says so without depending on
+        # anything else: memory decides **nothing** about what this Mac can run. Each package's
+        # availability is identical on the below-tier Mac and the qualified one. (Individual
+        # packages differ from each other for their own reasons — a `weights.npz` package that
+        # needs a converted view is not available in this fixture — and none of that is memory.)
+        for package_id, entry in small.items():
+            with self.subTest(package=package_id):
+                self.assertFalse(entry['readiness']['host']['eligible'] is False,
+                                 'a below-tier Mac is still an eligible host')
+                self.assertEqual(entry['available'], qualified[package_id]['available'])
+                self.assertEqual(entry['execution_ready'], qualified[package_id]['execution_ready'])
+                self.assertEqual(entry['readiness']['ready'], qualified[package_id]['readiness']['ready'])
+
     def test_npz_only_packages_are_reported_not_runnable(self) -> None:
         """Base/Small ship weights.npz, which this mlx-audio loader cannot read."""
         manager = self.build_manager()
