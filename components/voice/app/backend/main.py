@@ -37,8 +37,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (cache, catalog, fleet_auth, job_details, memory_policy, model_storage,
-               paths, reference_audio, settings as app_settings, storage_policy)
+from components import model_defaults
+
+from . import (cache, catalog, fleet_auth, job_details, lane_contract, memory_policy,
+               model_storage, paths, reference_audio, settings as app_settings,
+               storage_policy)
 from .generation import (
     manager as gen_manager,
     OUTPUT_DIR,
@@ -262,6 +265,18 @@ class MemoryPolicyBody(BaseModel):
     mode: str
 
 
+class ModelDefaultsBody(BaseModel):
+    """One model's stored defaults, as the Models tab sends them.
+
+    ``values`` is the whole answer for that model (``model_defaults.save`` replaces wholesale), so
+    an empty field is an explicit "no default" rather than an untouched one; ``None`` is the same
+    statement as ``{}``. ``DELETE`` sends the same body with ``repo`` alone, or names the repo in
+    the query string.
+    """
+    repo: str
+    values: Optional[dict] = None
+
+
 class TokenTestBody(BaseModel):
     hf_token: Optional[str] = None
 
@@ -284,12 +299,14 @@ def _reject_cloud_repo(repo: str) -> None:
         )
 
 
-def _resolve_section_budget(body: "Txt2SpeechBody", model) -> int | None:
-    if body.section_max_characters is None and model.section_size_control is None:
+def _resolve_section_budget(params: dict, model) -> int | None:
+    """The section budget one job runs with, from its already-defaulted parameters."""
+    requested = params.get("section_max_characters")
+    if requested is None and model.section_size_control is None:
         return None
     try:
         result = catalog.resolve_section_budget(
-            model.family, body.repo, body.section_max_characters
+            model.family, model.repo, requested
         )
     except catalog.SectionSizeControlError as exc:
         raise HTTPException(
@@ -297,6 +314,87 @@ def _resolve_section_budget(body: "Txt2SpeechBody", model) -> int | None:
             detail={"code": exc.code, "detail": str(exc)},
         ) from exc
     return int(result["section_max_characters"])
+
+
+# ───────────── per-model defaults ─────────────
+# Each model's own published parameters, and the operator's stored default for each of them.
+# The state file lives beside `memory_policy.json` in this Studio's own data directory, because
+# a default is a statement about how this operator wants this Mac to work.
+
+def _model_parameters(repo: str) -> list[dict]:
+    """The parameters one registered model's lane publishes.
+
+    `lane_contract.parameters_for` is the one function that assembles them - per model, from its
+    capabilities and its family's declared request fields - so this surface is exactly what the
+    model publishes: a model that does not accept `section_max_characters` is not offered a
+    default for it. An unknown repo is a refusal that names it, never a silent no-op.
+    """
+    model = catalog.get_model(repo)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown repo: {repo}")
+    return lane_contract.parameters_for(model)
+
+
+def _registered_model_parameters() -> list[tuple[str, list[dict]]]:
+    """``(repo, published parameters)`` for every registered model, for one status call."""
+    return [(model.repo, lane_contract.parameters_for(model)) for model in catalog.CATALOG]
+
+
+def _model_defaults_status() -> dict:
+    """The whole Models tab in one call, projected from each model's own lane contract."""
+    return model_defaults.status(paths.data_dir(), _registered_model_parameters())
+
+
+def _defaults_in_force(model: catalog.ModelEntry) -> dict:
+    """Every value in force for one model: the operator's stored defaults over the lane's own.
+
+    The one `model_defaults.resolved` call both the catalogue and a request read, so the
+    ``default`` this worker publishes and the value an omitted field receives cannot disagree.
+    """
+    in_force, _not_used = model_defaults.resolved(
+        paths.data_dir(), model.repo, lane_contract.parameters_for(model))
+    return in_force
+
+
+def _refusals(exc: ValueError):
+    """`model_defaults.save`'s per-parameter reasons, never flattened into one message.
+
+    The module raises ``ValueError`` whose message is the JSON object of refusals, keyed by
+    parameter, so every bad value the operator typed is answered at once and by name. That object
+    *is* the ``detail`` - the same shape the other Studios answer with, so one Models tab can read
+    every worker - and a message that is not that object is passed through rather than swallowed.
+    """
+    try:
+        reasons = json.loads(str(exc))
+    except ValueError:
+        return str(exc)
+    return reasons if isinstance(reasons, dict) else str(exc)
+
+
+def _job_parameters(body: "Txt2SpeechBody", model: catalog.ModelEntry) -> dict:
+    """The per-job parameters: the request's own fields plus the value in force for what it omitted.
+
+    The map is `model_defaults.resolved`'s own in-force map - **every** parameter the lane defaults,
+    including one an operator is offered no control for, with the operator's stored choice over it -
+    so a blanket default carried by this request model (`cfg_value: 2.0`, a number meant for no model
+    in particular) never stands in for the model's own published default. A parameter the request
+    supplies always wins.
+
+    One exception, the mirror image of that rule: a field this request model leaves as ``None``
+    means *the lane decides* (an omitted section size is Auto), and when the value in force is that
+    same lane-stated default the request already resolves to it. Rewriting it would record an
+    override the operator never chose, and the number the engine receives is identical either way.
+    """
+    params = body.model_dump()
+    supplied = set(body.model_fields_set)
+    lane = model_defaults.stated(lane_contract.parameters_for(model))
+    for name, value in _defaults_in_force(model).items():
+        if name in supplied or name not in params:
+            continue
+        if params[name] is None and lane.get(name) == value:
+            continue
+        params[name] = value
+    return params
 
 
 class Txt2SpeechBody(BaseModel):
@@ -656,7 +754,14 @@ def get_catalog() -> dict:
     families = {fid: catalog.serialize_family(f) for fid, f in catalog.FAMILIES.items()}
     models = []
     for m in catalog.CATALOG:
-        d = catalog.serialize_model(m)
+        # The row's lane contract publishes this model's resolved defaults, from the same call
+        # the request path applies, so a scheduler reads the numbers this worker will use.
+        defaults = _defaults_in_force(m)
+        d = catalog.serialize_model(m, defaults)
+        # The same values under the name every other Studio publishes them by, which is what the
+        # app pre-fills a form from: one call, so the catalogue's `default` fields, this map and
+        # the value an omitted request receives cannot be three answers to one question.
+        d["generation_defaults"] = dict(defaults)
         d["cache"] = _cache_with_companions(m.repo)
         candidate = candidate_summary(m.repo)
         runtime = gen_manager.model_runtime_status(m)
@@ -1268,7 +1373,9 @@ def start_txt2speech(body: Txt2SpeechBody, request: Request) -> dict:
             status_code=400,
             detail=f"Model {body.repo} doesn't support text-to-speech.",
         )
-    section_budget = _resolve_section_budget(body, model)
+    # The request's own fields, with this model's stored defaults filling the ones it omitted.
+    params = _job_parameters(body, model)
+    section_budget = _resolve_section_budget(params, model)
     if not gen_manager.is_available():
         raise HTTPException(
             status_code=503,
@@ -1280,7 +1387,6 @@ def start_txt2speech(body: Txt2SpeechBody, request: Request) -> dict:
             detail=f"Model {body.repo} is not fully cached. Download it from the Models tab first.",
         )
 
-    params = body.model_dump()
     if section_budget is not None:
         params.pop("section_max_characters", None)
         params["_resolved_section_max_characters"] = section_budget
@@ -1330,7 +1436,10 @@ async def start_txt2speech_with_reference(
                 "detail": f"Model {body.repo} does not support reference-audio cloning.",
             },
         )
-    section_budget = _resolve_section_budget(body, model)
+    # As on the plain route: the request's own fields, then this model's stored defaults for the
+    # ones it omitted, before the section budget is canonicalized.
+    params = _job_parameters(body, model)
+    section_budget = _resolve_section_budget(params, model)
     if not gen_manager.is_available():
         raise HTTPException(status_code=503, detail="TTS generation engine is not installed.")
     if cache.cache_state(body.repo) != "cached":
@@ -1386,7 +1495,6 @@ async def start_txt2speech_with_reference(
             409 if exc.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE" else 422
         )
         raise HTTPException(status_code=status, detail=exc.as_detail()) from exc
-    params = body.model_dump()
     if section_budget is not None:
         params.pop("section_max_characters", None)
         params["_resolved_section_max_characters"] = section_budget
@@ -1586,6 +1694,45 @@ def get_memory_policy() -> dict:
 def put_memory_policy(body: MemoryPolicyBody) -> dict:
     memory_policy.save(body.mode)
     return get_memory_policy()
+
+
+# ───────────── API: per-model defaults ─────────────
+# Same state directory as `memory_policy.json`, same shape of answer: GET reads, PUT replaces one
+# model's whole set, DELETE forgets it. One GET serves the whole Models tab, because every
+# registered model's own published parameters travel with its row.
+
+@app.get("/api/model-defaults")
+def get_model_defaults() -> dict:
+    """Every registered model's published parameters and the defaults in force for each."""
+    return _model_defaults_status()
+
+
+@app.put("/api/model-defaults")
+def put_model_defaults(body: ModelDefaultsBody) -> dict:
+    """Store one model's defaults, refusing any value its own lane would refuse.
+
+    A refusal is 422 whose ``detail`` is the per-parameter reason object, so an operator who typed
+    three bad values does not have to press Save three times to find out - and nothing is written
+    while any value stands refused.
+    """
+    parameters = _model_parameters(body.repo)
+    try:
+        model_defaults.save(paths.data_dir(), body.repo, body.values or {}, parameters)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=_refusals(exc)) from exc
+    return _model_defaults_status()
+
+
+@app.delete("/api/model-defaults")
+def delete_model_defaults(body: ModelDefaultsBody | None = None,
+                          repo: str | None = Query(default=None)) -> dict:
+    """Return one model to what the lane itself states, by body or query."""
+    target = (body.repo if body is not None and body.repo else repo or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="repo is required")
+    _model_parameters(target)  # unknown repo refused by name, never a silent no-op
+    model_defaults.clear(paths.data_dir(), target)
+    return _model_defaults_status()
 
 
 @app.post("/api/memory/release")

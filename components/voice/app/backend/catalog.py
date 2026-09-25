@@ -17,7 +17,7 @@ Capability vocabulary:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Mapping, Optional
 
 from . import lane_contract, long_form_policy, model_audits, qwen_quality
 
@@ -1334,7 +1334,16 @@ def voice_modes(m: ModelEntry) -> list[str]:
     return modes
 
 
-def serialize_model(m: ModelEntry) -> dict:
+def serialize_model(m: ModelEntry, defaults: Mapping[str, object] | None = None) -> dict:
+    """One catalog row.
+
+    ``defaults`` is the resolved per-model default map for this model
+    (``components/model_defaults.resolved``), passed straight into the lane
+    contract so the ``default`` a scheduler reads there is the value this worker
+    will use for an omitted parameter. It is a parameter rather than a read of
+    the worker's state directory here, because this function is also the
+    fixture-free way a test and ``reference_audio`` ask what a model publishes.
+    """
     # Per-model hardware-fit verdict against the running Mac's detected RAM.
     # Lazy import dodges any potential cycle at module-load time.
     try:
@@ -1421,7 +1430,9 @@ def serialize_model(m: ModelEntry) -> dict:
         # The dispatch contract a scheduler reads (docs/lane-execution-contract.md).
         # Kept beside, not inside, `execution_contract`: that one is TTS
         # presentation for the native Voice page, this one is how to ask for work.
-        "lane_contract": lane_contract.for_model(m),
+        # Its parameters carry this model's resolved defaults, so the number a
+        # scheduler reads is the number an omitted field gets.
+        "lane_contract": lane_contract.for_model(m, defaults),
         "execution_contract": {
             # Public limits are qualification results, not optimistic guesses
             # from family guidance. An unaudited model remains available for

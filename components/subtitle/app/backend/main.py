@@ -10,6 +10,7 @@ public lifecycle.
 from __future__ import annotations
 
 import hmac
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -18,6 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from components import app_version as app_version_module
+from components import model_defaults
 
 from . import memory_policy
 from .engine import ENGINE as SUBTITLE_ENGINE
@@ -169,6 +171,137 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    # ── per-model operator defaults ────────────────────────────────────────
+    # The same three paths Voice publishes, in this Studio's own state directory beside
+    # `memory_policy.json`. The parameters offered are the lane's own — the list `lane_contract`
+    # publishes, which is the list this app's own form fields were checked against — so a
+    # parameter the route drops is never offered a default.
+
+    def defaults_repo(spelling: object) -> str:
+        """The catalogue repository for one model name, or a refusal that names it."""
+        wanted = str(spelling or '').strip()
+        repo = manager.repository_for(wanted)
+        if repo is None:
+            raise HTTPException(404, f'Unknown repo: {wanted}')
+        return repo
+
+    def refusals(exc: ValueError) -> dict:
+        """`model_defaults.save`'s per-parameter reasons, never flattened into one message.
+
+        The module raises ``ValueError`` whose message is the JSON object of refusals, keyed by
+        parameter, so every bad value the operator typed is answered at once and by name. That
+        object *is* the ``detail`` - the same shape the other Studios answer with, so one Models
+        tab can read every worker - and a message that is not that object is passed through rather
+        than swallowed.
+        """
+        try:
+            reasons = json.loads(str(exc))
+        except ValueError:
+            return {'detail': str(exc)}
+        return reasons if isinstance(reasons, dict) else {'detail': str(exc)}
+
+    def route_refusals(values: dict) -> dict:
+        """The reasons this app's own request validation refuses, by parameter.
+
+        `model_defaults` checks a value against the bound the lane *publishes*. This route enforces
+        one more thing the contract cannot publish as a bound - the shape of the language hint -
+        so a proposed default is put through the route's own validator as well: a sentence typed
+        into the language field would otherwise store cleanly and turn every later request that
+        omitted language into a 422.
+        """
+        refused = {}
+        for name, value in values.items():
+            try:
+                validate_request({'model': manager.default_package(), 'formats': ['srt'],
+                                  str(name): value},
+                                 packages=sorted(manager.engine.manifests),
+                                 default_package=manager.default_package(),
+                                 aliases=manager.model_aliases())
+            except ValueError as exc:
+                refused[str(name)] = str(exc)
+        return refused
+
+    def defaults_payload() -> dict:
+        return model_defaults.status(manager.data, manager.registered_models())
+
+    @app.get('/api/model-defaults')
+    def get_model_defaults() -> dict:
+        """Every registered model's published parameters and the defaults in force for each."""
+        return defaults_payload()
+
+    @app.put('/api/model-defaults')
+    def put_model_defaults(body: dict | None = None) -> dict:
+        """Store one model's defaults, refusing any value its own lane would refuse.
+
+        Nothing is written while any value stands refused, so a 422 leaves the previous defaults
+        exactly as they were instead of half-applying.
+        """
+        payload = body if isinstance(body, dict) else {}
+        repo = defaults_repo(payload.get('repo'))
+        values = payload.get('values')
+        if values is None:
+            values = {}
+        if not isinstance(values, dict):
+            raise HTTPException(422, {
+                'values': ('must be an object of parameter names to values; received '
+                           f'{type(values).__name__}')})
+        parameters = manager.engine.lane_parameters()
+        # The lane's published bound first, then the lane's own enforcement: every refusal is
+        # reported at once, by parameter.
+        _accepted, refusals_found = model_defaults.validate(parameters, values)
+        for name, reason in route_refusals(values).items():
+            refusals_found.setdefault(name, reason)
+        if refusals_found:
+            raise HTTPException(422, refusals_found)
+        try:
+            model_defaults.save(manager.data, repo, values, parameters)
+        except ValueError as exc:
+            raise HTTPException(422, refusals(exc)) from exc
+        return defaults_payload()
+
+    @app.delete('/api/model-defaults')
+    def delete_model_defaults(repo: str = '', body: dict | None = None) -> dict:
+        """Return one model to what the lane itself states, by body or query."""
+        wanted = repo or str((body or {}).get('repo') or '')
+        if not wanted.strip():
+            raise HTTPException(400, 'repo is required')
+        model_defaults.clear(manager.data, defaults_repo(wanted))
+        return defaults_payload()
+
+    # ── applying them ──────────────────────────────────────────────────────
+    # A request that supplies a parameter always wins; only a field the form did not send takes
+    # the value in force. The anchor is the model the request names (or this worker's declared
+    # default when it names none), so the row whose defaults apply is the row the operator edited.
+
+    def defaults_for_request(spelling: str) -> dict:
+        anchor = manager.repository_for(spelling) or manager.repository_for(
+            manager.default_package() or '')
+        return manager.defaults_in_force(anchor) if anchor else {}
+
+    async def with_model_defaults(http_request: Request, model: str, language: str,
+                                  word_timestamps: bool,
+                                  activity_id: str) -> tuple[str, str, bool, str]:
+        """The form's own values, with the values in force filling the fields the form omitted.
+
+        The map is `model_defaults.resolved`'s whole in-force map - every parameter the lane
+        defaults, with the operator's stored choice over it - so a parameter the lane fixes and
+        offers no control for is still carried.
+
+        A field counts as supplied when its key is in the submitted form, so an explicit
+        ``word_timestamps=false`` is still the caller's answer and a stored ``true`` cannot
+        override it.
+        """
+        supplied = set((await http_request.form()).keys())
+        in_force = defaults_for_request(model)
+
+        def effective(name: str, value):
+            return value if name in supplied else in_force.get(name, value)
+
+        return (effective('model', model),
+                effective('language', language),
+                effective('word_timestamps', word_timestamps),
+                effective('activity_id', activity_id))
+
     @app.get('/api/transcribe/availability')
     def transcribe_availability() -> dict:
         return manager.availability()
@@ -177,6 +310,7 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
 
     @app.post('/api/transcribe')
     async def transcribe(
+        http_request: Request,
         file: UploadFile = File(...),
         model: str = Form(''),
         language: str = Form(''),
@@ -193,6 +327,8 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         data = await read_upload_limited(file, MAX_INPUT_BYTES)
+        model, language, word_timestamps, activity_id = await with_model_defaults(
+            http_request, model, language, word_timestamps, activity_id)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),
@@ -242,6 +378,7 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
 
     @app.post('/api/generate/transcribe')
     async def submit(
+        http_request: Request,
         file: UploadFile = File(...),
         model: str = Form(''),
         language: str = Form(''),
@@ -254,6 +391,8 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         data = await read_upload_limited(file, MAX_INPUT_BYTES)
+        model, language, word_timestamps, activity_id = await with_model_defaults(
+            http_request, model, language, word_timestamps, activity_id)
         try:
             request = validate_request(
                 {'model': model or manager.default_package(),

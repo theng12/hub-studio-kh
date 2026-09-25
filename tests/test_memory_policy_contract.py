@@ -613,6 +613,37 @@ print(json.dumps(out))
         self.assertEqual(out['release']['results'][0]['policy']['loaded_models'], [])
 
 
+class TheDefaultsSurfaceIsASiblingOfTheMemoryContract(unittest.TestCase):
+    """Per-model defaults must not cost a worker any of the three fleet memory paths.
+
+    The 0.6.x defect this module owns was a memory path spelled differently in one worker, and the
+    new surface lives in the same state directory and is reached by name over the same proxy. So
+    whatever a worker adds, the three fleet paths stay, and every worker goes through
+    ``components/model_defaults.py`` for the rule rather than validating defaults of its own.
+
+    The check is the served route table in the source each bundle stages. Building both apps here
+    would start the workers' residency threads inside this suite, which is a worse trade than a
+    path check the worker suites then exercise behaviourally (`components/voice/app/tests/
+    test_model_defaults.py`, `tests/test_subtitle_standalone.py`).
+    """
+
+    def test_each_worker_serves_the_fleet_paths_and_the_shared_defaults_rule(self) -> None:
+        from components import model_defaults
+
+        self.assertEqual(model_defaults.SETTINGS_NAME, "model_defaults.json")
+        for name in ("voice", "subtitle"):
+            source = (PROJECT_ROOT / "components" / name / "app" / "backend"
+                      / "main.py").read_text(encoding="utf-8")
+            with self.subTest(studio=name):
+                for path in ("/api/memory-policy", "/api/memory/release",
+                             "/api/model-defaults"):
+                    self.assertIn(path, source, f"{name} does not serve {path}")
+                for call in ("model_defaults.status(", "model_defaults.save(",
+                             "model_defaults.clear("):
+                    self.assertIn(call, source,
+                                  f"{name} does not use the one shared defaults rule")
+
+
 class _NoJobs:
     """The minimum an Image policy reads: the jobs it is running."""
 

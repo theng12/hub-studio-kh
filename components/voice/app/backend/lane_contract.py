@@ -38,13 +38,22 @@ The first is a build-time artefact: a packaged worker is not shipped the
 is the honest outcome - a runtime a scheduler sets a deadline from traces to a
 stored measurement or it is absent - and it is why this module keeps no curated
 copy of a number that would survive the record going missing.
+
+Each parameter's ``default`` is the value **in force** for that model, not a
+second copy of what the lane states: the operator's stored per-model default
+(when one is set) over the lane's own. The value comes from
+``components/model_defaults.resolved`` at the caller - the same call the request
+path reads - so this module can never advertise a ``default`` the worker would
+refuse. A parameter that has no value in force (neither the lane nor the
+operator states one) publishes no ``default`` at all: a ``null`` for a boolean
+is itself a value the worker would refuse.
 """
 from __future__ import annotations
 
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from . import catalog, long_form_policy, model_audits
 
@@ -125,6 +134,10 @@ _PARAMETER_SHAPES: dict[str, dict[str, Any]] = {
     "max_output_duration_s": {
         "type": "number",
         "minimum": 0.0,
+        # The API enforces `gt=0` (`main.Txt2SpeechBody.max_output_duration_s`), and an exclusive
+        # bound is published as this flag on `minimum` - never as a bound number of its own, which
+        # is how `0 <= True` once produced "must be greater than True".
+        "minimum_exclusive": True,
         "maximum": 120.0,
         "note": "optional caller ceiling on the generated audio, in seconds",
     },
@@ -316,13 +329,38 @@ def runtime_seconds_for(repo: str) -> Optional[dict[str, Any]]:
     return stored_measurements().get(repo) or _audited_runtime(repo)
 
 
-def parameters_for(model: catalog.ModelEntry) -> list[dict[str, Any]]:
+def _with_resolved_defaults(parameters: list[dict[str, Any]],
+                            defaults: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Each parameter's ``default`` replaced by the value in force for this model.
+
+    ``defaults`` is what ``model_defaults.resolved`` answered for this model, so
+    a scheduler reading the contract sends the number this worker would use when
+    the request omits it. A parameter no value is in force for keeps no
+    ``default`` rather than gaining a ``null``: ``null`` is not an accepted
+    ``boolean`` or ``number``, and publishing it would be a default the lane
+    refuses.
+    """
+    if not defaults:
+        return parameters
+    return [
+        {**parameter, "default": defaults[parameter["name"]]}
+        if parameter["name"] in defaults else parameter
+        for parameter in parameters
+    ]
+
+
+def parameters_for(model: catalog.ModelEntry,
+                   defaults: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     """The asked-for surface for one model: what the worker honours, with its bounds.
 
     Built from the model's own capabilities and its family's declared resolver
     fields, so a model that cannot clone never advertises a reference parameter,
     and a family that gains a control publishes it by declaring it on its
     registry entry.
+
+    ``defaults`` is the resolved per-model default map for this model (see
+    ``_with_resolved_defaults``); with none, every parameter keeps the default
+    the lane itself states.
     """
     family = catalog.family_for(model)
     parameters = [_text_parameter(model.repo), _speed_parameter()]
@@ -347,17 +385,22 @@ def parameters_for(model: catalog.ModelEntry) -> list[dict[str, Any]]:
         if any(parameter["name"] == name for parameter in parameters):
             continue
         parameters.append({"name": name, **shape})
-    return parameters
+    return _with_resolved_defaults(parameters, defaults)
 
 
-def for_model(model: catalog.ModelEntry) -> dict[str, Any]:
-    """The complete `lane_contract` for one catalog row."""
+def for_model(model: catalog.ModelEntry,
+              defaults: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The complete `lane_contract` for one catalog row.
+
+    ``defaults`` is the resolved per-model default map, so the contract publishes
+    the values this worker will actually use for an omitted parameter.
+    """
     contract: dict[str, Any] = {
         "schema": SCHEMA,
         "modality": MODALITY,
         "operation": OPERATION,
         "dispatch": DISPATCH_ROUTE,
-        "parameters": parameters_for(model),
+        "parameters": parameters_for(model, defaults),
         "artifact": dict(ARTIFACT),
         "states": dict(STATES),
         "cancel": dict(CANCEL),

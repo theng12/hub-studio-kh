@@ -17,6 +17,8 @@ import threading
 import time
 from uuid import uuid4
 
+from components import model_defaults
+
 from .engine import ModelPackageError, SubtitleEngine, _Cancelled
 
 TERMINAL = {'done', 'error', 'cancelled'}
@@ -226,7 +228,50 @@ class SubtitleManager:
     # ── catalog / readiness ────────────────────────────────────────────────
 
     def catalog(self) -> list[dict]:
-        return self.engine.catalog()
+        """Every registered package's row, with each lane contract publishing resolved defaults."""
+        return self.engine.catalog(
+            {repo: self.defaults_in_force(repo) for repo in self.registered_repos()})
+
+    def registered_repos(self) -> list[str]:
+        """Every registered package's repository, which is the key the catalogue publishes."""
+        return [manifest['model_id'] for manifest in self.engine.manifests.values()]
+
+    def registered_models(self) -> list[tuple[str, list[dict]]]:
+        """``(repo, the lane's published parameters)`` for every registered model.
+
+        The parameters are the lane's own — the ones `lane_contract` publishes and the route's
+        form fields were checked against — so a parameter the route drops is not offered a
+        default here either.
+        """
+        parameters = self.engine.lane_parameters()
+        return [(repo, parameters) for repo in self.registered_repos()]
+
+    def repository_for(self, spelling: str) -> str | None:
+        """The catalogue repository for a model named by repository or package id.
+
+        Both are accepted by the route's own `model` field, so an operator reading either name
+        off the catalogue addresses the same row. ``None`` means this worker has no such model.
+        """
+        wanted = (spelling or '').strip()
+        if not wanted:
+            return None
+        for manifest in self.engine.manifests.values():
+            if wanted in (manifest['model_id'], manifest['package_id']):
+                return manifest['model_id']
+        return None
+
+    def defaults_in_force(self, repo: str) -> dict:
+        """Every value in force for one model: the lane's own defaults, then the operator's.
+
+        This is `model_defaults.resolved`'s whole in-force map, not the settable subset: a
+        parameter the lane defaults but offers no control for (a one-option enum, a fixed
+        resolution) is still one a request has to carry. The one call both the catalogue and a
+        request read, so the ``default`` a scheduler reads and the value an omitted form field
+        receives cannot disagree.
+        """
+        in_force, _not_used = model_defaults.resolved(
+            self.data, repo, self.engine.lane_parameters())
+        return in_force
 
     def default_package(self) -> str:
         return self.engine.default_package()

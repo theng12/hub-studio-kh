@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from components import model_defaults
 from components import model_packages
 from components.subtitle.app.backend import engine as engine_module
 from components.subtitle.app.backend.main import create_app
@@ -651,6 +652,324 @@ class LaneContractTests(SubtitleFixture):
             self.assertTrue(row['source'], 'every row names where its number came from')
         self.assertIn('r07-2026-09-21', rows[0]['source'],
                       'the cold row traces to the stored receipt')
+
+
+class ModelDefaultsTests(SubtitleFixture):
+    """Per-model operator defaults: stored per model, validated, applied, published.
+
+    The owner's rule (2026-09-25): *"it has to be per model because each model is weight
+    differently. we can't have a blanket default meant for one model but applied to all."* Each
+    model's row offers exactly the parameters this lane publishes - the same list
+    ``lane_contract`` publishes and ``POST /api/transcribe`` declares as its form fields - the
+    worker stores the operator's choice per model, refuses a value its own lane would refuse,
+    applies it only to a field the request omitted, and publishes the resolved value as the
+    parameter's ``default`` so a scheduler reads what an omitted field will receive.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        factory, self.holder = _fake_factory([{'start': 0.0, 'end': 0.5, 'text': 'hello world'}])
+        self.manager = self.build_manager(factory=factory)
+        self.client = TestClient(create_app(self.manager, TOKEN))
+        self.headers = {'X-Hub-Token': TOKEN}
+        self.repo = self.manifests[0]['model_id']
+
+    def defaults_row(self, repo: str | None = None) -> dict:
+        payload = self.client.get('/api/model-defaults', headers=self.headers)
+        self.assertEqual(payload.status_code, 200, payload.text)
+        return {row['repo']: row for row in payload.json()['models']}[repo or self.repo]
+
+    def parameter(self, name: str) -> dict:
+        return next(p for p in self.manager.engine.lane_parameters() if p['name'] == name)
+
+    def published(self, name: str, repo: str | None = None):
+        """What ``GET /api/catalog`` advertises as one parameter's ``default``."""
+        catalog = self.client.get('/api/catalog', headers=self.headers).json()
+        entry = next(m for m in catalog['models'] if m['repo'] == (repo or self.repo))
+        return next(p for p in entry['lane_contract']['parameters']
+                    if p['name'] == name).get('default', 'absent')
+
+    def store(self, values: dict, repo: str | None = None):
+        return self.client.put('/api/model-defaults', headers=self.headers,
+                               json={'repo': repo or self.repo, 'values': values})
+
+    def transcribe(self, data: dict | None = None, *, model: str = 'whisper-turbo'):
+        """One upload through the Hub's synchronous contract, with only the fields given."""
+        body = dict(data or {})
+        if model:
+            body.setdefault('model', model)
+        return self.client.post(
+            '/api/transcribe', headers=self.headers, data=body,
+            files={'file': ('clip.wav', io.BytesIO(self.audio_bytes), 'audio/wav')})
+
+    def last_call(self) -> dict:
+        self.assertTrue(self.holder['model'].calls, 'the engine was never asked to decode')
+        return self.holder['model'].calls[-1]
+
+    def test_get_before_anything_is_set_is_the_lanes_own_defaults(self) -> None:
+        payload = self.client.get('/api/model-defaults', headers=self.headers).json()
+        rows = {row['repo']: row for row in payload['models']}
+        self.assertEqual(set(rows), {manifest['model_id'] for manifest in self.manifests})
+        offered = [p['name'] for p in model_defaults.editable(
+            self.manager.engine.lane_parameters())]
+        self.assertNotIn('file', offered, 'a required upload is not defaultable')
+        for repo, row in rows.items():
+            with self.subTest(model=repo):
+                self.assertEqual([p['name'] for p in row['parameters']], offered)
+                self.assertEqual(row['defaults'], row['stated'])
+                self.assertEqual(row['chosen'], {})
+                self.assertEqual(row['not_used'], {})
+                self.assertEqual(row['defaults'],
+                                 model_defaults.stated(row['parameters']))
+        self.assertIs(rows[self.repo]['defaults']['word_timestamps'], False)
+
+    def test_put_stores_get_reflects_and_delete_returns_the_model_to_the_lane(self) -> None:
+        saved = self.store({'word_timestamps': True, 'language': 'en'})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        row = self.defaults_row()
+        self.assertEqual(row['chosen'], {'word_timestamps': True, 'language': 'en'})
+        self.assertIs(row['defaults']['word_timestamps'], True)
+        self.assertEqual(model_defaults.load(self.data),
+                         {self.repo: {'word_timestamps': True, 'language': 'en'}})
+
+        deleted = self.client.request('DELETE', '/api/model-defaults', headers=self.headers,
+                                      json={'repo': self.repo})
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        row = self.defaults_row()
+        self.assertEqual(row['chosen'], {})
+        self.assertEqual(row['defaults'], row['stated'])
+
+        # The query spelling reaches the same route, so a caller with no body has one answer.
+        self.store({'language': 'en'})
+        self.assertEqual(self.client.request('DELETE', '/api/model-defaults',
+                                             headers=self.headers,
+                                             params={'repo': self.repo}).status_code, 200)
+        self.assertEqual(self.defaults_row()['chosen'], {})
+        self.assertEqual(model_defaults.load(self.data), {})
+
+    def test_a_default_belongs_to_one_model_alone(self) -> None:
+        """The owner's whole point: setting one model must not touch another."""
+        other = self.manifests[1]['model_id']
+        self.store({'word_timestamps': True})
+        self.assertIs(self.defaults_row()['defaults']['word_timestamps'], True)
+        untouched = self.defaults_row(other)
+        self.assertEqual(untouched['chosen'], {})
+        self.assertEqual(untouched['defaults'], untouched['stated'])
+
+    def test_either_spelling_addresses_the_same_model(self) -> None:
+        """The route's own `model` field takes a package id or a repository; so does this."""
+        self.assertEqual(self.store({'language': 'en'}, repo='whisper-turbo').status_code, 200)
+        self.assertEqual(self.defaults_row()['defaults']['language'], 'en')
+        self.assertEqual(model_defaults.load(self.data), {self.repo: {'language': 'en'}})
+
+    def test_an_unknown_repo_is_a_named_refusal_not_a_silent_no_op(self) -> None:
+        for response in (
+            self.store({}, repo='parakeet-tdt-0-6b'),
+            self.client.request('DELETE', '/api/model-defaults', headers=self.headers,
+                                json={'repo': 'parakeet-tdt-0-6b'}),
+        ):
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertIn('parakeet-tdt-0-6b', str(response.json()['detail']))
+        self.assertEqual(self.client.request('DELETE', '/api/model-defaults',
+                                             headers=self.headers).status_code, 400)
+        self.assertEqual(model_defaults.load(self.data), {})
+
+    def test_a_value_outside_the_models_own_bound_is_refused_by_name_and_not_stored(self) -> None:
+        """Driven against the REAL lane parameters, so a bound change moves this test."""
+        limit = self.parameter('activity_id')['max_characters']
+        response = self.store({'activity_id': 'x' * (limit + 1)})
+        self.assertEqual(response.status_code, 422, response.text)
+        detail = response.json()['detail']
+        self.assertIn('activity_id', detail)
+        self.assertIn(str(limit), detail['activity_id'])
+        # Not stored, and the model is still on the lane's own value.
+        self.assertEqual(model_defaults.load(self.data), {})
+        self.assertEqual(self.defaults_row()['chosen'], {})
+
+        # The control that proves this is a bound and not a blanket refusal: the lane's own
+        # limit is accepted, and GET shows it.
+        accepted = self.store({'activity_id': 'x' * limit})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(self.defaults_row()['defaults']['activity_id'], 'x' * limit)
+
+    def test_what_the_route_does_not_publish_is_not_defaultable(self) -> None:
+        """`formats` and `file` are request fields; the lane publishes one and not the other."""
+        for values, expected in (
+            ({'file': 'clip.wav'}, 'publishes no such settable parameter'),
+            ({'formats': ['srt']}, 'publishes no such settable parameter'),
+            ({'word_timestamps': 'yes'}, 'expected boolean'),
+            ({'model': 'not-a-packaged-model'}, 'is not one of'),
+        ):
+            with self.subTest(values=values):
+                response = self.store(values)
+                self.assertEqual(response.status_code, 422, response.text)
+                name = next(iter(values))
+                self.assertIn(name, response.json()['detail'])
+                self.assertIn(expected, response.json()['detail'][name])
+        self.assertEqual(model_defaults.load(self.data), {})
+
+    def test_the_routes_own_validator_refuses_what_it_would_refuse_at_request_time(self) -> None:
+        """A value this lane cannot publish a bound for is still checked against the lane.
+
+        The language hint's shape lives in this app's request validator, not in the lane contract,
+        so `model_defaults` cannot express it as a bound. A sentence typed into the language field
+        must be refused at the door: stored, it would turn every later request that omitted
+        language into a 422.
+        """
+        refused = self.store({'language': 'not a language!'})
+        self.assertEqual(refused.status_code, 422, refused.text)
+        self.assertIn('language', refused.json()['detail'])
+        self.assertIn('BCP-47', refused.json()['detail']['language'])
+        self.assertEqual(model_defaults.load(self.data), {})
+        # And a value the route accepts stores cleanly.
+        self.assertEqual(self.store({'language': 'en'}).status_code, 200)
+
+    def test_a_values_object_that_is_not_one_is_refused_by_name(self) -> None:
+        response = self.client.put('/api/model-defaults', headers=self.headers,
+                                   json={'repo': self.repo, 'values': ['en']})
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn('values', response.json()['detail'])
+        self.assertEqual(model_defaults.load(self.data), {})
+
+    def test_a_request_that_omits_it_gets_the_stored_default_the_catalog_publishes(self) -> None:
+        self.assertEqual(self.store({'word_timestamps': True}).status_code, 200)
+        response = self.transcribe()
+        self.assertEqual(response.status_code, 200, response.text)
+        # Read both sides: the number the request ran with is the number the catalog advertises.
+        self.assertIs(self.published('word_timestamps'), True)
+        self.assertIs(self.last_call()['word_timestamps'], self.published('word_timestamps'))
+
+    def test_a_request_that_supplies_it_is_unaffected_by_a_stored_default(self) -> None:
+        self.assertEqual(self.store({'word_timestamps': True}).status_code, 200)
+        response = self.transcribe({'word_timestamps': 'false'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIs(self.last_call()['word_timestamps'], False,
+                      'a stored default overrode what the caller sent')
+        # And the catalog still publishes the stored default: it is the answer for an omitted
+        # field, not a claim about what this request did.
+        self.assertIs(self.published('word_timestamps'), True)
+
+    def test_the_stored_language_is_published_and_used(self) -> None:
+        self.assertEqual(self.store({'language': 'en'}).status_code, 200)
+        self.assertEqual(self.published('language'), 'en')
+        self.assertEqual(self.transcribe().status_code, 200)
+        self.assertEqual(self.last_call()['language'], self.published('language'))
+
+    def test_route_catalog_generation_defaults_and_the_engine_agree(self) -> None:
+        """One value read at four places must be the same number.
+
+        The job's own validated parameters, the lane contract's published ``default``, the row's
+        ``generation_defaults`` (what the app pre-fills a form from) and the keyword the engine is
+        called with - if any of the four can disagree, the Models tab is showing an operator a
+        value the run does not use.
+        """
+        self.assertEqual(self.store({'language': 'en'}).status_code, 200)
+        response = self.transcribe()
+        self.assertEqual(response.status_code, 200, response.text)
+        job = self.manager.get(response.json()['studio_task_id'])
+        routed = job['params']['language']
+
+        entry = next(m for m in
+                     self.client.get('/api/catalog', headers=self.headers).json()['models']
+                     if m['repo'] == self.repo)
+        published = next(p for p in entry['lane_contract']['parameters']
+                         if p['name'] == 'language')['default']
+        generation_defaults = entry['generation_defaults']['language']
+
+        self.assertEqual(routed, published)
+        self.assertEqual(generation_defaults, published)
+        self.assertEqual(self.last_call()['language'], routed)
+
+    def test_generation_defaults_and_the_lane_contract_are_one_answer(self) -> None:
+        """Both spellings of "the value in force" on a row come from the one resolution."""
+        for entry in self.client.get('/api/catalog', headers=self.headers).json()['models']:
+            with self.subTest(model=entry['package_id']):
+                published = {p['name']: p['default']
+                             for p in entry['lane_contract']['parameters'] if 'default' in p}
+                self.assertEqual(entry['generation_defaults'], published)
+
+    def test_the_published_map_moves_with_a_stored_default(self) -> None:
+        before = {entry['package_id']: dict(entry['generation_defaults'])
+                  for entry in self.client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertEqual(self.store({'word_timestamps': True}).status_code, 200)
+        after = {entry['package_id']: dict(entry['generation_defaults'])
+                 for entry in self.client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertIs(after['whisper-turbo']['word_timestamps'], True)
+        self.assertIs(before['whisper-turbo']['word_timestamps'], False)
+        # One model's choice does not move another model's map.
+        self.assertEqual(after['whisper-base'], before['whisper-base'])
+
+    def test_with_nothing_stored_an_omitted_field_stays_exactly_as_the_lane_had_it(self) -> None:
+        """A stored default is the only thing that changes an omitted field."""
+        self.assertEqual(self.transcribe().status_code, 200)
+        call = self.last_call()
+        self.assertIs(call['word_timestamps'], False)
+        self.assertIsNone(call['language'])
+
+    def test_the_studio_route_applies_the_stored_default_too(self) -> None:
+        self.assertEqual(self.store({'language': 'en'}).status_code, 200)
+        response = self.client.post(
+            '/api/generate/transcribe', headers=self.headers, data={'model': 'whisper-turbo'},
+            files={'file': ('clip.wav', io.BytesIO(self.audio_bytes), 'audio/wav')})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.wait(self.manager, response.json()['job']['id'])['state'], 'done')
+        self.assertEqual(self.last_call()['language'], 'en')
+
+    def test_the_capability_and_weight_format_publication_does_not_move(self) -> None:
+        """Only the resolved ``default`` changes; what the package *is* does not."""
+        before = {m['package_id']: m for m in
+                  self.client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertEqual(self.store({'word_timestamps': True}).status_code, 200)
+        after = {m['package_id']: m for m in
+                 self.client.get('/api/catalog', headers=self.headers).json()['models']}
+        self.assertEqual(set(after), set(before))
+        for package_id, entry in after.items():
+            with self.subTest(package=package_id):
+                for field in ('family', 'languages', 'supports_segment_timestamps',
+                              'supports_word_timestamps', 'supports_long_form',
+                              'capabilities', 'engine', 'model_revision'):
+                    self.assertEqual(entry[field], before[package_id][field], field)
+                self.assertEqual(entry['readiness']['files'],
+                                 before[package_id]['readiness']['files'])
+                self.assertEqual([p['name'] for p in entry['lane_contract']['parameters']],
+                                 [p['name'] for p in
+                                  before[package_id]['lane_contract']['parameters']])
+        # The one field that does move is the resolved default, and it moves for one model.
+        chosen = next(p for p in after['whisper-turbo']['lane_contract']['parameters']
+                      if p['name'] == 'word_timestamps')
+        self.assertIs(chosen['default'], True)
+        untouched = next(p for p in after['whisper-base']['lane_contract']['parameters']
+                         if p['name'] == 'word_timestamps')
+        self.assertIs(untouched['default'], False)
+
+    def test_the_memory_policy_contract_answers_beside_the_defaults_routes(self) -> None:
+        """The two surfaces are neighbours in one state directory and neither renames the other."""
+        from unittest.mock import patch
+
+        from components.subtitle.app.backend import memory_policy
+
+        settings = self.data / 'memory_policy.json'
+        self.assertNotEqual(settings.name, model_defaults.SETTINGS_NAME)
+        with patch.object(memory_policy, 'settings_file', lambda: settings):
+            policy = self.client.get('/api/memory-policy', headers=self.headers)
+            self.assertEqual(policy.status_code, 200, policy.text)
+            for field in ('mode', 'resolved_mode', 'idle_seconds', 'options', 'loaded_models',
+                          'active_work', 'busy'):
+                self.assertIn(field, policy.json(), field)
+            saved = self.client.put('/api/memory-policy', headers=self.headers,
+                                    json={'mode': 'memory_saver'})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()['mode'], 'memory_saver')
+            self.assertEqual(json.loads(settings.read_text(encoding='utf-8')),
+                             {'mode': 'memory_saver'})
+        # The defaults surface is its own file in the same state directory, and neither write
+        # touched the other's.
+        self.store({'word_timestamps': True})
+        self.assertEqual(model_defaults.load(self.data), {self.repo: {'word_timestamps': True}})
+        self.assertTrue((self.data / model_defaults.SETTINGS_NAME).is_file())
+        self.assertTrue(settings.is_file())
+        self.assertEqual(json.loads(settings.read_text(encoding='utf-8')),
+                         {'mode': 'memory_saver'})
 
 
 class CatalogDiscoveryTests(SubtitleFixture):

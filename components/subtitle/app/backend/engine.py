@@ -138,19 +138,40 @@ def subtitle_capabilities(manifest: dict) -> dict:
     }
 
 
-def lane_contract(capabilities: dict, parameters: list[dict]) -> dict:
+def _with_resolved_defaults(parameters: list[dict],
+                            defaults: Optional[dict]) -> list[dict]:
+    """Each parameter's ``default`` replaced by the value in force for this package.
+
+    ``defaults`` is what ``model_defaults.resolved`` answered for this model, so the number a
+    scheduler reads here is the number an omitted form field receives. A parameter no value is
+    in force for (neither the lane nor the operator states one) keeps no ``default``: a ``null``
+    for a boolean is a value this worker would refuse.
+    """
+    if not defaults:
+        return parameters
+    return [{**parameter, 'default': defaults[parameter['name']]}
+            if parameter['name'] in defaults else parameter
+            for parameter in parameters]
+
+
+def lane_contract(capabilities: dict, parameters: list[dict],
+                  defaults: Optional[dict] = None) -> dict:
     """The published lane contract: what to send, what comes back, and what a cancel means.
 
-    `deadline_seconds` is deliberately absent: the Hub owns the only dispatch deadline
-    (`standalone.py`'s peer-proxy timeout) and adds it when it echoes this contract, so a worker
-    restating it would be another copy of a number it does not enforce. `runtime_seconds` is
+    ``deadline_seconds`` is deliberately absent: the Hub owns the only dispatch deadline
+    (``standalone.py``'s peer-proxy timeout) and adds it when it echoes this contract, so a worker
+    restating it would be another copy of a number it does not enforce. ``runtime_seconds`` is
     published only where a manifest records a measurement, with its evidence.
+
+    ``defaults`` is this package's resolved per-model default map, passed by the caller that owns
+    the state directory (``SubtitleManager.catalog``), so the contract and the request path read
+    the one ``model_defaults.resolved`` answer and cannot disagree.
     """
     contract = {
         'schema': LANE_SCHEMA,
         'modality': 'transcription',
         'operation': LANE_OPERATION,
-        'parameters': parameters,
+        'parameters': _with_resolved_defaults(parameters, defaults),
         'artifact': dict(LANE_ARTIFACT),
         'states': {key: (list(value) if isinstance(value, list) else value)
                    for key, value in LANE_STATES.items()},
@@ -573,7 +594,14 @@ class SubtitleEngine:
         return {'ready': ready, 'reason': reason, 'files': files, 'host': host,
                 'runtime_identity': {'id': self.runtime_sha256, 'compatible': True}}
 
-    def catalog(self) -> list[dict]:
+    def catalog(self, defaults: Optional[dict[str, dict]] = None) -> list[dict]:
+        """Every registered package's row, keyed as the catalog publishes it.
+
+        ``defaults`` is ``{repo: the values in force for that model}`` from
+        ``SubtitleManager``, which owns the state directory; each row's lane contract publishes
+        the resolved ``default`` for its parameters.
+        """
+        chosen = defaults or {}
         entries = []
         for package_id in sorted(self.manifests):
             manifest = self.manifests[package_id]
@@ -623,8 +651,15 @@ class SubtitleEngine:
                 'supports_word_timestamps': capabilities['supports_word_timestamps'],
                 'supports_long_form': capabilities['supports_long_form'],
                 # What a scheduler sends and gets back for this lane, from the worker that owns
-                # the API (`docs/lane-execution-contract.md`).
-                'lane_contract': lane_contract(capabilities, self.lane_parameters()),
+                # the API (`docs/lane-execution-contract.md`). Its parameters carry the resolved
+                # per-model defaults, so an omitted field and a published `default` are the same
+                # answer.
+                'lane_contract': lane_contract(capabilities, self.lane_parameters(),
+                                               chosen.get(manifest['model_id'])),
+                # The same values under the name every other Studio publishes them by, which is
+                # what the app pre-fills a form from: one map, so the lane contract's `default`
+                # fields, this object and what an omitted form field receives cannot disagree.
+                'generation_defaults': dict(chosen.get(manifest['model_id']) or {}),
                 'min_total_memory_gb': 8,
                 'qualification': manifest.get('qualification') or {},
             })
