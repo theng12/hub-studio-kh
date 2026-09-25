@@ -44,6 +44,15 @@ from typing import Callable, Optional
 VOICE_TRANSCRIPTION_MODULE = 'backend.transcription'
 VOICE_TRANSCRIPTION_SOURCE = 'components/voice/app/backend/transcription.py'
 
+# The same reuse rule, for the snapshot-view builder. Imported as ``backend.cache`` from the
+# Voice app directory rather than as ``components.voice.app.backend.cache``: the bundle stages
+# Voice at ``Resources/voice``, not under ``Resources/components``, so the dotted path resolved
+# in this checkout and nowhere else. It was wrapped in a bare ``except Exception`` and the
+# fallback below looked healthy, so the one-source reuse that comments promised had silently
+# stopped happening in every shipped build. ``staged_import_gaps`` now catches the shape.
+VOICE_CACHE_MODULE = 'backend.cache'
+VOICE_CACHE_SOURCE = 'components/voice/app/backend/cache.py'
+
 # The adopted Voice decision: Whisper's 30-second-window conditioning turns one
 # bad token into a self-reinforcing hallucination cascade. Voice measured 94%
 # fewer invented words with it off. Subtitle keeps the identical value rather
@@ -192,6 +201,35 @@ def host_eligibility() -> dict:
     return state
 
 
+def _voice_app_root(voice_app_dir: str | Path | None = None) -> str:
+    """The Voice app directory, on ``sys.path`` so ``backend.*`` resolves to it."""
+    explicit = str(voice_app_dir) if voice_app_dir is not None else ''
+    voice_app = explicit.strip() or os.environ.get('STUDIOHUB_VOICE_APP_DIR', '').strip()
+    if not voice_app:
+        raise RuntimeError('STUDIOHUB_VOICE_APP_DIR is required to reuse the Voice source')
+    root = str(Path(voice_app).expanduser().resolve())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return root
+
+
+def _voice_module(name: str, source: str, voice_app_dir: str | Path | None = None):
+    """Import one module out of the Voice app, proving it came from the named file.
+
+    The check is not decoration. ``backend`` is a bare package name, and a process that already
+    put a *different* ``backend`` on the path would otherwise be handed that other package's
+    module while every caller believed it had the Voice one. A mismatch names both files.
+    """
+    root = _voice_app_root(voice_app_dir)
+    module = importlib.import_module(name)
+    expected = Path(root) / 'backend' / (name.split('.', 1)[1] + '.py')
+    actual = Path(getattr(module, '__file__', '') or '')
+    if actual.resolve() != expected.resolve():
+        raise RuntimeError(
+            f'{name} resolved to {actual or "nowhere"}, not to the Voice source {expected}')
+    return module
+
+
 def voice_export_module(voice_app_dir: str | Path | None = None):
     """Import the existing Voice transcription module at its one source path.
 
@@ -201,14 +239,12 @@ def voice_export_module(voice_app_dir: str | Path | None = None):
     honoured. ``STUDIOHUB_VOICE_APP_DIR`` remains the fallback, which is what the packaged
     Subtitle worker passes at startup.
     """
-    explicit = str(voice_app_dir) if voice_app_dir is not None else ''
-    voice_app = explicit.strip() or os.environ.get('STUDIOHUB_VOICE_APP_DIR', '').strip()
-    if not voice_app:
-        raise RuntimeError('STUDIOHUB_VOICE_APP_DIR is required to reuse the Voice export source')
-    root = str(Path(voice_app).expanduser().resolve())
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    return importlib.import_module(VOICE_TRANSCRIPTION_MODULE)
+    return _voice_module(VOICE_TRANSCRIPTION_MODULE, VOICE_TRANSCRIPTION_SOURCE, voice_app_dir)
+
+
+def voice_cache_module(voice_app_dir: str | Path | None = None):
+    """The Voice snapshot-view builder, imported the same way the export module is."""
+    return _voice_module(VOICE_CACHE_MODULE, VOICE_CACHE_SOURCE, voice_app_dir)
 
 
 def source_file(voice_app_dir: str | Path) -> Path:
@@ -361,11 +397,22 @@ class SubtitleEngine:
         self._lock = threading.RLock()
         self.inference_lock = threading.Lock()
         self._export = one_source_location(self.voice_app_dir)
+        # Which builder produced each package's loadable folder, and why it was the one that
+        # answered. Published read-only through ``view_sources()``.
+        self._view_source: dict[str, dict] = {}
 
     # ── catalog / readiness ────────────────────────────────────────────────
 
     def export_source(self) -> dict:
         return dict(self._export)
+
+    def view_sources(self) -> dict[str, dict]:
+        """Per package, the folder a load will use and which builder chose it.
+
+        ``voice-cache`` is the designed path (one implementation, shared with Voice);
+        ``local-view`` and ``library`` are the fallbacks, each carrying the reason it ran.
+        """
+        return {package_id: dict(row) for package_id, row in self._view_source.items()}
 
     def _loadable_model_folder(self, folder: Path, package_id: str, revision: str,
                                model_id: str | None = None) -> Path:
@@ -376,27 +423,51 @@ class SubtitleEngine:
         view for a repository — merged weights+tokenizer, with npz converted — so reuse that
         rather than maintaining a second copy of the same logic. Verified library bytes are
         never modified either way.
+
+        Which of the two produced the folder is recorded, not inferred: the local builder below
+        is a fallback for the case where the shared module cannot answer (an unindexed package,
+        a library that moved), and when it runs for any other reason that is a fact an operator
+        should be able to read rather than a silence.
         """
         if model_id:
             try:
-                from components.voice.app.backend import cache as voice_cache
+                voice_cache = voice_cache_module(self.voice_app_dir)
                 shared = voice_cache.package_snapshot(model_id)
                 # `exists()` and not `is_file()`: a broken symlink satisfies `is_file()` on
                 # macOS, so this passed while the config it named did not exist, and mlx-audio
                 # then failed with "Config not found" pointing at a folder it had been told was
                 # complete.
                 if shared is not None and (shared[1] / 'config.json').exists():
+                    self._view_source[package_id] = {
+                        'source': 'voice-cache',
+                        'module': VOICE_CACHE_MODULE,
+                        'path': str(Path(voice_cache.__file__).resolve()),
+                        'folder': str(shared[1]),
+                    }
                     return shared[1]
-            except Exception:
-                pass
+                reason = 'the shared Voice cache did not resolve this package'
+            except Exception as exc:
+                reason = f'{type(exc).__name__}: {exc}'
+        else:
+            reason = 'the manifest states no model_id to resolve through the shared Voice cache'
         model = folder / 'model'
         if any(model.glob('*.safetensors')):
+            self._view_source[package_id] = {
+                'source': 'library', 'folder': str(model),
+                'reason': (f'the shared Voice cache did not answer ({reason}); the library folder '
+                           'already ships *.safetensors weights this runtime can load')}
             return model
         npz_files = sorted(model.glob('*.npz'))
         # This worker carries its own state root name, so accept either.
         state = (os.environ.get('STUDIOHUB_DATA_DIR')
                  or os.environ.get('STUDIOHUB_SUBTITLE_DATA_DIR'))
         if not npz_files or not state:
+            self._view_source[package_id] = {
+                'source': 'library', 'folder': str(model),
+                'reason': (f'the shared Voice cache did not answer ({reason}); the library ships '
+                           + ('weights this runtime can load' if not npz_files
+                              else 'no state root to build a converted view under')),
+            }
             return model
         view = Path(state) / 'snapshot-views' / f'{package_id}-{revision[:16]}' / 'model'
         marker = view / '.studiohub-weights'
@@ -412,6 +483,9 @@ class SubtitleEngine:
             # finished view - it is the state that got reused forever and produced "Config not
             # found" for a model whose config was in the library the whole time.
             if entries and all(e.exists() for e in entries):
+                self._view_source[package_id] = {
+                    'source': 'local-view', 'folder': str(view),
+                    'reason': f'the local builder answered because {reason}'}
                 return view
             shutil.rmtree(view, ignore_errors=True)
         try:
@@ -431,8 +505,15 @@ class SubtitleEngine:
                 mx.save_safetensors(str(view / (npz.stem + '.safetensors')),
                                     dict(mx.load(str(npz))))
             marker.write_text(f'{package_id}@{revision}\n', encoding='utf-8')
-        except (OSError, ValueError, ImportError):
+        except (OSError, ValueError, ImportError) as exc:
+            self._view_source[package_id] = {
+                'source': 'library', 'folder': str(model),
+                'reason': (f'the local builder could not convert this package '
+                           f'({type(exc).__name__}: {exc}) and {reason}')}
             return model
+        self._view_source[package_id] = {
+            'source': 'local-view', 'folder': str(view),
+            'reason': f'the local builder answered because {reason}'}
         return view
 
     def package(self, package_id: str) -> PackageLocation:
@@ -477,6 +558,7 @@ class SubtitleEngine:
                 'processor_folder': str(location.processor_folder)
                 if location.processor_folder.is_dir() else None,
                 'weight_files': [path.name for path in weights],
+                'view_source': self._view_source.get(package_id),
                 'runtime_supported': runtime_supported}
 
     def readiness(self, package_id: str) -> dict:

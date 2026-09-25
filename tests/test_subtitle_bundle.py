@@ -184,6 +184,71 @@ class SubtitleBundleTests(unittest.TestCase):
                 self.assertFalse(ready.exists(), log.read_text())
 
 
+@unittest.skipUnless(BUILD_PYTHON.is_file(), 'the bundled Voice runtime is required')
+class SubtitleBundleVoiceReuseTests(unittest.TestCase):
+    """The Voice snapshot-view builder is reachable from the staged bundle layout.
+
+    Voice is staged at ``Resources/voice``, never under ``Resources/components``. So
+    ``from components.voice.app.backend import cache`` resolved in this checkout and nowhere a
+    worker runs, and because it sat inside a bare ``except Exception`` the local fallback kept
+    the catalog looking healthy while the one-source reuse the module docstring promises had
+    silently stopped happening in every shipped build. The fallback cannot convert the
+    ``weights.npz`` that pinned Whisper base/small ship, so those two stayed catalog-only.
+    """
+
+    PROBE = """
+import json, sys
+from pathlib import Path
+resources = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(resources))
+from components.subtitle.app.backend import engine as subtitle_engine
+voice_app = resources / 'voice' / 'app'
+answer = {}
+try:
+    import components.voice.app.backend.cache  # noqa: F401
+    answer['dotted_path'] = 'resolved'
+except Exception as exc:
+    answer['dotted_path'] = f'{type(exc).__name__}: {exc}'
+try:
+    module = subtitle_engine.voice_cache_module(voice_app)
+    answer['shared'] = str(Path(module.__file__).resolve())
+    answer['expected'] = str((voice_app / 'backend' / 'cache.py').resolve())
+    answer['has_builder'] = callable(getattr(module, 'package_snapshot', None))
+except Exception as exc:
+    answer['shared'] = f'{type(exc).__name__}: {exc}'
+answer['export_source'] = str(
+    Path(subtitle_engine.voice_export_module(voice_app).__file__).resolve())
+# Written to a file, not stdout: importing the workers prints progress lines, and a test that
+# parsed the last stdout line would break the next time one is added.
+Path(sys.argv[2]).write_text(json.dumps(answer))
+"""
+
+    def test_the_view_builder_loads_from_the_voice_tree_not_a_dotted_component_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            resources, data, token = _bundle(root, library=root / 'Models')
+            probe = root / 'probe_voice_reuse.py'
+            probe.write_text(self.PROBE)
+            answer_path = root / 'probe_voice_reuse.json'
+            result = subprocess.run(
+                [str(BUILD_PYTHON), '-I', '-B', str(probe), str(resources), str(answer_path)],
+                capture_output=True, text=True,
+                env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(answer_path.is_file(), result.stdout + result.stderr)
+            answer = json.loads(answer_path.read_text())
+            # The bundle does not carry Voice under components/, which is exactly why the dotted
+            # import was wrong. Pinning the absence keeps the next reader from "fixing" the
+            # import back to the shape that only works in the checkout.
+            self.assertNotEqual(answer['dotted_path'], 'resolved', answer)
+            self.assertEqual(answer['shared'], answer['expected'], answer)
+            self.assertTrue(answer['has_builder'], answer)
+            # The transcription module is loaded through the same helper, so the check that
+            # proves the file it came from must not have broken the import that already worked.
+            self.assertTrue(answer['export_source'].endswith('/voice/app/backend/transcription.py'),
+                            answer)
+
+
 @unittest.skipUnless(REAL_LIBRARY, 'set STUDIOHUB_TEST_MODEL_LIBRARY to run real Whisper')
 @unittest.skipUnless(BUILD_PYTHON.is_file(), 'the bundled Voice runtime is required')
 class SubtitleBundleRealModelTests(unittest.TestCase):
@@ -229,6 +294,23 @@ class SubtitleBundleRealModelTests(unittest.TestCase):
                     turbo = next(entry for entry in catalog['models']
                                  if entry['package_id'] == 'whisper-turbo')
                     self.assertTrue(turbo['readiness']['ready'], turbo['readiness']['reason'])
+                    # The designed builder, not the fallback: `view_source` is published so this
+                    # is a measurement rather than an assumption about which code ran.
+                    self.assertEqual(
+                        turbo['readiness']['files']['view_source']['source'], 'voice-cache')
+                    # Whisper small ships weights.npz, which mlx-audio cannot load directly. Only
+                    # the shared Voice builder converts it, so this is the end-to-end proof that
+                    # the reuse reaches the bundle: with the dotted import it read `library` and
+                    # the package stayed `unsupported_weight_format` / catalog-only.
+                    small = next((entry for entry in catalog['models']
+                                  if entry['package_id'] == 'whisper-small'), None)
+                    if small is not None and small['readiness']['files']['state'] != 'not_installed':
+                        view = small['readiness']['files']['view_source']
+                        self.assertEqual(view['source'], 'voice-cache', view)
+                        self.assertTrue(small['readiness']['files']['runtime_supported'], view)
+                        self.assertTrue(any(name.endswith('.safetensors')
+                                            for name in small['readiness']['files']['weight_files']),
+                                        small['readiness']['files']['weight_files'])
                     with SPEECH_WAV.open('rb') as audio:
                         response = client.post(
                             value['url'] + '/api/transcribe', headers=headers,
