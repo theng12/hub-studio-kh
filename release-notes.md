@@ -65,6 +65,14 @@ Nothing a Studio does not accept is offered as a control.
   app already had them. It didn't. There is now a rule against that — a document names the build
   that has the behaviour — and the handoff says so at the top.
 
+### You can generate on a Mac again while it is a node
+
+If you switched a Mac to **node** and then found you could not make anything on it, that was a real
+blocker and it is fixed: the Hub refused **every** job you submitted from that Mac's own window,
+because a rule meant to stop a *customer* owning a node's work could not tell the difference
+between a customer and you sitting at the machine. Your own Mac now always runs your own work; work
+arriving from a controller is refused exactly as before.
+
 ### Still yours to do
 
 The **8 GB Z-Image-Turbo 6B MLX 4-bit run**: your manual test proved it works (~5 minutes, against

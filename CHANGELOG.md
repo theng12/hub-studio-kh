@@ -57,6 +57,13 @@ and both are the same shape — a consumer interpreting where a producer could s
 (`prompt_validate_repair`, `grammar_constrained: false`, one repair attempt), because "json_object
 is supported" does not answer the question a strict-JSON caller has.
 
+**And a Mac switched to a node can generate from its own window again.** It could not: one gate
+refused *every* local submission in agent mode with a 409, on the sound rule that a node must not
+own a **customer's** job — but the owner sitting at his own Mac is not a customer, and the gate
+could not tell him apart from a remote controller. The difference is the credential and nothing
+else: the Hub token is this Mac's own, the fleet token is someone else's. The fleet refusal is
+pinned by the same test, because narrowing a gate is only safe if what it protected still holds.
+
 ### What is not here
 
 Two app-side items are recorded rather than fixed: the Audio page's own persisted speed slider
