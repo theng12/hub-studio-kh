@@ -31,6 +31,18 @@ final class FixtureProtocol: URLProtocol {
     static var corruptImage = false
     static var corruptAudio = false
     static var voiceListCalls = 0
+    /// How many held voice-library reads were torn down before the fixture answered them. A read
+    /// the fixture *does* answer also stops loading, which is why the holding flag is cleared
+    /// before that answer is delivered.
+    static var voiceListCancellations = 0
+    static var holdNextVoiceList = false
+    static var heldVoiceListStarted = false
+    static var heldVoiceListHolding = false
+    /// When set, `GET /studio/voice/api/voices` answers this status instead of the list, so a real
+    /// read failure can be told apart from a cancelled one.
+    static var voiceListFailureStatus: Int?
+    static let voiceListStarted = DispatchSemaphore(value: 0)
+    static let releaseVoiceList = DispatchSemaphore(value: 0)
     static var voiceAudioCalls = 0
     static var voiceDeleteCalls = 0
     static var voiceAddCalls = 0
@@ -183,6 +195,17 @@ final class FixtureProtocol: URLProtocol {
     static func recheckBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return modelHealthBody }
     static func setModelVerifyRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; modelVerifyRejects = value }
     static func setHoldGeneration(_ value: Bool) { lock.lock(); defer { lock.unlock() }; holdGeneration = value }
+    /// Hold the next voice-library read unanswered, so a load can be cancelled mid-flight exactly
+    /// the way SwiftUI's `.task(id:)` cancels its previous task when the id changes.
+    static func holdVoiceList() {
+        lock.lock(); defer { lock.unlock() }
+        holdNextVoiceList = true
+        heldVoiceListStarted = false
+    }
+    static func voiceListHasStarted() -> Bool { lock.lock(); defer { lock.unlock() }; return heldVoiceListStarted }
+    static func voiceListCancelCount() -> Int { lock.lock(); defer { lock.unlock() }; return voiceListCancellations }
+    static func releaseHeldVoiceList() { releaseVoiceList.signal() }
+    static func setVoiceListFailure(_ status: Int?) { lock.lock(); defer { lock.unlock() }; voiceListFailureStatus = status }
     static func memoryBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastMemoryBody }
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
     static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
@@ -445,6 +468,9 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/studio/voice/api/voices"):
             Self.lock.lock()
             Self.voiceListCalls += 1
+            let hold = Self.holdNextVoiceList
+            if hold { Self.holdNextVoiceList = false; Self.heldVoiceListStarted = true; Self.heldVoiceListHolding = true }
+            let failure = Self.voiceListFailureStatus
             var rows: [[String: Any]] = [
                 ["id": "voice-1", "name": "Narrator", "language": "en", "gender": "f",
                  "notes": "booth", "license": "self-owned", "source_url": NSNull(),
@@ -463,7 +489,21 @@ final class FixtureProtocol: URLProtocol {
             ]
             rows.append(contentsOf: Self.voiceAdded)
             Self.lock.unlock()
-            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["voices": rows]))
+            if let failure {
+                result = (failure, "application/json", Data(#"{"detail":"the voice library is unreadable"}"#.utf8))
+            } else {
+                let payload = try! JSONSerialization.data(withJSONObject: ["voices": rows])
+                if hold {
+                    Self.voiceListStarted.signal()
+                    DispatchQueue.global().async { [self] in
+                        _ = Self.releaseVoiceList.wait(timeout: .now() + 5)
+                        Self.lock.lock(); Self.heldVoiceListHolding = false; Self.lock.unlock()
+                        finish((200, "application/json", payload))
+                    }
+                    return
+                }
+                result = (200, "application/json", payload)
+            }
         case ("POST", "/studio/voice/api/voices"):
             // The worker stores what it was given and returns it, so the fixture's list grows
             // with each add. The body is a file upload, and `requestBody()` cannot read a
@@ -788,7 +828,7 @@ final class FixtureProtocol: URLProtocol {
 
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
     private static let catalogFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","modes":["preset"],"size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","modes":["preset"],"size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","modes":["cloning","design"],"size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","modes":["cloning"],"size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","modes":["cloning"],"size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","modes":["preset"],"size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","modes":["preset"],"size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","modes":["cloning","preset"],"size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","modes":["preset"],"size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/two-mode-voice","label":"Two-mode voice fixture 4-bit","family":"fixture-two-mode","size_gb":2.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"modes":["cloning","design"],"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"fixture/unreported-modes","label":"Voice model with unreported modes","family":"fixture-unreported-modes","size_gb":1.2,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
 
     /// Shaped like the Hub's own reply. The same repo appears four times at different levels of
     /// detail, exactly as the aggregate catalogue delivers it — one studio publishes the full
@@ -797,7 +837,7 @@ final class FixtureProtocol: URLProtocol {
     /// seen" may win, because both would lose the engine and cache state the Subtitle form needs.
     private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
 
-    private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
+    private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-two-mode-voice","model_id":"fixture/two-mode-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unreported-modes","model_id":"fixture/unreported-modes","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
 
     /// The catalogue exactly as the fixture serves it, so a test can derive what the app must
     /// show from the data the app was given instead of restating it by hand. A hand-written
@@ -851,7 +891,13 @@ final class FixtureProtocol: URLProtocol {
         return Int(start)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        // A held voice-library read that is torn down before the fixture answers was cancelled.
+        guard request.url?.path == "/studio/voice/api/voices" else { return }
+        Self.lock.lock()
+        if Self.heldVoiceListHolding { Self.voiceListCancellations += 1 }
+        Self.lock.unlock()
+    }
 }
 
 // MARK: - Remote update fixtures (throwaway keys only)
@@ -1314,48 +1360,27 @@ struct NativeAPITests {
         await store.setRole("standalone")
         FixtureProtocol.setCredentialOrigin("minted")
 
-        // Which job a voice model does. The Audio page is arranged by this, and getting it wrong
-        // put a CustomVoice model on the cloning path, where it was asked for a reference voice it
-        // does not have. The rule is the catalog's own data, so a family this build has never seen
-        // still lands in the right tab.
-        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", family: "qwen3-tts",
-                         declaredClone: true) == .cloning,
-                "a Base tier clones")
-        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", family: "qwen3-tts",
-                         declaredClone: false) == .preset,
-                "CustomVoice takes preset speakers")
-        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit", family: "qwen3-tts",
-                         declaredClone: false) == .design,
-                "VoiceDesign takes a description")
-        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/VoxCPM2-4bit", family: "voxcpm-mlx",
-                         declaredClone: true) == .cloning,
-                "VoxCPM2 clones")
-        require(NativeWorkspaceStore.voiceMode(repo: "mlx-community/OmniVoice-bfloat16", family: "omnivoice",
-                         declaredClone: true) == .cloning,
-                "OmniVoice clones")
-        // A name that says nothing either way: the declared capability decides, whatever the family.
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-tts", family: "other",
-                         declaredClone: true) == .cloning,
-                "a declared clone capability must be believed")
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-tts", family: "other",
-                         declaredClone: false) == .preset,
-                "a model that declares no cloning is the preset form, not a forced clone")
-        // The Qwen tier name is scoped to Qwen: a name that merely contains "base" must not decide
-        // another family's contract.
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-base-tts", family: "other",
-                         declaredClone: false) == .preset,
-                "a non-Qwen name must never force the clone form")
-        // A family added to the catalog after this build. It must land correctly without the app
-        // knowing its name.
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/pocket-tts-4bit", family: "pocket-tts",
-                         declaredClone: true) == .cloning,
-                "an unknown clone-capable family must land in cloning")
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/pocket-tts-4bit", family: "pocket-tts",
-                         declaredClone: false) == .preset,
-                "an unknown preset family must land in preset")
-        require(NativeWorkspaceStore.voiceMode(repo: "someone/mystery-qwen", family: "qwen3-tts",
-                         declaredClone: false) == .preset,
-                "an unnamed Qwen tier is the preset form, the only mode needing nothing but a name")
+        // The modes a voice model offers come from the producer's own `modes` array, in its order,
+        // and the app no longer derives them: a derivation is a second source of truth free to
+        // disagree with the engine that answers the request, and it showed one tab for a model that
+        // publishes two. The decoder is driven here; the fixture-driven half is asserted against
+        // the catalogue the app is actually given.
+        require(NativeWorkspaceStore.voiceModes(["cloning", "design"]) == [.cloning, .design],
+                "both published modes must be offered, in the producer's order")
+        require(NativeWorkspaceStore.voiceModes(["cloning", "preset"]) == [.cloning, .preset],
+                "a model that clones and presets is offered in both tabs")
+        require(NativeWorkspaceStore.voiceModes(["design", "cloning"]) == [.design, .cloning],
+                "the producer's order is the display order")
+        require(NativeWorkspaceStore.voiceModes(["preset", "preset"]) == [.preset],
+                "a repeated mode is one tab")
+        // A mode this build cannot build a request for is dropped, not guessed at - and a row that
+        // published only unknown modes therefore reports none, which the page says out loud.
+        require(NativeWorkspaceStore.voiceModes(["hologram"]) == [],
+                "an unknown mode must not become a known one")
+        require(NativeWorkspaceStore.voiceModes(["cloning", "hologram"]) == [.cloning],
+                "a known mode beside an unknown one still stands")
+        require(NativeWorkspaceStore.voiceModes([]) == [] && NativeWorkspaceStore.voiceModes(nil) == [],
+                "no published modes means no tabs, never a default form")
 
         // Which container a fetched result is in, read from its own bytes. Playback needs the
         // right filename extension: `AVAudioPlayer(data:)` fails an MP3 with OSStatus -4, which is
@@ -1487,11 +1512,14 @@ struct NativeAPITests {
         require(FixtureProtocol.voiceAudioCalls == 1, "exactly one clip fetch")
 
         // Using a saved voice fills the reference fields, including the transcript that makes
-        // the clone possible.
+        // the clone possible - and selects the voice, because "Use voice" means this is the voice
+        // the Audio page clones from now that the picker there is the only way to choose one.
         let usedSaved = await store.useVoice(narrator)
         require(usedSaved, "a voice with a transcript must be usable")
         require(store.audioReferenceTranscript == "The exact words in the clip",
                 "using a voice must carry its transcript")
+        require(store.audioVoiceLibraryID == "voice-1",
+                "using a voice must select it for the Audio page's picker: \(store.audioVoiceLibraryID ?? "nil")")
         // The clip is fetched into the app's own folder, because staging reads from disk: a
         // saved voice lives in the worker's store, not here.
         require(store.audioReferencePath?.contains("voice-voice-1.wav") == true,
@@ -1503,6 +1531,110 @@ struct NativeAPITests {
                 "a voice with no transcript must not be offered for cloning")
         require(store.voiceError?.contains("no transcript") == true,
                 "a voice that cannot clone must say why: \(store.voiceError ?? "nil")")
+
+        // A cancelled voice-library read is not a failed one.
+        //
+        // The Audio page's Clone tab reads this library from a `.task(id:)`, and SwiftUI cancels
+        // that task the moment its id changes — a tab change, or the connection reconciling after
+        // the page appears. The cancellation reaches the store as `URLError.cancelled` (-999), and
+        // the catch used to treat any error as a broken library: it wiped the list held in memory
+        // and published "the voice library is unavailable on this build of the local engine". That
+        // is why the Clone tab arrived with an empty, disabled picker while the Voices page — whose
+        // task is keyed on the connection alone, and so is never cancelled this way — listed the
+        // very same voices correctly. Measured here by holding the read open, cancelling it
+        // mid-flight and checking what the store kept.
+        await store.refreshVoices()
+        require(store.voices.count == 2 && store.voiceError == nil,
+                "the baseline read must have the fixture's voices and no error")
+        FixtureProtocol.holdVoiceList()
+        let keyedReload = Task { @MainActor in await store.refreshVoices() }
+        for _ in 0..<200 where !FixtureProtocol.voiceListHasStarted() {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(FixtureProtocol.voiceListHasStarted(), "the held voice-library read never started")
+        keyedReload.cancel()
+        await keyedReload.value
+        require(FixtureProtocol.voiceListCancelCount() >= 1,
+                "the in-flight read must have been torn down by the cancellation")
+        require(store.voiceError == nil,
+                "a cancelled read must not be published as a failure: \(store.voiceError ?? "nil"); voices=\(store.voices.map(\.name)); selectable=\(store.selectableVoices.count)")
+        require(store.voices.count == 2,
+                "a cancelled read must leave the voices already in hand: \(store.voices.map(\.name))")
+        require(store.selectableVoices.count == 1,
+                "the picker's list must survive a cancelled reload")
+        FixtureProtocol.releaseHeldVoiceList()
+
+        // A real read failure is still a failure, and it names what happened rather than blaming
+        // the build: the owner's voices are on disk and a route that answers 500 is not proof that
+        // this build cannot read a library.
+        FixtureProtocol.setVoiceListFailure(500)
+        await store.refreshVoices()
+        require(store.voiceError?.contains("500") == true,
+                "a real failure must carry the engine's own answer: \(store.voiceError ?? "nil")")
+        FixtureProtocol.setVoiceListFailure(nil)
+        await store.refreshVoices()
+        require(store.voiceError == nil && store.voices.count == 2,
+                "a good read must clear the failure and restore the list")
+
+        // The shape cancellation arrives in, pinned so the next catch that sees one does not have
+        // to guess. Measured: `URLSession.data(for:)` reports a cancelled task as `URLError` -999
+        // (`NSURLErrorCancelled`), and `error is CancellationError` is false for it — so the store
+        // recognises both, and must keep treating a refused or timed-out connection as a failure.
+        require(NativeWorkspaceStore.isCancellation(URLError(.cancelled)),
+                "a cancelled URLSession read must read as cancellation")
+        require(NativeWorkspaceStore.isCancellation(CancellationError()),
+                "a cancelled Swift task must read as cancellation")
+        require(!NativeWorkspaceStore.isCancellation(URLError(.cannotConnectToHost)),
+                "a refused connection is a failure, not cancellation")
+        require(!NativeWorkspaceStore.isCancellation(URLError(.timedOut)),
+                "a timeout is a failure, not cancellation")
+
+        // The Audio page's trigger: read once per connection, not on every visit or tab change.
+        // A repeat read on every appearance is what created the cancellation window in the first
+        // place, so a loaded library must not be read again.
+        let readsAfterLoad = FixtureProtocol.voiceListCalls
+        await store.loadVoicesIfNeeded()
+        require(FixtureProtocol.voiceListCalls == readsAfterLoad,
+                "a library already in hand must not be read again on the next appearance")
+
+        // The library is read as part of joining a Hub, not left to whichever page is opened
+        // first: the Clone tab's picker is built from it, and it is the only control that chooses
+        // the voice. A read cancelled mid-connect leaves the library unloaded rather than empty, so
+        // the next look reads it again instead of showing an empty picker for the rest of the
+        // session.
+        FixtureProtocol.holdVoiceList()
+        let freshStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let connecting = Task { @MainActor in
+            await freshStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                     dataDirectory: temporary.appendingPathComponent("voice-cancel-fresh"),
+                                     token: "native-test-token")
+        }
+        for _ in 0..<200 where !FixtureProtocol.voiceListHasStarted() {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(FixtureProtocol.voiceListHasStarted(), "joining a Hub must read the voice library")
+        connecting.cancel()
+        await connecting.value
+        require(freshStore.voices.isEmpty && !freshStore.voicesLoaded,
+                "a cancelled first read must leave the library unloaded, not empty-and-loaded")
+        require(freshStore.voiceError == nil,
+                "a cancelled first read must not publish a failure: \(freshStore.voiceError ?? "nil")")
+        FixtureProtocol.releaseHeldVoiceList()
+        await freshStore.loadVoicesIfNeeded()
+        require(freshStore.voices.count == 2 && freshStore.voicesLoaded,
+                "the next look at an unloaded library must read it: \(freshStore.voices.map(\.name))")
+        freshStore.disconnect()
+
+        // What the picker says in each state it can be in. The line under the picker is the only
+        // thing that explains a disabled control, so a state that is silently mislabelled is the
+        // bug this pins: "not read yet" is not "you have no voices".
+        let emptyStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        require(emptyStore.voicePickerDetail.contains("Reading your saved voices"),
+                "an unread library must say it is being read: \(emptyStore.voicePickerDetail)")
+        require(store.voicePickerDetail.contains("Clones 1 of your saved voices"),
+                "a readable library must say how many voices it can clone: \(store.voicePickerDetail)")
+        require(store.voicePickerDetail.contains("No words yet"),
+                "a saved voice with no transcript must be named, not filtered out of sight: \(store.voicePickerDetail)")
 
         // Transcribing a clip on the spot: the words come back so neither the voice editor nor
         // the audio reference field has to ask the operator to type them.
@@ -1783,32 +1915,46 @@ struct NativeAPITests {
                 "every dispatched voice model must be selectable, got: \(supportedAudio.map(\.repo).sorted())")
         for entry in voiceCatalog {
             guard let repo = entry["repo"] as? String else { continue }
-            let family = entry["family"] as? String ?? ""
-            let declaredClone = (entry["reference_audio"] as? [String: Any])
-                .flatMap { $0["supported"] as? Bool ?? $0["declared"] as? Bool }
-                ?? ((entry["capabilities"] as? [String])?.contains("voice-cloning") ?? false)
-            let model = store.models.first { $0.function == .audio && $0.repo == repo }
-            let expected: VoiceMode
-            if family == "qwen3-tts" {
-                let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
-                expected = name.contains("voicedesign") ? .design
-                    : name.contains("customvoice") ? .preset
-                    : name.contains("base") ? .cloning
-                    : (declaredClone ? .cloning : .preset)
-            } else {
-                expected = declaredClone ? .cloning : .preset
+            // The modes the app shows must be the modes the producer published for that row, in
+            // the producer's order: `modes` is the Voice runtime's own answer, and the app used to
+            // derive one instead - which is how a model that clones *and* designs was shown a
+            // single tab. Derived from the fixture, so a new model or a new mode is covered without
+            // editing this test.
+            let published = (entry["modes"] as? [String]) ?? []
+            let expected = published.compactMap(VoiceMode.init(rawValue:)).reduce(into: [VoiceMode]()) {
+                if !$0.contains($1) { $0.append($1) }
             }
-            require(model?.voiceMode == expected,
-                    "\(repo) must land in \(expected.rawValue) — its catalog data says so")
-            require(model?.requiresReference == (expected == .cloning),
+            let model = store.models.first { $0.function == .audio && $0.repo == repo }
+            require(model?.voiceModes == expected,
+                    "\(repo) must offer exactly the modes its own catalog row published, got: \(model?.voiceModes.map(\.rawValue) ?? [])")
+            require(model?.reportsVoiceModes == !published.isEmpty,
+                    "\(repo) must report whether its engine published any modes")
+            require(model?.requiresReference == expected.contains(.cloning),
                     "\(repo) must need a reference clip only when it clones")
+            // Every tab the model publishes must actually list it, and no mode it did not publish
+            // may be reachable: this is what "the tabs follow the model" means from the store side.
+            for mode in VoiceMode.allCases {
+                let listed = store.audioModels(for: mode).contains { $0.repo == repo }
+                let wanted = expected.contains(mode) || expected.isEmpty
+                require(listed == wanted,
+                        "\(repo) listed in the \(mode.rawValue) tab: \(listed), expected \(wanted)")
+            }
         }
+
+        // A model whose engine reported no modes is still listed — hiding an installed model would
+        // answer "no voice model is installed" to someone looking straight at one — and the page
+        // says why it cannot generate with it.
+        let unreported = store.models.first { $0.repo == "fixture/unreported-modes" }
+        require(unreported?.supported == true && unreported?.voiceModes.isEmpty == true,
+                "a model with no published modes must still be listed as supported")
+        require(store.audioModels(for: .cloning).contains { $0.repo == "fixture/unreported-modes" },
+                "a model with no published modes must stay visible rather than vanish from every tab")
 
         // The four families this fix exists for, named so a reader sees the bug's own coverage.
         // Khmer is preset-only: the catalogue declares tts + multilingual and no voice-cloning, and
         // its generator rejects a reference voice. Chatterbox and Fish clone from a clip.
         let khmer = store.models.first { $0.repo == "khmerttsopensource/khmer-tts" }
-        require(khmer?.supported == true && khmer?.voiceMode == .preset && khmer?.requiresReference == false,
+        require(khmer?.supported == true && khmer?.voiceModes == [.preset] && khmer?.requiresReference == false,
                 "khmer-tts-mms must be selectable, in the preset tab, needing no reference clip")
         require(khmer?.speakers.isEmpty == true && khmer?.publishesPresetRoster == false,
                 "a single-speaker family must not be offered another family's preset roster")
@@ -1816,20 +1962,21 @@ struct NativeAPITests {
         require(qwenPreset?.speakers == ["Ryan", "Aiden"] && qwenPreset?.publishesPresetRoster == true,
                 "the family that publishes a roster must be the only one offered it")
         let khmerOnnx = store.models.first { $0.repo == "sengtha/khmer-tts-female-v2" }
-        require(khmerOnnx?.supported == true && khmerOnnx?.voiceMode == .preset,
+        require(khmerOnnx?.supported == true && khmerOnnx?.voiceModes == [.preset],
                 "khmer-tts-onnx must be selectable, in the preset tab")
         let chatterbox = store.models.first { $0.repo == "mlx-community/chatterbox-8bit" }
-        require(chatterbox?.supported == true && chatterbox?.voiceMode == .cloning
+        require(chatterbox?.supported == true && chatterbox?.voiceModes == [.cloning]
                 && chatterbox?.requiresReference == true,
                 "chatterbox-mlx must be selectable, in the cloning tab")
         let fish = store.models.first { $0.repo == "mlx-community/fish-audio-s2-pro-8bit" }
-        require(fish?.supported == true && fish?.voiceMode == .cloning,
+        require(fish?.supported == true && fish?.voiceModes == [.cloning],
                 "fish-audio-mlx must be selectable, in the cloning tab")
-        // The family arriving from the parallel job: it supports cloning, and it must land correctly
-        // without this build knowing the name "pocket-tts" at all.
+        // The family arriving from the parallel job: it publishes cloning *and* preset, so both tabs
+        // must offer it, and it must not need the app to know the name "pocket-tts" at all.
         let pocket = store.models.first { $0.repo == "mlx-community/pocket-tts-4bit" }
-        require(pocket?.supported == true && pocket?.voiceMode == .cloning && pocket?.requiresReference == true,
-                "an unknown clone-capable family must be selectable in the cloning tab")
+        require(pocket?.supported == true && pocket?.voiceModes == [.cloning, .preset]
+                && pocket?.requiresReference == true,
+                "a model that publishes two modes must be selectable in both tabs")
 
         // The heavy voice families must be reachable from the Audio form, not filtered out by a
         // family gate: VoxCPM2 and OmniVoice clone from a reference clip and were previously
@@ -1946,8 +2093,9 @@ struct NativeAPITests {
         // library without that exact model the page opened on nothing and Generate stayed shut.
         require(store.supportedModels(for: .audio).contains { $0.repo == store.audioModel },
                 "the Audio selection must be one of the models the Audio picker lists, got: \(store.audioModel)")
-        require(store.supportedModels(for: .audio).contains { $0.repo == store.audioModel && $0.voiceMode == store.audioMode },
-                "the Audio tab must be the one the selected model belongs to")
+        require(store.supportedModels(for: .audio).contains {
+            $0.repo == store.audioModel && ($0.voiceModes.contains(store.audioMode) || $0.voiceModes.isEmpty)
+        }, "the Audio tab must be one the selected model publishes")
 
         // B29: the display and aggregation lists are derived, so a Studio cannot be missing from
         // the sidebar, the status line or the history tabs.
@@ -2031,7 +2179,7 @@ struct NativeAPITests {
         let unwired = store.models.first { $0.repo == "fixture/unwired-voice" }
         require(unwired?.supported == true, "a shipped model must stay visible even before its runtime is ready")
         require(unwired?.runtimeReady == false, "a family the runtime does not report must never be shown as ready")
-        require(unwired?.voiceMode == .preset, "a model that declares no cloning is the preset form")
+        require(unwired?.voiceModes == [.preset], "the modes are the producer's, not a default")
         require(!store.models.contains { $0.repo == "mlx-community/S3TokenizerV2" },
                 "a companion codec the catalogue does not publish as a TTS form is not a voice model")
 
@@ -2082,6 +2230,64 @@ struct NativeAPITests {
         require(khmerParams?["preset_speaker"] as? String == "",
                 "a single-speaker model must not be sent another family's preset speaker, got: \(String(describing: khmerParams))")
         require(khmerParams?["speed"] as? Double == 1.0, "the engine's own pace must still be sent")
+
+        // Which request a two-mode model builds is the tab's decision, not the model's first mode.
+        // VoxCPM2 4-bit / 8-bit / bf16 (MLX 4-bit / 8-bit / bf16) clone *and* design, so picking the
+        // form from a single derived mode is how the other tab's job was sent with the wrong shape.
+        store.audioModel = "fixture/two-mode-voice"
+        require(store.audioMode == .cloning, "a model opens on the first mode it publishes")
+        store.audioVoiceLibraryID = "voice-1"
+        store.audioText = "Two-mode clone"
+        store.audioLanguage = "en"
+        await store.generateAudio()
+        require(store.error == nil, "the clone tab of a two-mode model must generate; error=\(store.error ?? "none")")
+        var twoMode = FixtureProtocol.generatedBody()
+        require(twoMode?["voice_library_id"] as? String == "voice-1",
+                "the clone tab must send the library voice, got: \(String(describing: twoMode?["voice_library_id"]))")
+        var twoModeParams = (twoMode?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(twoModeParams?["design_prompt"] == nil,
+                "the clone tab must not send a design description")
+        store.audioMode = .design
+        store.audioDesignPrompt = "a deep, slow and warm narrator"
+        store.audioText = "Two-mode design"
+        await store.generateAudio()
+        require(store.error == nil, "the design tab must generate; error=\(store.error ?? "none")")
+        twoMode = FixtureProtocol.generatedBody()
+        twoModeParams = (twoMode?["items"] as? [[String: Any]])?.first?["params"] as? [String: Any]
+        require(twoModeParams?["design_prompt"] as? String == "a deep, slow and warm narrator",
+                "the design tab must send the description, got: \(String(describing: twoModeParams))")
+        require(twoMode?["voice_library_id"] == nil,
+                "the design tab must not address a library voice")
+
+        // The tab follows the model only as far as it must. A mode the new model does not publish
+        // cannot stay selected; a mode it does publish is the operator's choice and is left alone.
+        store.audioModel = "mlx-community/chatterbox-8bit"
+        require(store.audioMode == .cloning,
+                "a mode the model does not publish must not stay selected, got: \(store.audioMode.rawValue)")
+        store.audioModel = "mlx-community/pocket-tts-4bit"
+        store.audioMode = .preset
+        store.audioModel = "mlx-community/pocket-tts-4bit"
+        require(store.audioMode == .preset,
+                "a mode the model does publish must be left where the operator put it")
+        require(store.audioModels(for: .preset).contains { $0.repo == "mlx-community/pocket-tts-4bit" }
+                && store.audioModels(for: .cloning).contains { $0.repo == "mlx-community/pocket-tts-4bit" },
+                "a two-mode model must be offered in both of its tabs")
+        require(!store.audioModels(for: .design).contains { $0.repo == "mlx-community/pocket-tts-4bit" },
+                "and not in a tab it did not publish")
+        store.audioMode = .cloning
+        store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+
+        // A model whose engine reported no modes cannot be generated with, and the refusal says
+        // which fact is missing. The app used to guess a form and send it.
+        store.audioModel = "fixture/unreported-modes"
+        store.audioText = "A voice whose engine said nothing"
+        let submitsBeforeUnreported = FixtureProtocol.generatedBodies().count
+        await store.generateAudio()
+        require(FixtureProtocol.generatedBodies().count == submitsBeforeUnreported,
+                "a model with no published modes must not reach Hub dispatch")
+        require(store.error?.contains("voice modes") == true,
+                "and it must say which fact is missing: \(store.error ?? "nil")")
+        store.error = nil
         store.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 
         // A voice clip is the result the owner most cares about, and it used to be saved

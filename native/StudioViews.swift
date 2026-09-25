@@ -1561,54 +1561,29 @@ struct StudioContent: View {
                         voiceModeTabs
                         modelPicker(.audio)
                         if workspace.audioMode == .cloning {
+                            // Cloning is library-only: the voice comes from the Voices page and is
+                            // chosen here. There is no loose-clip path on this page any more, so
+                            // the picker and the buttons that lead to where a voice is added and
+                            // managed are the whole control.
                             voiceSourcePicker
-                            if workspace.audioVoiceLibraryID != nil {
+                            if let voice = workspace.selectedLibraryVoice, voice.readyForCloning {
                                 // A saved voice carries its own clip, words and timings, so there is
                                 // nothing left to choose or prepare.
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("Ready to clone").font(.callout)
                                     Text("This voice's clip, its transcript and its timing are already stored with it. Type your script and press Generate Audio.")
                                         .font(.caption).foregroundStyle(.secondary)
-                                }
-                            } else {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Reference clip").font(.callout)
-                                    HStack(spacing: 8) {
-                                        Button("Choose Clip…") { chooseReferenceClip() }
-                                        Text(workspace.audioReferencePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No clip chosen")
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                    }
-                                    Text("A short, clean recording of the voice you want to reuse.")
-                                        .font(.caption).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
+                            } else if workspace.selectedLibraryVoice != nil {
+                                // Chosen, but not usable: say so here rather than in the "Ready to
+                                // clone" panel, which would be a claim about a voice that cannot be
+                                // cloned from at all.
                                 VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        Text("Reference transcript").font(.callout)
-                                        Spacer()
-                                        Button(transcribingClip ? "Transcribing…" : "Transcribe Clip") {
-                                            Task { await transcribeIntoAudioReference() }
-                                        }
-                                        .disabled(transcribingClip || workspace.audioReferencePath == nil)
-                                        if transcribingClip { ProgressView().controlSize(.small) }
-                                    }
-                                    TextField("The exact words spoken in the clip", text: $workspace.audioReferenceTranscript)
-                                        .textFieldStyle(.roundedBorder)
-                                    Text(selectedAudioModel?.requiresTranscript == false
-                                         ? "Optional for this model." : "Required: this model matches the clip to these words.")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                    Text("Not ready to clone").font(.callout)
+                                    Text("This saved voice has no transcript yet, so a clone cannot align its audio. Add the words on the Voices page, or choose another voice.")
+                                        .font(.caption).foregroundStyle(.orange)
                                         .fixedSize(horizontal: false, vertical: true)
-                                }
-                                HStack(spacing: 8) {
-                                    Button("Prepare Voice") { Task { await workspace.stageVoiceReference() } }
-                                        .disabled(!connected || workspace.stagingReference
-                                                  || workspace.audioReferencePath == nil
-                                                  || (selectedAudioModel?.requiresTranscript != false
-                                                      && workspace.audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                                    if workspace.stagingReference { ProgressView().controlSize(.small) }
-                                    if let status = workspace.audioReferenceStatus {
-                                        Text(status).font(.caption).foregroundStyle(.secondary)
-                                    }
                                 }
                             }
                         } else if workspace.audioMode == .preset {
@@ -1693,33 +1668,57 @@ struct StudioContent: View {
         .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
     }
 
-    /// Where the voice for a clone comes from: one already saved, or a clip from disk.
+    /// Where the voice for a clone comes from: the library on the Voices page, and nowhere else.
     ///
     /// The app has had a voice library since the Voices page existed, and the engine has always
-    /// accepted a saved voice by its id, but the Audio page only ever offered a file chooser - so a
+    /// accepted a saved voice by its id, but the Audio page once offered only a file chooser - so a
     /// voice the operator could see in **Voices**, ready to clone, could not be picked where they
-    /// generate. This is that missing control.
+    /// generate. The picker is that missing control; the two buttons beside it are the only other
+    /// thing this control needs, which is the page where a voice is added or managed.
     private var voiceSourcePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Voice").font(.callout)
                 Spacer()
+                // Both lead to the one place a voice is added, edited or removed. With no
+                // loose-clip path left, reaching that page is the only other thing this control
+                // can need to do.
+                Button("Add Voice…") { studio.select(.voices) }
+                    .font(.caption).fixedSize()
+                    .help("Add a reference clip and its transcript on the Voices page")
                 Button("Manage Voices") { studio.select(.voices) }
                     .font(.caption).fixedSize()
             }
             Picker("Voice", selection: Binding(
                 get: { workspace.audioVoiceLibraryID ?? "" },
                 set: { workspace.audioVoiceLibraryID = $0.isEmpty ? nil : $0 })) {
-                Text("Choose a clip file…").tag("")
-                ForEach(workspace.selectableVoices) { voice in
-                    Text("\(voice.name)  ·  \(voice.durationLabel)").tag(voice.id)
+                Text("Choose a saved voice…").tag("")
+                // Every saved voice is listed, including the ones that cannot be cloned from yet.
+                // Filtering them out left a picker that was empty for a reason nothing on screen
+                // named; a voice with no words is a thing the operator can fix, and it cannot be
+                // fixed while it is invisible. Choosing one is allowed — it stays selected and the
+                // reason is stated underneath — exactly the way an unusable model stays in the
+                // model picker with its own reason.
+                ForEach(workspace.voices) { voice in
+                    Text(voice.name + "  ·  " + voice.durationLabel
+                         + (voice.readyForCloning ? "" : "  ·  needs a transcript"))
+                        .tag(voice.id)
                 }
             }
             .labelsHidden()
             .frame(maxWidth: .infinity)
-            .disabled(workspace.selectableVoices.isEmpty)
+            // Disabled only when there is nothing at all to choose. A disabled control with no
+            // visible reason is the worst state a form can be in, so the line below always says
+            // which state the library is in: reading, empty, unreadable, or short of transcripts.
+            .disabled(workspace.voices.isEmpty)
             Text(workspace.voicePickerDetail).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // An empty library, honestly read, offers the one action that fills it. A library that
+            // could not be read does not: adding a voice would not fix that.
+            if workspace.voicesLoaded, workspace.voices.isEmpty, workspace.voiceError == nil {
+                Button("Add Voice…") { studio.select(.voices) }
+                    .font(.caption)
+            }
         }
     }
 
@@ -1745,15 +1744,38 @@ struct StudioContent: View {
         if model.runtimeReady != true {
             return "\(model.label) is installed, but its local runtime is unavailable."
         }
-        switch model.voiceMode {
+        // Which form this generation will take is the tab, and the tab is one of the modes the
+        // engine published for this model. A model whose engine published none cannot be generated
+        // with at all: the app used to guess a form, and the guess is what sent a CustomVoice model
+        // down the clone path to be refused for a reference voice it does not have.
+        guard model.reportsVoiceModes else {
+            return "\(model.label) has not reported which voice modes it supports. Update the local engine, or choose another model."
+        }
+        guard model.voiceModes.contains(workspace.audioMode) else {
+            return "\(model.label) does not publish \(workspace.audioMode.shortTitle). Choose one of its modes."
+        }
+        switch workspace.audioMode {
         case .cloning:
-            if workspace.audioVoiceLibraryID == nil, workspace.audioReferencePath == nil {
-                return workspace.selectableVoices.isEmpty
-                    ? "No saved voice can be used yet. Add or fix one on the Voices page, or choose a clip file."
-                    : "Choose a saved voice, or a clip file."
+            // Cloning is library-only, so there are exactly four ways to be held up here, and each
+            // one names the next action: a failed read, a read still in flight, no voice chosen,
+            // and a chosen voice that cannot be aligned. Nothing here tells the operator to pick a
+            // loose recording from disk, because there is no longer one to pick.
+            if let voiceError = workspace.voiceError, workspace.voices.isEmpty {
+                return "Your saved voices could not be read: \(voiceError) Refresh them on the Voices page."
             }
-            if workspace.audioVoiceLibraryID == nil, workspace.audioReferenceAssetId == nil {
-                return "Press Prepare Voice to upload the clip."
+            if !workspace.voicesLoaded, workspace.voiceError == nil {
+                // The library may simply not have been read yet. Saying "no saved voice can be
+                // used" while the read is still in flight is a claim about the operator's library
+                // that the app has not checked.
+                return "Reading your saved voices from the local engine."
+            }
+            if let voice = workspace.selectedLibraryVoice, !voice.readyForCloning {
+                return "\(voice.name) has no transcript yet. Add its words on the Voices page, or choose another voice."
+            }
+            if workspace.selectedLibraryVoice == nil {
+                return workspace.voices.isEmpty
+                    ? "No saved voice yet. Add one on the Voices page, then choose it here."
+                    : "Choose a saved voice."
             }
         case .design:
             if workspace.audioDesignPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1771,10 +1793,16 @@ struct StudioContent: View {
 
     /// When the Audio page should (re)load the voice library.
     ///
-    /// The connection, and which tab is showing: cloning is the only tab that offers saved voices,
-    /// so the other two have no reason to fetch them.
+    /// The connection, and **not** which voice tab is showing. Keying this on `audioMode` meant
+    /// every tab change was a new id, and `.task(id:)` cancels its previous task when its id
+    /// changes — so switching to Clone (or the mode being reconciled just after the page appeared)
+    /// cancelled the read that was in flight. A cancelled read reached the store as
+    /// `URLError.cancelled`, the store's catch treated it as a broken library, and the Clone tab's
+    /// picker came up empty and disabled while the Voices page listed the same voices. The load
+    /// itself is now once per connection (`loadVoicesIfNeeded`), so a tab change neither cancels a
+    /// read nor starts another one.
     private var voiceLibraryLoadKey: String {
-        "\(connected)/\(workspace.audioMode.rawValue)"
+        "\(connected)/\(workspace.connectionGeneration)"
     }
 
     /// Speaking pace: one slider, with the engine's own pace as the default.
@@ -1830,40 +1858,57 @@ struct StudioContent: View {
     /// pick. The catalog publishes which is which, so the sentence follows the model rather than
     /// assuming every preset model offers a list.
     private var audioModeDetail: String {
-        guard workspace.audioMode == .preset, selectedAudioModel?.publishesPresetRoster == false else {
-            return workspace.audioMode.detail
+        guard let model = selectedAudioModel else {
+            return "Choose a model to see how it can make a voice."
         }
-        return "This model's voice is built in. Type your script and generate."
+        // The local engine publishes which modes each model supports. Say which of the three
+        // states this is - not reported, not this one, or the chosen mode - rather than showing a
+        // form the engine never claimed.
+        guard model.reportsVoiceModes else {
+            return "\(model.label) has not reported which voice modes it supports. Update the local engine, or choose another model."
+        }
+        guard model.voiceModes.contains(workspace.audioMode) else {
+            return "\(model.label) does not publish \(workspace.audioMode.shortTitle). Choose one of its modes above."
+        }
+        if workspace.audioMode == .preset, !model.publishesPresetRoster {
+            return "This model's voice is built in. Type your script and generate."
+        }
+        return workspace.audioMode.detail
     }
 
-    /// The three ways of choosing a voice, as tabs.
+    /// The ways of choosing a voice, as tabs — exactly the modes the local engine published for
+    /// the selected model, in the producer's order.
     ///
-    /// They were previously one form whose controls changed under the operator depending on the
-    /// model, with nothing saying why - a CustomVoice model showed a speaker list, a Base model
-    /// showed a file chooser, and the difference was only discoverable by trying. Each is a
-    /// different job, so each gets its own tab, its own model list and its own controls.
+    /// The three tabs used to be shown for every model, including models whose engine can do only
+    /// one of them, so two of the three led to a form the engine would refuse. `modes` is the
+    /// runtime's own answer, and a model that publishes two (VoxCPM2 4-bit clones *and* designs)
+    /// gets both tabs. A model whose engine published none gets no tabs and a sentence saying so:
+    /// guessing a form is how a CustomVoice model was once sent down the clone path.
     private var voiceModeTabs: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Picker("Voice", selection: $workspace.audioMode) {
-                ForEach(VoiceMode.allCases) { mode in
-                    // Short labels, because a segmented control's minimum width is the sum of its
-                    // labels and three long ones could not fit the column - which clipped the tabs
-                    // themselves. The full name is in the line underneath and in the accessibility
-                    // label, so nothing is lost.
-                    Text(mode.shortTitle).tag(mode)
-                        .accessibilityLabel(mode.title)
+            if let model = selectedAudioModel, model.reportsVoiceModes {
+                Picker("Voice", selection: $workspace.audioMode) {
+                    ForEach(model.voiceModes) { mode in
+                        // Short labels, because a segmented control's minimum width is the sum of
+                        // its labels and three long ones could not fit the column - which clipped
+                        // the tabs themselves. The full name is in the line underneath and in the
+                        // accessibility label, so nothing is lost.
+                        Text(mode.shortTitle).tag(mode)
+                            .accessibilityLabel(mode.title)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            .onChange(of: workspace.audioMode) { _, mode in
-                // Keep the selected model consistent with the tab: a model from another tab would
-                // leave the controls below describing a different job than the one on screen.
-                if !workspace.audioModels(for: mode).contains(where: {
-                    $0.repo == workspace.audioModel && $0.supported
-                }) {
-                    workspace.audioModel = workspace.audioModels(for: mode).first?.repo ?? ""
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .onChange(of: workspace.audioMode) { _, mode in
+                    // Keep the selected model consistent with the tab: a model from another tab
+                    // would leave the controls below describing a different job than the one on
+                    // screen.
+                    if !workspace.audioModels(for: mode).contains(where: {
+                        $0.repo == workspace.audioModel && $0.supported
+                    }) {
+                        workspace.audioModel = workspace.audioModels(for: mode).first?.repo ?? ""
+                    }
                 }
             }
             Text(audioModeDetail).font(.caption).foregroundStyle(.secondary)
@@ -2029,10 +2074,11 @@ struct StudioContent: View {
         // The Audio page reads the voice library itself. Loading it only on the Voices page meant a
         // fresh launch that went straight here showed "No saved voices yet" and a disabled picker
         // while ten voices were sitting on the Mac, and nothing on screen said the list had simply
-        // never been fetched.
+        // never been fetched. It reads once per connection: the store is what knows whether the
+        // list is already in hand, so a visit to this page cannot cancel or repeat a read.
         .task(id: voiceLibraryLoadKey) {
-            guard connected, workspace.audioMode == .cloning else { return }
-            await workspace.refreshVoices()
+            guard connected else { return }
+            await workspace.loadVoicesIfNeeded()
         }
     }
 
@@ -2618,20 +2664,6 @@ struct StudioContent: View {
             workspace.voiceError = nil
         } catch {
             workspace.voiceError = error.localizedDescription
-        }
-    }
-
-    /// The same, for the reference clip on the audio page.
-    private func transcribeIntoAudioReference() async {
-        guard let path = workspace.audioReferencePath else { return }
-        transcribingClip = true
-        defer { transcribingClip = false }
-        do {
-            workspace.audioReferenceTranscript = try await workspace.transcribeClip(
-                at: URL(fileURLWithPath: path), language: workspace.audioLanguage)
-            workspace.error = nil
-        } catch {
-            workspace.error = error.localizedDescription
         }
     }
 
@@ -3808,13 +3840,6 @@ struct StudioContent: View {
     private func chooseTranscriptionFile() {
         let panel = NSOpenPanel(); panel.title = "Choose a recording"; panel.allowedContentTypes = [.audio, .movie]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK { workspace.transcriptionFile = panel.url }
-    }
-    /// Reference clip for Qwen Base voice cloning. The Hub accepts the same audio formats the
-    /// Voice worker does; validation stays on the Hub so the app and GenStudio behave identically.
-    private func chooseReferenceClip() {
-        let panel = NSOpenPanel(); panel.title = "Choose a reference clip"
-        panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { workspace.audioReferencePath = url.path }
     }
     /// The folder for a model that was copied onto this Mac, rather than downloaded.
     private func chooseModelFolder(for model: NativeModel) {

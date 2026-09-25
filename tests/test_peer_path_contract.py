@@ -361,6 +361,7 @@ class AudioBlockageTests(unittest.TestCase):
     """
 
     VIEWS = (ROOT / "native" / "StudioViews.swift").read_text()
+    API = (ROOT / "native" / "StudioAPI.swift").read_text()
 
     def test_the_generate_button_is_disabled_by_one_named_reason(self):
         audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
@@ -379,9 +380,16 @@ class AudioBlockageTests(unittest.TestCase):
         body = self.VIEWS[self.VIEWS.index("private var audioBlockedReason"):]
         body = body[:body.index("private var voiceLibraryLoadKey")]
         for covered in ("Start the local services", "Write the script", "Choose a model",
-                        "Download", "runtime is unavailable", "saved voice", "Prepare Voice",
-                        "Describe the voice"):
+                        "Download", "runtime is unavailable", "saved voice", "Voices page",
+                        "voice modes", "Describe the voice"):
             self.assertIn(covered, body, f"the reason list does not cover: {covered}")
+        # Cloning is library-only: the voice comes from the Voices page and nowhere else. A reason
+        # that offers a loose clip is a next action the page no longer has, and one that names a
+        # Prepare Voice step is pointing at a control that was removed with it.
+        self.assertNotIn("clip file", body,
+                         "the Clone tab has no loose-clip path, so no reason may offer one")
+        self.assertNotIn("Prepare Voice", body,
+                         "there is no Prepare Voice step on the Audio page any more")
         # The preset branch reports the one thing a roster model can be waiting for: it has not
         # published its voices yet. The page says that in two places - the picker and the button's
         # reason, both in this one file - so pin that the two agree rather than pinning today's
@@ -402,12 +410,63 @@ class AudioBlockageTests(unittest.TestCase):
                       "the preset tab and the blocked reason must call the model's roster the "
                       "same thing")
 
+    def test_the_clone_tab_is_library_only(self):
+        """Every clone voice comes from the voice library, which is where a voice is added.
+
+        The owner's direction: no dropping in an arbitrary clip and cloning from it. The saved-voice
+        picker stays - it is the control that chooses the voice - and the page leads to the Voices
+        page for adding and managing. A file chooser, a transcript box or a Prepare Voice button
+        reappearing here means a second way to make a voice exists again.
+        """
+        audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var modelsWorkspace")]
+        for gone in ("Choose Clip", "Reference clip", "Reference transcript", "Transcribe Clip",
+                     "Prepare Voice"):
+            self.assertNotIn(gone, audio, f"the Clone tab must not offer {gone!r} any more")
+        self.assertIn("voiceSourcePicker", audio, "the picker is still the control")
+        self.assertIn('Button("Add Voice…")', audio,
+                      "an empty tab must offer the one action that fills it")
+        self.assertIn('Button("Manage Voices")', audio,
+                      "and a full one must offer the page that manages the library")
+
     def test_the_audio_page_loads_the_voice_library_itself(self):
         """Loading it only on the Voices page left the picker empty on a fresh launch."""
         audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
         audio = audio[:audio.index("private var modelsWorkspace")]
-        self.assertIn("await workspace.refreshVoices()", audio)
+        self.assertIn("await workspace.loadVoicesIfNeeded()", audio)
         self.assertIn(".task(id: voiceLibraryLoadKey)", audio)
+
+    def test_the_voice_library_load_is_not_keyed_on_the_voice_tab(self):
+        """A tab-keyed `.task(id:)` cancels the read in flight, and the list was wiped with it.
+
+        `.task(id:)` cancels its previous task the moment the id changes. Keyed on the voice-mode
+        tab, switching tabs cancelled the `GET /studio/voice/api/voices` mid-flight; the
+        cancellation arrives as `URLError` -999, the store's catch read it as a broken library, and
+        the Clone tab's picker came up empty and disabled while the Voices page - keyed on the
+        connection alone, so never cancelled this way - listed the same voices. The key identifies
+        the connection, never the tab.
+        """
+        key = self.VIEWS[self.VIEWS.index("private var voiceLibraryLoadKey"):]
+        key = key[:key.index("private var ", 10)]
+        self.assertNotIn("audioMode", key, "a tab change must not cancel or repeat the voice read")
+        self.assertIn("connectionGeneration", key)
+
+    def test_the_voice_library_load_does_not_publish_a_cancelled_read_as_a_failure(self):
+        """The store's half of the same rule, pinned where it is decided.
+
+        `URLSession` reports a cancelled task as `URLError` -999, not as a `CancellationError`, so
+        recognising only the latter would still wipe the list and print a false "the voice library
+        is unavailable" over an intact library. `tests/native/api_main.swift` drives the real store
+        with a held read and cancels it mid-flight; this pins that the shape is named at the catch.
+        """
+        voices = self.API[self.API.index("func refreshVoices() async"):]
+        voices = voices[:voices.index("func loadVoicesIfNeeded")]
+        self.assertIn("isCancellation", voices, "the catch must tell cancellation from a failure")
+        self.assertIn("Task.isCancelled", voices)
+        cancellation = self.API[self.API.index("static func isCancellation"):]
+        cancellation = cancellation[:cancellation.index("\n    }")]
+        self.assertIn("CancellationError", cancellation)
+        self.assertIn("URLError", cancellation, "the measured shape is URLError.cancelled (-999)")
 
 
 if __name__ == "__main__":

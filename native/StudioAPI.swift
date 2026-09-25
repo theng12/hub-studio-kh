@@ -263,10 +263,19 @@ struct NativeModel: Identifiable, Equatable {
     var publishesPresetRoster: Bool = false
     /// Qwen3-TTS *Base* models clone from a reference clip instead of using preset speakers.
     var requiresReference: Bool = false
-    /// Which of the three ways of choosing a voice this model uses. The Audio page is organised by
-    /// this, because the three are different jobs with different controls: a saved voice, a picked
-    /// speaker, or a written description of the voice.
-    var voiceMode: VoiceMode = .cloning
+    /// Which of the three ways of choosing a voice this model offers, exactly as the local engine
+    /// published them and in its order. The Audio page is organised by this, because the three are
+    /// different jobs with different controls: a saved voice, a picked speaker, or a written
+    /// description of the voice. More than one is normal — a model that clones *and* designs gets
+    /// both tabs — so there is deliberately no single "the mode" to ask for.
+    var voiceModes: [VoiceMode] = []
+    /// Whether the local engine said how this model makes a voice at all.
+    ///
+    /// False is a fact about the engine, not about the model: an older worker publishes no `modes`,
+    /// and this app must say so rather than pick one of the three forms it knows. Guessing is how a
+    /// CustomVoice model was once sent down the clone path and asked for a reference voice it does
+    /// not have.
+    var reportsVoiceModes: Bool { !voiceModes.isEmpty }
     /// The runtime reports this as "required" for every Base tier: a clone fails closed on a
     /// transcript mismatch, so the app must not submit without one.
     var requiresTranscript: Bool = true
@@ -343,7 +352,7 @@ enum VoiceMode: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .cloning:
-            return "Use a voice you saved, or a clip from disk. The model repeats that voice."
+            return "Use one of the voices saved in your voice library. The model repeats that voice."
         case .preset:
             return "Voices that come with the model. Pick one and type your script."
         case .design:
@@ -1267,6 +1276,13 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var downloads: [NativeDownload] = []
     /// The saved voices on this Mac, read from the Voice worker's library.
     @Published private(set) var voices: [NativeVoice] = []
+    /// Whether `voices` is the result of a read that finished on this connection.
+    ///
+    /// The Audio page's Clone tab draws a picker from `voices`, and an empty array means two very
+    /// different things: "this Mac has no saved voices" and "the list has not been read yet". The
+    /// page cannot tell them apart from the array alone, so it said "No saved voices yet" while the
+    /// read was still in flight. This is that missing fact, kept beside the list it describes.
+    @Published private(set) var voicesLoaded = false
     /// Set while a voice is being added, edited or removed, so a button can show it is working
     /// and cannot be pressed twice.
     @Published private(set) var savingVoice = false
@@ -1315,6 +1331,13 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var error: String?
     @Published private(set) var refreshing = false
     @Published private(set) var isReachable = false
+    /// How many times this store has attached to a Hub.
+    ///
+    /// Published because the Audio page keys its voice-library load on it: a `.task(id:)` reloads
+    /// when its id changes, and a reconnect may be a *different* Hub whose voice library has
+    /// nothing to do with the one already in memory. The Bool "connected" alone cannot tell the two
+    /// apart — a silent reconnect leaves it true — so the id is this counter, not a tab name.
+    @Published private(set) var connectionGeneration = 0
     /// Per-machine model memory, read on demand rather than on the two-second poll: it fans
     /// out to every Studio, and nothing on the generation screens depends on it.
     @Published private(set) var memoryInventory: NativeMemoryInventory?
@@ -1521,6 +1544,10 @@ final class NativeWorkspaceStore: ObservableObject {
             hubToken = token
             let requestConnection = UUID()
             self.connectionID = requestConnection
+            // A reconnect may be a different Hub, so anything read from the last one is no longer
+            // known to be true: the Audio page keys its voice-library read on this counter.
+            connectionGeneration += 1
+            voicesLoaded = false
             self.dataDirectory = dataDirectory.standardizedFileURL
             try FileManager.default.createDirectory(
                 at: dataDirectory,
@@ -1539,6 +1566,13 @@ final class NativeWorkspaceStore: ObservableObject {
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-transcription.json"), "a pending transcription") { try loadPendingTranscription() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-model-downloads.json"), "the model-download list") { try loadHubDownloadRuns() }
             await refresh()
+            guard self.connectionID == requestConnection else { return }
+            // The Clone tab's picker is built from this library and is the only way to choose the
+            // voice a clone repeats, so it is read as part of joining a Hub rather than left to
+            // whichever page happens to be looked at first. Once per connection; a read that
+            // fails is reported and waits for the Voices page or its Refresh button, not a retry
+            // loop.
+            await loadVoicesIfNeeded()
             guard self.connectionID == requestConnection else { return }
             await refreshMemoryPolicy()
             guard self.connectionID == requestConnection else { return }
@@ -1572,6 +1606,9 @@ final class NativeWorkspaceStore: ObservableObject {
         hubToken = nil
         connectionID = nil
         isReachable = false
+        // The list stays for the operator to read, but it belongs to the connection that ended:
+        // the next connection reads its own library rather than trusting this one.
+        voicesLoaded = false
         submittingAudio = false
         submittingImage = false
         submittingMusic = false
@@ -1625,6 +1662,10 @@ final class NativeWorkspaceStore: ObservableObject {
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
                 try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
+            // Torn down while reading. The child reads that use `try?` come back nil rather than
+            // throwing, so without this a cancelled refresh would publish "a studio did not answer"
+            // and count its missing jobs — reporting a fault that never happened.
+            guard !Task.isCancelled else { return }
             // A degraded read is still a read the operator has to know about: without the package
             // rows every model reads as unsupported, and that looks like the models are broken
             // unless the reason is on screen.
@@ -1716,7 +1757,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
                     // is a convenience over the Hub's history, and losing it should not read as the
-                    // Hub being down.
+                    // Hub being down. A cancelled read is not a row that failed, so it stops the
+                    // refresh rather than being counted as unreadable.
+                    guard !Task.isCancelled, !Self.isCancellation(error) else { return }
                     unreadable += 1
                 }
             }
@@ -1784,6 +1827,10 @@ final class NativeWorkspaceStore: ObservableObject {
             await retryStartupMembershipIfNeeded()
         } catch {
             guard connectionID == requestConnection else { return }
+            // A cancelled refresh is not a Hub that went away. Marking it unreachable here would
+            // put every page's controls into their "start the local services" state over a read the
+            // app itself cancelled.
+            guard !Task.isCancelled, !Self.isCancellation(error) else { return }
             isReachable = false
             if reportErrors { self.error = Self.actionable(error, action: "Refresh local studio state") }
         }
@@ -1874,7 +1921,16 @@ final class NativeWorkspaceStore: ObservableObject {
                 guard !text.isEmpty else { throw NativeAPIError.message("Enter a script before generating audio.") }
                 guard text.count <= 40_000 else { throw NativeAPIError.message("The script exceeds the 40,000-character limit.") }
                 let language = audioLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-                if model.voiceMode == .design {
+                // Which form this request takes is the tab the operator is on, and the tab is one
+                // the model publishes. A model that clones *and* designs has two valid forms, so
+                // neither the model's first mode nor a guess may decide this.
+                guard model.reportsVoiceModes else {
+                    throw NativeAPIError.message("The local engine has not reported which voice modes \(model.label) supports. Update it, or choose another model.")
+                }
+                guard model.voiceModes.contains(audioMode) else {
+                    throw NativeAPIError.message("\(model.label) does not publish the \(audioMode.shortTitle) mode. Choose a mode it publishes.")
+                }
+                if audioMode == .design {
                     let description = audioDesignPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !description.isEmpty else {
                         throw NativeAPIError.message("Describe the voice you want — for example 'deep, slow and warm'.")
@@ -1886,13 +1942,16 @@ final class NativeWorkspaceStore: ObservableObject {
                             presetSpeaker: "", language: language, speed: audioSpeed,
                             designPrompt: description))],
                         voiceReferenceAssetId: nil, voiceLibraryId: nil, routing: routingPin)
-                } else if model.voiceMode == .cloning {
+                } else if audioMode == .cloning {
                     if let voiceID = audioVoiceLibraryID {
                         // A voice from the library: the worker reads the clip, its transcript and
                         // its timings from its own store. Nothing is uploaded, and there is no
                         // reference to prepare first.
-                        guard let voice = voices.first(where: { $0.id == voiceID }), voice.readyForCloning else {
+                        guard let voice = voices.first(where: { $0.id == voiceID }) else {
                             throw NativeAPIError.message("That saved voice is no longer in the voice library. Choose another, or refresh the Voices page.")
+                        }
+                        guard voice.readyForCloning else {
+                            throw NativeAPIError.message("\(voice.name) has no transcript yet, so a clone cannot align its audio. Add the words on the Voices page, or choose another voice.")
                         }
                         body = HubAudioRequest(
                             modality: "voice", model: model.repo,
@@ -1901,8 +1960,12 @@ final class NativeWorkspaceStore: ObservableObject {
                                 presetSpeaker: "", language: language, speed: audioSpeed))],
                             voiceReferenceAssetId: nil, voiceLibraryId: voiceID, routing: routingPin)
                     } else {
+                        // The staged-reference path: kept for a reference that arrives without a
+                        // library id. The Audio page's Clone tab no longer has a way to reach it -
+                        // cloning there is library-only - so the first thing to say is still which
+                        // voice to choose, never a clip to pick.
                         guard audioReferencePath != nil else {
-                            throw NativeAPIError.message("Choose a saved voice, or a reference clip to clone from.")
+                            throw NativeAPIError.message("Choose a saved voice for this clone.")
                         }
                         guard !model.requiresTranscript || !audioReferenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                             throw NativeAPIError.message("This voice model needs the exact words spoken in the reference clip.")
@@ -2261,18 +2324,61 @@ final class NativeWorkspaceStore: ObservableObject {
     /// A failure here must not break the rest of the workspace: an older worker without the
     /// voice library leaves the list empty and says so, rather than making the Voice page
     /// unusable for generation.
+    ///
+    /// **A cancelled read is not a failed read.** The Audio page's Clone tab reads this library
+    /// from a `.task(id:)`, and SwiftUI cancels that task when its id changes or the page goes
+    /// away. `URLSession` reports that cancellation as `URLError.cancelled` (-999) — not as a
+    /// `CancellationError`, which is why `isCancellation` checks both — and treating it as a
+    /// failure wiped the list already in memory and published "the voice library is unavailable on
+    /// this build of the local engine" over a library that was sitting on disk intact. The Clone
+    /// tab then arrived with an empty, disabled picker while the Voices page listed the same
+    /// voices, because that page's task is keyed on the connection alone and is never cancelled
+    /// this way. A cancelled read now leaves `voices`, `voicesLoaded` and `voiceError` untouched.
     func refreshVoices() async {
         guard let requestConnection = connectionID else { return }
         do {
             let value: VoiceListResponse = try await get(["studio", "voice", "api", "voices"])
             guard connectionID == requestConnection else { return }
+            // Cancelled before the answer could be published: someone else's read, not ours.
+            guard !Task.isCancelled else { return }
             voices = value.voices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            voicesLoaded = true
             voiceError = nil
         } catch {
             guard connectionID == requestConnection else { return }
-            voices = []
-            voiceError = "The voice library is unavailable on this build of the local engine."
+            guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+            // The read failed for a reason that is not cancellation. What is in hand is the last
+            // thing this Mac was told, so it stays on screen — labelled — instead of vanishing
+            // because one read did not answer. The error names the engine's own failure rather
+            // than blaming this build, which is what the old fixed sentence did for every cause,
+            // including a worker that was simply not running.
+            voiceError = Self.actionable(error, action: "Read the voice library")
         }
+    }
+
+    /// Read the voice library once for this connection, unless it is already in hand.
+    ///
+    /// This is what the Audio page's Clone tab calls when it appears. Reading it on every tab
+    /// change was the bug: `.task(id:)` cancels the previous read when its id changes, and the
+    /// cancellation was mistaken for a broken library. The Voices page and every add, edit or
+    /// remove call `refreshVoices` directly, because those are real reasons for the library to have
+    /// changed; this path is only the first look.
+    func loadVoicesIfNeeded() async {
+        guard connectionID != nil, !voicesLoaded else { return }
+        await refreshVoices()
+    }
+
+    /// Whether an error is this task being torn down rather than the engine failing.
+    ///
+    /// Measured, not assumed: a cancelled `URLSession.data(for:)` throws
+    /// `URLError` code **-999** (`NSURLErrorCancelled`), and `error is CancellationError` is
+    /// `false` for it. A check for `CancellationError` alone would still have wiped the list, so
+    /// both shapes are recognised — plus the `Task.isCancelled` check at the catch site, which
+    /// covers a task cancelled while its error was already on the way.
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     /// Add one voice from a reference clip on this Mac.
@@ -2584,18 +2690,54 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// The saved voices a clone can use: a voice with no transcript cannot be aligned, so it is not
-    /// offered rather than being offered and then refused.
+    /// offered as a working choice rather than being offered and then refused.
     var selectableVoices: [NativeVoice] { voices.filter { $0.readyForCloning } }
 
+    /// The saved voices that cannot be used yet, kept visible and named so an operator can see what
+    /// to fix. A saved voice with no transcript is not a voice that does not exist, and filtering it
+    /// out of the picker entirely is how a library of untranscribed voices reads as an empty,
+    /// broken picker with nothing to act on.
+    var voicesNeedingWords: [NativeVoice] { voices.filter { !$0.readyForCloning } }
+
+    /// The library voice currently chosen, if the list still holds it.
+    var selectedLibraryVoice: NativeVoice? {
+        guard let audioVoiceLibraryID else { return nil }
+        return voices.first { $0.id == audioVoiceLibraryID }
+    }
+
     /// Text for the Audio page, so an empty picker explains itself instead of looking broken.
+    ///
+    /// The states are ordered by what the operator most needs to know. A read that failed is named
+    /// first; then a read that has not finished, because an empty list at that moment means "not
+    /// read yet", not "you have no voices" — the sentence that made a first visit to the Clone tab
+    /// look like an empty library; then an empty library; then a library whose voices have no words.
     var voicePickerDetail: String {
+        if let voiceError {
+            return voices.isEmpty
+                ? "\(voiceError) The saved voices cannot be listed until that read succeeds."
+                : "\(voiceError) Showing the voices read earlier."
+        }
+        let waiting = voicesNeedingWords
         if !selectableVoices.isEmpty {
-            return "Clones \(selectableVoices.count) of your saved voices. The clip, its words and its timings stay in the app's own voice library."
+            var detail = "Clones \(selectableVoices.count) of your saved voices. The clip, its words and its timings stay in the app's own voice library."
+            if !waiting.isEmpty {
+                detail += " Needs a transcript before cloning: \(Self.nameList(waiting))."
+            }
+            return detail
+        }
+        // Nothing can be chosen yet: say which of the two reasons it is, and never the wrong one.
+        guard voicesLoaded else {
+            return "Reading your saved voices from the local engine…"
         }
         if voices.isEmpty {
-            return "No saved voices yet. Import clips on the Voices page, or choose a clip file to clone from."
+            return "No saved voices yet. Add one on the Voices page, then choose it here."
         }
-        return "None of your saved voices has a transcript yet, so none can be aligned. Add the words on the Voices page, or choose a clip file."
+        return "None of your saved voices has a transcript yet, so none can be aligned: \(Self.nameList(voices)). Add the words on the Voices page."
+    }
+
+    /// Names for a sentence, so a list of voices reads as a list.
+    static func nameList(_ voices: [NativeVoice]) -> String {
+        voices.map(\.name).joined(separator: ", ")
     }
 
     /// Fetch one saved voice's clip and hand it to the player.
@@ -2614,9 +2756,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Point the next generation at a saved voice instead of a loose file.
     ///
     /// Staging reads the clip from disk, and a saved voice lives in the worker's store, not in
-    /// the app's own folder - so the clip is fetched once and written here. Setting the
-    /// reference to a path that does not exist would make the next Prepare Voice fail with
-    /// "the clip is no longer at that location", which reads like the operator's mistake.
+    /// the app's own folder - so the clip is fetched once and written here. The voice is also
+    /// selected in the picker: "Use voice" on the Voices page means this voice is now the one the
+    /// Audio page clones from, and leaving the picker on "Choose a saved voice…" afterwards would
+    /// say the choice had not been made.
     @discardableResult
     func useVoice(_ voice: NativeVoice) async -> Bool {
         guard voice.readyForCloning else {
@@ -2634,9 +2777,13 @@ final class NativeWorkspaceStore: ObservableObject {
                                                     attributes: [.posixPermissions: 0o700])
             let clip = folder.appendingPathComponent("voice-\(voice.id)\(voice.audioExtension)")
             try data.write(to: clip, options: .atomic)
+            // Selecting the voice clears the staged-clip fields, so it is set first and the clip
+            // fields are written after it. The clip still travels with the reference for the
+            // prepare path; the plain "generate from the library" path addresses the voice by id.
+            audioVoiceLibraryID = voice.id
             audioReferencePath = clip.path
             audioReferenceTranscript = voice.transcript ?? ""
-            voiceNote = "Reference set to \(voice.name). Press Prepare Voice, then generate."
+            voiceNote = "\(voice.name) is selected for cloning on the Audio page."
             voiceError = nil
             return true
         } catch {
@@ -4456,7 +4603,13 @@ final class NativeWorkspaceStore: ObservableObject {
     private func syncAudioToModel() {
         guard let model = models.first(where: { $0.repo == audioModel && $0.function == .audio })
         else { return }
-        if model.voiceMode != audioMode { audioMode = model.voiceMode }
+        // The tab follows the model, but only as far as it has to: a mode the new model does not
+        // publish cannot stay selected, and a mode it does publish is the operator's choice and is
+        // left alone. Forcing the model's first mode every time would move an operator off the
+        // Design tab of a model that clones *and* designs.
+        if !model.voiceModes.isEmpty, !model.voiceModes.contains(audioMode) {
+            audioMode = model.voiceModes[0]
+        }
         if !model.speakers.contains(audioSpeaker) { audioSpeaker = model.speakers.first ?? "" }
     }
 
@@ -4472,6 +4625,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 audioSpeaker = selected.speakers.first ?? ""
             }
         }
+        // The tab has to be one of the modes the selected model publishes, and a catalogue refresh
+        // can change what a model publishes (a worker update, or a model re-installed with a
+        // different runtime). Re-checking the pair here keeps the tabs and the request shape in
+        // step even when the model selection itself did not move.
+        syncAudioToModel()
         if !models.contains(where: { $0.repo == transcriptionModel && $0.function == .transcription && $0.supported }) {
             // The worker's own `default_model` names the model it would transcribe with; the first
             // supported one is the fallback, so a library without that exact model still has a
@@ -4494,29 +4652,26 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    /// Which way a model is told what to sound like, read from what the catalog publishes.
+    /// The voice modes a catalogue row published, in the producer's own order.
     ///
-    /// The rule is the runtime's own data: a model whose catalog entry declares voice cloning
-    /// clones; one that does not is the preset/single-speaker form, which is what a family with a
-    /// fixed built-in voice publishes. No family needs to be known for that to be right, so a
-    /// family added to the catalog after this build lands in its correct tab.
+    /// The Voice runtime publishes `modes` per model — `"cloning"`, `"preset"`, `"design"` — and
+    /// this is the only source for which tabs the Audio page shows. The app used to work the form
+    /// out for itself, from `reference_audio`/`capabilities` plus a Qwen tier name check, which is a
+    /// second source of truth free to disagree with the engine that answers the request: a model
+    /// that clones *and* designs (VoxCPM2 4-bit / 8-bit / bf16, OmniVoice bf16) was shown one tab
+    /// and the other form could not be reached at all.
     ///
-    /// Qwen3-TTS is the one genuine exception and is kept name-driven: its three tiers — Base,
-    /// CustomVoice and VoiceDesign — publish an identical capability list and differ only by
-    /// name, so the name is the only data that separates them. The check is scoped to that family,
-    /// because a name that happens to contain "base" says nothing about another family's contract.
-    /// Not private: the contract test drives it directly, and a rule this easy to get wrong
-    /// deserves a test rather than only a UI to exercise it through.
-    static func voiceMode(repo: String, family: String, declaredClone: Bool) -> VoiceMode {
-        if family == "qwen3-tts" {
-            let name = (repo.split(separator: "/").last.map(String.init) ?? repo).lowercased()
-            if name.contains("voicedesign") { return .design }
-            if name.contains("customvoice") { return .preset }
-            if name.contains("base") { return .cloning }
+    /// A mode string this build does not know is dropped rather than guessed at; a row that
+    /// published modes and none of them known therefore decodes to none, which the page says out
+    /// loud instead of inventing a form. Not private: the contract test drives it directly, and a
+    /// rule this easy to get wrong deserves a test rather than only a UI to exercise it through.
+    static func voiceModes(_ published: [String]?) -> [VoiceMode] {
+        var result: [VoiceMode] = []
+        for name in published ?? [] {
+            guard let mode = VoiceMode(rawValue: name), !result.contains(mode) else { continue }
+            result.append(mode)
         }
-        // Everything else — a shipped family, or one this build has never seen — is decided by the
-        // runtime's declaration: cloning when it can clone, the preset form when it cannot.
-        return declaredClone ? .cloning : .preset
+        return result
     }
 
     /// How much of what this app reads a catalogue entry actually publishes.
@@ -4530,6 +4685,10 @@ final class NativeWorkspaceStore: ObservableObject {
         var score = 0
         if model.family?.isEmpty == false { score += 4 }
         if model.capabilities?.isEmpty == false { score += 4 }
+        // A row that publishes the voice modes is the row the Audio page needs: losing them to a
+        // bare duplicate of the same repo would leave a model with no tabs and no way to generate,
+        // which is exactly the kind of silent loss the dedupe exists to prevent.
+        if model.modes?.isEmpty == false { score += 4 }
         if model.cache != nil { score += 1 }
         if model.runtimeReady != nil { score += 1 }
         if model.referenceAudio != nil { score += 1 }
@@ -4579,8 +4738,13 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// The audio models for one tab, best first: installed and ready, then installed, then the
     /// rest. A tab with nothing usable still shows what to install rather than an empty page.
+    ///
+    /// A model that publishes two modes is offered in both tabs — the tab chooses the request. A
+    /// model that published no modes is offered too, in every tab: it is installed and it is real,
+    /// and hiding it would answer "no model is installed" to an operator looking straight at one.
+    /// What it cannot do is generate, and that is said where it is chosen.
     func audioModels(for mode: VoiceMode) -> [NativeModel] {
-        models.filter { $0.function == .audio && $0.voiceMode == mode }
+        models.filter { $0.function == .audio && ($0.voiceModes.contains(mode) || $0.voiceModes.isEmpty) }
             .sorted { left, right in
                 func rank(_ model: NativeModel) -> Int {
                     if model.cached && model.runtimeReady { return 0 }
@@ -4655,20 +4819,15 @@ final class NativeWorkspaceStore: ObservableObject {
             let family = item.family ?? ""
             let isQwen = family == "qwen3-tts"
             // What a model can do is published by the catalog, and this app reads it instead of
-            // keeping its own list of families. `reference_audio` is the runtime's own answer to
-            // "does this model clone from a clip?", and `capabilities` carries the same claim when
-            // the nested object is absent. A family allowlist here is what made six of thirteen
-            // shipped voice packages invisible — khmer-tts-mms, khmer-tts-onnx, chatterbox-mlx and
-            // fish-audio-mlx were dropped for not being on a list the catalog had never heard of,
-            // while the Hub, the manifests and the kits all offered them.
-            let declaredClone = item.referenceAudio?.supported ?? item.referenceAudio?.declared
-                ?? (item.capabilities?.contains("voice-cloning") ?? false)
-            let mode = Self.voiceMode(repo: item.repo, family: family, declaredClone: declaredClone)
-            // The form follows the mode: cloning is the only form that needs a reference clip, and
-            // its transcript is required only where the catalog's audited profile says so. The
-            // runtime's own declaration is the answer; a family that names its cloning tiers in the
-            // repo name is the one documented exception, handled inside `voiceMode`.
-            let isClone = mode == .cloning
+            // keeping its own list of families. `modes` is the runtime's own answer to "how can
+            // this model be told what to sound like?"; a family allowlist here is what made six of
+            // thirteen shipped voice packages invisible — khmer-tts-mms, khmer-tts-onnx,
+            // chatterbox-mlx and fish-audio-mlx were dropped for not being on a list the catalog
+            // had never heard of, while the Hub, the manifests and the kits all offered them.
+            let modes = Self.voiceModes(item.modes)
+            // The form follows the modes: cloning is the only form that needs a reference clip, and
+            // its transcript is required only where the catalog's audited profile says so.
+            let isClone = modes.contains(.cloning)
             let transcriptRequired = isClone
                 && (item.referenceAudio?.transcript ?? (isQwen ? "required" : "optional")) == "required"
             let package = packages[item.repo]
@@ -4692,8 +4851,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // model such as Khmer VITS has no list to choose from, and lending it another family's
             // names would be inventing data. A preset family that publishes no roster at all has
             // one built-in voice.
-            let roster = mode == .preset ? Self.roster(for: item, rosters: rosters) : nil
-            let publishesPresetRoster = supported && mode == .preset && roster != nil
+            let roster = modes.contains(.preset) ? Self.roster(for: item, rosters: rosters) : nil
+            let publishesPresetRoster = supported && modes.contains(.preset) && roster != nil
             let note = supported
                 ? (cached && ready
                     ? (qualified
@@ -4709,10 +4868,10 @@ final class NativeWorkspaceStore: ObservableObject {
                 capabilities: item.capabilities ?? [], languages: item.languages?.values ?? [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: roster ?? [], publishesPresetRoster: publishesPresetRoster,
                 requiresReference: isClone,
-                // Without this every model kept the struct's default of `.cloning`, so the preset
-                // and design tabs were empty and a CustomVoice model was sent down the clone path -
-                // which asked for a reference voice it does not have.
-                voiceMode: mode, requiresTranscript: transcriptRequired, blockReason: block,
+                // The tabs the Audio page shows are the modes the producer published, in its order.
+                // This used to be one derived mode per model, which showed a single tab for a model
+                // that supports two and sent the request down the wrong path for the other.
+                voiceModes: modes, requiresTranscript: transcriptRequired, blockReason: block,
                 paused: package?.paused == true, pausedReason: package?.pausedReason,
                 longForm: NativeLongFormDelivery(item.longFormDelivery),
                 pausedStudio: package?.pausedStudio
@@ -5049,7 +5208,7 @@ final class NativeWorkspaceStore: ObservableObject {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             return try decoder.decode(T.self, from: data)
         } catch let error as NativeAPIError { throw error }
-        catch { throw NativeAPIError.message("Could not upload to the local engine: \(error.localizedDescription)") }
+        catch { throw Self.transportError(error) }
     }
 
     private func performData(_ request: URLRequest) async throws -> Data {
@@ -5060,7 +5219,24 @@ final class NativeWorkspaceStore: ObservableObject {
             try validateResponse(data: data, response: response, request: request)
             return data
         } catch let error as NativeAPIError { throw error }
-        catch { throw NativeAPIError.message("Could not reach the local engine: \(error.localizedDescription)") }
+        catch { throw Self.transportError(error) }
+    }
+
+    /// Turn a URLSession failure into something a screen can act on — or hand cancellation back
+    /// as cancellation.
+    ///
+    /// A task that is torn down (a page that goes away, a `.task(id:)` whose id changed) makes
+    /// `URLSession` throw `URLError` **-999**, `NSURLErrorCancelled`. Wrapping that into the same
+    /// "could not reach the local engine" message as a refused connection made a cancelled read
+    /// indistinguishable from a broken one: the voice library was wiped and a false failure was
+    /// shown for a load the app itself had just cancelled. Cancellation is not a transport fact, so
+    /// it is rethrown as `CancellationError` and callers decide; `isCancellation` recognises it on
+    /// the far side.
+    private static func transportError(_ error: Error) -> Error {
+        if error is CancellationError { return CancellationError() }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return CancellationError() }
+        if Task.isCancelled { return CancellationError() }
+        return NativeAPIError.message("Could not reach the local engine: \(error.localizedDescription)")
     }
 
     private func validateResponse(data: Data, response: URLResponse, request: URLRequest) throws {
@@ -5440,6 +5616,11 @@ private struct CatalogModel: Decodable {
     let family: String?
     let sizeGb: Double?
     let capabilities: [String]?
+    /// How this model can be told what to sound like, published by the Voice runtime itself:
+    /// `"cloning"`, `"preset"`, `"design"`, in that order. This is the producer's own answer and
+    /// the only source for which tabs the Audio page shows; absent means the worker is older than
+    /// this field, which the page says out loud rather than guessing a form.
+    let modes: [String]?
     let languages: StringOrStrings?
     let runtimeReady: Bool?
     let memoryEligible: Bool?

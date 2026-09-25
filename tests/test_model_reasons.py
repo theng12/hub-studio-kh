@@ -81,10 +81,23 @@ class ModelReasonTests(unittest.TestCase):
 
     def test_readiness_is_no_longer_computed_from_a_subset(self) -> None:
         """`ready` used to ignore the gates entirely for audio and subtitle."""
-        for function in ("voiceMode(repo", "blockReason(memoryWarning"):
-            self.assertIn(function, API)
+        self.assertIn("blockReason(memoryWarning", API)
         self.assertNotIn("item.memoryEligible != false && package?.dispatchState == \"eligible\"", API,
                          "one of the three mappers still uses a hand-rolled readiness rule")
+
+    def test_voice_modes_are_read_from_the_producer_not_derived(self) -> None:
+        """The tab list is the engine's own `modes`, not a rule this app keeps.
+
+        The app derived one form per model, from `reference_audio`/`capabilities` plus a Qwen tier
+        name check. That is a second source of truth free to disagree with the engine that answers
+        the request, and it showed a single tab for a model that publishes two (VoxCPM2 4-bit /
+        8-bit / bf16 clone *and* design). The row field is the only answer read now.
+        """
+        self.assertIn("Self.voiceModes(item.modes)", API,
+                      "the audio mapper must read the producer's own modes")
+        self.assertIn("let modes: [String]?", API, "the catalogue row must decode what it sends")
+        self.assertNotIn("voiceMode(repo:", API,
+                         "a derived form must not come back beside the published one")
 
 
 if __name__ == "__main__":

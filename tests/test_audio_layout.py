@@ -133,10 +133,14 @@ class AudioLayoutTests(unittest.TestCase):
                       "VoiceOver must still hear the full tab name")
 
     def test_captions_wrap_rather_than_being_clipped(self) -> None:
-        # Searched across the file: one of these lives in the panel proper, another in the voice
-        # picker beside it, and both are on the page that was clipped.
-        for caption in ("voicePickerDetail", "A short, clean recording of the voice you want to reuse.",
-                        "Required: this model matches the clip to these words."):
+        # Searched across the file: one of these lives in the voice picker, the other in the panel
+        # beneath it, and both are on the page that was clipped. The captions that used to sit in
+        # the loose-clip block went with that block: cloning is library-only now.
+        for caption in ("voicePickerDetail",
+                        "This voice's clip, its transcript and its timing are already stored "
+                        "with it.",
+                        "This saved voice has no transcript yet, so a clone cannot align its "
+                        "audio."):
             index = VIEWS.index(caption)
             window = VIEWS[index:index + 400]
             self.assertIn("fixedSize(horizontal: false, vertical: true)", window,
