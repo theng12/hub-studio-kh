@@ -3,7 +3,48 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.64 (the fleet can reach itself, 2026-09-25).
+Last updated: 0.6.65 (the default is a default, and the page control is the override, 2026-09-25).
+
+**0.6.65 in one paragraph.** SH-14, closed by the owner's ruling and applied to every generator:
+**a value set in Models is what a job uses, a control on a generator page is the operator's own
+answer and always wins, and a control nobody has touched supplies nothing at all.** The last clause
+is the one that was missing. Voice's `speed` was sent as a flat `1.0` on all four generation paths,
+so a `speed` default set in Models could never reach the engine *from the app*; it now sends none
+until the slider moves, and `static let audioSpeedRange = 0.5...2.0` is gone — the bounds and the
+value both come from the selected model's lane contract, which the worker publishes **resolved**.
+Subtitle's `word_timestamps` was worse: a persisted `false` submitted on every request with **no
+control anywhere in the app**, so the Models value was unreachable and so was the value; it is a
+toggle now. The weight format is the row's own `weight_format`, not the extension of a file name.
+And the app stopped sending a `language` to the **12 of 13** voice families whose lane publishes
+none.
+
+**Read this before trusting a lane default.** The rule the whole release turns on: **an omitted
+parameter takes the value in force; a supplied one is the caller's answer and wins.** Every worker
+already implemented it (`model_fields_set` in `_job_parameters`; `set(form.keys())` in Subtitle's
+`with_model_defaults`; `validate_request` in Image and Music). What was broken was only ever the
+**app**, which supplied everything unconditionally. So when a Models default "doesn't work", the
+first question is not whether the worker reads it — it is whether the page sent the field anyway.
+
+**The tests that were pinning it are the reason nobody looked.** Three tests in
+`tests/test_peer_path_contract.py` asserted `var speed: Double`, that every audio path passed
+`speed: audioSpeed`, and that the slider used a `0.5...2.0` literal **declared in the app** — green
+for as long as the defect shipped, and one of them *required* the hardcoded range. They are replaced
+by `GenerationDefaultOwnershipTests`, whose general half is: **a generation control the app owns
+must be optional**, because "the operator has not chosen" is a state the request has to express.
+
+**A source-scanning trap, met twice in one session.** `tests/native_model_defaults.py` extracts a
+struct with `body()`, which stops at the first line beginning `    }`. Adding a method among
+`NativeModel`'s stored properties silently truncated the extraction and hid the property the test
+was looking for; the helper lives in an `extension NativeModel` for that reason, and says so. The
+same class bit the audio-path regexes, which matched the dead `AudioRequest` struct as though it
+were a live request body — it is deleted. **A regex over Swift source is a parser, and it is wrong
+in the same direction every time: it reads a declaration as a use.**
+
+**A flaky gate, second symptom, both seen once.** `tests/test_voice_product_suite.py` failed inside
+a full `tests/` run; the very next full run was green with the same deterministic order. The child's
+log is written to a fixed path and overwritten by each run, so the failing child's output was gone
+before it could be read — that is a defect in the harness, and the fix is to keep the last *failing*
+log. Recorded as SH-15(b), with the native `build.sh` cancellation race as SH-15(a).
 
 **0.6.64 in one paragraph.** Every node on controller 1100 was unreachable — five of five
 `ConnectTimeout` — because each Mac was answering on an address frozen the day it was set up. A Mac
@@ -12,7 +53,7 @@ addresses, **additively**, so nothing that worked is ever removed; `--listen-aut
 (both persisted now) and `--fleet-mode` are the supported setters; `/api/health` and
 `/api/hub/settings` publish what the Hub is actually bound to, so "loopback only" is a fact rather
 than a timeout. The Models tab is rebuilt around what each lane publishes, with per-model editable
-defaults for four of five lanes.
+defaults for four of five lanes (0.6.65 is what made those defaults actually reach the engine).
 
 **The lesson this release cost, and it is now a rule in `AGENTS.md`:** the 0.6.63 handoff
 documented this release's fixes as though the running build had them — *thirteen commits apart* —
