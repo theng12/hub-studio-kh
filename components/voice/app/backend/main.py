@@ -1353,10 +1353,16 @@ async def start_txt2speech_with_reference(
             expires_at=reference_expires_at,
         )
     except reference_audio.ReferenceAudioError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": exc.code, "detail": exc.detail},
-        ) from exc
+        # A model that publishes nothing to derive its contract from is the
+        # worker's own to-do (the catalog row or the audit record is
+        # incomplete), not a defect in the operator's clip: answer 409 with the
+        # missing field named so the caller can act on it, instead of the 422
+        # that says "record a different clip". Every other preparation failure
+        # is about the clip itself and stays 422.
+        status = (
+            409 if exc.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE" else 422
+        )
+        raise HTTPException(status_code=status, detail=exc.as_detail()) from exc
     params = body.model_dump()
     if section_budget is not None:
         params.pop("section_max_characters", None)
@@ -1369,6 +1375,11 @@ async def start_txt2speech_with_reference(
         "_reference_source_sha256": prepared["source_sha256"],
         "_reference_preparation_revision": prepared["preparation_revision"],
         "_reference_duration_s": prepared["duration_seconds"],
+        # Where this model's reference contract came from. The job record carries
+        # it so an operator can see an un-audited cloning path as un-audited,
+        # which is the honest half of "prepare it anyway".
+        "_reference_profile_audited": bool(prepared.get("profile_audited")),
+        "_reference_profile_sources": prepared.get("profile_sources") or {},
     })
     try:
         origin, origin_device = fleet_auth.classify_job_origin(request)
@@ -1384,6 +1395,11 @@ async def start_txt2speech_with_reference(
                 "source_sha256", "derived_sha256", "preparation_revision",
                 "duration_seconds", "sample_rate_hz", "channels",
                 "window_start_seconds", "window_end_seconds",
+                # The contract the execution copy was built from, and where each
+                # of its values came from: `profile_audited` is false for a model
+                # whose cloning path has no audit record, and `profile_sources`
+                # names the published field behind every value.
+                "profile", "profile_audited", "profile_sources",
             )
         },
     }

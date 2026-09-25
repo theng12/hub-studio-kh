@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import io
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import soundfile as sf
+from fastapi.testclient import TestClient
 
-from backend import generation, reference_audio
+from backend import catalog, generation, main, reference_audio
 
 
 # The 1.7B Base tier the app ships. The 8-bit checkpoint was pruned on
@@ -127,22 +129,36 @@ def test_qwen_audit_drives_reference_preparation_contract(
     assert prepared["profile"]["transcript"] == "required"
 
 
-def test_qwen_17b_private_reference_fails_closed_without_an_audited_profile(
+def test_qwen_17b_private_reference_derives_its_contract_when_the_audit_is_absent(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """An unaudited candidate cannot turn the generic preparation into a claim."""
+    """Withholding the audit no longer refuses; the model's own facts carry it.
+
+    The audited profile still wins where it exists (the tests above). This is the
+    un-audited half: the row publishes 24 kHz, and the model's own published
+    guardrails say the clone path aligns the clip to an exact transcript, so the
+    derived contract is the model's statement rather than a generic default.
+    """
     monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
     monkeypatch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
 
-    with pytest.raises(reference_audio.ReferenceAudioError) as error:
-        reference_audio.prepare(
-            audio_bytes=_wav(),
-            filename="customer.wav",
-            model_id=QWEN_17B_BASE,
-            transcript="Exact words.",
-        )
+    prepared = reference_audio.prepare(
+        audio_bytes=_wav(),
+        filename="customer.wav",
+        model_id=QWEN_17B_BASE,
+        transcript="Exact words.",
+    )
 
-    assert error.value.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE"
+    assert prepared["profile_audited"] is False
+    assert prepared["profile"]["sample_rate_hz"] == 24_000
+    assert prepared["profile"]["transcript"] == "required"
+    assert prepared["profile_sources"]["sample_rate_hz"].startswith(
+        "catalog.ModelEntry.sample_rate_hz"
+    )
+    assert prepared["profile_sources"]["transcript"].startswith(
+        "catalog.execution_contract.quality_guardrails"
+    )
+    assert Path(prepared["path"]).is_file()
 
 
 def test_private_reference_path_never_enters_public_job_payload(
@@ -412,42 +428,264 @@ def test_terminal_long_form_strategy_comes_from_audit_not_chunk_count(monkeypatc
     assert job.serialize()["long_form_strategy"] == "adapter_managed_long_form"
 
 
-# ─── A9: the audit requirement is the model's own published capability ─────
+# ─── A9 + its follow-up: the contract is the model's own published facts ───
 
-def test_every_cloning_model_is_governed_by_its_published_capability(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    """A new cloning family cannot silently fall back to generic defaults.
+VOXCPM_4BIT = "mlx-community/VoxCPM2-4bit"
 
-    The predicate is read from the model's own `capabilities`, so this covers the
-    next cloning model without an edit. It used to be a name-substring test
-    (`"qwen3-tts" in name and "base" in name`), which a new family - or a new
-    Qwen tier not spelled *-Base-* - would fall outside while still being
+
+def _catalog_row(**overrides) -> catalog.ModelEntry:
+    """A row shaped like a new cloning family, for the refusal case."""
+    fields: dict = {
+        "repo": "example/new-cloning-family-4bit",
+        "label": "A new cloning family 4-bit",
+        "family": "voxcpm-mlx",
+        "size_gb": 1.0,
+        "gated": False,
+        "capabilities": ("tts", "voice-cloning"),
+    }
+    fields.update(overrides)
+    return catalog.ModelEntry(**fields)
+
+
+def test_every_cloning_model_is_governed_by_its_published_capability() -> None:
+    """The predicate is the model's own `capabilities`, not a name substring.
+
+    It used to be `"qwen3-tts" in name and "base" in name`, which a new family —
+    or a new Qwen tier not spelled *-Base-* — fell outside while still being
     prepared with guessed duration, rate and transcript rules.
     """
-    from backend import catalog
-
-    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
     cloning = [entry for entry in catalog.CATALOG if "voice-cloning" in entry.capabilities]
     assert cloning, "no cloning model is catalogued; this test would be vacuous"
 
     for entry in catalog.CATALOG:
         declares = "voice-cloning" in entry.capabilities
-        assert reference_audio._requires_audited_profile(entry.repo) is declares, entry.repo
-        if not declares:
-            continue
-        # With the audited profile withheld, preparation refuses by name and
-        # names the file to add - never a silent generic execution copy.
-        with monkeypatch.context() as patch:
-            patch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
-            with pytest.raises(reference_audio.ReferenceAudioError) as error:
-                reference_audio.prepare(
-                    audio_bytes=_wav(), filename="customer.wav", model_id=entry.repo,
-                )
-        assert error.value.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE", entry.repo
-        assert entry.repo in error.value.detail, entry.repo
-        assert "model-audits" in error.value.detail, entry.repo
+        assert reference_audio._requires_published_profile(entry.repo) is declares, entry.repo
 
     # A model the registry does not know is not a documented cloning model, and
     # the public routes refuse it before preparation ever runs.
-    assert reference_audio._requires_audited_profile("example/not-in-this-catalog") is False
+    assert reference_audio._requires_published_profile("example/not-in-this-catalog") is False
+
+
+def test_every_cloning_model_prepares_without_an_audit_from_its_own_published_facts(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The invariant that catches the next cloning model.
+
+    With every audit withheld, each catalogued cloning model must still reach a
+    real execution copy, labelled `profile_audited: false`, with every value it
+    used traced to a published field. This is the half A9's first fix got wrong:
+    it refused the work instead of deriving it, so the recommended VoxCPM2 4-bit
+    tier could not clone from a chosen clip at all.
+    """
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    monkeypatch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
+    cloning = [entry for entry in catalog.CATALOG if "voice-cloning" in entry.capabilities]
+    assert cloning, "no cloning model is catalogued; this test would be vacuous"
+
+    for entry in catalog.CATALOG:
+        prepared = reference_audio.prepare(
+            audio_bytes=_wav(),
+            filename="customer.wav",
+            model_id=entry.repo,
+            transcript="Exact words for this reference clip.",
+        )
+        assert Path(prepared["path"]).is_file(), entry.repo
+        if "voice-cloning" not in entry.capabilities:
+            # A family that cannot clone keeps the generic preparation: the
+            # derivation must not tighten an unrelated model.
+            assert prepared["profile"] == {}, entry.repo
+            assert prepared["profile_audited"] is False, entry.repo
+            continue
+        assert prepared["profile_audited"] is False, entry.repo
+        assert prepared["profile"]["sample_rate_hz"] == entry.sample_rate_hz, entry.repo
+        assert prepared["sample_rate_hz"] == entry.sample_rate_hz, entry.repo
+        assert prepared["profile"]["transcript"] in {"required", "optional", "not_used"}, entry.repo
+        # No value is published without the field it came from, and no bound the
+        # model does not state is invented: it is recorded as unpublished.
+        for name in prepared["profile"]:
+            assert prepared["profile_sources"].get(name), (entry.repo, name)
+        assert "not published" in prepared["profile_sources"]["maximum_duration_seconds"]
+        assert "not published" in prepared["profile_sources"]["channels"]
+        # The derived rule is the rule preparation enforces: only a model whose
+        # contract says `required` may refuse a transcript-less clip.
+        try:
+            reference_audio.prepare(
+                audio_bytes=_wav(), filename="customer.wav", model_id=entry.repo,
+            )
+        except reference_audio.ReferenceAudioError as error:
+            assert prepared["profile"]["transcript"] == "required", entry.repo
+            assert error.code == "REFERENCE_TRANSCRIPT_REQUIRED", entry.repo
+        else:
+            assert prepared["profile"]["transcript"] != "required", entry.repo
+
+
+def test_the_recommended_voxcpm2_tier_resamples_to_its_own_published_rate(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """VoxCPM2 publishes 48 kHz; an audit-less clone must not fall back to 24 kHz.
+
+    This is the owner-visible half of A9: VoxCPM2 4-bit, the recommended voice
+    model, has no audit record, so a generic 24 kHz execution copy was wrong and
+    a refusal was not an answer either.
+    """
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    monkeypatch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
+
+    prepared = reference_audio.prepare(
+        audio_bytes=_wav(), filename="customer.wav", model_id=VOXCPM_4BIT,
+    )
+
+    entry = catalog.get_model(VOXCPM_4BIT)
+    assert entry is not None
+    assert entry.sample_rate_hz == 48_000
+    assert prepared["sample_rate_hz"] == 48_000
+    assert prepared["profile"] == {"sample_rate_hz": 48_000, "transcript": "optional"}
+    assert prepared["profile_sources"]["transcript"].startswith("catalog.FAMILIES")
+    assert Path(prepared["path"]).is_file()
+
+
+def test_a_cloning_model_that_publishes_nothing_derivable_refuses_by_name(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The only surviving refusal names the model, the field and the file to fix.
+
+    A refusal with a named field is a to-do; a refusal because a record does not
+    exist is a dead end. The exported error carries both so the route can answer
+    with something an operator can act on.
+    """
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    stub = _catalog_row(sample_rate_hz=0)
+    monkeypatch.setattr(catalog, "CATALOG", catalog.CATALOG + (stub,))
+
+    with pytest.raises(reference_audio.ReferenceAudioError) as error:
+        reference_audio.prepare(
+            audio_bytes=_wav(), filename="customer.wav", model_id=stub.repo,
+        )
+
+    assert error.value.code == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE"
+    assert stub.repo in error.value.detail
+    assert "sample_rate_hz" in error.value.detail
+    assert "components/voice/app/backend/catalog.py" in error.value.detail
+    assert "model-audits" in error.value.detail
+    assert error.value.model_id == stub.repo
+    assert error.value.missing_field == "sample_rate_hz"
+    assert error.value.fix_in == (
+        "components/voice/app/backend/catalog.py",
+        "components/voice/model-audits/<date>-<name>/<org>--<repo>.audit.json",
+    )
+    # The refusal is the missing *field*, and the route surfaces it as such.
+    assert error.value.as_detail()["missing_field"] == "sample_rate_hz"
+
+
+def test_an_audited_model_keeps_its_audited_contract_verbatim(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The audited path must not be re-derived or re-labelled by the follow-up."""
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    monkeypatch.setattr(
+        reference_audio.model_audits,
+        "input_limits",
+        lambda _repo: {"reference_audio": {
+            "minimum_duration_seconds": 2,
+            "maximum_duration_seconds": 4,
+            "sample_rate_hz": 16_000,
+            "transcript": "optional",
+        }},
+    )
+
+    prepared = reference_audio.prepare(
+        audio_bytes=_wav(), filename="customer.wav", model_id="model/a",
+    )
+
+    assert prepared["profile_audited"] is True
+    assert prepared["sample_rate_hz"] == 16_000
+    assert prepared["duration_seconds"] == pytest.approx(4.0, abs=0.02)
+    assert prepared["profile_sources"]["sample_rate_hz"] == (
+        "audit contract.input_limits.reference_audio.sample_rate_hz"
+    )
+
+
+# ─── the route behind the Clone tab's Choose Clip… → Prepare Voice ─────────
+
+def _reference_client(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """The real route, with the engine mocked out and every clip prepared for real."""
+    queued: list[dict] = []
+    monkeypatch.setattr(main.gen_manager, "is_available", lambda: True)
+    monkeypatch.setattr(main.cache, "cache_state", lambda _repo: "cached")
+    monkeypatch.setattr(
+        main.gen_manager,
+        "start_txt2speech",
+        lambda params, **_kwargs: (
+            queued.append(params) or SimpleNamespace(serialize=lambda: {})
+        ),
+    )
+    return queued
+
+
+def test_reference_route_prepares_an_unaudited_cloning_model_and_labels_it(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The path the owner reported broken must reach a generation again.
+
+    `POST /api/generate/txt2speech/reference` for VoxCPM2 4-bit (the recommended
+    voice model, with no audit record) must answer 200 and hand the job a real
+    prepared copy, while publishing that this model's cloning path is un-audited.
+    """
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    monkeypatch.setattr(reference_audio.model_audits, "input_limits", lambda _repo: {})
+    queued = _reference_client(monkeypatch)
+    client = TestClient(main.app, headers={"X-Studio-Token": main.FLEET_TOKEN})
+
+    response = client.post(
+        "/api/generate/txt2speech/reference",
+        data={"request_json": json.dumps({
+            "repo": VOXCPM_4BIT,
+            "text": "A cloned line of speech.",
+        })},
+        files={"audio": ("chosen-clip.wav", _wav(), "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    reference = response.json()["reference"]
+    assert reference["profile_audited"] is False
+    assert reference["profile"]["sample_rate_hz"] == 48_000
+    assert reference["sample_rate_hz"] == 48_000
+    assert reference["profile_sources"]["sample_rate_hz"].startswith("catalog.")
+    assert Path(reference["derived_sha256"] and queued[0]["_reference_audio_path"]).is_file()
+    # The job carries the same provenance, so the job record shows the
+    # un-audited cloning path instead of hiding it.
+    assert queued[0]["_reference_profile_audited"] is False
+    assert queued[0]["_reference_profile_sources"]["transcript"].startswith("catalog.")
+    assert queued[0]["ref_transcript"] is None
+
+
+def test_reference_route_answers_409_when_a_cloning_model_publishes_no_rate(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A refusal is a to-do: 409 with the model, the field and the file to fix.
+
+    It is deliberately not the 422 that means "record a different clip": the
+    clip is fine, the model's published contract is incomplete.
+    """
+    monkeypatch.setattr(reference_audio, "ROOT", tmp_path / "references")
+    stub = _catalog_row(repo="example/new-cloning-family-4bit", sample_rate_hz=0)
+    monkeypatch.setattr(catalog, "CATALOG", catalog.CATALOG + (stub,))
+    queued = _reference_client(monkeypatch)
+    client = TestClient(main.app, headers={"X-Studio-Token": main.FLEET_TOKEN})
+
+    response = client.post(
+        "/api/generate/txt2speech/reference",
+        data={"request_json": json.dumps({
+            "repo": stub.repo,
+            "text": "A cloned line of speech.",
+        })},
+        files={"audio": ("chosen-clip.wav", _wav(), "audio/wav")},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE"
+    assert detail["model_id"] == stub.repo
+    assert detail["missing_field"] == "sample_rate_hz"
+    assert "components/voice/app/backend/catalog.py" in detail["detail"]
+    assert queued == []

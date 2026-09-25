@@ -3,6 +3,14 @@
 GenStudio owns the customer asset and Studio Hub owns temporary transport.
 Voice Studio owns the model-specific execution copy: decoding, silence-aware
 selection, format normalization, transcript alignment, and immutable evidence.
+
+The execution copy is built from the model's own published contract: the audited
+profile where one is installed, otherwise the model's catalog row (its sample
+rate, and the transcript rule its family and guardrails publish). Every value
+carries its source (``profile_sources``) and an un-audited model is prepared
+anyway, labelled ``profile_audited: false``. Only a cloning model that publishes
+nothing to derive from is refused, and that refusal names the missing field and
+the file to add it in.
 """
 
 from __future__ import annotations
@@ -14,6 +22,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,37 +34,238 @@ PREPARATION_REVISION = "voicestudio.reference-audio.v1"
 MAX_BYTES = 25_000_000
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".webm"}
 
+# Where a reference-contract value has to be added when the model does not
+# publish it. Named in the refusal so the operator gets a to-do, not a dead end.
+CATALOG_SOURCE_FILE = "components/voice/app/backend/catalog.py"
+AUDIT_SOURCE_DIR = "components/voice/model-audits"
+# The published fields a prepared execution copy cannot be built without. A model
+# that states none of them is refused, never defaulted.
+_REQUIRED_PUBLISHED_FACTS = ("sample_rate_hz",)
+
 
 class ReferenceAudioError(ValueError):
-    def __init__(self, code: str, detail: str):
+    def __init__(
+        self,
+        code: str,
+        detail: str,
+        *,
+        model_id: str | None = None,
+        missing_field: str | None = None,
+        fix_in: tuple[str, ...] = (),
+    ):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+        self.model_id = model_id
+        self.missing_field = missing_field
+        self.fix_in = fix_in
+
+    def as_detail(self) -> dict[str, Any]:
+        """The route payload: code + explanation, plus the to-do when there is one."""
+        payload: dict[str, Any] = {"code": self.code, "detail": self.detail}
+        if self.model_id:
+            payload["model_id"] = self.model_id
+        if self.missing_field:
+            payload["missing_field"] = self.missing_field
+        if self.fix_in:
+            payload["fix_in"] = list(self.fix_in)
+        return payload
 
 
-def _profile(model_id: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _ReferenceContract:
+    """One model's reference-audio contract and where every value came from.
+
+    ``audited`` says the values came from an installed audit record.
+    ``sources`` names, per field, the published fact behind it - or records that
+    the model publishes no such fact. ``missing`` names the required published
+    field the model does not state; a caller refuses on it rather than guessing.
+    """
+
+    model_id: str
+    values: dict[str, Any] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)
+    audited: bool = False
+    cloning: bool = False
+    missing: str | None = None
+
+
+def _audited_profile(model_id: str) -> dict[str, Any]:
     limits = model_audits.input_limits(model_id)
     value = limits.get("reference_audio")
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _requires_audited_profile(model_id: str) -> bool:
-    """Whether this model's reference contract must come from an audited profile.
+def _published_transcript_rule(model: catalog.ModelEntry) -> tuple[str, str]:
+    """Whether the model's own clone path needs the exact reference transcript.
+
+    Read from what the row publishes: a model whose ``quality_guardrails``
+    enforce reference word alignment conditions on the transcript, so it is
+    required; a family that accepts ``ref_transcript`` takes one optionally; a
+    family that has no such parameter never reads one.
+    """
+    row = catalog.serialize_model(model)
+    guardrails = (row.get("execution_contract") or {}).get("quality_guardrails") or {}
+    if guardrails.get("reference_word_alignment"):
+        return (
+            "required",
+            "catalog.execution_contract.quality_guardrails.reference_word_alignment "
+            f"({model.repo})",
+        )
+    family = catalog.family_for(model)
+    if "ref_transcript" in (family.lane_parameters or ()):
+        return (
+            "optional",
+            f"catalog.FAMILIES[{family.id!r}].lane_parameters accepts ref_transcript",
+        )
+    return (
+        "not_used",
+        f"catalog.FAMILIES[{family.id!r}].lane_parameters has no ref_transcript",
+    )
+
+
+def _published_profile(
+    model: catalog.ModelEntry,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """The reference contract a cloning model publishes about itself.
+
+    Only the model's own row is read. Every value gets a source, and every bound
+    the row does not publish is recorded as unpublished rather than defaulted:
+    a guessed window is the defect A9 removed. Missing required facts stop the
+    derivation here, so a row that states nothing derivable never reaches the
+    transcript rule.
+    """
+    sources: dict[str, str] = {
+        field: f"not published in {CATALOG_SOURCE_FILE}" for field in _REQUIRED_PUBLISHED_FACTS
+    }
+    rate = getattr(model, "sample_rate_hz", None)
+    if isinstance(rate, bool) or not isinstance(rate, int) or rate <= 0:
+        return {}, sources
+    values: dict[str, Any] = {
+        "sample_rate_hz": rate,
+    }
+    sources["sample_rate_hz"] = f"catalog.ModelEntry.sample_rate_hz ({model.repo})"
+    requirement, requirement_source = _published_transcript_rule(model)
+    values["transcript"] = requirement
+    sources["transcript"] = requirement_source
+    # No reference length or channel count is published for this model, so
+    # preparation enforces none. Recorded, not defaulted: `_decode` produces a
+    # mono copy and the artifact's own metadata states that.
+    for field in ("minimum_duration_seconds", "maximum_duration_seconds", "channels"):
+        sources[field] = f"not published in {CATALOG_SOURCE_FILE} (ModelEntry has no {field})"
+    return values, sources
+
+
+def _profile(model_id: str) -> dict[str, Any]:
+    """The model's own reference contract, as values.
+
+    An installed audited profile is used as-is; a field it does not state is
+    completed from the model's published row, because that is the same model's
+    own statement and the alternative is this consumer's default. A cloning
+    model with no audit gets a profile built entirely from its published row.
+    A model the catalog does not describe as cloning keeps the generic
+    preparation (``{}``), exactly as before.
+
+    This is the seam that withholds a contract in the ST-04 tests: returning
+    ``{}`` for a catalogued cloning model is a refusal, not a default.
+    """
+    auditing = _audited_profile(model_id)
+    model = catalog.get_model(model_id)
+    if auditing:
+        values = dict(auditing)
+        published, _ = _published_profile(model) if model is not None else ({}, {})
+        for name in ("sample_rate_hz", "transcript"):
+            if values.get(name) in (None, "") and name in published:
+                values[name] = published[name]
+        return values
+    if model is None or "voice-cloning" not in (model.capabilities or ()):
+        return {}
+    published, _ = _published_profile(model)
+    return published if all(name in published for name in _REQUIRED_PUBLISHED_FACTS) else {}
+
+
+def _contract(model_id: str, profile: dict[str, Any]) -> _ReferenceContract:
+    """The provenance of a contract returned by `_profile`, and its gaps."""
+    model = catalog.get_model(model_id)
+    cloning = model is not None and "voice-cloning" in (model.capabilities or ())
+    if not profile:
+        return _ReferenceContract(
+            model_id=model_id,
+            cloning=cloning,
+            missing=_REQUIRED_PUBLISHED_FACTS[0] if cloning else None,
+        )
+    published, published_sources = _published_profile(model) if model is not None else ({}, {})
+    auditing = _audited_profile(model_id)
+    audited = bool(auditing) and all(
+        profile.get(name) == value for name, value in auditing.items()
+    )
+    sources: dict[str, str] = {}
+    if audited:
+        sources = {
+            name: f"audit contract.input_limits.reference_audio.{name}" for name in auditing
+        }
+    for name, value in profile.items():
+        if name in sources:
+            continue
+        if published.get(name) == value:
+            sources[name] = published_sources.get(name, f"catalog row ({name})")
+        elif audited:
+            sources[name] = f"audit contract.input_limits.reference_audio.{name}"
+        else:
+            # A value with no published field behind it. It is labelled as such
+            # rather than attributed to a source it did not come from.
+            sources[name] = f"no published source for {name}"
+    for name, source in published_sources.items():
+        sources.setdefault(name, source)
+    missing = next(
+        (name for name in _REQUIRED_PUBLISHED_FACTS if name not in profile),
+        None,
+    )
+    return _ReferenceContract(
+        model_id=model_id,
+        values=dict(profile),
+        sources=sources,
+        audited=audited,
+        cloning=cloning,
+        missing=missing,
+    )
+
+
+def _contract_refusal(contract: _ReferenceContract) -> ReferenceAudioError:
+    """Refuse a model that publishes nothing to derive its contract from.
+
+    The message names the model, the missing published field and both files the
+    field can be added in, the way `workload_policy.required_free_memory_gb` and
+    `generation._worker_for_engine` name theirs: a refusal with a named field is
+    a to-do, a refusal because a record does not exist is a dead end.
+    """
+    field = contract.missing or _REQUIRED_PUBLISHED_FACTS[0]
+    audit_file = f"{AUDIT_SOURCE_DIR}/<date>-<name>/<org>--<repo>.audit.json"
+    return ReferenceAudioError(
+        "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE",
+        f"{contract.model_id} declares voice cloning but publishes no {field} to build its "
+        f"reference contract from, so Voice Studio cannot derive an execution copy without "
+        f"guessing. Add it to this model's row in {CATALOG_SOURCE_FILE} (ModelEntry.{field}), or "
+        f"install an audit record under {audit_file} with "
+        f"contract.input_limits.reference_audio.{field}. Cloning from a saved voice in the "
+        "Voices library is not prepared here and is unaffected.",
+        model_id=contract.model_id,
+        missing_field=field,
+        fix_in=(CATALOG_SOURCE_FILE, audit_file),
+    )
+
+
+def _requires_published_profile(model_id: str) -> bool:
+    """Whether this model's reference contract must be the model's own.
 
     The question is answered by the producer, not by the model's name: a model
-    whose published ``capabilities`` declare voice cloning is a cloning model,
-    and a cloning model without an audit-grounded reference profile cannot be
-    prepared honestly. The numbers that matter here - how long the clip may be,
-    at what rate it is resampled, whether the engine conditions on an exact
-    transcript - are exactly what an unverified generic default guesses at, which
-    is why this function's failure mode is a refusal rather than "a wrong
-    execution copy instead of an honest error".
+    whose published ``capabilities`` declare voice cloning must be prepared from
+    its own published facts (an audited profile where one is installed, the
+    catalog row otherwise), never from this consumer's generic default.
 
     The previous version was ``"qwen3-tts" in name and "base" in name``. A new
     cloning family fell outside that substring test and silently received the
-    generic defaults; a new Qwen tier that was not a *-Base-* did too. The
-    capability is what the catalog publishes about cloning, so it is what this
-    reads (``reference_audio.declared`` in `serialize_model` is the same fact).
+    generic defaults; a new Qwen tier that was not a *-Base-* did too.
 
     A repo that is not in the catalog answers ``False``: the public routes refuse
     an unknown repo before preparation (`main.py` returns 400 for it, and
@@ -66,6 +276,15 @@ def _requires_audited_profile(model_id: str) -> bool:
     if model is None:
         return False
     return "voice-cloning" in (model.capabilities or ())
+
+
+# The name the ST-04 contract tests and `packaging/derive_qwen_base_audits.py`
+# already know. The follow-up to A9 changed what *satisfies* the question - an
+# audited profile or the model's own published facts - not the question itself:
+# is this model's reference contract the model's own, rather than a default this
+# consumer invented? Keeping the symbol keeps those callers honest instead of
+# leaving them asserting a rule the code no longer implements.
+_requires_audited_profile = _requires_published_profile
 
 
 def _number(value: object, default: float | None = None) -> float | None:
@@ -257,15 +476,16 @@ def prepare(
         raise ReferenceAudioError("REFERENCE_AUDIO_TYPE_UNSUPPORTED", "The reference audio type is unsupported.")
 
     profile = _profile(model_id)
-    if _requires_audited_profile(model_id) and not profile:
-        raise ReferenceAudioError(
-            "REFERENCE_AUDIO_CONTRACT_UNAVAILABLE",
-            f"{model_id} declares voice cloning but has no audited reference-audio profile, so "
-            "Voice Studio cannot derive its execution copy. Add the model's audit record under "
-            "components/voice/model-audits/<date>-<name>/<org>--<repo>.audit.json with "
-            "contract.input_limits.reference_audio (the Qwen3-TTS Base records show the shape), "
-            "or use a saved voice from the Voices library, which is not prepared here.",
-        )
+    contract = _contract(model_id, profile)
+    if contract.cloning and not profile:
+        # A cloning model the catalog describes must publish its own facts. This
+        # is the only refusal left: every catalogued cloning model now derives a
+        # usable profile, so reaching here means the row states nothing to build
+        # one from - a named to-do, not a dead end.
+        raise _contract_refusal(contract)
+    # Every catalogued cloning model's rate comes from its published row (or from
+    # its audit); the generic rate is reached only by a repo the catalog does not
+    # describe as cloning, which kept its historical behaviour.
     target_rate = int(_number(profile.get("sample_rate_hz"), 24000) or 24000)
     target_rate = max(8000, min(target_rate, 96000))
     source_sha = hashlib.sha256(audio_bytes).hexdigest()
@@ -286,6 +506,11 @@ def prepare(
         if expires_at and float(metadata.get("expires_at") or 0) < expires_at:
             metadata["expires_at"] = expires_at
             metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # This key is derived from the profile's values, so a reused entry was
+        # prepared under the same contract. An entry written before the
+        # provenance was published gets it here rather than reading as unknown.
+        metadata.setdefault("profile_audited", contract.audited)
+        metadata.setdefault("profile_sources", contract.sources)
         return {**metadata, "path": str(wav_path)}
 
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -363,6 +588,11 @@ def prepare(
             "window_end_seconds": round(window_end_s, 3),
             "transcript": derived_transcript,
             "profile": profile,
+            # Where this contract came from, field by field. Published beside the
+            # values so a caller can show an un-audited cloning path as
+            # un-audited without the app refusing to do the work.
+            "profile_audited": contract.audited,
+            "profile_sources": contract.sources,
             "expires_at": expires_at,
             "created_at": time.time(),
         }

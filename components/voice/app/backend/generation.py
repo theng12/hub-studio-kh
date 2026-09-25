@@ -1557,6 +1557,14 @@ class GenerationJob:
             "quality_retry_count": self.quality_retry_count,
             "quality_retry_history": self.quality_retry_history,
             "error_code": self.error_code,
+            # Provenance of the reference contract the job's clone path used.
+            # `reference_profile_audited: false` means the execution copy was
+            # derived from the model's published facts, not from an audit record,
+            # and `reference_profile_sources` names the field behind every value.
+            # Published so an un-audited cloning path is visible in the job
+            # record instead of the request being refused.
+            "reference_profile_audited": self.params.get("_reference_profile_audited"),
+            "reference_profile_sources": self.params.get("_reference_profile_sources"),
         }
         return {
             **result,
@@ -3456,6 +3464,11 @@ class GenerationManager:
             "_reference_preparation_revision": prepared["preparation_revision"],
             "_reference_duration_s": prepared["duration_seconds"],
             "ref_transcript": prepared.get("transcript") or transcript,
+            # A saved voice is prepared through the same model contract as a
+            # private upload, so it publishes the same provenance: an un-audited
+            # cloning path must be visible here too, not silently blank.
+            "_reference_profile_audited": bool(prepared.get("profile_audited")),
+            "_reference_profile_sources": prepared.get("profile_sources") or {},
         })
 
     def _mlx_kwargs_voxcpm_flex(self, params, gen_kwargs, voices_module) -> str:
