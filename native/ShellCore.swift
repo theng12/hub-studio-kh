@@ -273,6 +273,7 @@ struct ShellConfiguration {
         var explicitOffline = false
         var explicitHost: String?
         var explicitAutomatic = false
+        var explicitFleetMode = false
         var explicitPort: Int?
         var index = 1
         while index < arguments.count {
@@ -286,6 +287,13 @@ struct ShellConfiguration {
                 guard index + 1 < arguments.count else { throw ShellFailure(message: "Missing address for --listen-host.") }
                 explicitHost = arguments[index + 1]
                 index += 2
+            } else if argument == "--fleet-mode" {
+                // One switch for the three things a Mac that must be reachable needs, because
+                // three flags are three chances to set two of them. Deliberately does NOT touch
+                // sleep: holding a Mac awake is a power decision with its own costs, and nobody
+                // has asked for it.
+                explicitFleetMode = true
+                index += 1
             } else if argument == "--listen-auto" {
                 // The kit's supported way to turn automatic listening on and leave it on. Only
                 // meaningful with a data directory the app will keep using, which is what makes
@@ -330,6 +338,16 @@ struct ShellConfiguration {
         }
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
+        if explicitFleetMode {
+            // Reachable after a reboot, on every network this Mac has, without anyone opening the
+            // app. The services half matters as much as the listen half: the app already started
+            // at login, but the Hub did not, so a node that rebooted was invisible until somebody
+            // logged in and clicked Start - which is the same class of forgotten step as the
+            // Tailscale tick this release is about.
+            listenHostAutomatic = true
+            startAtLogin = true
+            startServicesAtLogin = true
+        }
         if explicitAutomatic { listenHostAutomatic = true }
         if let explicitHost {
             // Pinning an exact list is an explicit choice, so it turns automatic off: a caller
@@ -349,7 +367,7 @@ struct ShellConfiguration {
         // flag, and only the next launch differs. Refusing to come up because a preference could
         // not be saved is a worse failure than the one it reports, so it is recorded instead and
         // published where an operator or the gateway can read it.
-        if explicitHost != nil || explicitAutomatic {
+        if explicitHost != nil || explicitAutomatic || explicitFleetMode {
             do { try save() } catch { preferencesWriteFailure = "\(error)" }
         }
         try Self.requireBindableHost(listenHost)
