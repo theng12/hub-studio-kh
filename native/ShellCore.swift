@@ -189,6 +189,13 @@ struct ShellConfiguration {
     var startServicesAtLogin: Bool
     /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
     var listenHost: String
+    /// Whether `listenHost` is recomputed from this Mac's own addresses on every launch. See
+    /// `Preferences.listenHostAutomatic` for why the default is yes.
+    var listenHostAutomatic: Bool
+    /// Why a listen flag could not be written down, or nil. Recorded rather than thrown: the
+    /// launch honours the flag either way, so refusing to start would report the problem by
+    /// causing a worse one. Published so "I set it and it did not stick" has an answer.
+    var preferencesWriteFailure: String?
     /// The port the Hub binds, the same one on every start.
     ///
     /// It used to be the operating system's choice, which meant a new port each launch. Nothing
@@ -255,6 +262,8 @@ struct ShellConfiguration {
         startAtLogin = true
         startServicesAtLogin = false
         listenHost = "127.0.0.1"
+        listenHostAutomatic = true
+        preferencesWriteFailure = nil
         port = ShellConfiguration.defaultPort
         controllerAddress = nil
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
@@ -263,6 +272,7 @@ struct ShellConfiguration {
         var explicitModels: URL?
         var explicitOffline = false
         var explicitHost: String?
+        var explicitAutomatic = false
         var explicitPort: Int?
         var index = 1
         while index < arguments.count {
@@ -276,6 +286,12 @@ struct ShellConfiguration {
                 guard index + 1 < arguments.count else { throw ShellFailure(message: "Missing address for --listen-host.") }
                 explicitHost = arguments[index + 1]
                 index += 2
+            } else if argument == "--listen-auto" {
+                // The kit's supported way to turn automatic listening on and leave it on. Only
+                // meaningful with a data directory the app will keep using, which is what makes
+                // this a setting rather than a one-launch override.
+                explicitAutomatic = true
+                index += 1
             } else if argument == "--port" {
                 guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
                     throw ShellFailure(message: "Missing number for --port.")
@@ -294,6 +310,7 @@ struct ShellConfiguration {
             startAtLogin = saved.startAtLogin
             startServicesAtLogin = saved.startServicesAtLogin
             listenHost = saved.listenHost
+            listenHostAutomatic = saved.listenHostAutomatic ?? true
             port = saved.port ?? Self.defaultPort
             controllerAddress = saved.controllerAddress
             releasePublisherPublicKey = saved.releasePublisherPublicKey
@@ -313,8 +330,28 @@ struct ShellConfiguration {
         }
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
-        if let explicitHost { listenHost = explicitHost }
+        if explicitAutomatic { listenHostAutomatic = true }
+        if let explicitHost {
+            // Pinning an exact list is an explicit choice, so it turns automatic off: a caller
+            // that named addresses meant those addresses.
+            listenHost = explicitHost
+            listenHostAutomatic = false
+        } else if listenHostAutomatic {
+            listenHost = Self.automaticListenHost(keeping: listenHost)
+        }
         if let explicitPort { port = explicitPort }
+        // A flag is a setting, not a one-launch override. `--listen-host 127.0.0.1` used to last
+        // exactly until the next launch, because nothing wrote it down - so a kit that configured
+        // a Mac and then watched it come up on the old addresses had no way to tell the
+        // difference between "the flag was ignored" and "the flag was forgotten".
+        //
+        // A failed write does **not** stop the app from starting: this launch still honours the
+        // flag, and only the next launch differs. Refusing to come up because a preference could
+        // not be saved is a worse failure than the one it reports, so it is recorded instead and
+        // published where an operator or the gateway can read it.
+        if explicitHost != nil || explicitAutomatic {
+            do { try save() } catch { preferencesWriteFailure = "\(error)" }
+        }
         try Self.requireBindableHost(listenHost)
         try Self.requireBindablePort(port)
         if let modelsDirectory {
@@ -329,6 +366,25 @@ struct ShellConfiguration {
     static func defaultListenHost() -> String {
         let usable = LocalAddresses.current().filter(\.isPrivate).map(\.address)
         return usable.isEmpty ? "127.0.0.1" : usable.joined(separator: ",")
+    }
+
+    /// What the saved list becomes when this Mac is allowed to answer for itself.
+    ///
+    /// **Additive**: every address already saved is kept, and every private or Tailscale address
+    /// this Mac has right now is added. Nothing is removed, so this can never take away a way in
+    /// that was working; the worst case is an address that is no longer present, which
+    /// `unavailableListenAddresses` already drops for the launch and names.
+    ///
+    /// Current addresses come first so the tailnet leads the list, which is the order the
+    /// Connections screen shows and the order the owner asked for.
+    static func automaticListenHost(keeping saved: String) -> String {
+        var ordered: [String] = []
+        let candidates = LocalAddresses.current().filter(\.isPrivate).map(\.address)
+            + saved.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        for candidate in candidates where !candidate.isEmpty && !ordered.contains(candidate) {
+            ordered.append(candidate)
+        }
+        return ordered.isEmpty ? "127.0.0.1" : ordered.joined(separator: ",")
     }
 
     /// The addresses the Hub should listen on: loopback (always added by the Hub itself) plus
@@ -490,6 +546,7 @@ struct ShellConfiguration {
                                                         startAtLogin: startAtLogin,
                                                         startServicesAtLogin: startServicesAtLogin,
                                                         listenHost: listenHost,
+                                                        listenHostAutomatic: listenHostAutomatic,
                                                         port: port,
                                                         controllerAddress: controllerAddress,
                                                         releasePublisherPublicKey: releasePublisherPublicKey,
@@ -508,6 +565,21 @@ struct ShellConfiguration {
         /// means off: the default is the conservative one.
         let startServicesAtLogin: Bool
         let listenHost: String
+        /// Whether the listen list is recomputed from this Mac's own addresses on every launch,
+        /// or pinned to exactly `listenHost`.
+        ///
+        /// Absent means **automatic**, and that is a deliberate change of default rather than an
+        /// accident of decoding. A fresh install always computed its addresses from the machine
+        /// (`defaultListenHost()`), but the moment anything was saved they froze — so a Mac whose
+        /// owner never opened Connections, or who set it up before it joined a tailnet, stayed on
+        /// loopback (or on a LAN address from a network it had since left) forever. The owner
+        /// asked for the tailnet to be on without having to remember it.
+        ///
+        /// Automatic is **additive**: the saved addresses are kept and the Mac's current private
+        /// and tailnet addresses are added. It never removes an address. An operator who really
+        /// wants loopback only sets this to `false`, which the Connections list does on the first
+        /// manual change, and which `--listen-host` does when the kit pins an exact list.
+        let listenHostAutomatic: Bool?
         /// Absent in a preferences file written before the port was pinned, and absent means the
         /// Hub's own default rather than whatever the operating system hands out next time.
         let port: Int?
@@ -524,7 +596,7 @@ struct ShellConfiguration {
         let loginMigrationComplete: Bool
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
-             listenHost: String, port: Int?, controllerAddress: String?,
+             listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
              releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval],
@@ -534,6 +606,7 @@ struct ShellConfiguration {
             self.startAtLogin = startAtLogin
             self.startServicesAtLogin = startServicesAtLogin
             self.listenHost = listenHost
+            self.listenHostAutomatic = listenHostAutomatic
             self.port = port
             self.controllerAddress = controllerAddress
             self.releasePublisherPublicKey = releasePublisherPublicKey
@@ -552,9 +625,11 @@ struct ShellConfiguration {
             // Older previews did not persist this preference; the first-release default is on.
             startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true
             startServicesAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startServicesAtLogin) ?? false
-            // Every build before fleet support was loopback-only, and that stays the default
-            // for preferences written by them.
+            // Every build before fleet support was loopback-only. The address itself is kept as
+            // written; whether it is the *whole* list is what `listenHostAutomatic` decides, and
+            // an absent flag means automatic — see the field's own comment.
             listenHost = try values.decodeIfPresent(String.self, forKey: .listenHost) ?? "127.0.0.1"
+            listenHostAutomatic = try values.decodeIfPresent(Bool.self, forKey: .listenHostAutomatic)
             port = try values.decodeIfPresent(Int.self, forKey: .port)
             controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
             releasePublisherPublicKey = try values.decodeIfPresent(String.self, forKey: .releasePublisherPublicKey)

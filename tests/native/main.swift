@@ -363,8 +363,63 @@ try Data("{\"modelsPath\":\"\(legacyRoot.path)/models\",\"offline\":false,\"star
 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
 let legacy = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", legacyRoot.path],
                                     bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
-require(legacy.listenHost == "127.0.0.1", "an older preference file must default to loopback")
+// This used to require `127.0.0.1` — "an older preference file must default to loopback" — and
+// that default is what the owner asked to change: *"i keep forgetting to turn on tailscale. i
+// want it already the default on."* A Mac whose addresses were frozen on the day it was set up
+// never reaches its tailnet, and the operator's only clue is a Connections screen he has to
+// remember to open.
+//
+// An absent flag now means automatic, and automatic is additive over the saved list. The
+// expectation is written as the rule rather than as a literal, because what this Mac's addresses
+// are depends on the Mac running the test.
+require(legacy.listenHostAutomatic, "an absent preference must mean automatic, not pinned")
+require(legacy.listenHost == ShellConfiguration.automaticListenHost(keeping: "127.0.0.1"),
+        "an older preference file must follow this Mac's networks, got \(legacy.listenHost)")
 require(legacy.clientHost == "127.0.0.1", "a default configuration must reach its own Hub on loopback")
+
+// Automatic is ADDITIVE: an address already saved survives, and this Mac's current addresses are
+// added to it. Nothing may be removed, so an upgrade can never take away a way in that worked.
+let additive = ShellConfiguration.automaticListenHost(keeping: "10.44.0.9")
+require(additive.split(separator: ",").map(String.init).contains("10.44.0.9"),
+        "an address already configured must survive, got \(additive)")
+require(additive == ShellConfiguration.automaticListenHost(keeping: "10.44.0.9"),
+        "automatic must be a function of the saved list and this Mac, not of call order")
+
+// An explicit choice stays an explicit choice. `--listen-host` pins the exact list and says so,
+// and — the part that was missing — it is written down, so it lasts past this launch.
+let pinnedRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-pinned-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: pinnedRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: pinnedRoot) }
+let pinned = try ShellConfiguration(
+    arguments: ["StudioHub", "--data-dir", pinnedRoot.path, "--listen-host", "127.0.0.1"],
+    bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(!pinned.listenHostAutomatic, "--listen-host names an exact list, so it is not automatic")
+require(pinned.listenHost == "127.0.0.1", "the pinned list is what was asked for")
+let reopened = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", pinnedRoot.path],
+                                      bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(reopened.listenHost == "127.0.0.1" && !reopened.listenHostAutomatic,
+        "a listen host given on the command line must survive the next launch, got "
+        + "\(reopened.listenHost) automatic=\(reopened.listenHostAutomatic)")
+
+// ...and `--listen-auto` is the kit's supported way to turn it back on, persisted the same way.
+let automaticRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-auto-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: automaticRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: automaticRoot) }
+try Data("{\"listenHost\":\"127.0.0.1\",\"offline\":false}".utf8).write(
+    to: automaticRoot.appendingPathComponent("app-preferences.json"), options: .atomic)
+try FileManager.default.setAttributes(
+    [.posixPermissions: 0o600],
+    ofItemAtPath: automaticRoot.appendingPathComponent("app-preferences.json").path)
+_ = try ShellConfiguration(
+    arguments: ["StudioHub", "--data-dir", automaticRoot.path, "--listen-auto"],
+    bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+let autoReopened = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", automaticRoot.path],
+                                          bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(autoReopened.listenHostAutomatic, "--listen-auto must survive the next launch")
+require(autoReopened.listenHost == ShellConfiguration.automaticListenHost(keeping: "127.0.0.1"),
+        "--listen-auto must recompute this Mac's addresses, got \(autoReopened.listenHost)")
 
 // The service log must not grow without bound. Rotation moves an oversized log to
 // `.1` and leaves a small one alone. A sparse file keeps the test cheap.
