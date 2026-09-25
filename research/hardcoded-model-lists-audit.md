@@ -122,6 +122,31 @@ the Hub and onto the model's own row during this release, once the producer publ
 the pattern: move the fact to the model whenever the model can state it, and make the absence loud
 when it cannot.
 
+### One more of the same shape, found after the audit closed
+
+`components/hub/backend/capabilities.py::_voice_modes` derived a model's voice modes from its
+`capabilities` **plus a name substring** — `"voicedesign" in repo` — and defaulted any TTS model to
+`preset_voice` (`"tts" in capabilities and not modes`). That is audit row **A9's** shape in the Hub,
+which the audit itself missed because it searched for *model* enumerations in the Hub and this one
+enumerates *modes*.
+
+It was not cosmetic. Measured against the shipped catalog, the old derivation **lost a published
+mode** for four models and **invented one** for a fifth:
+
+| Model | Hub said | Truth |
+| --- | --- | --- |
+| VoxCPM2 4-bit / 8-bit / bf16 (MLX) | `[reference_audio_clone]` | `[reference_audio_clone, voice_design]` |
+| OmniVoice bf16 (MLX bfloat16) | `[reference_audio_clone]` | `[reference_audio_clone, voice_design]` |
+| pocket-tts-4bit (MLX 4-bit) | `[reference_audio_clone]` | `[reference_audio_clone, preset_voice]` |
+
+The Hub now reads the producer's own `modes` (published per model since 2026-09-25) and renames it
+through **one** table into its peer-facing control vocabulary, preserving the producer's order. An
+unknown mode raises a `ValueError` naming the mode, the model and both files to update — the
+`_worker_for_engine` shape. A row publishing no `modes` gets no `voice_modes` key plus a warning
+rather than a refusal, deliberately: refusing would raise out of `build_snapshot` and 500
+`/api/hub/capabilities` for every modality on the site because one studio is stale, which is the
+0.6.57 blank-everything failure mode.
+
 ### Two things the audit did not find, and this release added
 
 Both arrived from Gateway Studio, measured from the consuming side
