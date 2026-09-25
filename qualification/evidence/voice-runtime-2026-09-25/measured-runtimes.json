@@ -1,0 +1,91 @@
+{
+  "schema": "studiohub.voice-runtime-evidence.v1",
+  "captured_at": "2026-09-25",
+  "what_this_is": "The Voice lane's measured per-item runtimes, as rows a reader can check. `components/voice/app/backend/lane_contract.py` publishes these as `runtime_seconds`; it no longer carries a curated per-model table of its own.",
+  "admission_rule": "A row is admitted only when the run itself left a stored probe receipt in this repository. Each `source` names that file and the field the number was read from, and `components/voice/app/tests/test_lane_contract.py` re-reads the file and fails if the two disagree. A wall-clock figure that survives only as a sentence (a comment, a changelog entry, a manifest's memory note) is not admitted: an absent runtime is honest, a curated one is the defect this record removes.",
+  "host": "Apple M2 Max, 32 GiB unified memory (this repository's local qualification host; the probe receipts record the app path and the models directory, not the chip)",
+  "measurements": [
+    {
+      "repo": "mlx-community/VoxCPM2-4bit",
+      "quantization": "MLX 4-bit",
+      "measured_on": "M2 Max 32 GiB unified memory, packaged app path, 2026-09-21",
+      "measured": [
+        {
+          "seconds": 22.29,
+          "scene": "93-character sentence cloned from the project reference clip (qualification/evidence/st04-reference-clip.wav) through the packaged app's own job path; 5.76 s artifact at 48 kHz",
+          "source": "qualification/evidence/r07-2026-09-21/voxcpm2-4bit.json generate_seconds"
+        },
+        {
+          "seconds": 20.19,
+          "scene": "same 93-character sentence with the reference clip staged without a transcript, through the installed app's job path; 491,580-byte artifact",
+          "source": "qualification/evidence/r07-2026-09-21/voxcpm2-4bit-no-transcript.json generate_seconds"
+        }
+      ]
+    },
+    {
+      "repo": "mlx-community/VoxCPM2-8bit",
+      "quantization": "MLX 8-bit",
+      "measured_on": "M2 Max 32 GiB unified memory, packaged app path, 2026-09-21",
+      "measured": [
+        {
+          "seconds": 18.13,
+          "scene": "93-character sentence cloned from the project reference clip through the packaged app's own job path; 5.60 s artifact at 48 kHz",
+          "source": "qualification/evidence/r07-2026-09-21/voxcpm2-8bit.json generate_seconds"
+        }
+      ]
+    },
+    {
+      "repo": "mlx-community/VoxCPM2-bf16",
+      "quantization": "MLX bf16",
+      "measured_on": "M2 Max 32 GiB unified memory, packaged app path, 2026-09-21",
+      "measured": [
+        {
+          "seconds": 23.21,
+          "scene": "93-character sentence cloned from the project reference clip through the packaged app's own job path; 5.60 s artifact at 48 kHz",
+          "source": "qualification/evidence/r07-2026-09-21/voxcpm2-bf16.json generate_seconds"
+        }
+      ]
+    },
+    {
+      "repo": "mlx-community/OmniVoice-bfloat16",
+      "quantization": "MLX bf16",
+      "measured_on": "M2 Max 32 GiB unified memory, packaged app path, 2026-09-21",
+      "measured": [
+        {
+          "seconds": 18.13,
+          "scene": "93-character sentence cloned from the project reference clip through the packaged app's own job path; 6.44 s artifact at 24 kHz",
+          "source": "qualification/evidence/r07-2026-09-21/omnivoice-bfloat16.json generate_seconds"
+        }
+      ]
+    },
+    {
+      "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+      "quantization": "MLX 8-bit",
+      "measured_on": "M2 Max 32 GiB unified memory (this repository's local qualification host)",
+      "measured": [
+        {
+          "seconds": 26.18,
+          "scene": "2026-09-21, packaged app: 93-character sentence cloned from the project reference clip (transcript supplied); 4.88 s artifact at 24 kHz",
+          "source": "qualification/evidence/r07-2026-09-21/qwen06-base-8bit.json generate_seconds"
+        },
+        {
+          "seconds": 24.26,
+          "scene": "2026-09-25, installed 0.6.61 Hub bundle: the recorded smoke sentence ('This is a standalone Voice Studio test. The bundled engine is speaking clearly.') cloned from the same clip with the recorded smoke parameters (language=en, seed=42); 230,444-byte artifact, 4.80 s at 24 kHz",
+          "source": "qualification/evidence/voice-runtime-2026-09-25/qwen06-base-8bit-smoke-clone.json generate_seconds"
+        }
+      ]
+    }
+  ],
+  "withheld": [
+    {
+      "repo": "mlx-community/VoxCPM2-4bit",
+      "numbers": "61.9 s on a 17.2 GB M2 and 738.4 s on an 8.6 GB M2, 2026-08-07",
+      "why": "No probe receipt exists for the fleet run: the figure survives only as prose (components/voice/CHANGELOG.md 1.31.0, the catalogue comment beside the model's 16 GB memory floor, research notes). It was published as this model's runtime until 2026-09-25 on the strength of that prose. The model keeps a runtime from the stored r07 probe instead, and the prose stays where it is as the evidence for the memory floor it was measured for."
+    },
+    {
+      "repo": "mlx-community/pocket-tts-4bit",
+      "numbers": "0.30 s for 6.64 s of cloned audio, 1.93 GB peak (cloning path), 0.25 GB peak (preset path), 2026-09-24",
+      "why": "No probe receipt exists: the numbers live in a manifest's `qualification.memory_evidence` string, in the owner-review notes and in the comment this record replaced. The measurement happened, but a number with no stored run behind it must not be republished as a scheduler's runtime. Re-admit it by storing the run's own receipt."
+    }
+  ]
+}

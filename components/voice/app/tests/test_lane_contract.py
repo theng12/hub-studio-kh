@@ -129,10 +129,108 @@ def test_runtime_seconds_is_measured_rows_or_absent() -> None:
 def test_a_measured_runtime_names_a_shipped_model(monkeypatch) -> None:
     """A runtime row for a model nobody ships is a number with no model."""
     shipped = {model.repo for model in catalog.CATALOG}
-    for repo in lane_contract._MEASURED_RUNTIME:
+    record = lane_contract.stored_measurements()
+    assert record, (
+        "the stored runtime record was not reachable from this checkout: "
+        f"{lane_contract._RUNTIME_RECORD}"
+    )
+    for repo in record:
         assert repo in shipped, repo
     # A model with no measurement publishes no key rather than a guess.
     assert lane_contract.runtime_seconds_for("example/not-a-model") is None
+
+
+def _audit_canary_seconds(repo: str) -> set[float]:
+    """The canary runtimes stored for one model in `components/voice/model-audits/`.
+
+    Read from the files themselves rather than through `model_audits.audit_record`, so a
+    change to the selection rule cannot make this test agree with the code by construction.
+    """
+    root = REPO_ROOT / "components" / "voice" / "model-audits"
+    found: set[float] = set()
+    for path in root.glob(f"*/{repo.replace('/', '--')}.audit.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        canary = (record.get("evidence") or {}).get("five_thousand_character_canary") or {}
+        value = canary.get("runtime_seconds")
+        if isinstance(value, (int, float)) and value > 0:
+            found.add(round(float(value), 3))
+    return found
+
+
+def test_every_published_runtime_row_traces_to_a_stored_record() -> None:
+    """A number a scheduler sets a deadline from is re-read from where it is stated.
+
+    Three halves, and all must hold: the published row equals the row in the stored
+    runtime record (or the canary evidence of the model's own stored audit), the stored
+    record's row equals the probe file its `source` names, and a model nothing measured
+    publishes nothing at all. A curated number that lives only in this repository's Python
+    fails the first half the moment it disagrees; a record that has drifted from its own
+    receipt fails the second.
+    """
+    record = lane_contract.stored_measurements()
+    assert record, (
+        "the stored runtime record was not reachable from this checkout: "
+        f"{lane_contract._RUNTIME_RECORD}"
+    )
+    published_any = 0
+    for row in _rows():
+        published = row["lane_contract"].get("runtime_seconds")
+        if published is None:
+            continue
+        published_any += 1
+        stored = record.get(row["repo"])
+        if stored is None:
+            audited = _audit_canary_seconds(row["repo"])
+            assert audited, (
+                f"{row['repo']} publishes runtime_seconds that neither the stored runtime "
+                "record nor a stored model audit states; publish the run's own receipt or "
+                "publish nothing"
+            )
+            assert published["evidence"] == "measured" and published["measured_on"], row["repo"]
+            for measurement in published["measured"]:
+                assert round(float(measurement["seconds"]), 3) in audited, (
+                    f"{row['repo']}: {measurement['seconds']} is not in any stored audit"
+                )
+            continue
+        assert published["evidence"] == stored["evidence"] == "measured", row["repo"]
+        assert published["measured_on"] == stored["measured_on"], row["repo"]
+        assert len(published["measured"]) == len(stored["measured"]), row["repo"]
+        for measurement in published["measured"]:
+            assert any(
+                candidate["seconds"] == measurement["seconds"]
+                and candidate["scene"] == measurement["scene"]
+                for candidate in stored["measured"]
+            ), f"{row['repo']}: {measurement!r} is not in the stored record"
+    assert published_any, "no model publishes a measured runtime; the key would be dead weight"
+    # And every stored row names the probe receipt its number was read from.
+    for repo, entry in record.items():
+        for measurement in entry["measured"]:
+            source = measurement.get("source")
+            assert source, repo
+            relative, _, field = source.partition(" ")
+            probe_path = REPO_ROOT / relative
+            assert probe_path.is_file(), f"{repo}: {relative} does not exist"
+            probe = json.loads(probe_path.read_text(encoding="utf-8"))
+            assert probe[field] == measurement["seconds"], (
+                f"{repo}: the stored record says {measurement['seconds']} but {relative} "
+                f"states {probe[field]}"
+            )
+
+
+def test_a_run_with_no_stored_receipt_publishes_no_runtime() -> None:
+    """Pocket TTS 4-bit (MLX 4-bit)'s 0.30 s survives only as prose, so it is not published.
+
+    The measurement happened - the owner's review, this row's own former comment and the
+    package's manifest all record it - but no probe receipt is stored, and a curated copy
+    of a number is the defect this record removes. This test is the pin: re-admitting the
+    number means storing the run, not editing a table.
+    """
+    row = next(row for row in _rows() if row["repo"] == "mlx-community/pocket-tts-4bit")
+    assert "runtime_seconds" not in row["lane_contract"]
+    assert lane_contract.runtime_seconds_for("mlx-community/pocket-tts-4bit") is None
 
 
 def test_a_family_that_declares_an_unknown_lane_parameter_fails_loudly(monkeypatch) -> None:

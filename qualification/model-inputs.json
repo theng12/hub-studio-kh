@@ -1,5 +1,112 @@
 {
   "purpose": "isolated local model proof; copied selected complete snapshots only, no source credentials or node state",
+  "shipped_smoke": {
+    "recorded_at": "2026-09-25",
+    "why": "The `models` array below is the 0.1.0 pilot proof and is kept as evidence: its TTS entry, Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit, was cut from the catalog in ST-13.B, so `packaging/smoke_voice.py` planned a run around a model the packaged catalogue no longer offers and reported the TTS role as unexercised. This key names a model the catalogue still ships, with the smoke parameters that model itself publishes, and it is what the smoke now plans and verifies from.",
+    "smoke_params_note": "Qwen3-TTS Base publishes no preset-speaker roster - the `qwen3_preset_speakers` roster in `generation.py` belongs to the CustomVoice family, which this catalog does not ship - so no `preset_speaker` is recorded here. The parameters are the request fields this model's own catalog row publishes: `en` is one of its ten languages, and `seed` is the worker's own sampling control (the historical pilot used 42).",
+    "asr_note": "The Whisper entry is recorded here too because the historical one no longer describes what is installed: its file list carries `.gitattributes` and `README.md`, which the app's package import does not copy into the Hugging Face cache, so `--models-dir ~/StudioHubModels` failed validation before the run. This entry is the shipped `model-manifests/whisper-turbo.json` package, which is exactly what `~/StudioHubModels/whisper-turbo/<revision>/` holds.",
+    "reference_note": "Qwen3-TTS Base clones: the worker refuses a request that carries neither a Voices-library id nor a private reference. The reference below is the project's tracked qual/evidence clip, the same one the stored r07 clone probes staged for this exact checkpoint (qualification/evidence/r07-2026-09-21/qwen06-base-8bit.json). `smoke()` uploads it for this repo only, through the worker's own POST /api/generate/txt2speech/reference.",
+    "models": [
+      {
+        "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+        "role": "tts",
+        "revision": "50f45ef0047cde7e84c2ef04326acb8ada2436a7",
+        "source": "model-manifests/qwen3-tts-12hz-0-6b-base-8bit.json (source_path, size, sha256)",
+        "smoke_params": {
+          "language": "en",
+          "seed": 42
+        },
+        "reference": {
+          "file": "qualification/evidence/st04-reference-clip.wav",
+          "bytes": 252084,
+          "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+          "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
+          "note": "the project's tracked clip, the same one the stored r07 clone probes staged for this checkpoint"
+        },
+        "files": [
+          {
+            "path": "config.json",
+            "bytes": 5522,
+            "sha256": "b404fb6f99dac6f7a81f3a03af5675b131ecf9936ac75a7c9d75e54044600044"
+          },
+          {
+            "path": "generation_config.json",
+            "bytes": 245,
+            "sha256": "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa"
+          },
+          {
+            "path": "merges.txt",
+            "bytes": 1671839,
+            "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+          },
+          {
+            "path": "model.safetensors",
+            "bytes": 1304461214,
+            "sha256": "9488e7005cc0cf44f8804eb543668d0763bb1c649ce6f1eddc663519524b3182"
+          },
+          {
+            "path": "model.safetensors.index.json",
+            "bytes": 77731,
+            "sha256": "7829f1cc24f5cbd7d7a3ba888bb08c7cf52d82ba79a4f0f3756d41f8bf5e52b4"
+          },
+          {
+            "path": "preprocessor_config.json",
+            "bytes": 127,
+            "sha256": "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119"
+          },
+          {
+            "path": "speech_tokenizer/config.json",
+            "bytes": 2336,
+            "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167"
+          },
+          {
+            "path": "speech_tokenizer/configuration.json",
+            "bytes": 76,
+            "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd"
+          },
+          {
+            "path": "speech_tokenizer/model.safetensors",
+            "bytes": 682293092,
+            "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"
+          },
+          {
+            "path": "speech_tokenizer/preprocessor_config.json",
+            "bytes": 234,
+            "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb"
+          },
+          {
+            "path": "tokenizer_config.json",
+            "bytes": 7344,
+            "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"
+          },
+          {
+            "path": "vocab.json",
+            "bytes": 2776833,
+            "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+          }
+        ]
+      },
+      {
+        "repo": "mlx-community/whisper-large-v3-turbo",
+        "role": "asr",
+        "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+        "source": "model-manifests/whisper-turbo.json model/ files; the processor companion lives under its own repository and is recorded by the 0.1.0 pilot entry above",
+        "files": [
+          {
+            "path": "config.json",
+            "bytes": 268,
+            "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379"
+          },
+          {
+            "path": "weights.safetensors",
+            "bytes": 1613977612,
+            "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6"
+          }
+        ]
+      }
+    ],
+    "layout_note": "Both entries are the Hugging Face cache layout (`hub/models--<repo>/snapshots/<revision>/`), because that is what `--models-dir` is for a voice-only proof bundle: `packaging/stage_voice.py` stages no `model-manifests/` into a voice-only app, so the worker cannot resolve the Mac's package library from it and the smoke's model set has to be the copied snapshots this file describes. Paths are the publisher's own (`source_path`), which is where a snapshot holds them."
+  },
   "models": [
     {
       "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",

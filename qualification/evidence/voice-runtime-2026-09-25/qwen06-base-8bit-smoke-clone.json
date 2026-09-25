@@ -1,0 +1,50 @@
+{
+  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-0661/Studio Hub.app",
+  "models_dir": "/build/StudioHubModels",
+  "model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+  "text": "This is a standalone Voice Studio test. The bundled engine is speaking clearly.",
+  "params": {
+    "preset_speaker": "",
+    "language": "en",
+    "seed": 42
+  },
+  "reference": {
+    "file": "st04-reference-clip.wav",
+    "bytes": 252084,
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "transcript": "The river runs quietly past the old stone bridge, and the morning light settles on the water."
+  },
+  "ready_seconds": 2.07,
+  "stage_status": 201,
+  "asset": {
+    "asset_id": "25990298cb625cf415992458",
+    "sha256": "605e1089f5c73cd602aa132af2b6e80c75cf0725db0626ab15f6c81f3cd40480",
+    "bytes": 252084,
+    "media_type": "audio/wav",
+    "created_at": 1790303651.3505542,
+    "expires_at": 1790390051.3502321,
+    "transcript_supplied": true,
+    "origin": "local"
+  },
+  "submit_status": 200,
+  "batch_id": "8dbf905c2e",
+  "generate_seconds": 24.26,
+  "final_status": null,
+  "item": {
+    "state": "done",
+    "bytes": 230444,
+    "sha256": "9f7be501c14273267117449c66e251d6c00dc9deb767878e4eb641afd26ff45a",
+    "media_type": "audio/wav",
+    "error": null,
+    "error_code": null,
+    "worker_id": "voice",
+    "metadata": null
+  },
+  "artifact_status": 200,
+  "artifact": {
+    "bytes": 230444,
+    "sha256": "9f7be501c14273267117449c66e251d6c00dc9deb767878e4eb641afd26ff45a",
+    "riff_wave": true
+  },
+  "ok": true
+}

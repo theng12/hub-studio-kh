@@ -22,9 +22,28 @@ Two rules from that document decide everything here:
 (one constant, enforced by the Hub), and a worker restating it would be a copy of
 a Hub number. `runtime_seconds` is ours, and it appears only where a run has
 been measured, with the scene and the machine named.
+
+`runtime_seconds` comes from one of two stored records, never from a table kept
+here:
+
+* `qualification/evidence/voice-runtime-2026-09-25/measured-runtimes.json` - the
+  probe receipts, one row per stored run, each naming the file its number was
+  read from. `components/voice/app/tests/test_lane_contract.py` re-reads those
+  files and fails when a published number and its receipt disagree.
+* the model's own audit record under `components/voice/model-audits/`, through
+  `model_audits.audit_record`.
+
+The first is a build-time artefact: a packaged worker is not shipped the
+`qualification/` tree, so in the bundle only audit-backed runtimes appear. That
+is the honest outcome - a runtime a scheduler sets a deadline from traces to a
+stored measurement or it is absent - and it is why this module keeps no curated
+copy of a number that would survive the record going missing.
 """
 from __future__ import annotations
 
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from . import catalog, long_form_policy, model_audits
@@ -179,42 +198,69 @@ def _language_parameter(model: catalog.ModelEntry) -> Optional[dict[str, Any]]:
     return parameter
 
 
-_MEASURED_RUNTIME: dict[str, dict[str, Any]] = {
-    # Measured on the owner's fleet 2026-08-07, same section of text on both
-    # tiers (catalog.py carries the same measurement beside the model).
-    "mlx-community/VoxCPM2-4bit": {
-        "measured_on": "M2 17.2 GB and M2 8.6 GB unified memory, 2026-08-07",
-        "measured": [
+# The stored record of runs that actually happened, relative to the repository
+# root. Found by walking up from this file, so the record can be read from a
+# checkout or a development build and is simply absent inside a packaged bundle.
+_RUNTIME_RECORD = (
+    Path("qualification") / "evidence" / "voice-runtime-2026-09-25" / "measured-runtimes.json"
+)
+
+
+def _load_runtime_record(path: Path) -> dict[str, dict[str, Any]]:
+    """One stored measurement record, keyed by repo. Empty when unreadable.
+
+    An unreadable record is not an error: the packaged worker has no
+    `qualification/` tree, and "no stored measurement" is exactly what the
+    contract must then say. A record that exists but disagrees with its own
+    probe files is caught by the test, not by a runtime guess here.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    measurements = payload.get("measurements")
+    if not isinstance(measurements, list):
+        return {}
+    record: dict[str, dict[str, Any]] = {}
+    for entry in measurements:
+        if not isinstance(entry, dict):
+            continue
+        repo = entry.get("repo")
+        rows = entry.get("measured")
+        if not isinstance(repo, str) or not isinstance(rows, list) or not rows:
+            continue
+        prepared = [
             {
-                "seconds": 61.9,
-                "unified_memory_gb": 17.2,
-                "scene": "one production section (~400 characters), default settings",
-            },
-            {
-                "seconds": 738.4,
-                "unified_memory_gb": 8.6,
-                "scene": "one production section (~400 characters), default settings",
-            },
-        ],
-        "note": (
-            "Twelve times slower on the 8 GB machine for identical work: 7.963 GB peak against "
-            "8.6 GB of total RAM, so the run swaps. The output is correct either way."
-        ),
-        "evidence": "measured",
-    },
-    # Owner listening review 2026-09-24, cloning path through this app's own worker.
-    "mlx-community/pocket-tts-4bit": {
-        "measured_on": "M2 Max 32 GB unified memory, 2026-09-24",
-        "measured": [
-            {
-                "seconds": 0.30,
-                "scene": "6.64 s of audio, cloning path (reference voice)",
-            },
-        ],
-        "note": "1.93 GB peak for the cloning path; 0.25 GB for the preset path.",
-        "evidence": "measured",
-    },
-}
+                key: row[key]
+                for key in ("seconds", "scene", "source")
+                if isinstance(row, dict) and key in row
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
+        if repo in record:
+            # A second entry for one model is another run, not a replacement: appending keeps
+            # every receipt published instead of letting the last one silently win.
+            record[repo]["measured"].extend(prepared)
+            continue
+        record[repo] = {
+            "measured_on": entry.get("measured_on"),
+            "measured": prepared,
+            "evidence": "measured",
+        }
+        if entry.get("note"):
+            record[repo]["note"] = entry["note"]
+    return record
+
+
+@lru_cache(maxsize=1)
+def stored_measurements() -> dict[str, dict[str, Any]]:
+    """The stored runtime record, keyed by repo; {} when the record is not reachable."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / _RUNTIME_RECORD
+        if candidate.is_file():
+            return _load_runtime_record(candidate)
+    return {}
 
 
 def _audited_runtime(repo: str) -> Optional[dict[str, Any]]:
@@ -264,9 +310,10 @@ def runtime_seconds_for(repo: str) -> Optional[dict[str, Any]]:
     """The measured runtime for one shipped model, or None when nothing was measured.
 
     None means the key is absent from the contract. A guessed runtime is how a
-    scheduler sets a deadline that fails on use.
+    scheduler sets a deadline that fails on use, so the only two sources are a
+    stored probe receipt and the model's own audit record.
     """
-    return _MEASURED_RUNTIME.get(repo) or _audited_runtime(repo)
+    return stored_measurements().get(repo) or _audited_runtime(repo)
 
 
 def parameters_for(model: catalog.ModelEntry) -> list[dict[str, Any]]:

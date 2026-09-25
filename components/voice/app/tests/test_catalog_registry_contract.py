@@ -127,6 +127,106 @@ def test_a_new_mlx_family_is_labelled_mlx_and_survives_the_mlx_only_filter(monke
     assert catalog.FAMILIES["khmer-tts-onnx"].engine == catalog.ENGINE_ONNX_VITS
 
 
+def test_every_catalog_row_publishes_the_modes_it_offers() -> None:
+    """A row a consumer cannot file into a tab is a model nobody can pick.
+
+    The three names are the contract (`cloning`, `preset`, `design`), and they are the
+    native Voice page's own tab vocabulary. Publishing nothing, publishing a name outside
+    that set, or publishing the same name twice would each leave a consumer guessing -
+    which is the shape this field exists to remove.
+    """
+    assert catalog.VOICE_MODES == ("cloning", "preset", "design")
+    for model in catalog.CATALOG:
+        modes = catalog.serialize_model(model)["modes"]
+        assert modes, f"{model.repo} publishes no modes, so no picker could offer it"
+        assert len(set(modes)) == len(modes), (model.repo, modes)
+        assert set(modes) <= set(catalog.VOICE_MODES), (model.repo, modes)
+
+
+def test_published_modes_agree_with_the_rows_capabilities() -> None:
+    """Cloning is a capability fact, in both directions.
+
+    A cloning model must offer cloning; a model that does not declare `voice-cloning`
+    must not, because a consumer that offered it would send a reference the lane then
+    refuses. The dispatch contract's reference parameter is the same fact stated for a
+    scheduler, so it is cross-checked here too.
+    """
+    for model in catalog.CATALOG:
+        row = catalog.serialize_model(model)
+        declared = "voice-cloning" in row["capabilities"]
+        assert ("cloning" in row["modes"]) is declared, (model.repo, row["modes"])
+        offered = {parameter["name"] for parameter in row["lane_contract"]["parameters"]}
+        assert ("voice_library_id" in offered) is declared, (model.repo, row["modes"])
+
+
+def test_a_preset_only_family_is_never_offered_as_a_cloning_model() -> None:
+    """The Khmer VITS voices have one built-in speaker and read no reference at all."""
+    for repo in ("khmerttsopensource/khmer-tts", "sengtha/khmer-tts-female-v2"):
+        row = catalog.serialize_model(catalog.get_model(repo))
+        assert row["modes"] == ["preset"], (repo, row["modes"])
+        assert "voice-cloning" not in row["capabilities"]
+
+
+def test_a_model_that_both_clones_and_carries_presets_publishes_both() -> None:
+    """Pocket TTS 4-bit (MLX 4-bit)'s own generate() takes a preset name or a reference.
+
+    The native page could reach that model in one tab only, which is the bug the `modes`
+    field exists to let it fix. Publishing both is the producer's half; offering it in
+    both is the consumer's.
+    """
+    row = catalog.serialize_model(catalog.get_model("mlx-community/pocket-tts-4bit"))
+    assert set(row["modes"]) == {"cloning", "preset"}
+
+
+def test_design_is_offered_exactly_where_the_family_declares_the_input() -> None:
+    """`design` is not a guess about quality: it is the family's own request field."""
+    for model in catalog.CATALOG:
+        family = catalog.family_for(model)
+        row = catalog.serialize_model(model)
+        assert ("design" in row["modes"]) is (
+            "voice_design_prompt" in family.lane_parameters
+        ), (model.repo, row["modes"])
+
+
+def test_a_new_family_publishes_its_modes_without_a_consumer_edit(monkeypatch) -> None:
+    """The invariant, not today's membership: a synthetic family lands in its own tabs.
+
+    A family declaring a voice-design input is offered as design (and as cloning, when its
+    model declares cloning) with no edit to any consumer; a family declaring cloning,
+    design or a named preset input nowhere is the ready-made form, because its own
+    built-in voice is the only voice it has.
+    """
+    family_id = "synthetic-voice-family"
+    monkeypatch.setitem(
+        catalog.FAMILIES,
+        family_id,
+        _synthetic_family(family_id, lane_parameters=("voice_design_prompt",)),
+    )
+    designing = catalog.ModelEntry(
+        repo=f"example/{family_id}-4bit",
+        label="Synthetic voice 4-bit",
+        family=family_id,
+        size_gb=1.0,
+        gated=False,
+        capabilities=("tts", "voice-cloning"),
+    )
+    assert catalog.voice_modes(designing) == ["cloning", "design"]
+
+    monkeypatch.setitem(catalog.FAMILIES, family_id, _synthetic_family(family_id))
+    speaking = catalog.ModelEntry(
+        repo=f"example/{family_id}-fixed",
+        label="Synthetic fixed voice",
+        family=family_id,
+        size_gb=1.0,
+        gated=False,
+        capabilities=("tts",),
+    )
+    assert catalog.voice_modes(speaking) == ["preset"], (
+        "a family with no cloning, no design and no preset input speaks with its own "
+        "built-in voice, which is the ready-made form"
+    )
+
+
 def test_the_wiring_table_and_the_registry_cannot_disagree(monkeypatch) -> None:
     """A new mlx-audio family without a config row fails at import, by name."""
     family_id = "synthetic-mlx-family"

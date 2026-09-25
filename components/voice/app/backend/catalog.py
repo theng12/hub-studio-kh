@@ -1289,6 +1289,51 @@ def _validate_registry() -> None:
             )
 
 
+# The three ways this app can be told what a voice should sound like, in the
+# order every consumer renders them. The names are the contract: a consumer
+# (the native Voice page's tabs, a scheduler) must not have to map them.
+VOICE_MODES = ("cloning", "preset", "design")
+
+
+def voice_modes(m: ModelEntry) -> list[str]:
+    """Which of ``cloning`` / ``preset`` / ``design`` this model actually offers.
+
+    Derived from two published facts and nothing else, so a model added to the
+    catalog lands in the right tabs without an edit anywhere:
+
+    * ``capabilities`` - ``"voice-cloning"`` is the model declaring that it
+      clones a reference voice;
+    * the family's own ``lane_parameters`` - the request fields its resolver
+      reads. ``voice_design_prompt`` means the engine designs a voice from a
+      description; ``voice`` means it speaks with a named built-in preset.
+
+    A model with none of the three is not voiceless: a family that declares no
+    cloning, no design and no preset input (the Khmer VITS voices) speaks with
+    its own single built-in voice, which is the ready-made form.
+
+    This exists because the native Voice page used to offer all three tabs for
+    every model and reduce a model to one mode by name - so an operator could
+    pick "Design" on a model that cannot design and only learn it from a
+    refusal, and a model that both clones and carries presets was reachable in
+    one tab only. Publishing the list here is what lets that page offer a model
+    in each mode it publishes; no consumer should re-derive it.
+    """
+    family = family_for(m)
+    capabilities = tuple(m.capabilities or ())
+    declared = set(family.lane_parameters)
+    cloning = "voice-cloning" in capabilities
+    design = "voice_design_prompt" in declared
+    named_preset = "voice" in declared
+    modes = []
+    if cloning:
+        modes.append("cloning")
+    if named_preset or not (cloning or design):
+        modes.append("preset")
+    if design:
+        modes.append("design")
+    return modes
+
+
 def serialize_model(m: ModelEntry) -> dict:
     # Per-model hardware-fit verdict against the running Mac's detected RAM.
     # Lazy import dodges any potential cycle at module-load time.
@@ -1353,6 +1398,12 @@ def serialize_model(m: ModelEntry) -> dict:
            if m.min_free_memory_gb is not None else {}),
         "recommended_hardware": m.recommended_hardware,
         "capabilities": list(m.capabilities),
+        # Which of `cloning` / `preset` / `design` this model offers, derived from the
+        # capabilities above and the family's own declared request fields (see
+        # `voice_modes`). A consumer offers the model in each mode listed here and in no
+        # other: offering a mode the model does not support is a silent-wrong-UI shape
+        # where the operator learns it from a refusal after pressing Generate.
+        "modes": voice_modes(m),
         "best_for": m.best_for,
         "sample_rate_hz": m.sample_rate_hz,
         # No fixed max duration for TTS — output length scales with text length.
