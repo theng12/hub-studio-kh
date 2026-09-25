@@ -306,7 +306,7 @@ else
   FLOOR_GB=""
 fi
 if [ "${CHAT_SMOKE:-0}" != "1" ] && [ -n "$AVAIL_BYTES" ] && [ -n "$FLOOR_GB" ] \
-   && [ "${CHAT_IGNORE_FREE_FLOOR:-0}" != 1 ]; then
+   && [ "${CHAT_IGNORE_FREE_FLOOR:-0}" != 1 ] && [ "$TIER" != "8 GB" ]; then
   if awk -v b="$AVAIL_BYTES" -v f="$FLOOR_GB" 'BEGIN{exit !(b < f*1e9)}'; then
     # The refusal is printed as the same one block, to stdout only: on an 8 GB Mac this is the
     # most likely outcome, and the owner should be able to send it back without editing anything.
@@ -332,6 +332,25 @@ EOF
     echo "REFUSING TO RUN: ${AVAIL_GB} GB available is below the ${FLOOR_GB} GB floor." >&2
     echo "The block above is on standard output, for sending back. Nothing was run." >&2
     exit 3
+  fi
+fi
+# On the 8 GB tier the floor is expected to be unmet and must not be a gate. The floor exists so a
+# run on a bigger Mac is not measuring the SSD instead of the tier; on 8 GB the question *is* what
+# happens below it, and refusing answered nothing — the owner ran this on his 8 GB Mac and got a
+# refusal, which told him only that macOS and his other apps were holding memory. So this tier
+# attempts by default, and the guards that actually bound the attempt are kept: the wall-clock
+# timeout and the swap cap above, which stop a run that thrashes. The record says it started below
+# the floor, so a reader can weigh it.
+if [ "${CHAT_SMOKE:-0}" != "1" ] && [ "$TIER" = "8 GB" ] && [ -n "$FLOOR_GB" ] \
+   && [ "${CHAT_IGNORE_FREE_FLOOR:-0}" != 1 ]; then
+  if awk -v b="$AVAIL_BYTES" -v f="$FLOOR_GB" 'BEGIN{exit !(b < f*1e9)}'; then
+    STARTED_BELOW_FLOOR=yes
+    echo "NOTE: ${AVAIL_GB} GB available is below the ${FLOOR_GB} GB floor this model asks for."
+    echo "      This tier is being attempted anyway, because on an 8 GB Mac that is the question"
+    echo "      rather than a reason to stop. The run is stopped if swap passes ${CHAT_MAX_SWAP_GB:-6} GB of swap or"
+    echo "      a single request passes ${CHAT_TIMEOUT:-900} s, and the record will say it started below the"
+    echo "      floor. Quit other apps first if you want it to have the best chance."
+    echo
   fi
 fi
 
@@ -727,6 +746,10 @@ fi
   echo "Memory policy pinned to: $POLICY_MODE for the measurement (the shipped default is auto, which on a 16 GB Mac resolves to balanced and holds the model for 10 idle minutes; this run pins it so no measurement can be affected by a release between runs)"
   echo "Prompt (${MAX_TOKENS} max tokens, temperature 0, top_p 1, seed 42, thinking off): $PROMPT"
   echo "Memory at start: ${AVAIL_GB:-?} GB available (floor ${FLOOR_GB:-?} GB), swap ${SWAP_START_MB:-?} MB used"
+  # A run that began below the floor is not the same evidence as one that did not: it ran
+  # against less room than the checkpoint asks for, which is the point on 8 GB and a caveat
+  # everywhere. The block says which it was rather than leaving the reader to infer it.
+  [ "${STARTED_BELOW_FLOOR:-no}" = yes ] && echo "STARTED BELOW THE FLOOR: this run had less memory available than the weights plus working room; the swap cap and the timeout are what bounded it."
   printf '  %-17s %8s %8s %10s %8s %9s %11s %10s  %s\n' run prompt_tok compl_tok engine_s wall_s tok_per_s swap_peak load_s result
   for label in 00-load 01-story 02-story-repeat; do
     printf '  %-17s %8s %8s %10s %8s %9s %11s %10s  %s\n' \
