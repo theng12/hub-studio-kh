@@ -737,7 +737,7 @@ final class FixtureProtocol: URLProtocol {
             let body: [String: Any] = ["id": "music-job", "modality": "music", "model": "ACE-Step/Ace-Step1.5", "created_at": 35,
                 "items": [["index": 0, "state": uncertain ? "uncertain" : "done", "progress": 1.0, "prompt": "Warm lo-fi beat",
                            "artifact_url": "/api/hub/jobs/music-job/items/0/artifact", "bytes": Self.wav.count, "sha256": sha,
-                           "media_type": "audio/wav", "audio_duration_s": 30.0, "runtime_s": 89.0,
+                           "media_type": "audio/wav", "audio_duration_s": 125.0, "runtime_s": 89.0,
                            "params": Self.musicParams]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
         case ("GET", "/api/hub/jobs/music-job/items/0/artifact"):
@@ -2790,6 +2790,13 @@ struct NativeAPITests {
         require(musicWireParams?["instrumental"] as? Bool == true, "Music must send the instrumental flag")
         let music = store.musicJobs.first!
         require(music.musicSettings?.steps == 8, "an accepted Music job must carry its settings back")
+        // A 2 min 5 s clip. The row's facts used minutes to one decimal, so this read "2.1 min" and
+        // the seconds were not on screen at all - the owner's rule is that a duration states its
+        // exact seconds wherever it appears, and a media length is the same claim as a run time.
+        require(music.assetFacts.contains("2 min 5 s"),
+                "a clip's own length must state its seconds too, got: \(music.assetFacts)")
+        require(!music.assetFacts.contains("min 0 s") || music.assetFacts.contains("2 min 5 s"),
+                "a clip length must not be rounded away, got: \(music.assetFacts)")
         let verifiedMusic = try await store.musicData(for: music)
         require(verifiedMusic == FixtureProtocol.wav, "verified Music artifact")
         FixtureProtocol.setCorruptMusic(true)

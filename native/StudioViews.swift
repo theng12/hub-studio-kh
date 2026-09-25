@@ -900,7 +900,8 @@ struct StudioContent: View {
 
     private func seconds(_ value: Double?) -> String {
         guard let value else { return "not measured" }
-        return value >= 60 ? String(format: "%.1f min", value / 60) : String(format: "%.1f s", value)
+        // A measured run says its exact seconds, like every other duration in the app.
+        return NativeJob.clock(value)
     }
     private func workspaceStatus(_ page: StudioPage) -> String {
         // Derived from the page's own Studio, not a list of page names: a Studio this build has

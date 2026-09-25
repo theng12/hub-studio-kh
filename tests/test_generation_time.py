@@ -148,6 +148,37 @@ class DurationFormattingTests(unittest.TestCase):
         self.assertEqual(suffix.count("clock("), 2,
                          "both the finished and the running label must use the one formatter")
 
+    def test_a_media_length_is_not_a_second_duration_format(self) -> None:
+        """One duration voice, wherever a duration is shown.
+
+        `assetFacts` (a job's clip length) and `NativeVoice.durationLabel` (a saved reference clip)
+        each carried their own copy of the old `%.1f min` shape, in the same rows as the run time
+        the owner was reading — so a 2 min 5 s clip said "2.1 min" directly above "2 min 5 s". The
+        invariant is the shape, not the two call sites: no native file renders minutes to a decimal
+        for a duration, and every duration goes through the shared formatter.
+        """
+        for name in ("StudioAPI.swift", "StudioViews.swift"):
+            source = (ROOT / "native" / name).read_text()
+            # Comments are stripped, not merely tolerated: the comment explaining this defect has
+            # to be allowed to name the shape it removed, and any *code* line that still renders
+            # minutes to a decimal is the defect back again.
+            code = "\n".join(line for line in source.splitlines()
+                             if not line.strip().startswith("//"))
+            self.assertNotIn("%.1f min", code,
+                             f"{name} has a second duration format; use NativeJob.clock")
+        facts = API[API.index("var assetFacts: String {"):]
+        facts = facts[:facts.index("\n    }")]
+        self.assertIn("Self.clock(durationSeconds)", facts,
+                      "a job's own length must go through the one formatter")
+        voice = API[API.index("var durationLabel: String {"):]
+        voice = voice[:voice.index("\n    }")]
+        self.assertIn("NativeJob.clock(durationSeconds)", voice,
+                      "a saved clip's length must go through the one formatter")
+        # The transport label ("0:07 / 0:30") is a playhead, not a duration report, and keeps the
+        # shape every other player uses. Everything else here is a duration.
+        self.assertIn("NativeJob.clock(value)", VIEWS,
+                      "a measured run on the Overview must use the one formatter")
+
 
 if __name__ == "__main__":
     unittest.main()

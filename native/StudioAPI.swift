@@ -787,9 +787,10 @@ struct NativeJob: Identifiable, Equatable {
     var assetFacts: String {
         var parts: [String] = []
         if let durationSeconds, durationSeconds > 0 {
-            parts.append(durationSeconds >= 60
-                ? String(format: "%.1f min", durationSeconds / 60)
-                : String(format: "%.1f s", durationSeconds))
+            // One duration format for the whole app. This line rendered minutes as "%.1f min", so
+            // a 2 min 5 s clip read "2.1 min" and dropped the seconds - the same defect the run
+            // time had, in the line directly above it and in the same row the operator reads.
+            parts.append(Self.clock(durationSeconds))
         }
         if let bytes, bytes > 0 {
             parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
@@ -845,9 +846,8 @@ struct NativeVoice: Decodable, Equatable, Identifiable {
     var readyForCloning: Bool { hasTranscript }
     var durationLabel: String {
         guard let durationSeconds, durationSeconds > 0 else { return "—" }
-        return durationSeconds >= 60
-            ? String(format: "%.1f min", durationSeconds / 60)
-            : String(format: "%.1f s", durationSeconds)
+        // The same one formatter: a saved 90-second reference clip reads "1 min 30 s", not "1.5 min".
+        return NativeJob.clock(durationSeconds)
     }
     /// What the worker published for this voice's gender, in the operator's words.
     ///
