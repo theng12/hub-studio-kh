@@ -648,6 +648,29 @@ def _peer_work_request(method: str, path: str) -> bool:
     return method == "POST" and _peer_lease_policy(path) is not None
 
 
+# Which proxied work leaves a job in *this* node's history, keyed by the peer path that creates
+# it. This is the one place the choice is made, for both surfaces that reach `_proxy_to_worker`.
+#
+# The old rule was "a controller's jobs are not this node's", and it does not survive contact
+# with the other modalities: a controller submitting Image or Voice work POSTs `/api/hub/jobs`
+# *on this node*, which creates the batch here, so that work is listed here. Chat has no broker
+# lane - `broker.MODALITY` has no `chat`, deliberately: a completion is synchronous and owns its
+# own job module - so this proxy is the only point at which its work could be filed at all.
+# Whose history a job is in follows the Mac that ran it, not the credential that asked.
+#
+# Nothing is recorded for work this node merely forwards to an asynchronous worker: those
+# batches are created by the submit route itself, and recording them here as well would file
+# every accepted job twice.
+_PEER_JOB_RECORDERS = {
+    "chat/v1/chat/completions": chat_jobs.record_page_completion,
+}
+
+
+def _peer_job_recorder(modality: str, path: str):
+    """The recorder for one proxied work path, or ``None`` when this node keeps no job for it."""
+    return _PEER_JOB_RECORDERS.get(f"{modality}/{path.strip('/')}")
+
+
 async def _request_model(request: Request, body: bytes, content_type: str) -> str:
     """The model a work request names, or "" when it names none.
 
@@ -1992,10 +2015,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         request is re-signed with the worker's own token: a fleet credential reaching this Mac
         must never become a fleet credential reaching its workers.
 
-        ``record`` is called once with the settled outcome when the job history belongs to this
-        Hub rather than to the caller that submitted it - the app's own Chat page. The peer
-        surface passes nothing: those jobs are the submitting controller's, and restating them in
-        this Mac's Jobs list would file someone else's work under this node.
+        ``record`` is called once with the settled outcome of any work this node accepts, whichever
+        credential asked for it - which paths those are, and why, is ``_PEER_JOB_RECORDERS``. The
+        rule used to be that the peer surface passed nothing because a controller's jobs are the
+        controller's. That stopped being true for every other modality: a controller submitting
+        Image or Voice work creates the batch on this node through ``/api/hub/jobs``, so its work
+        is listed here. Chat is synchronous and files nowhere else, so leaving its proxy
+        unrecorded was the same work escaping this node's history rather than a different kind of
+        work. The caller's identity does not decide whose history a job is in; the machine that
+        ran it does.
         """
         worker_id, tail = _proxy_target(f"{modality}/{path}")
         worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
@@ -2082,7 +2110,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                    methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def studio_proxy(modality: str, path: str, request: Request) -> Response:
         """Serve the fleet peer surface over ``_proxy_to_worker``."""
-        return await _proxy_to_worker(modality, path, request)
+        return await _proxy_to_worker(modality, path, request,
+                                      record=_peer_job_recorder(modality, path))
 
     @app.post("/api/hub/chat/completions")
     async def hub_chat_completions(request: Request) -> Response:
@@ -2094,7 +2123,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         every other studio's work; the send itself stays synchronous.
         """
         return await _proxy_to_worker("chat", "v1/chat/completions", request,
-                                      record=chat_jobs.record_page_completion)
+                                      record=_peer_job_recorder("chat", "v1/chat/completions"))
 
     from . import delivery, operator_controls, statistics
     delivery.register_routes(app, monitor)

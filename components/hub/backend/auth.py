@@ -410,7 +410,17 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
 # In short: send work, watch it, collect it, cancel it - and read what is needed to decide
 # where work should go. Never change this Mac's settings, never delete its output, never
 # manage its models or its membership of the fleet.
-_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music)"
+#
+# `chat` was missing from this regex until 2026-09-25, and the gap was a lie rather than a
+# precaution: `GET /api/hub/catalog` is fleet-allowed and aggregates every worker's catalog,
+# so a controller was shown the Chat model as available and then got 403 from every route that
+# could describe or run it. The owner's decision is that every model that is running is shown
+# *and runnable* - so chat's reads are granted here.
+#
+# Named here for the **GET** contract only. The POST and DELETE patterns below spell their
+# modalities out instead of reusing this regex, so widening it grants no write: the one chat
+# route that creates work is the single explicit POST entry further down.
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -451,6 +461,13 @@ FLEET_ALLOWED = (
     # allowance for the studio surface would have handed a controller exactly the control this
     # scope exists to withhold.
     ("POST", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
+    # Chat's work route, and the only one. A controller dispatches to a node exactly as this Hub
+    # dispatches to its own workers, so the peer surface's spelling of the completion is the one
+    # the fleet uses. The Hub's own `POST /api/hub/chat/completions` is deliberately NOT added
+    # here even though it runs the same operation: that route exists for this Mac's own Chat
+    # page, and handing the fleet a second spelling of one operation is the second vocabulary
+    # this project keeps paying for.
+    ("POST", r"^/studio/chat/v1/chat/completions$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
     ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
     # Jobs: submit, watch, collect, acknowledge, reconcile, discard, cancel.

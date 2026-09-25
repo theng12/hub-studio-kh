@@ -129,18 +129,22 @@ class _StubWorker:
 
     ``hold`` keeps the response until the test releases it, so a caller can be cancelled while
     the worker still has the request; ``status``/``payload``/``raw``/``content_type`` make the
-    worker refuse or answer in any shape the test needs.
+    worker refuse or answer in any shape the test needs; ``routes`` answers a specific path with
+    its own JSON body, which is how a test gives the Hub a real `/api/catalog` to aggregate
+    rather than one it wrote itself.
     """
 
     def __init__(self, *, hold: bool = False, status: int = 200,
                  payload: dict | None = None, raw: bytes | None = None,
-                 content_type: str = "application/json") -> None:
+                 content_type: str = "application/json",
+                 routes: dict[str, dict] | None = None) -> None:
         self.requests: list[dict] = []
         self.hold = hold
         self.status = status
         self.payload = payload
         self.raw = raw
         self.content_type = content_type
+        self.routes = routes or {}
         self.seen = threading.Event()
         self.release = threading.Event()
         outer = self
@@ -155,21 +159,30 @@ class _StubWorker:
                 outer.seen.set()
                 if outer.hold:
                     outer.release.wait(15)
-                reply = outer.payload if outer.payload is not None else {
-                    "id": "chatcmpl-stub", "object": "chat.completion",
-                    "model": MODEL,
-                    "choices": [{"index": 0, "finish_reason": "stop",
-                                 "message": {"role": "assistant", "content": "stub reply"}}],
-                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-                }
-                encoded = outer.raw if outer.raw is not None else json.dumps(reply).encode()
-                self.send_response(outer.status)
-                self.send_header("content-type", outer.content_type)
+                routed = outer.routes.get(self.path)
+                if routed is not None:
+                    code, encoded, kind = 200, json.dumps(routed).encode(), "application/json"
+                else:
+                    reply = outer.payload if outer.payload is not None else {
+                        "id": "chatcmpl-stub", "object": "chat.completion",
+                        "model": MODEL,
+                        "choices": [{"index": 0, "finish_reason": "stop",
+                                     "message": {"role": "assistant", "content": "stub reply"}}],
+                        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                    }
+                    code = outer.status
+                    kind = outer.content_type
+                    encoded = outer.raw if outer.raw is not None else json.dumps(reply).encode()
+                self.send_response(code)
+                self.send_header("content-type", kind)
                 self.send_header("content-length", str(len(encoded)))
                 self.end_headers()
                 self.wfile.write(encoded)
 
             def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
+                self._answer()
+
+            def do_PUT(self) -> None:  # noqa: N802 (stdlib naming)
                 self._answer()
 
             def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
@@ -329,6 +342,18 @@ class _PackagedHub:
 
     def owner_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.TOKEN}"}
+
+    def use_fleet_credential(self, token: str) -> None:
+        """Present a Fleet token, the way a joined controller presents the one it adopted.
+
+        Set as the environment value rather than written to a file: `peers.fleet_token()` reads it
+        on every request, and `build_hub`/`tear_down_hub` already restore the environment around
+        each test, so nothing in this Mac's real state is touched.
+        """
+        os.environ["STUDIOHUB_FLEET_TOKEN"] = token
+
+    def fleet_headers_for(self, token: str) -> dict[str, str]:
+        return {"X-Hub-Token": token}
 
 
 class ChatCompletionJobTests(_PackagedHub, unittest.TestCase):
@@ -731,6 +756,75 @@ class ChatGenerationRecordTests(unittest.TestCase):
         self.assertEqual(item["text"], "hi")
 
 
+def _dispatch_chat_pack(payload: dict) -> tuple[dict, dict]:
+    """Run one dispatched Chat pack against a stub worker answering ``payload``.
+
+    Returns ``(batch, pack)`` so a test can read either the pack's own facts or the summary the
+    Hub publishes from them, without a second copy of the fixture.
+    """
+    from components.hub.backend import chat_jobs, ledger
+
+    async def run() -> tuple[dict, dict]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=payload)))
+        monitor = type("Monitor", (), {"_client": client})()
+        studio = {"id": "chat", "modality": "chat", "machine": "local",
+                  "hub_token": "worker-token", "host": "127.0.0.1", "port": 1}
+        pack = {"index": 0, "pack_id": "pack-1", "scene_ids": ["scene-1"],
+                "messages": [{"role": "user", "content": "hi"}], "params": {},
+                "state": "running", "tries": 1, "studio": "chat",
+                "duration_seconds": None, "error": None, "results": {}, "usage": None,
+                "model_revision": None, "raw_responses": [], "started_at": None,
+                "finished_at": None, "retry_at": None}
+        batch = {"id": "batch-1", "model": MODEL, "kind": "completion", "cancelled": False,
+                 "created_at": time.time(), "idempotency_key": "k", "packs": [pack]}
+        try:
+            with tempfile.TemporaryDirectory(prefix="studiohub-chat-pack-") as state:
+                with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                    await chat_jobs._run_pack(monitor, batch, pack, studio, "chat:owner")
+        finally:
+            await client.aclose()
+            chat_jobs.busy_studios.discard("chat")
+        return batch, pack
+
+    return asyncio.run(run())
+
+
+def chat_jobs_summary_pack(batch: dict) -> dict:
+    """The pack row a `GET`-facing Chat summary publishes for one dispatched pack."""
+    from components.hub.backend import chat_jobs
+
+    return chat_jobs.summary(batch)["packs"][0]
+
+
+def _chat_worker_routes() -> list[tuple[str, str]]:
+    """Every (method, path) the Chat worker publishes, read from the worker's own source.
+
+    The fleet allowlist's chat surface is checked against the worker's real route table rather
+    than a list typed into the test, so a route the worker adds later is scanned automatically:
+    a newly published settings, storage or model route cannot arrive invisible to the gate.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parents[1]
+              / "components" / "chat" / "app" / "backend" / "main.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if (isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Attribute)
+                    and isinstance(decorator.func.value, ast.Name)
+                    and decorator.func.value.id == "app"
+                    and decorator.args
+                    and isinstance(decorator.args[0], ast.Constant)
+                    and isinstance(decorator.args[0].value, str)):
+                found.add((decorator.func.attr.upper(), decorator.args[0].value))
+    return sorted(found)
+
+
 class ChatPackUsageEvidenceTests(unittest.TestCase):
     """The Chat lane records token usage that is whole counts and adds up, or records none.
 
@@ -742,37 +836,11 @@ class ChatPackUsageEvidenceTests(unittest.TestCase):
     """
 
     def _run_pack(self, usage: dict) -> dict:
-        from components.hub.backend import chat_jobs, ledger
-
         payload = {"id": "chatcmpl-pack", "model": MODEL,
                    "choices": [{"index": 0, "finish_reason": "stop",
                                 "message": {"role": "assistant", "content": "hello"}}],
                    "usage": usage}
-
-        async def run() -> dict:
-            client = httpx.AsyncClient(transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json=payload)))
-            monitor = type("Monitor", (), {"_client": client})()
-            studio = {"id": "chat", "modality": "chat", "machine": "local",
-                      "hub_token": "worker-token", "host": "127.0.0.1", "port": 1}
-            pack = {"index": 0, "pack_id": "pack-1", "scene_ids": ["scene-1"],
-                    "messages": [{"role": "user", "content": "hi"}], "params": {},
-                    "state": "running", "tries": 1, "studio": "chat",
-                    "duration_seconds": None, "error": None, "results": {}, "usage": None,
-                    "model_revision": None, "raw_responses": [], "started_at": None,
-                    "finished_at": None, "retry_at": None}
-            batch = {"id": "batch-1", "model": MODEL, "kind": "completion", "cancelled": False,
-                     "created_at": time.time(), "idempotency_key": "k", "packs": [pack]}
-            try:
-                with tempfile.TemporaryDirectory(prefix="studiohub-chat-pack-") as state:
-                    with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
-                        await chat_jobs._run_pack(monitor, batch, pack, studio, "chat:owner")
-            finally:
-                await client.aclose()
-                chat_jobs.busy_studios.discard("chat")
-            return pack
-
-        return asyncio.run(run())
+        return _dispatch_chat_pack(payload)[1]
 
     def test_whole_counts_that_add_up_are_recorded_exactly(self) -> None:
         pack = self._run_pack({"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10})
@@ -918,6 +986,611 @@ class PeerLeaseDisconnectTests(_PackagedHub, unittest.TestCase):
                                 headers=self.owner_headers())
             self.assertEqual(status.status_code, 200, status.text)
         self.assertNotIn("node-image", self.broker.busy_machines())
+
+
+class ChatPageUsageEvidenceTests(unittest.TestCase):
+    """The page path records a usage block a tokenizer could have produced, or records none.
+
+    `chat_jobs._usage` was defined and called by nothing, so `record_page_completion` published
+    whatever shape the worker's response carried - a string count, a bool, a float, a negative, a
+    total below its own parts - as fact. The app divides `completion_tokens` by `generation_s` to
+    show a rate, so nonsense in a payload became a nonsense number on screen. The dispatched-pack
+    lane already refused those; this is the page lane obeying the same rule.
+    """
+
+    ANSWER = "Low water is at 04:12."
+
+    def record(self, usage) -> dict:
+        """One recorded page completion whose response carries `usage` (or none, for _MISSING)."""
+        from components.hub.backend import chat_jobs, ledger
+
+        body = {"id": "chatcmpl-usage", "model": MODEL,
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": self.ANSWER}}]}
+        if usage is not _MISSING:
+            body["usage"] = usage
+        with tempfile.TemporaryDirectory(prefix="studiohub-chat-usage-") as state:
+            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+                return chat_jobs.record_page_completion(
+                    request_body=b'{"model": "mlx-community/Qwen3.5-9B-4bit", "messages": '
+                                 b'[{"role": "user", "content": "when is low tide?"}]}',
+                    started_at=time.time() - 1.0, runtime_s=1.0, worker_id="chat",
+                    machine="local", status_code=200, content_type="application/json",
+                    content=json.dumps(body).encode())["items"][0]
+
+    def test_whole_counts_that_add_up_are_recorded_exactly(self) -> None:
+        item = self.record({"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10})
+        self.assertEqual(item["usage"], {"prompt_tokens": 3, "completion_tokens": 7,
+                                         "total_tokens": 10})
+        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["text"], self.ANSWER)
+
+    def test_an_absent_usage_block_records_none(self) -> None:
+        item = self.record(_MISSING)
+        self.assertIsNone(item["usage"])
+        self.assertEqual(item["text"], self.ANSWER)
+
+    def test_a_usage_the_worker_could_not_have_measured_is_recorded_as_none(self) -> None:
+        for stated in (
+            # Not whole counts: a string, a bool, a float, a negative.
+            {"prompt_tokens": "3", "completion_tokens": 2, "total_tokens": 5},
+            {"prompt_tokens": 3, "completion_tokens": True, "total_tokens": 4},
+            {"prompt_tokens": 3, "completion_tokens": 2.5, "total_tokens": 5.5},
+            {"prompt_tokens": -1, "completion_tokens": 2, "total_tokens": 1},
+            # A count missing altogether.
+            {"prompt_tokens": 3, "completion_tokens": 2},
+            # A total below its own parts: internally inconsistent, so not a measurement.
+            {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 4},
+            # Not a usage block at all.
+            "prompt_tokens: 3", [], 7, None,
+            # `NaN`/`Infinity` are what a broken clock writes on the wire; sent as JSON tokens
+            # rather than as values a Python caller could have filtered first.
+            float("nan"), float("inf"),
+        ):
+            with self.subTest(stated=stated):
+                item = self.record(stated)
+                self.assertIsNone(
+                    item["usage"],
+                    f"usage={stated!r} was recorded as a count the worker never measured")
+                # A block this refuses is not a failed completion: the answer is still recorded.
+                self.assertEqual(item["state"], "done")
+                self.assertEqual(item["text"], self.ANSWER)
+
+    def test_the_validator_is_what_the_page_path_records_through(self) -> None:
+        """Negative control for the wiring itself.
+
+        If `record_page_completion` published the worker's block verbatim - the defect - this
+        spy's answer would be ignored. It is not: the recorded value is the validator's, so a
+        future edit that drops the call fails here rather than on the owner's screen.
+        """
+        from components.hub.backend import chat_jobs
+
+        raw = {"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10}
+        with patch.object(chat_jobs, "_usage", return_value=None) as usage:
+            item = self.record(raw)
+        usage.assert_called_once_with(raw)
+        self.assertIsNone(item["usage"],
+                          "the page path recorded a usage the validator never approved")
+
+
+class ChatPackTimingTests(unittest.TestCase):
+    """A dispatched pack carries the worker's generation time beside the Hub's round trip.
+
+    `_run_pack` read `payload["elapsed_seconds"]`, which no Chat worker sends - the worker states
+    its generation time at `studio_hub.elapsed_seconds` - so `or` fell back to the Hub's own round
+    trip every time and recorded it under a name that reads like the model's speed. The round
+    trip stays the round trip; the stated time is now its own fact, under the same name the page
+    lane uses.
+    """
+
+    ANSWER = "hello"
+
+    @staticmethod
+    def payload(elapsed=_MISSING, *, top_level=_MISSING) -> dict:
+        body = {"id": "chatcmpl-pack", "model": MODEL,
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": ChatPackTimingTests.ANSWER}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}}
+        if elapsed is not _MISSING:
+            body["studio_hub"] = {"elapsed_seconds": elapsed}
+        if top_level is not _MISSING:
+            body["elapsed_seconds"] = top_level
+        return body
+
+    def test_a_worker_that_states_nothing_records_none_beside_the_round_trip(self) -> None:
+        batch, pack = _dispatch_chat_pack(self.payload())
+        self.assertEqual(pack["state"], "done")
+        self.assertIsNone(pack["generation_s"],
+                          "a generation time was published that the worker never stated")
+        self.assertGreaterEqual(pack["duration_seconds"], 0.0,
+                                "the Hub's own round trip is still recorded")
+        row = chat_jobs_summary_pack(batch)
+        self.assertIsNone(row["generation_s"])
+        self.assertEqual(row["duration_seconds"], pack["duration_seconds"])
+
+    def test_a_stated_generation_time_is_recorded_beside_the_round_trip(self) -> None:
+        batch, pack = _dispatch_chat_pack(self.payload(3.5))
+        self.assertEqual(pack["generation_s"], 3.5)
+        self.assertEqual(pack["state"], "done")
+        self.assertNotEqual(pack["generation_s"], pack["duration_seconds"],
+                            "the two timings are one fact recorded twice")
+        row = chat_jobs_summary_pack(batch)
+        self.assertEqual(row["generation_s"], 3.5,
+                         "the stated time is recorded but reaches no reader")
+        self.assertEqual(row["duration_seconds"], pack["duration_seconds"])
+
+    def test_a_top_level_elapsed_seconds_is_not_the_workers_stated_time(self) -> None:
+        """Negative control: the contract names `studio_hub.elapsed_seconds`, and only that.
+
+        A number under any other key is not the fact, and the round trip is never taken from the
+        payload - which is the whole defect being fixed here.
+        """
+        _, pack = _dispatch_chat_pack(self.payload(top_level=99.0))
+        self.assertIsNone(pack["generation_s"])
+        self.assertNotEqual(pack["duration_seconds"], 99.0,
+                            "the Hub's round trip was replaced by a number off the wire")
+
+    def test_a_nonsense_stated_time_records_none(self) -> None:
+        # `NaN`/`Infinity` are covered in `ChatGenerationRecordTests`, which sends them as bytes;
+        # httpx refuses to encode them from a value, so they cannot travel through this stub's
+        # `json=` body. Every other nonsense shape a worker can actually put on the wire is here.
+        for stated in ("fast", -1.0, 0, 0.0, True, None, [], {}):
+            with self.subTest(stated=stated):
+                _, pack = _dispatch_chat_pack(self.payload(stated))
+                self.assertIsNone(pack["generation_s"])
+                self.assertEqual(pack["state"], "done")
+
+
+class FleetChatAllowlistTests(unittest.TestCase):
+    """What a Fleet credential is granted in the chat studio surface, checked on the allowlist.
+
+    `_FLEET_STUDIO` is reused by more than one pattern, so "adding `chat` grants only the GET
+    reads" is a claim about the whole compiled allowlist, not about the one line that changed.
+    The chat surface is scanned from the worker's own route table, so a route it adds later is
+    scanned too; the write scan is proved non-vacuous against a route the fleet really is
+    granted a write on.
+    """
+
+    # The reads `_FLEET_STUDIO` names, plus the job shape it also covers.
+    READS = (
+        "/studio/chat/api/health",
+        "/studio/chat/api/catalog",
+        "/studio/chat/api/fleet/activity",
+        "/studio/chat/api/memory-policy",
+    )
+    # The one spelling of the completion the fleet gets, matching the shape the other modalities'
+    # work routes take. `/api/hub/chat/completions` is this Mac's own app's route and stays
+    # Hub-token only; a second spelling of one operation for the fleet is a second vocabulary.
+    WORK_ROUTE = ("POST", "/studio/chat/v1/chat/completions")
+    # Settings, storage and debug spellings a chat studio is expected to grow. None is published
+    # by today's worker; the Hub must refuse them before its worker is asked, because the worker
+    # is not the boundary - the allowlist is.
+    UNCLASSIFIED = (
+        "/studio/chat/api/settings",
+        "/studio/chat/api/storage",
+        "/studio/chat/api/downloads",
+        "/studio/chat/api/chat/diagnostics",
+        "/studio/chat/api/not-yet-classified",
+    )
+
+    @staticmethod
+    def _granted(method: str, path: str) -> bool:
+        from components.hub.backend.auth import fleet_path_allowed
+        return fleet_path_allowed(method, path)
+
+    def test_the_chat_surface_grants_reads_and_exactly_one_write(self) -> None:
+        routes = _chat_worker_routes()
+        self.assertTrue(routes, "the Chat worker's route table could not be read at all")
+        granted = [(method, path) for method, path in routes
+                   if self._granted(method, f"/studio/chat{path}")]
+        self.assertTrue([row for row in granted if row[0] == "GET"],
+                        "the scan found no granted chat read at all")
+        writes = sorted(row for row in granted if row[0] != "GET")
+        self.assertEqual(
+            writes, [("POST", "/v1/chat/completions")],
+            "a fleet credential was granted a write on chat beyond the one declared work route")
+
+    def test_the_write_scan_can_see_a_write(self) -> None:
+        """Negative control: the scan above is not vacuously reporting reads only."""
+        self.assertTrue(self._granted("POST", "/studio/image/api/generate/txt2img"),
+                        "the fleet must be able to send image work")
+        self.assertFalse(self._granted("PUT", "/studio/image/api/generate/txt2img"),
+                         "the scan cannot tell a granted write from a granted read")
+
+    def test_the_named_reads_are_granted_and_nothing_else_writes_them(self) -> None:
+        for path in self.READS:
+            with self.subTest(path=path):
+                self.assertTrue(self._granted("GET", path))
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    self.assertFalse(self._granted(method, path),
+                                     f"{method} {path} was granted to the fleet")
+
+    def test_the_one_work_route_is_granted_and_its_twin_is_not(self) -> None:
+        from components.hub.backend.auth import fleet_path_allowed
+        self.assertTrue(fleet_path_allowed(*self.WORK_ROUTE))
+        # The worker's own second spelling of a completion, and the Hub's local route: neither is
+        # a fleet route.
+        self.assertFalse(fleet_path_allowed("POST", "/studio/chat/api/chat/completions"))
+        self.assertFalse(fleet_path_allowed("POST", "/api/hub/chat/completions"))
+
+    def test_settings_storage_and_debug_shapes_are_refused(self) -> None:
+        for path in self.UNCLASSIFIED:
+            for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                with self.subTest(method=method, path=path):
+                    self.assertFalse(self._granted(method, path),
+                                     f"{method} {path} was granted to the fleet")
+
+    def test_the_worker_publishes_a_route_the_fleet_is_not_granted(self) -> None:
+        """The corpus has to contain a write the fleet is refused, or the scan proves nothing."""
+        published = {f"/studio/chat{path}": method for method, path in _chat_worker_routes()}
+        self.assertIn("PUT", published.values(), "the Chat worker publishes no writable route")
+        for path, method in published.items():
+            if method == "PUT":
+                self.assertFalse(self._granted(method, path),
+                                 f"the fleet was granted chat's {method} {path}")
+
+
+class FleetChatSurfaceTests(_PackagedHub, unittest.TestCase):
+    """A controller holding only the Fleet token can read and run this node's Chat.
+
+    Measured hole, 2026-09-25: `_FLEET_STUDIO` had no `chat`, so a fleet credential got 403 on
+    `/studio/chat/api/health`, `/catalog`, `/fleet/activity` and `/memory-policy` - while
+    `GET /api/hub/catalog`, which *is* fleet-allowed, aggregated the Chat worker's catalogue and
+    advertised its model as available. The catalogue said runnable and every route refused. The
+    owner's decision is that every model that is running is shown and runnable, so the reads and
+    the one work route are granted, and nothing else in the studio surface is.
+    """
+
+    TOKEN = "fleet-chat-hub-token"
+    FLEET_TOKEN = "fleet-chat-controller-token-0123456789"
+    WORKER_TOKEN = "fleet-chat-worker-token"
+    ANSWER = "High water is at 10:26."
+    CATALOG_MODEL = MODEL
+
+    def setUp(self) -> None:
+        self.stub = _StubWorker(payload={
+            "id": "chatcmpl-fleet", "object": "chat.completion", "model": MODEL,
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": self.ANSWER}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+        }, routes={
+            "/api/health": {"ok": True, "app_version": "1.2.3"},
+            "/api/catalog": {"models": [{
+                "repo": self.CATALOG_MODEL, "label": "fixture chat model",
+                "modality": "chat", "cache": {"state": "cached"}, "available": True,
+                "runtime_ready": True, "execution_ready": True,
+            }]},
+            "/api/fleet/activity": {"schema": 1, "studio": "chat", "active": [], "latest": None},
+            "/api/memory-policy": {"mode": "auto", "loaded_model": None},
+        })
+        self.addCleanup(self.stub.close)
+        self.build_hub([{
+            "id": "chat", "title": "Chat Studio", "modality": "chat",
+            "host": "127.0.0.1", "port": self.stub.port, "machine": "node-chat", "local": True,
+            "runtime_identity": {"id": "chat-runtime"}, "hub_token": self.WORKER_TOKEN,
+            "managed_output_roots": [],
+        }])
+        self.addCleanup(self.tear_down_hub)
+        # The model-readiness gate only applies where this Hub owns a model library to verify
+        # against; this fixture has none, and an inherited value would make the test depend on
+        # the machine it runs on.
+        os.environ.pop("STUDIOHUB_MODELS_DIR", None)
+        self.use_fleet_credential(self.FLEET_TOKEN)
+
+    def fleet_headers(self) -> dict[str, str]:
+        return self.fleet_headers_for(self.FLEET_TOKEN)
+
+    def test_a_fleet_credential_reads_health_catalog_activity_and_memory_policy(self) -> None:
+        from fastapi.testclient import TestClient
+
+        before = len(self.stub.requests)
+        with TestClient(self.app) as client:
+            for path in ("/studio/chat/api/health", "/studio/chat/api/catalog",
+                         "/studio/chat/api/fleet/activity", "/studio/chat/api/memory-policy"):
+                with self.subTest(path=path):
+                    response = client.get(path, headers=self.fleet_headers())
+                    self.assertEqual(response.status_code, 200, response.text)
+        sent = self.stub.requests[before:]
+        self.assertEqual([row["path"] for row in sent],
+                         ["/api/health", "/api/catalog", "/api/fleet/activity",
+                          "/api/memory-policy"])
+        for row in sent:
+            self.assertEqual(row["token"], self.WORKER_TOKEN,
+                             "the worker was not signed with its own token")
+
+    def test_a_fleet_credential_can_run_a_completion_on_the_peer_surface(self) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.app) as client:
+            response = client.post(
+                "/studio/chat/v1/chat/completions", headers=self.fleet_headers(),
+                json={"model": MODEL, "messages": [{"role": "user", "content": "when is high tide?"}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["choices"][0]["message"]["content"], self.ANSWER)
+        sent = self.stub.requests[-1]
+        self.assertEqual(sent["path"], "/v1/chat/completions")
+        self.assertEqual(sent["token"], self.WORKER_TOKEN,
+                         "the controller's credential was handed to the worker")
+
+    def test_the_same_credential_is_refused_every_other_chat_route(self) -> None:
+        from fastapi.testclient import TestClient
+
+        before = len(self.stub.requests)
+        with TestClient(self.app) as client:
+            for method, path in (
+                # Settings, storage and debug reads: this Mac's own business.
+                ("GET", "/studio/chat/api/settings"),
+                ("GET", "/studio/chat/api/storage"),
+                ("GET", "/studio/chat/api/chat/diagnostics"),
+                # Writes anywhere in the studio surface, including the routes the worker really
+                # publishes for them.
+                ("PUT", "/studio/chat/api/memory-policy"),
+                ("POST", "/studio/chat/api/memory/release"),
+                ("PATCH", "/studio/chat/api/chat/models/qwen"),
+                ("DELETE", "/studio/chat/api/chat/models/qwen"),
+                ("PUT", "/studio/chat/api/settings"),
+                ("DELETE", "/studio/chat/v1/chat/completions"),
+                # The worker's own second spelling of a completion.
+                ("POST", "/studio/chat/api/chat/completions"),
+            ):
+                with self.subTest(method=method, path=path):
+                    response = client.request(method, path, headers=self.fleet_headers(), json={})
+                    self.assertEqual(response.status_code, 403, response.text)
+            # The Hub's own route for this Mac's Chat page is not a fleet route either: one
+            # operation, one spelling for the fleet.
+            local = client.post("/api/hub/chat/completions", headers=self.fleet_headers(),
+                                json={"model": MODEL, "messages": [
+                                    {"role": "user", "content": "hi"}]})
+            self.assertEqual(local.status_code, 403, local.text)
+        self.assertEqual(len(self.stub.requests), before,
+                         "a refused request still reached the worker")
+
+    def test_the_hub_credential_is_unaffected(self) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.app) as client:
+            local = client.post("/api/hub/chat/completions", headers=self.owner_headers(),
+                                json={"model": MODEL, "messages": [
+                                    {"role": "user", "content": "hi"}]})
+            self.assertEqual(local.status_code, 200, local.text)
+            peer = client.post("/studio/chat/v1/chat/completions", headers=self.owner_headers(),
+                               json={"model": MODEL, "messages": [
+                                   {"role": "user", "content": "hi"}]})
+            self.assertEqual(peer.status_code, 200, peer.text)
+            # The Hub credential could always reach the worker's own writes; it still can.
+            policy = client.put("/studio/chat/api/memory-policy", headers=self.owner_headers(),
+                                json={"mode": "auto"})
+            self.assertEqual(policy.status_code, 200, policy.text)
+
+    def test_the_model_the_catalogue_advertises_is_the_model_the_fleet_can_run(self) -> None:
+        """The lie, end to end: advertised by `/api/hub/catalog`, runnable by the same token."""
+        from fastapi.testclient import TestClient
+
+        self.app.state.monitor.status["chat"] = {"status": "up"}
+        with TestClient(self.app) as client:
+            catalog = client.get("/api/hub/catalog", headers=self.fleet_headers())
+            self.assertEqual(catalog.status_code, 200, catalog.text)
+            rows = [row for row in catalog.json()["models"]
+                    if row.get("hub_modality") == "chat"]
+            self.assertTrue(rows, "the aggregate catalogue no longer carries the chat worker")
+            advertised = sorted({str(row["repo"]) for row in rows})
+            for model in advertised:
+                with self.subTest(model=model):
+                    sent = client.post(
+                        "/studio/chat/v1/chat/completions", headers=self.fleet_headers(),
+                        json={"model": model, "messages": [
+                            {"role": "user", "content": "run what you advertise"}]})
+                    self.assertEqual(sent.status_code, 200, sent.text)
+                    self.assertEqual(json.loads(self.stub.requests[-1]["body"])["model"], model)
+
+
+class FleetChatJobRecordTests(_PackagedHub, unittest.TestCase):
+    """A completion a controller sends through the peer surface is filed as this node's job.
+
+    It was not, on the reasoning that a controller's jobs are the controller's. That is not true
+    of the other modalities: a controller submitting Image or Voice work POSTs `/api/hub/jobs`
+    here, so its work is listed here. Chat is synchronous and files nowhere else, so leaving the
+    proxy unrecorded was the same work escaping this node's history. The two callers now leave
+    the same record, in the same shape, under the same facts.
+    """
+
+    TOKEN = "fleet-chat-job-hub-token"
+    FLEET_TOKEN = "fleet-chat-job-controller-token-0123456789"
+    WORKER_TOKEN = "fleet-chat-job-worker-token"
+    ANSWER = "Low water is at 04:12; the next high is at 10:26."
+    GENERATION_S = 2.5
+
+    def setUp(self) -> None:
+        self.stub = _StubWorker(payload={
+            "id": "chatcmpl-fleet-job", "object": "chat.completion", "model": MODEL,
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": self.ANSWER}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            "studio_hub": {"elapsed_seconds": self.GENERATION_S, "json_valid": None,
+                           "repairs": 0},
+        })
+        self.addCleanup(self.stub.close)
+        self.build_hub([{
+            "id": "chat", "title": "Chat Studio", "modality": "chat",
+            "host": "127.0.0.1", "port": self.stub.port, "machine": "node-chat", "local": True,
+            "runtime_identity": {"id": "chat-runtime"}, "hub_token": self.WORKER_TOKEN,
+            "managed_output_roots": [],
+        }])
+        self.addCleanup(self.tear_down_hub)
+        os.environ.pop("STUDIOHUB_MODELS_DIR", None)
+        self.use_fleet_credential(self.FLEET_TOKEN)
+
+    def fleet_headers(self) -> dict[str, str]:
+        return self.fleet_headers_for(self.FLEET_TOKEN)
+
+    def test_a_fleet_completion_is_a_chat_job_in_the_same_shape_as_a_local_one(self) -> None:
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.app) as client:
+            local = client.post("/api/hub/chat/completions", headers=self.owner_headers(),
+                                json={"model": MODEL, "messages": [
+                                    {"role": "user", "content": "local turn"}]})
+            fleet = client.post("/studio/chat/v1/chat/completions", headers=self.fleet_headers(),
+                                json={"model": MODEL, "messages": [
+                                    {"role": "user", "content": "fleet turn"}]})
+            self.assertEqual((local.status_code, fleet.status_code), (200, 200), fleet.text)
+
+            listing = client.get("/api/hub/jobs", headers=self.fleet_headers())
+            self.assertEqual(listing.status_code, 200, listing.text)
+            rows = listing.json()["batches"]
+            self.assertEqual(len(rows), 2, rows)
+            self.assertEqual({row["modality"] for row in rows}, {"chat"})
+            self.assertEqual({row["model"] for row in rows}, {MODEL})
+            self.assertTrue(all(row["done"] == 1 and row["total"] == 1 for row in rows), rows)
+
+            details = {client.get(f"/api/hub/jobs/{row['id']}",
+                                  headers=self.fleet_headers()).json()["items"][0]["prompt"]:
+                       client.get(f"/api/hub/jobs/{row['id']}",
+                                  headers=self.fleet_headers()).json()
+                       for row in rows}
+            self.assertEqual(set(details), {"local turn", "fleet turn"})
+            local_row, fleet_row = details["local turn"], details["fleet turn"]
+            self.assertEqual(set(fleet_row["items"][0]), set(local_row["items"][0]),
+                             "a fleet-submitted completion is not the shape a local one is")
+            for row in (local_row, fleet_row):
+                item = row["items"][0]
+                self.assertEqual(row["modality"], "chat")
+                self.assertEqual(row["model"], MODEL)
+                self.assertEqual(row["routing"], "studio:chat")
+                self.assertEqual(item["state"], "done")
+                self.assertEqual(item["error"], None)
+                self.assertEqual(item["studio"], "chat")
+                self.assertEqual(item["text"], self.ANSWER)
+                self.assertEqual(item["usage"], {"prompt_tokens": 11, "completion_tokens": 7,
+                                                 "total_tokens": 18})
+                self.assertGreaterEqual(item["runtime_s"], 0)
+                self.assertEqual(item["generation_s"], self.GENERATION_S)
+                self.assertEqual(item["terminal_result"]["status"], "succeeded")
+                self.assertEqual(item["media_type"], "text/plain; charset=utf-8")
+                self.assertEqual(item["bytes"], len(self.ANSWER.encode("utf-8")))
+                self.assertEqual(item["sha256"],
+                                 hashlib.sha256(self.ANSWER.encode("utf-8")).hexdigest())
+
+            # The artifact route serves the fleet's answer with the same credential.
+            artifact = client.get(f"/api/hub/jobs/{fleet_row['id']}/items/0/artifact",
+                                  headers=self.fleet_headers())
+            self.assertEqual(artifact.status_code, 200, artifact.text)
+            self.assertEqual(artifact.text, self.ANSWER)
+            self.assertEqual(artifact.headers["x-content-sha256"],
+                             fleet_row["items"][0]["sha256"])
+
+    def test_a_fleet_refusal_leaves_no_job_because_nothing_ran(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from components.hub.backend import broker as broker_module
+
+        with TestClient(self.app) as client:
+            self.assertTrue(broker_module.acquire_external_machine("node-chat", "image:other"))
+            self.addCleanup(broker_module.release_external_machine, "node-chat", "image:other")
+            refused = client.post("/studio/chat/v1/chat/completions", headers=self.fleet_headers(),
+                                  json={"model": MODEL, "messages": [
+                                      {"role": "user", "content": "hi"}]})
+            self.assertEqual(refused.status_code, 409, refused.text)
+            self.assertEqual(
+                client.get("/api/hub/jobs", headers=self.fleet_headers()).json()["batches"], [])
+
+
+class FleetWorkRouteCoverageTests(unittest.TestCase):
+    """Every modality in the Hub's vocabulary that runs work must be runnable by the fleet.
+
+    This is the question nobody asked while chat was invisible: the fleet could *see* chat in
+    `/api/hub/catalog` and could not run it. The modality list is the Hub's own vocabulary, so a
+    worker added later is covered here without an edit; each modality's work route is derived
+    from the Hub's own declarations where one exists. A modality this test can find no route for
+    fails loudly, naming what to add - it cannot ship invisible the way chat did.
+    """
+
+    # The peer work route of a modality whose lane owns its own queue rather than the broker's.
+    # The broker lanes are derived from `broker.MODALITY` below, so they need no entry here;
+    # these two are exactly the lanes `broker.MODALITY_RETRY_CLASS` classifies as auxiliary and
+    # which `chat_jobs`/`transcription_jobs` serve. Each entry is checked against the proxy's own
+    # work declaration, so this table cannot name a path the Hub does not treat as new work.
+    LANE_WORK_ROUTES = {
+        "chat": "/studio/chat/v1/chat/completions",
+        "transcription": "/studio/transcription/api/transcribe",
+    }
+    # A modality that runs work but has no fleet work route, with the reason. Empty today; the
+    # test proves a modality named here really has no allowed route, so the table cannot be used
+    # to hide one that does.
+    NO_FLEET_WORK_ROUTE: dict[str, str] = {}
+
+    @classmethod
+    def work_routes(cls) -> dict[str, str]:
+        from components.hub.backend import broker, vocabulary
+
+        routes = {modality: f"/studio/{modality}{spec[0]}"
+                  for modality, spec in broker.MODALITY.items()
+                  if modality in vocabulary.WORKER_FOR_MODALITY}
+        routes.update(cls.LANE_WORK_ROUTES)
+        return routes
+
+    @staticmethod
+    def work_tails() -> set[str]:
+        from components.hub.backend import broker
+
+        return {spec[0] for spec in broker.MODALITY.values()} | set(standalone._PEER_WORK_PATHS)
+
+    def test_every_modality_is_fleet_reachable_or_declared_unreachable(self) -> None:
+        from components.hub.backend import auth, vocabulary
+
+        routes = self.work_routes()
+        peer_surface = {getattr(route, "path", "") for route in standalone.app.routes}
+        self.assertIn("/studio/{modality}/{path:path}", peer_surface,
+                      "the peer surface this checks against is not registered")
+        for modality in sorted(vocabulary.WORKER_FOR_MODALITY):
+            with self.subTest(modality=modality):
+                if modality in self.NO_FLEET_WORK_ROUTE:
+                    self.assertTrue(self.NO_FLEET_WORK_ROUTE[modality].strip(),
+                                    f"{modality} is declared unreachable without a reason")
+                    for tail in self.work_tails():
+                        self.assertFalse(
+                            auth.fleet_path_allowed("POST", f"/studio/{modality}/{tail}"),
+                            f"{modality} is declared unreachable but the fleet may run it")
+                    continue
+                self.assertIn(
+                    modality, routes,
+                    f"{modality} runs work and this test knows no fleet work route for it. Add "
+                    f"its route to the Hub's own declarations, or name it in "
+                    f"NO_FLEET_WORK_ROUTE with the reason a controller cannot run it")
+                route = routes[modality]
+                self.assertTrue(
+                    auth.fleet_path_allowed("POST", route),
+                    f"a fleet credential cannot POST {route}: the Hub advertises this "
+                    f"modality's models through /api/hub/catalog and refuses the work")
+                tail = route.split(f"/studio/{modality}/", 1)[1]
+                self.assertTrue(
+                    standalone._peer_work_request("POST", tail),
+                    f"{route} is not a path the proxy treats as new work")
+
+    def test_transcription_needs_no_exemption(self) -> None:
+        """The one modality that could have needed an exemption, and what was actually found.
+
+        `transcription` was already inside `_FLEET_STUDIO` before this change, so its reads were
+        never the hole; its work route is `POST /studio/transcription/api/transcribe`, which the
+        explicit transcribe entry has always allowed - even though the route names the *modality*
+        while the worker is registered as `subtitle`. So no exemption is required, and this test
+        says so rather than leaving the next reader to wonder.
+        """
+        from components.hub.backend import auth, vocabulary
+
+        self.assertIn("transcription", vocabulary.WORKER_FOR_MODALITY)
+        self.assertTrue(auth.fleet_path_allowed("POST", "/studio/transcription/api/transcribe"))
+        self.assertTrue(auth.fleet_path_allowed("GET", "/studio/transcription/api/catalog"))
+        self.assertNotIn("transcription", self.NO_FLEET_WORK_ROUTE)
+
+    def test_the_vocabulary_is_the_only_modality_list_here(self) -> None:
+        """A modality declared with a route but absent from the vocabulary is a stale entry."""
+        from components.hub.backend import vocabulary
+
+        for modality in sorted(set(self.LANE_WORK_ROUTES) | set(self.NO_FLEET_WORK_ROUTE)):
+            with self.subTest(modality=modality):
+                self.assertIn(modality, vocabulary.WORKER_FOR_MODALITY,
+                              f"{modality} is declared here but the Hub routes no such modality")
 
 
 if __name__ == "__main__":

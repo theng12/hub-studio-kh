@@ -368,6 +368,9 @@ def summary(batch: dict, include_raw: bool = False, include_results: bool = True
             "max_tries": MAX_TRIES, "started_at": pack.get("started_at"),
             "retry_at": pack.get("retry_at"),
             "duration_seconds": pack.get("duration_seconds"), "error": pack.get("error"),
+            # The worker's own stated generation time, under the name the page path uses for the
+            # same fact, so a reader never has to guess which of the two numbers is the model's.
+            "generation_s": pack.get("generation_s"),
             "usage": pack.get("usage"), "model_revision": pack.get("model_revision"),
             "missing_scene_ids": [scene_id for scene_id in pack["scene_ids"]
                                   if scene_id not in pack.get("results", {})],
@@ -714,7 +717,15 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
         pack["raw_responses"] = [*(pack.get("raw_responses") or []), content][-MAX_TRIES:]
         pack["results"].update(parse_scene_results(content, missing, batch["kind"]))
         remaining = [scene_id for scene_id in pack["scene_ids"] if scene_id not in pack["results"]]
-        pack["duration_seconds"] = round(float(payload.get("elapsed_seconds") or time.time() - started), 2)
+        # Two timings, two names - the same two facts the page path records under the same two
+        # names. `duration_seconds` is this Hub's own round trip around the dispatch, unchanged.
+        # `generation_s` is the time the worker itself stated, which it publishes at
+        # `studio_hub.elapsed_seconds`; the old line read a top-level `elapsed_seconds` that no
+        # worker sends, so the `or` fallback fired on every pack and wrote the Hub's round trip -
+        # model load on a cold turn included - under a name that reads like the model's speed.
+        # None when the worker stated no usable number, never a value derived from the round trip.
+        pack["duration_seconds"] = round(time.time() - started, 2)
+        pack["generation_s"] = _stated_generation_seconds(payload)
         if not remaining:
             pack.update(state="done", error=None, finished_at=time.time())
         elif pack["tries"] < MAX_TRIES and not batch.get("cancelled"):
@@ -873,12 +884,24 @@ def _request_facts(request_body: bytes) -> tuple[str, str]:
 
 
 def _usage(value: object) -> dict | None:
-    """Token usage only when the worker stated it as whole non-negative counts."""
+    """Token usage only when the worker stated it as whole, consistent counts.
+
+    The app derives the rate it shows from ``completion_tokens`` over `generation_s`, so this is
+    a measurement, not a place to be generous: a count that is a string, a bool, a float or a
+    negative is not a count the model produced, and a total below its own two parts did not come
+    from any tokenizer. Both are recorded as ``None`` - an absence, never a coerced number.
+
+    The consistency rule is the one the dispatched-pack lane already enforces on the same
+    payload (`total >= prompt + completion`), so the two Chat paths cannot disagree about what a
+    usable usage block is.
+    """
     if not isinstance(value, dict):
         return None
     fields = ("prompt_tokens", "completion_tokens", "total_tokens")
     if any(isinstance(value.get(field), bool) or not isinstance(value.get(field), int)
            or value.get(field) < 0 for field in fields):
+        return None
+    if value["total_tokens"] < value["prompt_tokens"] + value["completion_tokens"]:
         return None
     return {field: value[field] for field in fields}
 
@@ -1056,6 +1079,10 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         (answer, usage, worker_job_id, stated_model, error, error_code,
          generation_s) = completion_outcome(
             status_code=status_code, content_type=content_type, content=content)
+        # The response's usage is published verbatim by `completion_outcome`; what is recorded
+        # here has to be a count a tokenizer could have produced. `_usage` refuses the rest and
+        # answers None, which is what an item with no usable usage block carries anyway.
+        usage = _usage(usage)
         if not model:
             model = stated_model
     finished_at = time.time()
