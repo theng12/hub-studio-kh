@@ -503,15 +503,38 @@ def release_notes() -> dict:
         match = re.search(r"\d+\.\d+\.\d+", heading)
         if not match:
             continue
-        details = []
+        # What's New shows the body of each release. A release written as bullets and one written
+        # as prose are both bodies: reading only `- ` and `### ` meant the 0.6.62 entry - which the
+        # owner wrote as four explanatory paragraphs - rendered as a version with nothing under it,
+        # and the voice suite caught it. Paragraphs are joined into one entry, and a blank line
+        # ends one, so the shape of the source decides the shape of the list rather than a markup
+        # convention nobody enforces.
+        details: list[str] = []
+        paragraph: list[str] = []
+
+        def flush() -> None:
+            if not paragraph:
+                return
+            joined = re.sub(r"[`*]", "", " ".join(paragraph)).strip()
+            paragraph.clear()
+            if joined:
+                details.append(joined)
+
         for line in lines[1:]:
             value = line.strip()
             if value.startswith("- "):
+                flush()
                 details.append(re.sub(r"[`*]", "", value[2:].strip()))
             elif value.startswith("### "):
+                flush()
                 details.append(re.sub(r"[`*]", "", value[4:].strip()))
+            elif value:
+                paragraph.append(value)
+            else:
+                flush()
             if len(details) >= 12:
                 break
+        flush()
         releases.append({
             "version": match.group(0),
             "heading": heading,
