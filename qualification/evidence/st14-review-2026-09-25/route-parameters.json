@@ -1,0 +1,139 @@
+{
+ "probe": "chat route parameter surface, 2026-09-25",
+ "app": "components/chat/app/backend/main.py (shipped 0.6.62)",
+ "results": [
+  {
+   "case": "thinking string 'false'",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": true,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "thinking string 'no'",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": true,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "thinking number 0",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "max_tokens -5",
+   "http": 422,
+   "detail": "max_tokens must be a positive integer"
+  },
+  {
+   "case": "max_tokens 0",
+   "http": 422,
+   "detail": "max_tokens must be a positive integer"
+  },
+  {
+   "case": "max_tokens 1e11",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 100000000000,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "temperature -3.5",
+   "http": 422,
+   "detail": "temperature must not be negative"
+  },
+  {
+   "case": "top_p 0",
+   "http": 422,
+   "detail": "top_p must be greater than 0 and at most 1"
+  },
+  {
+   "case": "top_p 1.5",
+   "http": 422,
+   "detail": "top_p must be greater than 0 and at most 1"
+  },
+  {
+   "case": "response_format 42",
+   "http": 422,
+   "detail": "response_format must be an object"
+  },
+  {
+   "case": "seed 'not-a-number'",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": "not-a-number"
+   },
+   "message_count": 1
+  },
+  {
+   "case": "prompt 200 000 chars",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "500 messages",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": null
+   },
+   "message_count": 500
+  },
+  {
+   "case": "tools / n / logit_bias sent",
+   "http": 200,
+   "engine_received": {
+    "max_tokens": 8,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "thinking": false,
+    "seed": null
+   },
+   "message_count": 1
+  },
+  {
+   "case": "temperature NaN",
+   "http": 200,
+   "engine_received": {
+    "temperature": "nan"
+   }
+  }
+ ]
+}

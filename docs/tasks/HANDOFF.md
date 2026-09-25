@@ -446,12 +446,29 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
   [`qualification/st14-chat-2026-09-24.md`](../../qualification/st14-chat-2026-09-24.md). The
   thinking fix (`apply_chat_template(enable_thinking=False)` by default, plus a per-request
   toggle) is committed with a test.
-  **Kit stocking is done** — all four `KH-STUDIO-*` kits carry the chat-capable app (`4e87afd`)
-  and the 5.98 GB model, and each verifies 20 installed / 20 advertised, 181 files, 64.5 GB,
-  `RESULT: PASS`. **Still owed:** 8/16/24 GB throughput is unmeasured, the packaged GUI
-  interaction is unproven, and **ST-14.8 independent review has not happened**. gateway-kh remains read-only here and does not
-  serve chat on its `studio_hub` kind (`research/chat-studio-gateway-bridge.md`). Streaming
-  through the Hub is buffered by `studio_proxy`, so the app uses non-streaming.
+  **Kit stocking is done, and the numbers in this paragraph were stale** — re-measured 2026-09-25:
+  all four `KH-STUDIO-*` kits carry the chat-capable app at **0.6.62 / `3e1a0eb`** and the 5.98 GB
+  model, each verifying **24 installed / 24 advertised**, 215–234 files, 70.5–72.5 GB, `RESULT:
+  PASS`. (This used to say `4e87afd`, 20/20, 181 files, 64.5 GB — the 0.6.56 kit.)
+  **ST-14.8 independent review has happened, twice** — the first on 2026-09-24 (verdict *not
+  passable*, 10 findings, commit `40453b9`) which was never recorded on the card, and a second on
+  2026-09-25 that closed ST-14.1/14.3/14.4 and corrected the card. See
+  [`ST-14-review.md`](ST-14-review.md). **What that review leaves open is now the honest list:**
+  8/16/24 GB throughput is unmeasured (harness ready: `qualification/README-chat-tiers.md`), no
+  human has typed in the packaged Chat page, streaming-end-to-end through the Hub is unexercised,
+  and **nothing in the product refuses on memory tier** — the worker publishes the manifest's 16 GB
+  as a *warning* and stays eligible, the Hub's `effective_min_total_memory_gb` is deliberately 0,
+  and the app ignores the warning, so an 8 GB Mac tries rather than refusing. That is a decision
+  to make, not a measurement to take, and it matches the image precedent (Z-Image-Turbo 6B MLX
+  4-bit warns on 8 GB rather than refusing).
+  gateway-kh remains read-only here and does not serve chat on its `studio_hub` kind
+  (`research/chat-studio-gateway-bridge.md`), and chat is absent from `auth._FLEET_STUDIO`, so a
+  remote fleet caller gets 403 — deliberately unresolved until the text-fleet story is decided.
+  Streaming through the Hub is buffered by `studio_proxy`, so the app uses non-streaming.
+  **Fixed since that paragraph was written:** the model's missing receipt and the Verify dead end
+  (a real completion now answers through the installed Hub — see the verify entry above); the
+  `thinking:"false"` inversion, the stream-disconnect lock wedge, the cancelled-request lease and
+  the silent parameter drops are with workers now.
 - **The VibeVoice offer is dead in 0.6.55** (loader remap bug, see the board's cautions). It is
   one of the families ST-13 cuts, so it disappears with the re-stage; the bug is still worth
   fixing upstream.

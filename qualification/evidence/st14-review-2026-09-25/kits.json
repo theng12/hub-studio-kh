@@ -1,0 +1,57 @@
+{
+  "review": "ST-14.8 second pass (2026-09-25) \u2014 kit stocking",
+  "checked": "each drive's .studiohub/installed.json, focused-release-manifest.json and model files, by size",
+  "model": "mlx-community/Qwen3.5-9B-4bit (uniform 4-bit MLX)",
+  "manifest_digest": "68a3cf0222475be31a3c35c15076c2b02cd676493341bbda38617ab227411936",
+  "kits": [
+    {
+      "drive": "ATLAS",
+      "installed": 24,
+      "advertised": 24,
+      "library_files": 234,
+      "library_bytes": 72520794408,
+      "app_version": "0.6.62",
+      "app_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+      "chat_receipt": true,
+      "manifest_sha256_matches": true,
+      "eleven_file_sizes_match": true
+    },
+    {
+      "drive": "NOVA",
+      "installed": 24,
+      "advertised": 24,
+      "library_files": 215,
+      "library_bytes": 70529444539,
+      "app_version": "0.6.62",
+      "app_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+      "chat_receipt": true,
+      "manifest_sha256_matches": true,
+      "eleven_file_sizes_match": true
+    },
+    {
+      "drive": "ORICO",
+      "installed": 24,
+      "advertised": 24,
+      "library_files": 228,
+      "library_bytes": 72520755472,
+      "app_version": "0.6.62",
+      "app_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+      "chat_receipt": true,
+      "manifest_sha256_matches": true,
+      "eleven_file_sizes_match": true
+    },
+    {
+      "drive": "UGREEN",
+      "installed": 24,
+      "advertised": 24,
+      "library_files": 228,
+      "library_bytes": 72520755472,
+      "app_version": "0.6.62",
+      "app_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+      "chat_receipt": true,
+      "manifest_sha256_matches": true,
+      "eleven_file_sizes_match": true
+    }
+  ],
+  "date": "2026-09-25T05:30:14Z"
+}

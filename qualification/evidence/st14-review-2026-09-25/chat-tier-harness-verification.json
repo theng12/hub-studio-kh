@@ -1,0 +1,77 @@
+{
+  "review": "ST-14.8 second pass (2026-09-25) \u2014 chat tier harness verification",
+  "evidence": "The harness run on this 32 GiB M2 Max, which is NOT one of the measured tiers. It verifies the harness (discovery, guards, worker start, real model load, real completions, swap sampling, diagnostics, verdict) and is not tier evidence. The 8 GB and 16 GB tiers have NOT been run.",
+  "command": "CHAT_ALLOW_NON_TARGET=1 CHAT_OUT=/tmp/chat-final-check CHAT_MAX_TOKENS=8 bash qualification/chat-tier-run.sh",
+  "bundle": {
+    "version": "0.6.62",
+    "implementation_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+    "app": "/Applications/Studio Hub.app",
+    "runtime": "runtimes/voice"
+  },
+  "model": {
+    "model_id": "mlx-community/Qwen3.5-9B-4bit",
+    "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+    "quantization": "uniform 4-bit MLX",
+    "bytes": 5977071067,
+    "files": 11
+  },
+  "engine": {
+    "mlx": "0.31.2",
+    "runtime_revision": "8524ca232c4c679255bbfe9ab1683baa4faf55afc7dca8784a4d6f5270016ce0"
+  },
+  "peak_memory_bytes_after_all_runs": 5247506880,
+  "active_memory_bytes_after_all_runs": 5038041610,
+  "released_after_runs": true,
+  "runs": [
+    {
+      "label": "00-load",
+      "prompt_tokens": "15",
+      "completion_tokens": "1",
+      "engine_elapsed_s": "0.391",
+      "wall_s": "7.51",
+      "tok_per_s": "2.56",
+      "peak_mlx_bytes": "5188690034",
+      "active_mlx_bytes": "5038041610",
+      "load_s": "7.52",
+      "swap_before_mb": "965.75",
+      "swap_after_mb": "965.75",
+      "swap_peak_mb": "965.75",
+      "result": "OK",
+      "note": ""
+    },
+    {
+      "label": "01-story",
+      "prompt_tokens": "29",
+      "completion_tokens": "8",
+      "engine_elapsed_s": "0.521",
+      "wall_s": "0.54",
+      "tok_per_s": "15.36",
+      "peak_mlx_bytes": "5247359424",
+      "active_mlx_bytes": "5038041610",
+      "load_s": "?",
+      "swap_before_mb": "965.75",
+      "swap_after_mb": "965.75",
+      "swap_peak_mb": "965.75",
+      "result": "OK",
+      "note": ""
+    },
+    {
+      "label": "02-story-repeat",
+      "prompt_tokens": "29",
+      "completion_tokens": "8",
+      "engine_elapsed_s": "0.395",
+      "wall_s": "0.41",
+      "tok_per_s": "20.25",
+      "peak_mlx_bytes": "5247506880",
+      "active_mlx_bytes": "5038041610",
+      "load_s": "?",
+      "swap_before_mb": "965.75",
+      "swap_after_mb": "965.75",
+      "swap_peak_mb": "965.75",
+      "result": "OK",
+      "note": ""
+    }
+  ],
+  "verdict": "NOT TIER EVIDENCE (non-target host)",
+  "date": "2026-09-25T05:30:08Z"
+}

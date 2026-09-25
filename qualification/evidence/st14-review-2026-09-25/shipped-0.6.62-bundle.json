@@ -1,0 +1,90 @@
+{
+  "review": "ST-14.8 second pass (2026-09-25)",
+  "host": "Apple M2 Max, Mac14,13, 32 GiB, macOS 27.0",
+  "how": "Packaged Hub booted from the built 0.6.62 bundle (.build/StudioHub-0662/Studio Hub.app) with --offline and the real ~/StudioHubModels library; GETs only, no model loaded. Artefacts: .build/chat-review-2026-09-25/shipped_bundle_probe.sh",
+  "bundle": {
+    "version": "0.6.62",
+    "implementation_commit": "3e1a0eb203d63b72e67807ddbcd1d836f291f3a5",
+    "development_build": false,
+    "components": [
+      "chat",
+      "hub",
+      "image",
+      "music",
+      "subtitle",
+      "voice"
+    ],
+    "chat_component": {
+      "source_sha256": "ad1dc1d78203feeefc22a5e00d1d686204703b2843d1c7f498dd566fd33159da",
+      "runtime": "voice",
+      "runtime_sha256": "8524ca232c4c679255bbfe9ab1683baa4faf55afc7dca8784a4d6f5270016ce0"
+    }
+  },
+  "hub_health": {
+    "ok": true,
+    "worker_count": 5
+  },
+  "model_packages": {
+    "row_count": 24,
+    "chat_rows": 1,
+    "chat": {
+      "package_id": "qwen3-5-9b-4bit",
+      "model_id": "mlx-community/Qwen3.5-9B-4bit",
+      "engine": "chat-mlx",
+      "modality": "chat",
+      "worker_id": "chat",
+      "files_state": "not_installed",
+      "runtime_state": "ready",
+      "worker_state": "running",
+      "dispatch_state": "ineligible",
+      "state": "not_installed"
+    }
+  },
+  "aggregate_catalog": {
+    "row_count": 31,
+    "chat_rows": 1,
+    "chat": {
+      "model_id": "mlx-community/Qwen3.5-9B-4bit",
+      "label": "Qwen3.5-9B-4bit",
+      "modality": "chat",
+      "capabilities": [
+        "chat.completion"
+      ],
+      "available": true,
+      "context_window_tokens": 262144,
+      "max_output_tokens": 4096
+    }
+  },
+  "chat_worker_catalog": {
+    "label": "Qwen3.5-9B-4bit",
+    "repo": "mlx-community/Qwen3.5-9B-4bit",
+    "modality": "chat",
+    "capabilities": [
+      "chat.completion"
+    ],
+    "available": true,
+    "qualified_minimum_memory_gb": 16.0,
+    "memory_eligible": true,
+    "cache": {
+      "state": "cached"
+    },
+    "context_window_tokens": 262144,
+    "max_output_tokens": 4096
+  },
+  "chat_worker_model_limits": {
+    "context_window_tokens": {
+      "value": 262144,
+      "source": "model/config.json text_config.max_position_embeddings"
+    },
+    "max_output_tokens": {
+      "value": 4096,
+      "source": "worker default: the checkpoint ships no generation_config.json"
+    }
+  },
+  "mac_library_index": {
+    "entries": 42,
+    "has_qwen3_5_9b_4bit": true,
+    "mtime": "2026-09-25 12:27"
+  },
+  "date": "2026-09-25T05:29:44Z"
+}

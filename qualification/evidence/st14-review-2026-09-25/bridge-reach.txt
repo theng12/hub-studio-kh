@@ -1,0 +1,11 @@
+hub http://127.0.0.1:51924
+
+--- POST /studio/chat/v1/chat/completions with NO credential (must be 401, not 200) ---
+HTTP 401
+--- GET /studio/chat/api/catalog with the Hub token (the gateway's local credential) ---
+HTTP 200
+label: Qwen3.5-9B-4bit | capabilities: ['chat.completion'] | context: 262144
+--- GET the same with NO credential (must be 401) ---
+HTTP 401
+.build/chat-review-2026-09-25/bridge_reach_probe.sh: line 43: 52536 Terminated: 15          "$PY" -I -B "$RES/hub_worker.py" --data-dir "$DATA" --models-dir "$HOME/StudioHubModels" --ready-file "$READY" --port 0 --host 127.0.0.1 --offline > "$OUT/bridge-hub.out" 2>&1
+children remaining: 0

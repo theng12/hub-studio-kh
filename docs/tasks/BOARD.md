@@ -883,7 +883,7 @@ evidence does not complete these cards.
 | [ST-09](ST-09.md) | D · Startup/recovery | ST-02 | DONE | st09_startup (Luna/high), root integrated `7aa7775` |
 | [ST-10](ST-10.md) | E · Fleet/GenStudio | ST-02, ST-09 | IN_PROGRESS | coordinator; Connections, the independent-client proof, credential rotation and the clone contract are in; 10.4/10.6/DATA partial, no second machine, needs review |
 | [ST-11](ST-11.md) | F · Qualification/install kit | ST-04, ST-05, ST-06, ST-08, ST-10 | IN_PROGRESS | coordinator; 11.1/11.2/11.7 done, kit + measurement tooling proven, hardware checkpoints open, needs review |
-| [ST-14](ST-14.md) | G · Local Chat Studio | ST-01, ST-02 | IN_PROGRESS | owner-directed; worker + Hub wiring + native Chat page done, suites green; model revised to plain 5.98 GB build; gateway bridge handed off; stocking blocked on bandwidth + ST-13 |
+| [ST-14](ST-14.md) | G · Local Chat Studio | ST-01, ST-02 | IN_PROGRESS | the lane works end to end — a real completion answers through the installed Hub; worker, Hub wiring, native page and kits done (24/24 on all four drives); **reviewed twice** ([review](ST-14-review.md)); remaining: the 8/16 GB tier run (harness ready), a human in the Chat page, and the tier-refusal decision |
 
 ## Status rules
 
