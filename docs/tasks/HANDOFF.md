@@ -79,9 +79,9 @@ in the same direction every time: it reads a declaration as a use.**
 
 **A flaky gate, second symptom, both seen once.** `tests/test_voice_product_suite.py` failed inside
 a full `tests/` run; the very next full run was green with the same deterministic order. The child's
-log is written to a fixed path and overwritten by each run, so the failing child's output was gone
-before it could be read — that is a defect in the harness, and the fix is to keep the last *failing*
-log. Recorded as SH-15(b), with the native `build.sh` cancellation race as SH-15(a).
+log was written to a fixed path and overwritten by each run, so the failing child's output was gone
+before it could be read. Fixed in the same release: see the SH-15(b) note above. The flake itself is
+still unreproduced. The native `build.sh` cancellation race is SH-15(a).
 
 **0.6.64 in one paragraph.** Every node on controller 1100 was unreachable — five of five
 `ConnectTimeout` — because each Mac was answering on an address frozen the day it was set up. A Mac
@@ -140,13 +140,21 @@ have been torn down by the cancellation"* and passed on an immediate re-run with
 unmodified (`git status` clean). Recorded because a gate that fails once in a while is a gate people
 learn to re-run, which is the same as not having it. Not chased; it needs a deliberate reproduction.
 
-**A second flake, also seen once, and it destroyed its own evidence.** In the 0.6.65 gate,
+**A second flake, also seen once — and its evidence now survives.** In the 0.6.65 gate,
 `tests/test_voice_product_suite.py` failed inside a full `tests/` run; the next full run was green
-(`1306 passed`, exit 0) at the same deterministic order (`-p no:randomly`). The test writes its
+(`1306 passed`, exit 0) at the same deterministic order (`-p no:randomly`). The test wrote its
 child's output to `.build/voice-product-suite.log` on **every** run, so the failing child's log was
-overwritten by the next pass before anyone could read it. **That is a harness defect, not only a
-flake**: a test whose evidence does not survive the next run cannot be diagnosed. The fix is to keep
-the last *failing* log. Recorded as SH-15(b) beside the native one as SH-15(a).
+overwritten by the next pass before anyone could read it — which left exactly one fact, that the
+child exited nonzero. **Fixed**: a failure now writes `.build/voice-product-suite.failing.log`,
+which a passing run leaves alone, headed with the outcome and the UTC time so a log left over from
+an earlier failure cannot be read as a current one. A hang keeps its partial output too;
+`subprocess.run` used to raise before anything was written, so the suite that never *finished* was
+the one case with no evidence at all. **Verified end to end**: the child was forced to fail
+(`STUDIOHUB_TEST_RUNTIME=/usr/bin/false`), the failure log appeared with `Outcome: exit 1`, and the
+next green run left it **byte-identical** (same SHA-256). The synthetic log was moved to
+`_trash/voice-suite-logs/` so it cannot be mistaken for a real one. **The flake itself is still
+unreproduced** — SH-15(b) stays open for that, but the next occurrence can now be read rather than
+guessed at. The native `build.sh` race is SH-15(a).
 
 **A trap, walked into and out of on the same day:** reading `tests/test_hub_jobs.py`, two
 `class HubJobProofTests` by `grep` look like one shadowing the other and eleven tests never running.
