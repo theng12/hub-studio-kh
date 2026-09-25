@@ -397,6 +397,15 @@ final class FixtureProtocol: URLProtocol {
                 return
             }
         }
+        // Each Studio's defaults route, reached through the Hub's studio proxy exactly like every
+        // other worker call: `/studio/<modality>/api/model-defaults`.
+        if path.hasPrefix("/studio/"), path.hasSuffix("/api/model-defaults") {
+            let parts = path.split(separator: "/")
+            if parts.count == 4 {
+                answerModelDefaults(modality: String(parts[1]), method: method)
+                return
+            }
+        }
         // The artifact route is range-capable like the controller's. A `Range` request is answered
         // with 206 and the remainder, unless the test asks this server to ignore ranges (200 with
         // the whole body), which is exactly the case a resuming client must handle.
@@ -1001,16 +1010,16 @@ final class FixtureProtocol: URLProtocol {
     /// each image row's `loading_modes` for the selection the fixture's stub Image worker is
     /// currently holding.
     private static let catalogBaseFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","modes":["preset"],"size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","modes":["preset"],"size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"subtitle-mlx","size_gb":1.6,"capabilities":["transcription"],"languages":"Multilingual","runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":false,"selected":"auto","effective":"default","threshold_bytes":null,"options":[],"measured":{"default":{"peak_gb":null,"seconds":null},"low_ram":{"peak_gb":null,"seconds":null},"measured_on":null,"evidence":"unmeasured","scene":null,"note":"This model states no bounded configuration."},"reason":"No memory knobs on purpose: this fixture is qualified at 16 GB, and adding an mflux memory knob would be an unverified change to a verified path. This machine-wide setting does not change how it loads."},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","modes":["cloning","design"],"size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","modes":["cloning"],"size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","modes":["cloning"],"size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","modes":["preset"],"size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","modes":["preset"],"size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","modes":["cloning","preset"],"size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":true,"selected":"auto","effective":"low-ram","threshold_bytes":24000000000,"options":[{"id":"auto","label":"Auto","detail":"Chooses from this Mac's unified memory: the bounded configuration below 24 GB, the default at or above it. The trade: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"low","label":"Low RAM","detail":"Runs mflux's bounded configuration: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"full","label":"Full","detail":"Runs mflux's default configuration: about 17.7 GB peak instead of 7.1 GB, and about 166 s instead of 236 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."}],"measured":{"default":{"peak_gb":17.67,"seconds":166},"low_ram":{"peak_gb":7.12,"seconds":236},"measured_on":"32 GiB M2 Max, mflux 0.20.0, 4-bit pack","evidence":"measured","scene":"1280x720, 9 steps, seed 42","note":null},"reason":null},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/flux-unpackaged","label":"Unregistered Image fixture 4-bit","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":4,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","modes":["preset"],"size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/two-mode-voice","label":"Two-mode voice fixture 4-bit","family":"fixture-two-mode","size_gb":2.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"modes":["cloning","design"],"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"fixture/unreported-modes","label":"Voice model with unreported modes","family":"fixture-unreported-modes","size_gb":1.2,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","modes":["preset"],"size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000},"long_form_delivery":{"section_max_characters":400,"join_pause_milliseconds":120,"hard_cap_characters":5000,"source":"long_form_policy","note":"Sections are cut on sentence boundaries and joined with one pause.","speed":{"delivery":"native","minimum":0.5,"maximum":2.0},"section_size_control":{"minimum":400,"maximum":4000,"step":50,"default_custom":1600,"runtime_default":1600}},"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"voice","operation":"voice.tts","parameters":[{"name":"text","type":"string","required":true,"max_characters":4000,"bound_source":"Qwen CustomVoice audit: contract.input_limits.text_max_characters"},{"name":"speed","type":"number","required":false,"minimum":0.5,"maximum":2.0,"default":1.0,"note":"clamped to this range by the dispatcher; delivered per the family's policy"},{"name":"section_max_characters","type":"integer","required":false,"minimum":400,"maximum":4000,"default":1600,"note":"omit for the measured Auto section size"},{"name":"language","type":"string","required":false,"enum":["en","zh"]}],"artifact":{"modality":"voice","media_type":"audio/wav","extension":"wav","per_item":1}}},{"repo":"other/tts","label":"Other TTS","family":"other","modes":["preset"],"size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"subtitle-mlx","size_gb":1.6,"capabilities":["transcription"],"languages":"Multilingual","runtime_ready":true,"cache":{"state":"cached"},"readiness":{"files":{"weight_files":["weights.safetensors"]}}},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":false,"selected":"auto","effective":"default","threshold_bytes":null,"options":[],"measured":{"default":{"peak_gb":null,"seconds":null},"low_ram":{"peak_gb":null,"seconds":null},"measured_on":null,"evidence":"unmeasured","scene":null,"note":"This model states no bounded configuration."},"reason":"No memory knobs on purpose: this fixture is qualified at 16 GB, and adding an mflux memory knob would be an unverified change to a verified path. This machine-wide setting does not change how it loads."},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295},"sizes":[{"aspect_ratio":"16:9","width":1280,"height":720,"tier":"1K","default":true},{"aspect_ratio":"1:1","width":1024,"height":1024,"tier":"1K"}],"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"image","operation":"image.text_to_image","parameters":[{"name":"prompt","type":"string","required":true,"max_characters":4000},{"name":"aspect_ratio","type":"string","required":false,"enum":["1:1","16:9"],"default":"16:9"},{"name":"resolution","type":"string","required":false,"enum":["1K"],"default":"1K"},{"name":"steps","type":"integer","required":false,"minimum":1,"maximum":50,"default":4},{"name":"guidance","type":"number","required":false,"minimum":0.0,"maximum":10.0,"default":1.0,"note":"accepted and ignored: this model runs without classifier-free guidance"},{"name":"seed","type":"integer","required":false,"minimum":-1,"maximum":4294967295,"default":-1}],"artifact":{"modality":"image","media_type":"image/png","extension":"png","per_item":1}}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","modes":["cloning","design"],"size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"music","operation":"music.generation","parameters":[{"name":"prompt","type":"string","required":true,"max_characters":4000},{"name":"duration_seconds","type":"number","required":false,"minimum":1.0,"maximum":600.0,"default":30.0,"ladder":[{"seconds":1,"label":"1 s"},{"seconds":30,"label":"30 s"},{"seconds":60,"label":"60 s"},{"seconds":120,"label":"120 s"},{"seconds":240,"label":"240 s"},{"seconds":480,"label":"480 s"},{"seconds":600,"label":"600 s","exceeds_single_pass":true}],"note":"a duration beyond this host's single-pass cap is rendered in sections"},{"name":"steps","type":"integer","required":false,"minimum":1,"maximum":50,"default":8},{"name":"guidance_scale","type":"number","required":false,"minimum":0.0,"maximum":30.0,"default":1.0},{"name":"seed","type":"integer","required":false,"minimum":-1,"maximum":4294967295,"default":-1},{"name":"shift","type":"number","required":false,"minimum":0.0,"maximum":20.0,"note":"the engine's own control; its bounds are the engine's, not this model's"},{"name":"instrumental","type":"boolean","required":false,"default":true,"note":"false asks for sung lyrics; this engine is the only one that can sing"},{"name":"lyrics","type":"string","required":false,"max_characters":4000},{"name":"vocal_language","type":"string","required":false,"max_characters":32}],"artifact":{"modality":"music","media_type":"audio/wav","extension":"wav","per_item":1}}},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","modes":["cloning"],"size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","modes":["cloning"],"size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","modes":["preset"],"size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","modes":["preset"],"size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","modes":["cloning","preset"],"size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":true,"selected":"auto","effective":"low-ram","threshold_bytes":24000000000,"options":[{"id":"auto","label":"Auto","detail":"Chooses from this Mac's unified memory: the bounded configuration below 24 GB, the default at or above it. The trade: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"low","label":"Low RAM","detail":"Runs mflux's bounded configuration: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"full","label":"Full","detail":"Runs mflux's default configuration: about 17.7 GB peak instead of 7.1 GB, and about 166 s instead of 236 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."}],"measured":{"default":{"peak_gb":17.67,"seconds":166},"low_ram":{"peak_gb":7.12,"seconds":236},"measured_on":"32 GiB M2 Max, mflux 0.20.0, 4-bit pack","evidence":"measured","scene":"1280x720, 9 steps, seed 42","note":null},"reason":null},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"music","operation":"music.generation","parameters":[{"name":"prompt","type":"string","required":true,"max_characters":4000},{"name":"duration_seconds","type":"number","required":false,"minimum":5.0,"maximum":60.0,"default":20.0,"ladder":[{"seconds":1,"label":"1 s"},{"seconds":30,"label":"30 s"},{"seconds":60,"label":"60 s"},{"seconds":120,"label":"120 s"},{"seconds":240,"label":"240 s"},{"seconds":380,"label":"380 s"}]},{"name":"steps","type":"integer","required":false,"minimum":1,"maximum":50,"default":10}],"artifact":{"modality":"music","media_type":"audio/wav","extension":"wav","per_item":1}}},{"repo":"fixture/flux-unpackaged","label":"Unregistered Image fixture 4-bit","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":4,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","modes":["preset"],"size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/two-mode-voice","label":"Two-mode voice fixture 4-bit","family":"fixture-two-mode","size_gb":2.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"modes":["cloning","design"],"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"fixture/unreported-modes","label":"Voice model with unreported modes","family":"fixture-unreported-modes","size_gb":1.2,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"},"min_total_memory_gb":16,"model_limits":{"context_window_tokens":{"value":262144,"source":"model/config.json text_config.max_position_embeddings"},"max_output_tokens":{"value":4096,"source":"worker default: the checkpoint ships no generation_config.json"}},"memory_warning":null,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"chat","operation":"chat.completion","parameters":[{"name":"model","type":"string","required":false,"default":"Qwen/Qwen3.5-9B","note":"the one model this worker serves; any other value is refused by name"},{"name":"messages","type":"array","required":true,"note":"OpenAI-shaped messages"},{"name":"max_tokens","type":"integer","required":false,"minimum":1,"maximum":4096,"default":4096},{"name":"temperature","type":"number","required":false,"minimum":0.0,"default":0.7},{"name":"top_p","type":"number","required":false,"minimum":0.0,"minimum_exclusive":true,"maximum":1.0,"default":0.95},{"name":"stream","type":"boolean","required":false,"default":false},{"name":"seed","type":"integer","required":false,"note":"a real integer"},{"name":"response_format","type":"object","required":false,"note":"type must be json_object or json_schema; anything else is refused"}],"artifact":{"modality":"chat","media_type":"application/json","extension":"json","per_item":1}}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/narrow-image","label":"Narrow Image fixture 4-bit","family":"narrow-engine","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"min_total_memory_gb":16,"generation_defaults":{"width":800,"height":600,"steps":4,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295},"sizes":[{"aspect_ratio":"4:3","width":800,"height":600,"tier":"1K","default":true},{"aspect_ratio":"3:2","width":900,"height":600,"tier":"1K"}],"guidance_ignored":true,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"image","operation":"image.text_to_image","parameters":[{"name":"prompt","type":"string","required":true,"max_characters":4000},{"name":"aspect_ratio","type":"string","required":false,"enum":["4:3","3:2"],"default":"4:3"},{"name":"resolution","type":"string","required":false,"enum":["1K"],"default":"1K"},{"name":"steps","type":"integer","required":false,"minimum":3,"maximum":5,"default":4},{"name":"guidance","type":"number","required":false,"minimum":0.0,"maximum":1.0,"default":0.0,"ignored":true,"note":"accepted and ignored: this model runs without classifier-free guidance"},{"name":"seed","type":"integer","required":false,"minimum":-1,"maximum":4294967295,"default":-1}],"artifact":{"modality":"image","media_type":"image/png","extension":"png","per_item":1}}}]}"#.utf8)
 
     /// Shaped like the Hub's own reply. The same repo appears four times at different levels of
     /// detail, exactly as the aggregate catalogue delivers it — one studio publishes the full
     /// transcription contract, others only a name — so the app's dedupe is exercised rather than
     /// assumed. A bare row sits both before and after the rich one: neither "first seen" nor "last
     /// seen" may win, because both would lose the engine and cache state the Subtitle form needs.
-    private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":true,"cached":true},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
+    private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","supports_word_timestamps":true,"supports_segment_timestamps":true,"recommended":true,"cached":true,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"transcription","operation":"audio.transcription","parameters":[{"name":"file","type":"string","required":true,"max_bytes":2147483648,"enum":[".wav",".mp3",".m4a",".flac",".mp4",".mov"],"note":"multipart upload; the filename extension must be one of the listed values"},{"name":"model","type":"string","required":false,"enum":["whisper-turbo","whisper-base"],"default":"whisper-turbo"},{"name":"word_timestamps","type":"boolean","required":false,"default":false},{"name":"language","type":"string","required":false,"enum":["en","km","zh"]}],"artifact":{"modality":"transcription","media_type":"application/json","extension":"json","per_item":1}}},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
 
-    private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-two-mode-voice","model_id":"fixture/two-mode-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unreported-modes","model_id":"fixture/unreported-modes","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
+    private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-narrow-image","model_id":"fixture/narrow-image","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"ace-step-1-5-turbo","model_id":"ACE-Step/Ace-Step1.5","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-two-mode-voice","model_id":"fixture/two-mode-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unreported-modes","model_id":"fixture/unreported-modes","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
 
     /// The catalogue exactly as the fixture serves it, so a test can derive what the app must
     /// show from the data the app was given instead of restating it by hand. A hand-written
@@ -1070,9 +1079,34 @@ final class FixtureProtocol: URLProtocol {
         lock.lock()
         let selection = imageLoadingSelection
         let subtitleWarning = subtitleMemoryWarning
+        let stored = modelDefaultsChosen
         lock.unlock()
         let models = catalogBaseModels.map { entry -> [String: Any] in
             var patched = entry
+            // The Image and Music workers publish `generation_defaults` **resolved**: the
+            // operator's saved default over the model's own, which is the value a job that omits
+            // the parameter is given. The fixture resolves it from the same store its defaults
+            // route reads, so the page the app seeds and the editor it saves through cannot
+            // disagree about what is in force.
+            if let repo = entry["repo"] as? String,
+               let contract = entry["lane_contract"] as? [String: Any],
+               let modality = contract["modality"] as? String,
+               let values = stored["\(modality)/\(repo)"], !values.isEmpty,
+               var defaults = entry["generation_defaults"] as? [String: Any] {
+                for (name, value) in values {
+                    // The one value that is not the same shape in both places: the lane takes the
+                    // aspect ratio and the job takes the pixels it means.
+                    if name == "aspect_ratio", let ratio = value as? String,
+                       let sizes = entry["sizes"] as? [[String: Any]],
+                       let size = sizes.first(where: { $0["aspect_ratio"] as? String == ratio }) {
+                        defaults["width"] = size["width"]
+                        defaults["height"] = size["height"]
+                        continue
+                    }
+                    defaults[name] = value
+                }
+                patched["generation_defaults"] = defaults
+            }
             // The Subtitle worker's own below-tier sentence, on its own catalogue row and under
             // the same top-level key Image, Music and Chat use. `null` when this Mac is at or
             // above the tier, which is the case the page must render nothing for.
@@ -1133,6 +1167,210 @@ final class FixtureProtocol: URLProtocol {
             "models": rows.sorted { ($0["repo"] as? String ?? "") < ($1["repo"] as? String ?? "") },
         ]
         return try! JSONSerialization.data(withJSONObject: payload)
+    }
+
+
+    // MARK: The per-model defaults route (`/studio/<modality>/api/model-defaults`)
+
+    /// The values the stub Studios are holding, keyed `"<modality>/<repo>"` and then by parameter.
+    static var modelDefaultsChosen: [String: [String: Any]] = [:]
+    static var modelDefaultsRequests: [String] = []
+    static var lastModelDefaultsBody: [String: Any]?
+
+    static func modelDefaultsRequestLog() -> [String] {
+        lock.lock(); defer { lock.unlock() }; return modelDefaultsRequests
+    }
+    static func lastModelDefaultsRequest() -> [String: Any]? {
+        lock.lock(); defer { lock.unlock() }; return lastModelDefaultsBody
+    }
+    static func resetModelDefaultsRequests() {
+        lock.lock(); defer { lock.unlock() }; modelDefaultsRequests = []
+    }
+    /// Store a value the way an earlier session would have: without validating it now, so a bound
+    /// that has since tightened is exercised rather than refused at the door.
+    static func seedStoredDefault(modality: String, repo: String, values: [String: Any]) {
+        lock.lock(); defer { lock.unlock() }
+        modelDefaultsChosen["\(modality)/\(repo)"] = values
+    }
+    static func clearStoredDefaults() {
+        lock.lock(); defer { lock.unlock() }; modelDefaultsChosen = [:]
+    }
+
+    /// One `(repo, parameters)` pair per model whose own lane contract names this modality.
+    ///
+    /// The catalogue rows and the transcription availability rows are both searched, because that
+    /// is where the two producers publish their contracts — the same two places the app reads.
+    static func modelDefaultsModels(modality: String) -> [(repo: String, parameters: [[String: Any]])] {
+        var rows: [(repo: String, parameters: [[String: Any]])] = []
+        for entry in catalogModels + transcriptionModels {
+            guard let repo = entry["repo"] as? String,
+                  let contract = entry["lane_contract"] as? [String: Any],
+                  contract["modality"] as? String == modality,
+                  let parameters = contract["parameters"] as? [[String: Any]] else { continue }
+            rows.append((repo, parameters))
+        }
+        var seen = Set<String>()
+        return rows.filter { seen.insert($0.repo).inserted }
+    }
+
+    /// `components/model_defaults.editable`: what the lane publishes, minus what it requires and
+    /// minus a parameter whose enum holds exactly one value.
+    static func modelDefaultsEditable(_ parameters: [[String: Any]]) -> [[String: Any]] {
+        parameters.filter {
+            guard ($0["required"] as? Bool) != true,
+                  (($0["name"] as? String) ?? "").isEmpty == false else { return false }
+            if let options = $0["enum"] as? [Any] { return options.count > 1 }
+            return true
+        }
+    }
+
+    /// `components/model_defaults.stated`: every parameter the lane gives a default for, including
+    /// the ones an operator is offered no control for.
+    static func modelDefaultsStated(_ parameters: [[String: Any]]) -> [String: Any] {
+        var stated: [String: Any] = [:]
+        for parameter in parameters where (parameter["required"] as? Bool) != true {
+            guard let name = parameter["name"] as? String, let value = parameter["default"] else { continue }
+            stated[name] = value
+        }
+        return stated
+    }
+
+    private static func isJSONBool(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+    private static func isJSONNumber(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) != CFBooleanGetTypeID()
+    }
+    private static func sameJSON(_ left: Any, _ right: Any) -> Bool {
+        guard let left = left as? NSObject, let right = right as? NSObject else {
+            return String(describing: left) == String(describing: right)
+        }
+        return left.isEqual(right)
+    }
+
+    /// `components/model_defaults._check`, in the fixture: the reason one value is refused, or nil.
+    static func modelDefaultsRefusal(_ parameter: [String: Any], _ value: Any) -> String? {
+        let name = parameter["name"] as? String ?? "?"
+        let type = parameter["type"] as? String ?? ""
+        if value is NSNull { return "\(name): expected \(type), got null" }
+        switch type {
+        case "integer":
+            guard isJSONNumber(value), let number = value as? NSNumber,
+                  number.doubleValue == number.doubleValue.rounded() else {
+                return "\(name): expected integer, got \(Swift.type(of: value))"
+            }
+        case "number":
+            guard isJSONNumber(value) else { return "\(name): expected number, got \(Swift.type(of: value))" }
+        case "string":
+            guard value is String else { return "\(name): expected string, got \(Swift.type(of: value))" }
+        case "boolean":
+            guard isJSONBool(value) else { return "\(name): expected boolean, got \(Swift.type(of: value))" }
+        case "array":
+            guard value is [Any] else { return "\(name): expected array, got \(Swift.type(of: value))" }
+        case "object":
+            guard value is [String: Any] else { return "\(name): expected object, got \(Swift.type(of: value))" }
+        default:
+            return "\(name): the lane publishes type \(type), which this setting has no rule for"
+        }
+        if let options = parameter["enum"] as? [Any],
+           !options.contains(where: { sameJSON($0, value) }) {
+            return "\(name): \(value) is not one of \(options.map { String(describing: $0) })"
+        }
+        if isJSONNumber(value), let number = (value as? NSNumber)?.doubleValue {
+            if let minimum = (parameter["minimum"] as? NSNumber)?.doubleValue, number < minimum {
+                return "\(name): \(value) is below the lane's minimum of \(minimum)"
+            }
+            if let maximum = (parameter["maximum"] as? NSNumber)?.doubleValue, number > maximum {
+                return "\(name): \(value) is above the lane's maximum of \(maximum)"
+            }
+        }
+        if let limit = parameter["max_characters"] as? Int, let text = value as? String,
+           text.count > limit {
+            return "\(name): \(text.count) characters, above the lane's limit of \(limit)"
+        }
+        return nil
+    }
+
+    /// The payload the Studio's route answers with, built from the lane contracts the fixture
+    /// already serves — so the fixture cannot disagree with itself about which parameters exist.
+    static func modelDefaultsPayload(modality: String) -> Data {
+        lock.lock()
+        let stored = modelDefaultsChosen
+        lock.unlock()
+        var rows: [[String: Any]] = []
+        for model in modelDefaultsModels(modality: modality) {
+            let editable = modelDefaultsEditable(model.parameters)
+            let stated = modelDefaultsStated(model.parameters)
+            var inForce = stated
+            var notUsed: [String: String] = [:]
+            for (name, value) in (stored["\(modality)/\(model.repo)"] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                guard let parameter = editable.first(where: { $0["name"] as? String == name }) else {
+                    notUsed[name] = "this lane publishes no such settable parameter, so there is nothing to default"
+                    continue
+                }
+                if let reason = modelDefaultsRefusal(parameter, value) {
+                    notUsed[name] = reason
+                    continue
+                }
+                inForce[name] = value
+            }
+            var chosen: [String: Any] = [:]
+            for parameter in editable {
+                guard let name = parameter["name"] as? String, let value = inForce[name] else { continue }
+                if stated[name] == nil || !sameJSON(stated[name]!, value) { chosen[name] = value }
+            }
+            rows.append(["repo": model.repo, "defaults": inForce, "stated": stated,
+                         "chosen": chosen, "not_used": notUsed, "parameters": editable])
+        }
+        let payload: [String: Any] = [
+            "models": rows.sorted { ($0["repo"] as? String ?? "") < ($1["repo"] as? String ?? "") },
+            "settings_file": "model_defaults.json",
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload)
+    }
+
+    /// GET, PUT and DELETE for the defaults route, exactly as a Studio answers them: a PUT whose
+    /// values are refused at any parameter answers 422 with `detail` keyed by parameter.
+    private func answerModelDefaults(modality: String, method: String) {
+        let body = method == "GET" ? nil
+            : (try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]
+        Self.lock.lock()
+        Self.modelDefaultsRequests.append("\(method) \(modality)")
+        if method != "GET" { Self.lastModelDefaultsBody = body }
+        Self.lock.unlock()
+        let repo = body?["repo"] as? String ?? ""
+        if method == "PUT", let values = body?["values"] as? [String: Any] {
+            var refusals: [String: String] = [:]
+            let editable = Self.modelDefaultsEditable(
+                Self.modelDefaultsModels(modality: modality).first { $0.repo == repo }?.parameters ?? [])
+            for (name, value) in values {
+                guard let parameter = editable.first(where: { $0["name"] as? String == name }) else {
+                    refusals[name] = "this lane publishes no such settable parameter, so there is nothing to default"
+                    continue
+                }
+                if let reason = Self.modelDefaultsRefusal(parameter, value) { refusals[name] = reason }
+            }
+            if !refusals.isEmpty {
+                let payload = try! JSONSerialization.data(withJSONObject: ["detail": refusals])
+                finish((422, "application/json", payload))
+                return
+            }
+            Self.lock.lock()
+            Self.modelDefaultsChosen["\(modality)/\(repo)"] = values.filter { $0.value is NSNull == false }
+            Self.lock.unlock()
+            finish((200, "application/json", Self.modelDefaultsPayload(modality: modality)))
+            return
+        }
+        if method == "DELETE" {
+            Self.lock.lock()
+            Self.modelDefaultsChosen.removeValue(forKey: "\(modality)/\(repo)")
+            Self.lock.unlock()
+            finish((200, "application/json", Self.modelDefaultsPayload(modality: modality)))
+            return
+        }
+        finish((200, "application/json", Self.modelDefaultsPayload(modality: modality)))
     }
 
     /// The repos the fixture's Hub reports a package for.
@@ -4217,6 +4455,294 @@ struct NativeAPITests {
                 "a name that resolves to a private address must be recorded as that address")
         require(NativeWorkspaceStore.literalControllerAddress(URL(string: "http://192.168.1.21")!) == nil,
                 "an address with no port cannot name a Hub, so it must not be reported")
+
+
+        // ── The Models tab: one section per Studio, per-generator facts, per-model defaults ────
+
+        // The harness disconnected this store before the update sections; put it back on the
+        // fixture Hub so the reads below reach the fixture instead of no-opping.
+        await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                            dataDirectory: state, token: "native-test-token")
+
+        // A section per Studio, in the app's own Studio list's order — derived, never listed here.
+        // Adding a case to `StudioFunction` and nothing else must change this screen, which is what
+        // this assertion is: the sections ARE the enum, in its order, with no Studio missing.
+        let sections = store.modelSections(search: "", installedOnly: false)
+        require(sections.map(\.function) == StudioFunction.allCases,
+                "one section per Studio, in the Studio list's own order, got: \(sections.map(\.function.rawValue))")
+        require(sections.allSatisfy { $0.symbol == $0.function.symbol },
+                "each section must carry its own Studio's symbol")
+        guard let imageSection = sections.first(where: { $0.function == .image }) else {
+            fatalError("the fixture publishes image models, so Image must have a section")
+        }
+        require(imageSection.header == "Image — \(imageSection.models.count) models",
+                "the header must be the Studio's own name and its count, got: \(imageSection.header)")
+        // The existing filters still apply inside a section, and a search reaches every Studio: the
+        // narrow-bound fixture is found by its label, and only the section holding it is listed.
+        let searched = store.modelSections(search: "Narrow Image", installedOnly: false)
+        require(searched.count == 1 && searched.first?.function == .image
+                && searched.first?.models.map(\.repo) == ["fixture/narrow-image"],
+                "a search must reach into every Studio and list the sections that matched, got: \(searched.map(\.function.rawValue))")
+        require(store.modelSections(search: "narrow image", installedOnly: true).count == 0
+                || store.modelSections(search: "narrow image", installedOnly: true).first?.models.isEmpty == false,
+                "the installed-only filter must still apply inside a search")
+
+        func fact(_ label: String, _ model: NativeModel?) -> NativeModelFact? {
+            (model?.facts ?? []).first { $0.label == label }
+        }
+        func deliveryFact(_ label: String, _ model: NativeModel?) -> NativeModelFact? {
+            (model?.longForm?.facts ?? []).first { $0.label == label }
+        }
+
+        // Chat: the model's own limits, each with the artefact that states it — the number beside
+        // the source, never a curated substitute.
+        let chatModel = store.models.first { $0.repo == "Qwen/Qwen3.5-9B" }
+        require(fact("context_window_tokens", chatModel)?.value == "262144",
+                "the chat context window must be the model's own number, got: \(fact("context_window_tokens", chatModel)?.value ?? "nil")")
+        require(fact("context_window_tokens", chatModel)?.source
+                    == "model/config.json text_config.max_position_embeddings",
+                "the context window must carry the source that states it, from the row's model_limits")
+        require(chatModel?.modelLimits?["context_window_tokens"]?.value?.intValue == 262144,
+                "the row's model_limits object is the only source of a limit with provenance")
+        require(fact("max_output_tokens", chatModel)?.value == "4096"
+                && fact("max_output_tokens", chatModel)?.source?.contains("worker default") == true,
+                "a worker's fallback must say it is a worker's fallback, got: \(fact("max_output_tokens", chatModel)?.line ?? "nil")")
+        require(fact("Family", chatModel)?.value == "chat-mlx", "the family is a published fact")
+        require(fact("Label", chatModel)?.value == "Qwen3.5-9B 4-bit"
+                && fact("Label", chatModel)?.source == "label",
+                "the published label must be shown verbatim, bits and all, got: \(fact("Label", chatModel)?.line ?? "nil")")
+        require(chatModel?.facts.contains { $0.label == "Quantization" } == false,
+                "nothing may label a label as a quantization: the row states no such field")
+        let untagged = store.models.first { $0.function == .transcription && $0.repo == "mlx-community/whisper-large-v3-turbo" }
+        require(untagged?.facts.contains { $0.label == "Quantization" } == false
+                && fact("Label", untagged)?.value == "Whisper turbo",
+                "a model whose label carries no bits must not be given a quantization line")
+        require(fact("Memory tier", chatModel)?.value == "16 GB"
+                && fact("Memory tier", chatModel)?.source == "catalog row min_total_memory_gb",
+                "the memory tier must be the published one, with its key")
+        require(fact("messages", chatModel)?.value.contains("required") == true,
+                "a required parameter is shown as required, not offered as a default")
+
+        // Image: the size table with the pixels each aspect ratio means and the tier published, the
+        // steps/guidance bounds, and the model's own answer about guidance.
+        let narrow = store.models.first { $0.repo == "fixture/narrow-image" }
+        require(fact("4:3", narrow)?.value == "800 × 600 · 1K · default",
+                "the size table must state the pixels and the tier, got: \(fact("4:3", narrow)?.value ?? "nil")")
+        require(fact("3:2", narrow)?.value == "900 × 600 · 1K",
+                "every published aspect ratio belongs in the size table")
+        require(fact("steps", narrow)?.value == "3–5 · default 4",
+                "the steps range must be the lane's own, got: \(fact("steps", narrow)?.value ?? "nil")")
+        require(fact("resolution", narrow)?.value == "one of 1K · default 1K",
+                "the resolution tiers must be the ones the model publishes — one, not more")
+        require(fact("Guidance", narrow)?.value == "accepted and ignored by this model",
+                "a model that ignores guidance must say so rather than imply it works")
+
+        // Voice: the long-form bounds with their step and engine default, the hard cap, the join
+        // pause, and how the speed control reaches the engine.
+        let voiceModel = store.models.first { $0.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit" }
+        require(deliveryFact("Section size", voiceModel)?.value == "1600 characters · engine default",
+                "the section size in force must name the engine's own default, got: \(deliveryFact("Section size", voiceModel)?.value ?? "nil")")
+        require(deliveryFact("Adjustable range", voiceModel)?.value == "400–4000 characters · step 50",
+                "the adjustable range must carry the lane's own step, got: \(deliveryFact("Adjustable range", voiceModel)?.value ?? "nil")")
+        require(deliveryFact("Hard cap", voiceModel)?.value == "stops reading past 5000 characters",
+                "the hard cap must be shown")
+        require(deliveryFact("Between sections", voiceModel)?.value == "120 ms", "the join pause must be shown")
+        require(deliveryFact("Speed control", voiceModel)?.value == "engine-native · 0.5–2×",
+                "the speed fact must carry both the range and how it is delivered, got: \(deliveryFact("Speed control", voiceModel)?.value ?? "nil")")
+        require(fact("Voice modes", voiceModel)?.value == "Ready-Made Voices",
+                "the modes a model offers must come from its own row")
+
+        // Music: the duration ladder with the host's single-pass cap, and whether vocals and lyrics
+        // are accepted at all — read from the parameters the lane published.
+        let musicModel = store.models.first { $0.repo == "ACE-Step/Ace-Step1.5" }
+        require(fact("duration_seconds", musicModel)?.value == "1–600 · default 30",
+                "the duration ladder must be the lane's own, got: \(fact("duration_seconds", musicModel)?.value ?? "nil")")
+        require(fact("steps", musicModel)?.value == "1–50 · default 8", "Music's steps range must be shown")
+        require(fact("guidance_scale", musicModel)?.value == "0–30 · default 1", "Music's guidance range must be shown")
+        require(fact("shift", musicModel)?.value == "0–20", "Music's shift range must be shown")
+        require(fact("duration_seconds ladder", musicModel)?.value
+                    == "1 s | 30 s | 60 s | 120 s | 240 s | 480 s | 600 s (renders in sections)",
+                "the published ladder must be shown in the lane's own labels, with the rung that "
+                + "is rendered in sections marked, got: \(fact("duration_seconds ladder", musicModel)?.value ?? "nil")")
+        require(fact("Single-pass render", musicModel)?.value
+                    == "up to 480 s · longer durations are rendered in sections",
+                "the single-pass maximum is a different fact from the model's own maximum")
+        require(fact("Vocals & lyrics", musicModel)?.value
+                    == "accepted: instrumental, lyrics, vocal_language",
+                "an engine that can sing must say which controls it accepts, got: \(fact("Vocals & lyrics", musicModel)?.value ?? "nil")")
+        require(fact("Sample rate", musicModel)?.value == "48000 Hz · 2 channels",
+                "the output shape must be shown")
+        let instrumentalOnly = store.models.first { $0.repo == "fixture/second-music" }
+        require(fact("duration_seconds ladder", instrumentalOnly)?.value
+                    == "1 s | 30 s | 60 s | 120 s | 240 s | 380 s",
+                "a ladder with no sectioned rung must render without one")
+        require(fact("Vocals & lyrics", instrumentalOnly)?.value
+                    == "not accepted: this lane publishes no vocal or lyric parameter",
+                "a runtime that forces instrumental output must say so, got: \(fact("Vocals & lyrics", instrumentalOnly)?.value ?? "nil")")
+
+        // Subtitle: languages, both timestamp claims, and the weight format the worker named.
+        let subtitleModel = store.models.first { $0.function == .transcription && $0.repo == "mlx-community/whisper-large-v3-turbo" }
+        require(fact("Languages", subtitleModel)?.value == "Multilingual", "the manifest's languages must be shown")
+        require(fact("Segment timestamps", subtitleModel)?.value == "supported",
+                "the manifest's segment-timestamp claim must be shown")
+        require(fact("Word timestamps", subtitleModel)?.value == "supported",
+                "the manifest's word-timestamp claim must be shown")
+        require(fact("Weight format", subtitleModel)?.value == "safetensors · weights.safetensors",
+                "the weight format must be read from the files the worker listed, got: \(fact("Weight format", subtitleModel)?.value ?? "nil")")
+
+        // The editor is built from the Studio's own route: one control per settable parameter, in
+        // the Studio's order, with the Studio's bounds.
+        await store.loadModelDefaultsIfNeeded()
+        require(FixtureProtocol.modelDefaultsRequestLog().contains("GET image"),
+                "the Models tab must read each Studio's published defaults: \(FixtureProtocol.modelDefaultsRequestLog())")
+        require(store.modelDefaultsSettingsFile == "model_defaults.json",
+                "the file the values live in must come from the Studio's own answer")
+        guard let narrowModel = narrow else { fatalError("the narrow fixture must be in the library") }
+        let controls = store.modelDefaultControls(for: narrowModel)
+        require(controls.map(\.name) == ["aspect_ratio", "steps", "guidance", "seed"],
+                "the editor's controls must be the Studio's settable parameters in its own order, got: \(controls.map(\.name))")
+        // The one-option enum the worker does not offer a control for is still a stated value: the
+        // image request has to carry a resolution whether or not there is a picker for it.
+        require(store.savedDefault("resolution", for: narrowModel)?.stringValue == "1K"
+                && !controls.contains { $0.name == "resolution" },
+                "a parameter with no control must still be in the values in force")
+        require(!controls.contains { $0.name == "prompt" },
+                "a required parameter is per-request content and must render no control")
+        require(controls.first { $0.name == "steps" }?.boundText == "3–5 · default 4",
+                "the narrow bound must be rendered exactly, got: \(controls.first { $0.name == "steps" }?.boundText ?? "nil")")
+        require(controls.first { $0.name == "aspect_ratio" }?.boundText == "one of 4:3, 3:2 · default 4:3",
+                "an enum control must offer exactly the lane's options in its order")
+        require(controls.first { $0.name == "guidance" }?.ignored == true
+                && controls.first { $0.name == "guidance" }?.sendsValue == false,
+                "a parameter the lane ignores must be shown as ignored and never sent")
+        // The structured field outranks the prose note, and the note still covers a lane that has
+        // not published the field yet.
+        let noteOnly = store.modelDefaultControls(for: store.models.first { $0.repo == "fixture/flux" }!)
+        require(noteOnly.first { $0.name == "guidance" }?.ignored == true
+                && noteOnly.first { $0.name == "guidance" }?.sendsValue == false,
+                "a lane that states it in a note alone must still be obeyed")
+        // The chat lane publishes two shapes this editor has no rule for (an array and an object),
+        // and both are shown rather than hidden or faked as editable.
+        let chatControls = store.modelDefaultControls(for: chatModel!)
+        require(chatControls.first { $0.name == "response_format" }?.sendsValue == false,
+                "a parameter whose type this editor cannot render must not be sent")
+        require(chatControls.first { $0.name == "top_p" }?.boundText.contains(">0") == true,
+                "an exclusive bound must be rendered as one, got: \(chatControls.first { $0.name == "top_p" }?.boundText ?? "nil")")
+        require(chatControls.first { $0.name == "max_tokens" }?.boundText == "1–4096 · default 4096",
+                "the chat maximum must be the model's own published ceiling")
+        let durationControl = store.modelDefaultControls(for: musicModel!).first { $0.name == "duration_seconds" }
+        require(durationControl?.ladder?.count == 7
+                && durationControl?.ladder?.last?.exceedsSinglePass == true
+                && durationControl?.ladder?.last?.label == "600 s",
+                "the duration control must carry the lane's ladder, flagged as published")
+        require(durationControl?.boundText == "1–600 · default 30",
+                "the ladder must not narrow the bound: the control stays the model's own range, got: \(durationControl?.boundText ?? "nil")")
+
+        // A worker that wrongly lists a required parameter as settable still renders no control for
+        // it: the rule is the app's own as well as the route's, because a stored default for
+        // per-request content would answer with something nobody wrote this time.
+        func laneParameter(_ name: String, required: Bool, type: String, options: [String]? = nil,
+                           minimum: Double? = nil, maximum: Double? = nil,
+                           defaultValue: NativeJSONValue? = nil) -> NativeLaneParameter {
+            NativeLaneParameter(name: name, type: type, required: required, minimum: minimum,
+                                maximum: maximum, minimumExclusive: nil, maximumExclusive: nil,
+                                maxCharacters: nil, maxBytes: nil, options: options,
+                                defaultValue: defaultValue, note: nil, ignored: nil, ladder: nil,
+                                boundSource: nil)
+        }
+        let synthetic = NativeModelDefaults(
+            repo: "fixture/synthetic", defaults: [:], stated: [:], chosen: [:], notUsed: [:],
+            parameters: [laneParameter("prompt", required: true, type: "string"),
+                         laneParameter("steps", required: false, type: "integer",
+                                       minimum: 2, maximum: 4, defaultValue: .integer(2))])
+        require(NativeWorkspaceStore.modelDefaultControls(synthetic).map(\.name) == ["steps"],
+                "a required parameter must render no control, in the lane's order and nothing else")
+
+        // Saving a value inside the published bound, and taking the Studio's own answer as the
+        // result: the value in force, marked as chosen.
+        store.error = nil
+        await store.saveModelDefaults(for: narrowModel,
+                                      values: ["steps": .integer(5), "aspect_ratio": .string("3:2")])
+        require(FixtureProtocol.lastModelDefaultsRequest()?["repo"] as? String == "fixture/narrow-image",
+                "the PUT must name the model it is about")
+        require(store.modelDefaultControls(for: narrowModel).first { $0.name == "steps" }?.value?.intValue == 5,
+                "the Studio's answer is what the editor shows after a save")
+        require(store.modelDefaultControls(for: narrowModel).first { $0.name == "steps" }?.chosen == true,
+                "a value the operator chose must be marked as chosen")
+
+        // A refused value answers 422 with a reason per parameter, and each reason belongs to its
+        // own field — not to one generic banner.
+        await store.saveModelDefaults(for: narrowModel,
+                                      values: ["steps": .integer(99), "aspect_ratio": .string("7:3")])
+        let refusals = store.modelDefaultRefusals(for: narrowModel)
+        require(refusals["steps"]?.contains("above the lane's maximum") == true,
+                "the refused steps value must carry the lane's own reason, got: \(refusals["steps"] ?? "nil")")
+        require(refusals["aspect_ratio"]?.contains("is not one of") == true,
+                "the refused enum value must carry its own reason, got: \(refusals["aspect_ratio"] ?? "nil")")
+        require(refusals.count == 2, "every refused value must be reported, got: \(refusals)")
+        require(store.error == nil,
+                "a per-parameter refusal must not be collapsed into the shared banner, got: \(store.error ?? "nil")")
+        require(store.modelDefaultControls(for: narrowModel).first { $0.name == "steps" }?.value?.intValue == 5,
+                "a refused save must leave the values in force untouched")
+
+        // A stored value the lane now refuses is shown with its reason and is not in force.
+        FixtureProtocol.seedStoredDefault(modality: "image", repo: "fixture/narrow-image",
+                                          values: ["steps": 40])
+        await store.refreshModelDefaults(modality: "image")
+        let notUsed = store.modelDefaultsNotUsed(for: narrowModel)
+        require(notUsed.count == 1 && notUsed[0].hasPrefix("steps — ")
+                && notUsed[0].contains("above the lane's maximum"),
+                "a stored value the lane refuses must be shown with its reason, got: \(notUsed)")
+        require(store.modelDefaultControls(for: narrowModel).first { $0.name == "steps" }?.value?.intValue == 4,
+                "a refused stored value must not be the value in force")
+
+        // Restore sends the DELETE and the editor returns to what the Studio states.
+        FixtureProtocol.resetModelDefaultsRequests()
+        await store.restoreModelDefaults(for: narrowModel)
+        require(FixtureProtocol.modelDefaultsRequestLog() == ["DELETE image"],
+                "Restore must issue the DELETE for this model's Studio, got: \(FixtureProtocol.modelDefaultsRequestLog())")
+        let restored = store.modelDefaultControls(for: narrowModel)
+        require(restored.first { $0.name == "steps" }?.value?.intValue == 4
+                && restored.first { $0.name == "steps" }?.chosen == false,
+                "Restore must return the control to what the lane states")
+        require(restored.first { $0.name == "aspect_ratio" }?.value?.stringValue == "4:3",
+                "every restored control must return to the lane's own value")
+        require(store.modelDefaultsNotUsed(for: narrowModel).isEmpty,
+                "Restore must clear the values the lane no longer accepts")
+        require(store.modelDefaultRefusals(for: narrowModel).isEmpty,
+                "Restore must clear the refusals it replaced")
+
+        // The generator page opens on the catalogue's resolved value — the worker's own answer to
+        // "what would this job run with?" — and adopts a save on the next refresh.
+        store.imageModel = "fixture/narrow-image"
+        store.restoreImageDefaults()
+        require(store.imageSettings?.steps == 4,
+                "with nothing saved, the page opens on the model's own default, got: \(String(describing: store.imageSettings?.steps))")
+        await store.saveModelDefaults(for: narrowModel,
+                                      values: ["steps": .integer(5), "aspect_ratio": .string("3:2")])
+        require(store.imageSettings?.steps == 5,
+                "the Image page must pick up the resolved default on the refresh after a save, got: \(String(describing: store.imageSettings?.steps))")
+        require(store.imageSettings?.width == 900 && store.imageSettings?.height == 600,
+                "the saved aspect ratio must reach the page as the pixels the catalogue resolves, got: \(String(describing: store.imageSettings))")
+        store.imageModel = "fixture/flux"
+        store.imageModel = "fixture/narrow-image"
+        require(store.imageSettings?.steps == 5,
+                "reopening the model must show the resolved default, got: \(String(describing: store.imageSettings?.steps))")
+        // ...and a value the operator has since typed is never overwritten by a poll.
+        store.imageSettings?.steps = 9
+        await store.refresh()
+        require(store.imageSettings?.steps == 9,
+                "a refresh must not overwrite a value the operator typed, got: \(String(describing: store.imageSettings?.steps))")
+
+        let instrumentalModel = store.models.first { $0.repo == "fixture/second-music" }
+        require(instrumentalModel != nil, "the second music fixture must be in the library")
+        store.musicModel = "fixture/second-music"
+        await store.saveModelDefaults(for: instrumentalModel!,
+                                      values: ["duration_seconds": .number(45), "steps": .integer(12)])
+        store.musicModel = "ACE-Step/Ace-Step1.5"
+        store.musicModel = "fixture/second-music"
+        require(store.musicSettings?.durationSeconds == 45 && store.musicSettings?.steps == 12,
+                "the Music page must show the catalogue's resolved duration and steps, got: \(String(describing: store.musicSettings))")
 
         print("Native API contract checks passed")
     }

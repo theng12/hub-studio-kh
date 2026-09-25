@@ -327,6 +327,358 @@ struct NativeMusicConfiguration: Equatable {
     }
 }
 
+/// One JSON value a lane publishes: a bound's default, a stored default, or a value in force.
+///
+/// The defaults payload carries a heterogeneous map — `{"steps": 9, "aspect_ratio": "16:9",
+/// "instrumental": true}` — so it is decoded as the JSON it is rather than as one concrete type
+/// that would drop every key of another shape. Nothing is coerced on the way in or out: an integer
+/// stays an integer, so the value the operator typed is the value that goes back to the lane.
+enum NativeJSONValue: Codable, Equatable {
+    case string(String)
+    case integer(Int)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { self = .null; return }
+        // Boolean before number on purpose: this decoder is strict about the two, and a JSON
+        // `true` must not become 1 in a field the lane validates as a boolean.
+        if let value = try? container.decode(Bool.self) { self = .bool(value); return }
+        if let value = try? container.decode(Int.self) { self = .integer(value); return }
+        if let value = try? container.decode(Double.self) { self = .number(value); return }
+        if let value = try? container.decode(String.self) { self = .string(value); return }
+        throw DecodingError.dataCorruptedError(
+            in: container, debugDescription: "a value this app has no rule for")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .integer(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .integer(let value): return value
+        case .number(let value) where value == value.rounded() && value.magnitude < 9e18:
+            return Int(value)
+        default: return nil
+        }
+    }
+    var doubleValue: Double? {
+        switch self {
+        case .integer(let value): return Double(value)
+        case .number(let value): return value
+        default: return nil
+        }
+    }
+    var boolValue: Bool? { if case .bool(let value) = self { return value }; return nil }
+    var stringValue: String? { if case .string(let value) = self { return value }; return nil }
+
+    /// The value as a field shows it. A double that is really an integer prints without a decimal
+    /// tail, because `9.0` in a steps field reads as a number the lane never published.
+    var fieldText: String {
+        switch self {
+        case .string(let value): return value
+        case .integer(let value): return String(value)
+        case .number(let value): return Self.trimmed(value)
+        case .bool(let value): return value ? "on" : "off"
+        case .null: return ""
+        }
+    }
+
+    /// A number as a person writes it: no trailing `.0`, no exponent for the sizes here.
+    static func trimmed(_ value: Double) -> String {
+        guard value.isFinite else { return "" }
+        if value == value.rounded() && value.magnitude < 1e15 { return String(Int(value)) }
+        var text = String(format: "%g", value)
+        if text.contains("e") { text = String(value) }
+        return text
+    }
+}
+
+/// One suggested value a lane publishes under a parameter — Music's duration ladder.
+///
+/// A rung is a *suggestion*, never the set of accepted values: the parameter stays the bounded
+/// number it always was, and the operator may store any value inside the lane's own range.
+/// `exceedsSinglePass` is a fact about the job the rung produces — a length the engine renders in
+/// sections — so it is shown rather than hidden.
+struct NativeLadderRung: Decodable, Equatable, Identifiable {
+    let seconds: Double
+    let label: String
+    let exceedsSinglePass: Bool?
+    var id: Double { seconds }
+}
+
+/// One parameter a lane publishes in its `lane_contract`, exactly as it published it.
+///
+/// This is the whole of what the editor and the facts block know about a control: the name, the
+/// type, and the bound the lane says it enforces. Nothing here is a copy of a bound — a parameter
+/// added, withdrawn or re-bounded by a Studio changes this screen with no edit in the app.
+struct NativeLaneParameter: Decodable, Equatable, Identifiable {
+    let name: String
+    let type: String
+    /// A required parameter is per-request content: it is never offered as a default.
+    let required: Bool?
+    let minimum: Double?
+    let maximum: Double?
+    /// `top_p` publishes `minimum_exclusive`: the lane refuses the bound itself, so the editor
+    /// must not offer it as an accepted value.
+    let minimumExclusive: Bool?
+    let maximumExclusive: Bool?
+    let maxCharacters: Int?
+    let maxBytes: Int?
+    /// The lane's own options, in the lane's own order.
+    let options: [String]?
+    let defaultValue: NativeJSONValue?
+    /// The lane's own sentence about the parameter — including that it is accepted and ignored.
+    let note: String?
+    /// The lane's own machine-readable answer to "do you read this parameter at all?", where it
+    /// publishes one. It outranks the prose note below: a field cannot be reworded by accident.
+    let ignored: Bool?
+    /// Suggested values the lane publishes for this parameter, when it publishes any.
+    let ladder: [NativeLadderRung]?
+    /// Where the lane says the bound came from, when it says (Voice publishes `bound_source`).
+    let boundSource: String?
+
+    var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, type, required, minimum, maximum, note, ignored, ladder
+        case minimumExclusive, maximumExclusive, maxCharacters, maxBytes, boundSource
+        case options = "enum"
+        case defaultValue = "default"
+    }
+
+    /// Whether the lane itself says it accepts this parameter and discards it.
+    ///
+    /// The Image worker is the live case: Z-Image-Turbo accepts `guidance` and forces it to zero.
+    /// Where the lane publishes the machine-readable `ignored` field that is the answer; where it
+    /// has not landed yet, its own sentence — "accepted and ignored: this model runs without
+    /// classifier-free guidance" — is read instead. A control that looked editable there would be
+    /// a value the lane never reads, so it is shown as ignored and never sent.
+    var isDeclaredIgnored: Bool {
+        if let ignored { return ignored }
+        return (note ?? "").lowercased().hasPrefix("accepted and ignored")
+    }
+}
+
+/// One limit a worker publishes with the artefact that states it.
+///
+/// `value` is nil when nothing states the limit, and `source` is then the reason — never a curated
+/// substitute. The app renders the value only when it has one, and always with its source.
+struct NativeModelLimit: Decodable, Equatable {
+    let value: NativeJSONValue?
+    let source: String?
+}
+
+/// The artifact a lane's successful item yields.
+struct NativeLaneArtifact: Decodable, Equatable {
+    let modality: String?
+    let mediaType: String?
+    let fileExtension: String?
+    let perItem: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case modality, mediaType, perItem
+        case fileExtension = "extension"
+    }
+}
+
+/// The dispatch contract one Studio publishes for one model (`studiohub.lane-contract.v1`).
+///
+/// The app read none of this until now. It is the only place a scheduler — or this screen — can
+/// learn what a lane accepts, with which bounds, without reading the worker's source.
+struct NativeLaneContract: Decodable, Equatable {
+    let schema: String?
+    /// The lane's own modality: the string every `/studio/<modality>/…` call is addressed with, so
+    /// the defaults route is reached without a second table in the app.
+    let modality: String
+    let operation: String?
+    let parameters: [NativeLaneParameter]
+    /// Chat publishes the model's own limits here, each with the artefact that states it.
+    let modelLimits: [String: NativeModelLimit]?
+    let artifact: NativeLaneArtifact?
+    /// The Hub adds its own proxy timeout when it echoes a contract on a package row.
+    let deadlineSeconds: Double?
+}
+
+/// One row of the size table an Image model publishes: the aspect ratio, the pixels it means, and
+/// the resolution tier the model states for it.
+struct NativeImageSizeRow: Decodable, Equatable, Identifiable {
+    let aspectRatio: String
+    let width: Int
+    let height: Int
+    let tier: String?
+    let isDefault: Bool?
+
+    var id: String { aspectRatio }
+
+    enum CodingKeys: String, CodingKey {
+        case aspectRatio, width, height, tier
+        case isDefault = "default"
+    }
+}
+
+/// One read-only fact about a model, and what stated it.
+///
+/// `source` is the producer's own provenance where it publishes one — a `config.json` key, a
+/// worker default, a bound's `bound_source` — and nil only where the value is the whole of what
+/// was published (a family name, a boolean the row states without qualification).
+struct NativeModelFact: Equatable, Identifiable {
+    let label: String
+    let value: String
+    let source: String?
+
+    var id: String { label }
+
+    /// One line, with its provenance beside it — what the detail pane renders and what the
+    /// evidence harness prints.
+    var line: String {
+        guard let source, !source.isEmpty else { return "\(label): \(value)" }
+        return "\(label): \(value) — \(source)"
+    }
+}
+
+/// One section of the Models tab: a Studio from the app's own Studio list, its symbol and name,
+/// and the models it offers. Nothing about which Studios exist is written down here.
+struct NativeModelSection: Identifiable, Equatable {
+    let function: StudioFunction
+    let models: [NativeModel]
+
+    var id: String { function.id }
+    var symbol: String { function.symbol }
+    /// The header, exactly as the Models tab renders it.
+    var header: String {
+        "\(function.rawValue) — \(models.count) \(models.count == 1 ? "model" : "models")"
+    }
+}
+
+/// One editor row in "Your defaults for this model".
+///
+/// Built only from the parameter the lane published: its type, its own bound, and the value in
+/// force. The lane's order is preserved, so a parameter the Studio adds appears where the Studio
+/// put it.
+struct NativeModelDefaultControl: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case integer
+        case number
+        /// A picker of exactly the lane's options, in the lane's order.
+        case choice([String])
+        case text
+        case toggle
+        /// A type this editor has no rule for (`array`, `object`, or a type it has never seen).
+        /// Shown with the lane's own note and never sent: a control invented for a shape nobody
+        /// published would be a value the lane never validated.
+        case unrenderable
+    }
+
+    let name: String
+    let kind: Kind
+    let minimum: Double?
+    let maximum: Double?
+    let minimumExclusive: Bool
+    let maximumExclusive: Bool
+    let step: Double?
+    let maxCharacters: Int?
+    let maxBytes: Int?
+    /// The type the lane published, kept for the caption of a shape this editor cannot render.
+    let typeName: String
+    /// Suggested values the lane published for this parameter, in the lane's own order and labels.
+    /// They are offered beside the field, never instead of it: the bound is what the lane accepts.
+    let ladder: [NativeLadderRung]?
+    let note: String?
+    /// The lane itself says it accepts this parameter and discards it.
+    let ignored: Bool
+    /// The value in force: the operator's chosen default over the lane's own.
+    let value: NativeJSONValue?
+    /// What the lane states, so "Restore" can be seen to return the control to it.
+    let stated: NativeJSONValue?
+    /// The operator has chosen a value for this parameter.
+    let chosen: Bool
+    let boundSource: String?
+
+    var id: String { name }
+
+    /// Whether this control sends a value in a PUT. A parameter the lane ignores, or a shape this
+    /// editor has no rule for, is shown but not sent.
+    var sendsValue: Bool {
+        if ignored { return false }
+        if case .unrenderable = kind { return false }
+        return true
+    }
+
+    /// The bound, in the lane's own numbers, exactly as the editor captions the control.
+    var boundText: String {
+        var parts: [String] = []
+        switch kind {
+        case .choice(let options):
+            parts.append("one of " + options.joined(separator: ", "))
+        case .toggle:
+            parts.append("on or off")
+        case .text:
+            if let maxCharacters { parts.append("up to \(maxCharacters) characters") }
+            if let maxBytes { parts.append("up to \(maxBytes) bytes") }
+        case .integer, .number:
+            parts.append(Self.rangeText(minimum: minimum, maximum: maximum,
+                                        minimumExclusive: minimumExclusive,
+                                        maximumExclusive: maximumExclusive))
+        case .unrenderable:
+            parts.append("published as \(typeName)")
+        }
+        if let stated { parts.append("default \(stated.fieldText)") }
+        return parts.joined(separator: " · ")
+    }
+
+    static func rangeText(minimum: Double?, maximum: Double?, minimumExclusive: Bool,
+                          maximumExclusive: Bool) -> String {
+        let low = minimum.map(NativeJSONValue.trimmed)
+        let high = maximum.map(NativeJSONValue.trimmed)
+        switch (low, high) {
+        case (nil, nil): return "no bound published"
+        case (let value?, nil):
+            return "\(minimumExclusive ? "above" : "at least") \(value)"
+        case (nil, let value?):
+            return "\(maximumExclusive ? "below" : "up to") \(value)"
+        case (let value?, let ceiling?):
+            if !minimumExclusive && !maximumExclusive { return "\(value)–\(ceiling)" }
+            let lower = "\(minimumExclusive ? ">" : "≥")\(value)"
+            let upper = "\(maximumExclusive ? "<" : "≤")\(ceiling)"
+            return "\(lower) and \(upper)"
+        }
+    }
+}
+
+/// One model's editable default surface, exactly as the Studio's own route answers it
+/// (`GET /studio/<modality>/api/model-defaults`).
+struct NativeModelDefaults: Decodable, Equatable, Identifiable {
+    let repo: String
+    /// The values in force: the operator's choices over what the lane states.
+    let defaults: [String: NativeJSONValue]
+    /// What the lane itself states.
+    let stated: [String: NativeJSONValue]
+    /// What the operator changed.
+    let chosen: [String: NativeJSONValue]
+    /// A stored value the current lane refuses, with the reason. Shown, never silently dropped.
+    let notUsed: [String: String]
+    /// The settable parameters the lane publishes, in the lane's order.
+    let parameters: [NativeLaneParameter]
+
+    var id: String { repo }
+}
+
+struct NativeModelDefaultsPayload: Decodable, Equatable {
+    let models: [NativeModelDefaults]
+    let settingsFile: String?
+}
+
 struct NativeModel: Identifiable, Equatable {
     let id: String
     let repo: String
@@ -387,11 +739,41 @@ struct NativeModel: Identifiable, Equatable {
     /// the WAV will be without opening it; absent for every other function.
     var sampleRateHz: Int? = nil
     var channels: Int? = nil
+    /// The longest single render this host's Music engine can do, when the model publishes one.
+    var singlePassMaxSeconds: Double? = nil
     /// The Image worker's loading-size setting as it applies to this model on this Mac, published
     /// on the model's own catalogue row. Nil means the row published none at all — which is what a
     /// catalogue row for a manifest the worker has no registered model for looks like — and the
     /// Image page says so rather than drawing a control that would do nothing.
     var loadingModes: NativeImageLoadingModes? = nil
+    /// The dispatch contract this model's Studio published for it. The Models tab reads every
+    /// per-generator fact from here — the operation, every parameter with its enforced bound, and
+    /// the modality every `/studio/<modality>/…` call is addressed with. Nil means the Studio
+    /// published none, and the detail pane then offers no editor rather than an invented one.
+    var laneContract: NativeLaneContract? = nil
+    /// The model limits the row publishes *with the artefact that states each one*
+    /// (`model_limits`). The bare `context_window_tokens` the same row carries is a number with no
+    /// provenance — a worker's fallback published beside the model's own fact is exactly the
+    /// confusion the standing rule forbids — so a limit is only ever rendered from here.
+    var modelLimits: [String: NativeModelLimit]? = nil
+    /// The size table an Image model publishes: each aspect ratio with the pixels it means and the
+    /// resolution tier the model states. Empty for every other Studio and for a row that published
+    /// none, and then nothing is shown for it.
+    var imageSizeRows: [NativeImageSizeRow] = []
+    /// The Image worker's own answer to "does this model read a guidance value at all?".
+    var guidanceIgnored: Bool = false
+    /// The RAM tier a Studio publishes for this model, and the key it came from, so the fact can
+    /// be shown with its provenance instead of a re-derived threshold.
+    var minimumMemoryGB: Double? = nil
+    var minimumMemorySource: String? = nil
+    /// Subtitle: whether this model's manifest declares segment timestamps, and word-level ones.
+    /// Both are optional claims: a Studio that publishes neither renders nothing for them, and a
+    /// model that publishes `false` says "not supported" rather than staying silent.
+    var supportsSegmentTimestamps: Bool? = nil
+    var wordTimestampsClaim: Bool? = nil
+    /// Subtitle: the weight files the worker's own catalogue row lists, which is what says which
+    /// weight format this runtime can load.
+    var weightFiles: [String] = []
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
     /// A cleaned short name for a chooser. The catalogue label carries a recommendation suffix and
@@ -406,6 +788,207 @@ struct NativeModel: Identifiable, Equatable {
         name = name.replacingOccurrences(of: " (MLX)", with: "")
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? label : trimmed
+    }
+
+    // MARK: - Read-only facts, per generator
+
+    /// Every read-only fact this model publishes, in the order the detail pane shows them.
+    ///
+    /// Three sources, and no fourth: the lane's own `parameters` (every one, in the lane's order,
+    /// with the bound it enforces), the values the row publishes beside them (a size table, a
+    /// long-form policy, model limits, a sample rate, a language list), and the label the row
+    /// carries. Each block is gated on the data being present rather than on which Studio this is,
+    /// so a Studio that starts publishing one of these keys gets its facts with no edit here —
+    /// which is the same rule the editor follows.
+    ///
+    /// Nothing is invented to fill a gap: a value that is absent renders nothing, and a limit whose
+    /// producer states no value is left out rather than shown as a curated number.
+    var facts: [NativeModelFact] {
+        var facts: [NativeModelFact] = []
+        if let contract = laneContract {
+            if let operation = contract.operation, !operation.isEmpty {
+                facts.append(NativeModelFact(label: "Operation", value: operation,
+                                             source: "lane_contract.operation"))
+            }
+            // Every parameter the lane publishes, with the bound it enforces. This is what makes
+            // "the steps range" or "the duration ladder" a read of the lane's own numbers rather
+            // than a table kept in the app.
+            for parameter in contract.parameters {
+                facts.append(NativeModelFact(
+                    label: parameter.name,
+                    value: Self.parameterSummary(parameter),
+                    source: parameter.boundSource ?? parameter.note))
+                // A published ladder is a fact about the parameter, in the lane's own labels, with
+                // the rungs that are rendered in sections marked as such.
+                if let ladder = parameter.ladder, !ladder.isEmpty {
+                    facts.append(NativeModelFact(
+                        label: "\(parameter.name) ladder",
+                        value: ladder.map { rung in
+                            rung.exceedsSinglePass == true
+                                ? "\(rung.label) (renders in sections)" : rung.label
+                        }.joined(separator: " | "),
+                        source: "lane_contract.parameters.\(parameter.name).ladder"))
+                }
+            }
+            facts.append(contentsOf: Self.limitFacts(modelLimits ?? contract.modelLimits ?? [:]))
+            if let artifact = contract.artifact {
+                var shape: [String] = []
+                if let media = artifact.mediaType, !media.isEmpty { shape.append(media) }
+                if let perItem = artifact.perItem { shape.append("\(perItem) per item") }
+                if !shape.isEmpty {
+                    facts.append(NativeModelFact(label: "Artifact", value: shape.joined(separator: " · "),
+                                                 source: "lane_contract.artifact"))
+                }
+            }
+        }
+        // The size table: for each aspect ratio the pixels it means, and the tier the model
+        // states. One row per ratio, so a model publishing several says so and a model publishing
+        // one tier does not imply more.
+        for row in imageSizeRows {
+            var value = "\(row.width) × \(row.height)"
+            if let tier = row.tier, !tier.isEmpty { value += " · \(tier)" }
+            if row.isDefault == true { value += " · default" }
+            facts.append(NativeModelFact(label: row.aspectRatio, value: value,
+                                         source: "catalog row sizes"))
+        }
+        if guidanceIgnored {
+            facts.append(NativeModelFact(
+                label: "Guidance", value: "accepted and ignored by this model",
+                source: "catalog row guidance_ignored"))
+        }
+        if let sampleRateHz {
+            var value = "\(sampleRateHz) Hz"
+            if let channels { value += " · \(channels) channel\(channels == 1 ? "" : "s")" }
+            facts.append(NativeModelFact(label: "Sample rate", value: value,
+                                         source: "catalog row sample_rate_hz"))
+        }
+        if let singlePassMaxSeconds {
+            facts.append(NativeModelFact(
+                label: "Single-pass render",
+                value: "up to \(NativeJSONValue.trimmed(singlePassMaxSeconds)) s · longer durations are rendered in sections",
+                source: "catalog row generation_limits.single_pass_max_seconds"))
+        }
+        // Whether this lane accepts vocals and lyrics at all, read from the parameters it
+        // published: the Music worker's own rule is that a runtime forcing instrumental output
+        // must not advertise the keys it discards, so their absence is the fact. A Studio whose
+        // duration is not this shape publishes none of them and renders nothing here.
+        if let contract = laneContract, contract.parameters.contains(where: { $0.name == "duration_seconds" }) {
+            let vocal = contract.parameters.map(\.name).filter(Self.vocalParameters.contains)
+            facts.append(NativeModelFact(
+                label: "Vocals & lyrics",
+                value: vocal.isEmpty
+                    ? "not accepted: this lane publishes no vocal or lyric parameter"
+                    : "accepted: " + vocal.joined(separator: ", "),
+                source: "lane_contract.parameters"))
+        }
+        if !languages.isEmpty {
+            facts.append(NativeModelFact(label: "Languages", value: languages.joined(separator: ", "),
+                                         source: nil))
+        }
+        if let segment = supportsSegmentTimestamps {
+            facts.append(NativeModelFact(
+                label: "Segment timestamps", value: segment ? "supported" : "not supported",
+                source: "catalog row supports_segment_timestamps"))
+        }
+        if let words = wordTimestampsClaim {
+            facts.append(NativeModelFact(
+                label: "Word timestamps", value: words ? "supported" : "not supported",
+                source: "availability row supports_word_timestamps"))
+        }
+        if !weightFiles.isEmpty {
+            let formats = Self.distinctExtensions(weightFiles)
+            facts.append(NativeModelFact(
+                label: "Weight format",
+                value: formats.isEmpty ? weightFiles.joined(separator: ", ")
+                                       : "\(formats.joined(separator: ", ")) · \(weightFiles.joined(separator: ", "))",
+                source: "catalog row readiness.files.weight_files"))
+        }
+        if let minimumMemoryGB {
+            facts.append(NativeModelFact(
+                label: "Memory tier",
+                value: "\(NativeJSONValue.trimmed(minimumMemoryGB)) GB",
+                source: minimumMemorySource))
+        }
+        // The heading is "Label", not "Quantization", because a label is what the row publishes.
+        // Where the label carries the bits ("Qwen3.5-9B 4-bit") they are on screen verbatim; where
+        // it carries none ("Whisper turbo") the line does not claim a quantization that does not
+        // exist. Nothing is parsed out of the repo name — that is the name-substring guessing that
+        // made six voice packages invisible — and when a structured `quantization` field exists in
+        // the manifests it gets a `Quantization` line of its own, beside this honest one.
+        facts.append(NativeModelFact(label: "Label", value: label, source: "label"))
+        if !family.isEmpty {
+            facts.append(NativeModelFact(label: "Family", value: family, source: nil))
+        }
+        if !voiceModes.isEmpty {
+            facts.append(NativeModelFact(
+                label: "Voice modes",
+                value: voiceModes.map(\.title).joined(separator: " · "),
+                source: "catalog row modes"))
+        }
+        return facts
+    }
+
+    /// One parameter, as a fact: its bound in the lane's own numbers and, where the lane states
+    /// one, its default.
+    static func parameterSummary(_ parameter: NativeLaneParameter) -> String {
+        var parts: [String] = []
+        let type = parameter.type.lowercased()
+        if let options = parameter.options, !options.isEmpty {
+            parts.append("one of " + options.joined(separator: ", "))
+        } else {
+            switch type {
+            case "integer", "number":
+                parts.append(NativeModelDefaultControl.rangeText(
+                    minimum: parameter.minimum, maximum: parameter.maximum,
+                    minimumExclusive: parameter.minimumExclusive == true,
+                    maximumExclusive: parameter.maximumExclusive == true))
+            case "string":
+                if let limit = parameter.maxCharacters { parts.append("up to \(limit) characters") }
+                if let bytes = parameter.maxBytes { parts.append("up to \(bytes) bytes") }
+            case "boolean":
+                parts.append("on or off")
+            default:
+                parts.append("published as \(type)")
+            }
+        }
+        if parameter.required == true { parts.append("required") }
+        if let value = parameter.defaultValue { parts.append("default \(value.fieldText)") }
+        return parts.isEmpty ? "published" : parts.joined(separator: " · ")
+    }
+
+    /// The facts a row's own `model_limits` states: the number, and the artefact that states it.
+    /// A limit with no value renders nothing — the source is then the reason, not a substitute.
+    static func limitFacts(_ limits: [String: NativeModelLimit]) -> [NativeModelFact] {
+        // Sorted so the block is stable; the names are the producer's own keys.
+        limits.sorted { $0.key < $1.key }.compactMap { name, limit in
+            guard let value = limit.value else { return nil }
+            let rendered: String
+            switch value {
+            case .null: return nil
+            case .integer(let number): rendered = "\(number)"
+            case .number(let number): rendered = NativeJSONValue.trimmed(number)
+            case .string(let text): rendered = text
+            case .bool(let flag): rendered = flag ? "yes" : "no"
+            }
+            return NativeModelFact(label: name, value: rendered,
+                                   source: limit.source ?? "lane_contract.model_limits")
+        }
+    }
+
+    /// The names a Music lane uses for the parameters that make it sing. A lane that forces
+    /// instrumental output publishes none of them (its own rule: do not offer what the runtime
+    /// discards), so their absence is what "this model cannot sing" is read from. This list
+    /// interprets a published vocabulary; it never decides whether a control exists.
+    static let vocalParameters: Set<String> = ["instrumental", "lyrics", "vocal_language"]
+
+    /// The extensions the worker's own weight-file names carry, in the order they appear.
+    static func distinctExtensions(_ files: [String]) -> [String] {
+        var seen: [String] = []
+        for file in files {
+            let ext = (file as NSString).pathExtension.lowercased()
+            if !ext.isEmpty, !seen.contains(ext) { seen.append(ext) }
+        }
+        return seen
     }
 }
 
@@ -603,6 +1186,19 @@ private struct MemoryModeBody: Encodable {
 /// `PUT /studio/image/api/loading-mode`: the one field the Image worker reads.
 private struct ImageLoadingModeBody: Encodable {
     let mode: String
+}
+
+/// `PUT /studio/<modality>/api/model-defaults`: the model, and the whole set of values the editor
+/// shows. Wholesale on purpose — merging would make a cleared field indistinguishable from an
+/// untouched one, which is the same rule the Studio applies when it stores them.
+private struct ModelDefaultsBody: Encodable {
+    let repo: String
+    let values: [String: NativeJSONValue]
+}
+
+/// `DELETE /studio/<modality>/api/model-defaults`: the model whose stored defaults are forgotten.
+private struct ModelDefaultsRepoBody: Encodable {
+    let repo: String
 }
 
 /// Truthful identity of the Hub this app is talking to. The Connections screen shows these
@@ -1127,9 +1723,18 @@ struct NativeTokenTest: Decodable, Equatable {
 
 private enum NativeAPIError: LocalizedError {
     case message(String)
+    /// A refusal that names each problem against the parameter it belongs to — what a 422 from a
+    /// defaults route carries. Kept as a case of its own so the editor can put each reason under
+    /// its own field instead of collapsing them into one sentence.
+    case refusals([String: String])
 
     var errorDescription: String? {
-        switch self { case .message(let message): return message }
+        switch self {
+        case .message(let message): return message
+        case .refusals(let reasons):
+            return reasons.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
+                .joined(separator: "; ")
+        }
     }
 }
 
@@ -1456,6 +2061,11 @@ final class NativeWorkspaceStore: ObservableObject {
     /// model being unusable.
     @Published var imageModel = "" {
         didSet {
+            // Changing the model changes the controls, so the new model's own published controls
+            // are loaded at once. Leaving them nil disabled Generate until the next poll, which
+            // read as the model being unusable. These are the *resolved* controls: the Image
+            // worker publishes `generation_defaults` as the operator's saved default over the
+            // model's own, so seeding from here is what makes a saved default reach a job.
             if imageModel != oldValue { imageSettings = imageConfigurations[imageModel]?.defaults }
             scheduleSave()
         }
@@ -1468,6 +2078,7 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var musicPrompt = "" { didSet { scheduleSave() } }
     @Published var musicModel = "" {
         didSet {
+            // The Music worker resolves `generation_defaults` the same way Image does.
             if musicModel != oldValue { musicSettings = musicConfigurations[musicModel]?.defaults }
             scheduleSave()
         }
@@ -1606,6 +2217,28 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var modelNote: String?
     @Published private(set) var modelNoteRepo: String?
     @Published private(set) var updatingModels = false
+    /// Each Studio's published default surface, keyed `"<modality>/<repo>"` — the modality being
+    /// the one the model's own lane contract states, so the route is addressed without a table.
+    @Published private(set) var modelDefaults: [String: NativeModelDefaults] = [:]
+    /// The per-parameter reasons a PUT was refused with, keyed the same way and then by parameter,
+    /// so each reason lands against the field it belongs to instead of in one generic banner.
+    @Published private(set) var modelDefaultRefusals: [String: [String: String]] = [:]
+    /// Whether every Studio that publishes a lane contract has been asked for its defaults.
+    @Published private(set) var modelDefaultsLoaded = false
+    /// The modalities already read on this connection, so several pages asking for the same
+    /// Studio make one request.
+    private var modelDefaultsReadModalities: Set<String> = []
+    /// The per-run controls each Image and Music model last published, so a *change* in the
+    /// catalogue's resolved values can be told from the same values read again.
+    private var publishedImageDefaults: [String: NativeImageSettings] = [:]
+    private var publishedMusicDefaults: [String: NativeMusicSettings] = [:]
+    @Published private(set) var savingModelDefaults = false
+    /// Where the values are stored, as the Studio's own route names the file.
+    @Published private(set) var modelDefaultsSettingsFile: String?
+    /// The result of the last save or restore, shown in the editor.
+    @Published private(set) var modelDefaultsNote: String?
+    /// Bumped whenever the published defaults change, so a page re-seeds its per-run controls.
+    @Published private(set) var modelDefaultsRevision = 0
     @Published private(set) var memoryNote: String?
     @Published private(set) var updatingMemory = false
     /// Truthful Hub identity for the Connections screen.
@@ -1888,6 +2521,17 @@ final class NativeWorkspaceStore: ObservableObject {
         modelNote = nil
         modelNoteRepo = nil
         updatingModels = false
+        // A saved default is a statement about one worker on one Mac, so the next connection reads
+        // its own instead of showing this one's values or refusals.
+        modelDefaults = [:]
+        modelDefaultRefusals = [:]
+        modelDefaultsReadModalities = []
+        publishedImageDefaults = [:]
+        publishedMusicDefaults = [:]
+        modelDefaultsLoaded = false
+        savingModelDefaults = false
+        modelDefaultsNote = nil
+        modelDefaultsSettingsFile = nil
         offeredRelease = nil
         offeredReleaseDescriptor = nil
         updateOffered = false
@@ -1974,6 +2618,9 @@ final class NativeWorkspaceStore: ObservableObject {
                let first = models.first(where: { $0.function == .music && $0.supported }) { musicModel = first.repo }
             if imageSettings == nil { imageSettings = imageConfiguration?.defaults }
             if musicSettings == nil { musicSettings = musicConfiguration?.defaults }
+            // A default saved in the Models tab reaches the generator page as a changed catalogue
+            // row on the next refresh. Adopt it here, before the page is opened on it.
+            adoptResolvedDefaults()
             // The speaker follows the selected model's own published roster, never a global list:
             // a global outlives the model it was read for, which is how a Khmer model would have
             // been offered another family's voice names.
@@ -2278,6 +2925,8 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func restoreImageDefaults() {
+        // What the Image worker publishes, which is already the resolved set: the operator's saved
+        // default for this model over the model's own.
         imageSettings = imageConfiguration?.defaults
     }
 
@@ -2468,6 +3117,266 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             if connectionID == requestConnection {
                 self.error = Self.actionable(error, action: "Change the image loading mode")
+            }
+        }
+    }
+
+    // MARK: - Per-model defaults (`/studio/<modality>/api/model-defaults`)
+
+    /// The key one model's published defaults are held under.
+    ///
+    /// The modality is the model's own lane contract's, which is the same string the Studio proxy
+    /// is addressed with — so a new Studio needs no entry anywhere in this app.
+    static func modelDefaultsKey(modality: String, repo: String) -> String { "\(modality)/\(repo)" }
+
+    func modelDefaultsKey(for model: NativeModel) -> String? {
+        guard let modality = model.laneContract?.modality, !modality.isEmpty else { return nil }
+        return Self.modelDefaultsKey(modality: modality, repo: model.repo)
+    }
+
+    /// Every modality the loaded catalogue publishes a lane contract for, in a stable order.
+    ///
+    /// Derived from the models themselves rather than from a list of Studios: a Studio that starts
+    /// publishing contracts is read without an edit, and one that publishes none is not called.
+    var modelDefaultModalities: [String] {
+        var seen: [String] = []
+        for model in models {
+            guard let modality = model.laneContract?.modality, !modality.isEmpty,
+                  !seen.contains(modality) else { continue }
+            seen.append(modality)
+        }
+        return seen.sorted()
+    }
+
+    /// Read every Studio's default surface, once per connection.
+    ///
+    /// Called when the Models tab appears rather than on the two-second poll: it is one request per
+    /// Studio and nothing else on screen depends on it.
+    func loadModelDefaultsIfNeeded() async {
+        guard connectionID != nil else { return }
+        modelDefaultsLoaded = true
+        for modality in modelDefaultModalities { await readModelDefaults(modality: modality) }
+    }
+
+    /// Read one model's Studio defaults, once per connection.
+    ///
+    /// A generator page calls this so its per-run controls open on the operator's saved default
+    /// rather than on the model's own. Reading is keyed on the modality, so several pages asking
+    /// for the same Studio make one request.
+    func loadModelDefaultsIfNeeded(for model: NativeModel?) async {
+        guard let modality = model?.laneContract?.modality, !modality.isEmpty else { return }
+        await readModelDefaults(modality: modality)
+    }
+
+    private func readModelDefaults(modality: String) async {
+        guard connectionID != nil, !modelDefaultsReadModalities.contains(modality) else { return }
+        modelDefaultsReadModalities.insert(modality)
+        await refreshModelDefaults(modality: modality)
+    }
+
+    func refreshModelDefaults(modality: String) async {
+        guard let requestConnection = connectionID, !modality.isEmpty else { return }
+        do {
+            let payload: NativeModelDefaultsPayload = try await get(
+                ["studio", modality, "api", "model-defaults"])
+            guard connectionID == requestConnection else { return }
+            mergeModelDefaults(payload, modality: modality)
+        } catch {
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            // A Studio that does not publish this route must not break the page: the facts still
+            // render from the lane contract, and the editor says what is missing. The shared error
+            // banner is left alone because the rest of the tab is not broken by this read.
+            modelDefaultsNote = "\(modality.capitalized) Studio did not publish its defaults route "
+                + "(GET /studio/\(modality)/api/model-defaults): \(Self.describe(error))"
+        }
+    }
+
+    /// Save one model's defaults, wholesale, and take the Studio's own answer as the result.
+    ///
+    /// A refused value comes back as 422 with a reason per parameter; those reasons are kept
+    /// against their parameters so the editor can show each one under its own field.
+    func saveModelDefaults(for model: NativeModel, values: [String: NativeJSONValue]) async {
+        guard let modality = model.laneContract?.modality, let requestConnection = connectionID,
+              let key = modelDefaultsKey(for: model) else { return }
+        savingModelDefaults = true
+        defer { if connectionID == requestConnection { savingModelDefaults = false } }
+        do {
+            let payload: NativeModelDefaultsPayload = try await sendJSON(
+                ["studio", modality, "api", "model-defaults"], method: "PUT",
+                body: ModelDefaultsBody(repo: model.repo, values: values))
+            guard connectionID == requestConnection else { return }
+            mergeModelDefaults(payload, modality: modality)
+            modelDefaultRefusals[key] = nil
+            modelDefaultsNote = "Saved your defaults for \(model.label)."
+            error = nil
+            // The catalogue republishes these parameters resolved, so reading it again is how the
+            // generator page comes to open on the value that was just saved.
+            await refresh()
+        } catch NativeAPIError.refusals(let reasons) {
+            guard connectionID == requestConnection else { return }
+            // Every refusal at once, each against its own parameter. The values stay on screen so
+            // the operator can fix the one that was refused instead of retyping the rest.
+            modelDefaultRefusals[key] = reasons
+            let named = reasons.keys.sorted().joined(separator: ", ")
+            modelDefaultsNote = "\(model.label) refused \(reasons.count) value\(reasons.count == 1 ? "" : "s"): \(named)."
+            error = nil
+        } catch {
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            self.error = Self.actionable(error, action: "Save defaults for \(model.label)")
+        }
+    }
+
+    /// Forget one model's stored defaults (the DELETE), leaving it on what the lane states.
+    func restoreModelDefaults(for model: NativeModel) async {
+        guard let modality = model.laneContract?.modality, let requestConnection = connectionID,
+              let key = modelDefaultsKey(for: model) else { return }
+        savingModelDefaults = true
+        defer { if connectionID == requestConnection { savingModelDefaults = false } }
+        do {
+            let payload: NativeModelDefaultsPayload = try await sendJSON(
+                ["studio", modality, "api", "model-defaults"], method: "DELETE",
+                body: ModelDefaultsRepoBody(repo: model.repo))
+            guard connectionID == requestConnection else { return }
+            mergeModelDefaults(payload, modality: modality)
+            modelDefaultRefusals[key] = nil
+            modelDefaultsNote = "Restored \(model.label) to what its Studio states."
+            error = nil
+            await refresh()
+        } catch {
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            self.error = Self.actionable(error, action: "Restore defaults for \(model.label)")
+        }
+    }
+
+    private func mergeModelDefaults(_ payload: NativeModelDefaultsPayload, modality: String) {
+        modelDefaultsReadModalities.insert(modality)
+        for row in payload.models {
+            modelDefaults[Self.modelDefaultsKey(modality: modality, repo: row.repo)] = row
+        }
+        if let file = payload.settingsFile, !file.isEmpty { modelDefaultsSettingsFile = file }
+        modelDefaultsRevision += 1
+        // Nothing on the generator pages is seeded from here: they seed from the catalogue's own
+        // resolved values, which is the one path a job's parameters can come from. This read is
+        // for the editor — what is settable, stated, chosen and no longer accepted.
+    }
+
+    /// The Models tab, one section per Studio in the app's own Studio list.
+    ///
+    /// The Studios come from `StudioFunction.allCases` — the same list the sidebar, the Jobs tabs
+    /// and the status line are built from — so a Studio added to the app gets a section without an
+    /// edit here, and no Studio can be left off the screen by a list kept separately. The order is
+    /// the enum's own. A search drops empty sections (it is a question about models); without one,
+    /// a Studio with nothing to show keeps its header and reports a count of zero.
+    func modelSections(search: String, installedOnly: Bool) -> [NativeModelSection] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return StudioFunction.allCases.compactMap { function in
+            let matching = models.filter { model in
+                model.function == function
+                    && (!installedOnly || model.cached)
+                    && (query.isEmpty
+                        || model.label.localizedCaseInsensitiveContains(query)
+                        || model.repo.localizedCaseInsensitiveContains(query))
+            }
+            guard query.isEmpty || !matching.isEmpty else { return nil }
+            return NativeModelSection(function: function, models: matching)
+        }
+    }
+
+    /// The controls the editor renders for one model: one per parameter the Studio published as
+    /// settable, in the Studio's order, with the Studio's own bounds.
+    ///
+    /// A `required` parameter is excluded even if a worker publishes it in this list: it is
+    /// per-request content, and a stored default for one would answer with something nobody wrote
+    /// this time. Nothing else is filtered — a parameter whose type this editor cannot render is
+    /// shown, with the lane's note, rather than hidden or faked.
+    func modelDefaultControls(for model: NativeModel) -> [NativeModelDefaultControl] {
+        guard let key = modelDefaultsKey(for: model), let row = modelDefaults[key] else { return [] }
+        return Self.modelDefaultControls(row)
+    }
+
+    static func modelDefaultControls(_ row: NativeModelDefaults) -> [NativeModelDefaultControl] {
+        row.parameters.filter { $0.required != true }.map { parameter in
+            let type = parameter.type.lowercased()
+            let kind: NativeModelDefaultControl.Kind
+            if let options = parameter.options, !options.isEmpty {
+                kind = .choice(options)
+            } else {
+                switch type {
+                case "integer": kind = .integer
+                case "number": kind = .number
+                case "boolean": kind = .toggle
+                case "string": kind = .text
+                default: kind = .unrenderable
+                }
+            }
+            return NativeModelDefaultControl(
+                name: parameter.name,
+                kind: kind,
+                minimum: parameter.minimum,
+                maximum: parameter.maximum,
+                minimumExclusive: parameter.minimumExclusive == true,
+                maximumExclusive: parameter.maximumExclusive == true,
+                step: type == "integer" ? 1 : nil,
+                maxCharacters: parameter.maxCharacters,
+                maxBytes: parameter.maxBytes,
+                typeName: type,
+                ladder: parameter.ladder,
+                note: parameter.note,
+                ignored: parameter.isDeclaredIgnored,
+                value: row.defaults[parameter.name],
+                stated: row.stated[parameter.name],
+                chosen: row.chosen[parameter.name] != nil,
+                boundSource: parameter.boundSource)
+        }
+    }
+
+    /// The reasons a PUT was refused with, against the parameters they belong to.
+    func modelDefaultRefusals(for model: NativeModel) -> [String: String] {
+        guard let key = modelDefaultsKey(for: model) else { return [:] }
+        return modelDefaultRefusals[key] ?? [:]
+    }
+
+    /// The stored values this model's lane now refuses, each with the lane's own reason, in a
+    /// stable order. They are shown rather than dropped: the operator's intent is not lost because
+    /// a model moved.
+    func modelDefaultsNotUsed(for model: NativeModel) -> [String] {
+        guard let key = modelDefaultsKey(for: model), let row = modelDefaults[key] else { return [] }
+        return row.notUsed.sorted { $0.key < $1.key }.map { "\($0.key) — \($0.value)" }
+    }
+
+    /// The value in force for one published parameter, by the lane's own name for it.
+    func savedDefault(_ name: String, for model: NativeModel) -> NativeJSONValue? {
+        guard let key = modelDefaultsKey(for: model) else { return nil }
+        return modelDefaults[key]?.defaults[name]
+    }
+
+    /// The per-run controls as the catalogue's own resolved values.
+    ///
+    /// The Image and Music workers publish `generation_defaults` **resolved**: the operator's
+    /// saved default over the model's own, the same answer the job would get if the parameter were
+    /// omitted. So the generated page seeds from the catalogue and there is no second read path —
+    /// a saved default reaches a job because the form's own starting value is the resolved one.
+    ///
+    /// A save in the Models tab changes that catalogue row, and the page has to adopt the change
+    /// without a relaunch. It does so here, and only when the page is still holding the value it
+    /// was seeded with: a poll must never overwrite something the operator typed.
+    private func adoptResolvedDefaults() {
+        for (repo, configuration) in imageConfigurations {
+            let published = configuration.defaults
+            let previous = publishedImageDefaults[repo]
+            publishedImageDefaults[repo] = published
+            guard let previous, previous != published else { continue }
+            if repo == imageModel, imageSettings == nil || imageSettings == previous {
+                imageSettings = published
+            }
+        }
+        for (repo, configuration) in musicConfigurations {
+            let published = configuration.defaults
+            let previous = publishedMusicDefaults[repo]
+            publishedMusicDefaults[repo] = published
+            guard let previous, previous != published else { continue }
+            if repo == musicModel, musicSettings == nil || musicSettings == previous {
+                musicSettings = published
             }
         }
     }
@@ -5050,6 +5959,10 @@ final class NativeWorkspaceStore: ObservableObject {
         if model.longFormDelivery != nil { score += 1 }
         if model.imageConfiguration != nil { score += 2 }
         if model.musicConfiguration != nil { score += 2 }
+        // The lane contract is the row's dispatch surface: losing it to a bare duplicate of the
+        // same repo would leave that model with no facts and no editor on the Models tab.
+        if model.laneContract != nil { score += 2 }
+        if model.sizes?.isEmpty == false { score += 1 }
         if model.hubModality?.isEmpty == false { score += 1 }
         if model.sizeGb != nil { score += 1 }
         return score
@@ -5061,6 +5974,10 @@ final class NativeWorkspaceStore: ObservableObject {
         if model.engine?.isEmpty == false { score += 4 }
         if model.cached != nil { score += 2 }
         if model.supportsWordTimestamps != nil { score += 2 }
+        if model.supportsSegmentTimestamps != nil { score += 1 }
+        // The lane contract and the manifest's language list are what the Subtitle facts are read
+        // from, so a row carrying them wins over a bare duplicate of the same repo.
+        if model.laneContract != nil { score += 2 }
         if !model.languageList.isEmpty { score += 1 }
         if model.sizeGb != nil { score += 1 }
         return score
@@ -5176,6 +6093,18 @@ final class NativeWorkspaceStore: ObservableObject {
         let catalogWarnings = catalog.reduce(into: [String: String]()) { result, item in
             if let warning = item.memoryWarning, !warning.isEmpty { result[item.repo] = warning }
         }
+        // The weight files the Subtitle worker lists on its own catalogue row, by repo. The
+        // availability route the transcription models come from carries the languages and the
+        // timestamp claims but not the file receipt, so the weight format is read where the
+        // producer actually publishes it.
+        let catalogWeightFiles = catalog.reduce(into: [String: [String]]()) { result, item in
+            if let files = item.readiness?.files?.weightFiles, !files.isEmpty { result[item.repo] = files }
+        }
+        // The RAM tier each catalogue row publishes, with the key that carried it, so the fact is
+        // shown with its provenance rather than as a threshold this app re-derived.
+        let catalogTiers = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
+            if let tier = item.memoryTier { result[item.repo] = tier }
+        }
         let audioModels = catalog.filter { $0.capabilities?.contains("tts") == true }.map { item in
             let family = item.family ?? ""
             let isQwen = family == "qwen3-tts"
@@ -5235,7 +6164,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 voiceModes: modes, requiresTranscript: transcriptRequired, blockReason: block,
                 paused: package?.paused == true, pausedReason: package?.pausedReason,
                 longForm: NativeLongFormDelivery(item.longFormDelivery),
-                pausedStudio: package?.pausedStudio
+                pausedStudio: package?.pausedStudio,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits
             )
         }
         let transcriptionModels = transcriptionRows.map { item in
@@ -5271,7 +6202,14 @@ final class NativeWorkspaceStore: ObservableObject {
                 runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: [],
                 memoryWarning: memoryWarning,
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
-                pausedStudio: package?.pausedStudio
+                pausedStudio: package?.pausedStudio,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits,
+                minimumMemoryGB: catalogTiers[item.repo]?.value,
+                minimumMemorySource: catalogTiers[item.repo]?.source,
+                supportsSegmentTimestamps: item.supportsSegmentTimestamps,
+                wordTimestampsClaim: item.supportsWordTimestamps,
+                weightFiles: catalogWeightFiles[item.repo] ?? []
             )
         }
         let imageModels = catalog.filter { $0.capabilities?.contains("txt2img") == true }.map { item in
@@ -5299,7 +6237,18 @@ final class NativeWorkspaceStore: ObservableObject {
                 pausedStudio: package?.pausedStudio,
                 // The loading-size setting is the model's own catalogue row, read rather than
                 // rebuilt: whether a control exists is the model's answer, not this app's.
-                loadingModes: item.loadingModes)
+                loadingModes: item.loadingModes,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits,
+                // The size table with its tier where the row publishes one, and the label-carrying
+                // `image_sizes` rows where it does not. Nothing is invented for the missing tier.
+                imageSizeRows: item.sizes ?? (item.imageSizes ?? []).map {
+                    NativeImageSizeRow(aspectRatio: $0.id, width: $0.width, height: $0.height,
+                                       tier: nil, isDefault: nil)
+                },
+                guidanceIgnored: item.guidanceIgnored ?? false,
+                minimumMemoryGB: catalogTiers[item.repo]?.value,
+                minimumMemorySource: catalogTiers[item.repo]?.source)
         }
         // A chat form is whatever the catalogue publishes as one. The capability is spelled
         // several ways across workers (`chat.completion`, `chat`, `text-generation`,
@@ -5322,7 +6271,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
-                pausedStudio: package?.pausedStudio)
+                pausedStudio: package?.pausedStudio,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits,
+                minimumMemoryGB: catalogTiers[item.repo]?.value,
+                minimumMemorySource: catalogTiers[item.repo]?.source)
         }
         return audioModels + transcriptionModels + imageModels + chatModels
             + Self.musicModels(catalog, packages: packages)
@@ -5399,7 +6352,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// to put on the form — and it says so rather than disappearing.
     private static func musicModels(_ catalog: [CatalogModel],
                                     packages: [String: HubModelPackage]) -> [NativeModel] {
-        catalog.filter { $0.capabilities?.contains("music") == true }.map { item in
+        let catalogTiers = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
+            if let tier = item.memoryTier { result[item.repo] = tier }
+        }
+        return catalog.filter { $0.capabilities?.contains("music") == true }.map { item in
             let package = packages[item.repo]
             let drivable = item.musicConfiguration != nil
             let supported = drivable && package != nil
@@ -5422,7 +6378,12 @@ final class NativeWorkspaceStore: ObservableObject {
                 memoryWarning: item.memoryWarning, blockReason: block,
                 paused: package?.paused == true, pausedReason: package?.pausedReason,
                 pausedStudio: package?.pausedStudio,
-                sampleRateHz: item.sampleRateHz, channels: item.channels)
+                sampleRateHz: item.sampleRateHz, channels: item.channels,
+                singlePassMaxSeconds: item.generationLimits?.singlePassMaxSeconds,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits,
+                minimumMemoryGB: catalogTiers[item.repo]?.value,
+                minimumMemorySource: catalogTiers[item.repo]?.source)
         }
     }
 
@@ -5619,9 +6580,27 @@ final class NativeWorkspaceStore: ObservableObject {
             throw NativeAPIError.message("The local engine attempted to redirect outside the address it was reached at.")
         }
         guard (200..<300).contains(http.statusCode) else {
+            // A parameter-valued refusal is not one sentence: the defaults routes answer 422 with
+            // `detail` keyed by parameter, and collapsing that into a string loses which field the
+            // operator has to fix. It is carried as such and the editor places each reason.
+            if http.statusCode == 422, let reasons = Self.refusalDetail(data), !reasons.isEmpty {
+                throw NativeAPIError.refusals(reasons)
+            }
             let detail = Self.errorDetail(data) ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
             throw NativeAPIError.message("Local engine HTTP \(http.statusCode): \(detail)")
         }
+    }
+
+    /// `{"detail": {"steps": "steps: 101 is above the lane's maximum of 50"}}` as a Swift map,
+    /// or nil when the body is not a per-parameter refusal.
+    private static func refusalDetail(_ data: Data) -> [String: String]? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = object["detail"] as? [String: Any] else { return nil }
+        var reasons: [String: String] = [:]
+        for (name, reason) in detail {
+            if let text = reason as? String { reasons[name] = text }
+        }
+        return reasons
     }
 
     private static func errorDetail(_ data: Data) -> String? {
@@ -6033,7 +7012,36 @@ private struct CatalogModel: Decodable {
     /// which models were "pilot tested" from a repo list, so a new quant of an audited family was
     /// mislabelled. This is the producer's own answer.
     let executionContract: CatalogExecutionContract?
+    /// The dispatch contract this row's Studio published for this model. It is where the app
+    /// learns the operation, the modality every worker call for this model is addressed with, and
+    /// every parameter with the bound the lane enforces.
+    let laneContract: NativeLaneContract?
+    /// The Image size table with its resolution tier: each aspect ratio, the pixels it means, and
+    /// the tier the model states. Published beside `image_sizes`, which carries the label.
+    let sizes: [NativeImageSizeRow]?
+    /// The model limits the row publishes with the artefact that states each one. The bare
+    /// `context_window_tokens`/`max_output_tokens` beside it carry numbers with no provenance and
+    /// are deliberately not decoded: a worker's fallback must never be shown as the model's fact.
+    let modelLimits: [String: NativeModelLimit]?
+    /// The Image worker's own answer to "does this model read a guidance value at all?".
+    let guidanceIgnored: Bool?
+    /// The RAM tier the Studio publishes for this model. Two spellings ship; each is kept with the
+    /// key it came from so the fact can name its source.
+    let minTotalMemoryGb: Double?
+    let qualifiedMinimumMemoryGb: Double?
+    /// The package's file receipt, which is where the Subtitle worker names the weight files it
+    /// found. Read one level down, because that is where the producer publishes them.
+    let readiness: CatalogReadiness?
     var isAuditGrounded: Bool { executionContract?.qualificationSource == "audit" }
+
+    /// The tier this row publishes with the key that carried it, or nil when it publishes none.
+    var memoryTier: (value: Double, source: String)? {
+        if let minTotalMemoryGb { return (minTotalMemoryGb, "catalog row min_total_memory_gb") }
+        if let qualifiedMinimumMemoryGb {
+            return (qualifiedMinimumMemoryGb, "catalog row qualified_minimum_memory_gb")
+        }
+        return nil
+    }
 
     /// The controls this model actually publishes, or nil when it publishes no size to generate
     /// at. Every control key inside is optional: a second engine of the same modality publishing
@@ -6082,6 +7090,15 @@ private struct CatalogExecutionContract: Decodable {
     let qualificationSource: String?
 }
 
+/// One level of the catalogue row's `readiness` block: the file receipt, where a worker names the
+/// weight files it found for a package.
+private struct CatalogReadiness: Decodable {
+    let files: CatalogFiles?
+}
+private struct CatalogFiles: Decodable {
+    let weightFiles: [String]?
+}
+
 /// The catalogue's `generation_defaults` object, decoded field by field.
 ///
 /// Image publishes `width`/`height`/`steps`/`guidance`/`seed`; Music publishes
@@ -6126,6 +7143,9 @@ private struct HubGenerationLimits: Decodable {
     let maxSeed: Int64?
     let minDurationSeconds: Double?
     let maxDurationSeconds: Double?
+    /// The longest single render this host's engine can do: a longer request is rendered in
+    /// sections, which is a different fact from the model's own maximum.
+    let singlePassMaxSeconds: Double?
     let minShift: Double?
     let maxShift: Double?
     var imageLimits: NativeImageLimits {
@@ -6177,6 +7197,8 @@ struct NativeLongFormDelivery: Equatable {
     let chosenSectionMaxCharacters: Int
     let sectionMinimum: Int
     let sectionMaximum: Int
+    /// The step the catalogue's own section-size control offers, when it publishes one.
+    let sectionStep: Int?
 
     /// The model's default, or nil when the payload has no sectioning policy at all.
     init?(_ wire: HubLongFormDelivery?) {
@@ -6193,6 +7215,44 @@ struct NativeLongFormDelivery: Equatable {
         chosenSectionMaxCharacters = control?.runtimeDefault ?? section
         sectionMinimum = control?.minimum ?? section
         sectionMaximum = control?.maximum ?? section
+        sectionStep = control?.step
+    }
+
+    /// How long-form delivery is described, each line carrying the producer's own source.
+    ///
+    /// The first two lines are the bounds: the size the engine will actually cut at, and the range
+    /// a caller may choose from with the catalogue's own step. A step nobody published is not a
+    /// step this app invents, so it is left out rather than defaulted.
+    var facts: [NativeModelFact] {
+        var facts: [NativeModelFact] = []
+        facts.append(NativeModelFact(
+            label: "Section size",
+            value: "\(chosenSectionMaxCharacters) characters · engine default",
+            source: "catalog row long_form_delivery.section_size_control.runtime_default"))
+        var bounds = "\(sectionMinimum)–\(sectionMaximum) characters"
+        if let sectionStep { bounds += " · step \(sectionStep)" }
+        facts.append(NativeModelFact(label: "Adjustable range", value: bounds,
+                                     source: "catalog row long_form_delivery.section_size_control"))
+        if let hardCapCharacters {
+            facts.append(NativeModelFact(
+                label: "Hard cap",
+                value: "stops reading past \(hardCapCharacters) characters",
+                source: "catalog row long_form_delivery.hard_cap_characters"))
+        }
+        facts.append(NativeModelFact(label: "Between sections",
+                                     value: "\(joinPauseMilliseconds) ms",
+                                     source: "catalog row long_form_delivery.join_pause_milliseconds"))
+        // How the speed control reaches the engine is a different fact from its range: an engine
+        // that paces itself keeps the voice, and a post-pass is applied to finished audio.
+        let delivery = speedDelivery == "native" ? "engine-native" : "post-pass"
+        facts.append(NativeModelFact(
+            label: "Speed control",
+            value: "\(delivery) · \(NativeJSONValue.trimmed(speedMinimum))–\(NativeJSONValue.trimmed(speedMaximum))×",
+            source: "catalog row long_form_delivery.speed.delivery"))
+        if !note.isEmpty {
+            facts.append(NativeModelFact(label: "Long-form note", value: note, source: source))
+        }
+        return facts
     }
 }
 
@@ -6208,6 +7268,15 @@ private struct TranscriptionModel: Decodable {
     let engine: String?
     let languages: StringOrStrings?
     let supportsWordTimestamps: Bool?
+    /// The manifest's own claim about timed sections, published beside the word-timestamp claim.
+    let supportsSegmentTimestamps: Bool?
+    /// The lane contract the Subtitle worker publishes on this same row.
+    let laneContract: NativeLaneContract?
+    /// The model limits the row publishes with the artefact that states each one, when it does.
+    let modelLimits: [String: NativeModelLimit]?
+    /// The weight files the worker's catalogue row lists for this package, read from the Hub's
+    /// aggregated catalogue row for the same repo. It is what says which weight format this
+    /// runtime can load, and it is published on the catalogue row rather than here.
     let recommended: Bool?
     let cached: Bool?
     var languageList: [String] { languages?.values ?? [] }

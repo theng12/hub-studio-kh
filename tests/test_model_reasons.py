@@ -61,12 +61,67 @@ class ModelReasonTests(unittest.TestCase):
         self.assertIn("model.blockReason", models)
 
     def test_the_models_page_shows_how_a_model_is_sectioned_and_speeded(self) -> None:
-        """The owner asked how chunking is applied per model. Answering it needs no terminal."""
+        """The owner asked how chunking is applied per model. Answering it needs no terminal.
+
+        The page renders every fact a producer publishes through `model.facts`, so the section
+        bounds, the hard cap, the join pause and the speed route are shown without a click per
+        model. The sentences are built in the store from the producer's own payload — the
+        catalogue's long-form policy and the lane's parameter bounds — so the page cannot restate
+        a number the runtime does not enforce.
+        """
         models = VIEWS[VIEWS.index("private var modelsWorkspace"):]
         models = models[:models.index("private var ", 10)]
-        for phrase in ("Section size", "Adjustable range", "Speed control", "Long-form delivery"):
-            self.assertIn(phrase, models, f"the Models page never shows {phrase!r}")
-        self.assertIn("model.longForm", models, "the list must mark sectioning without a click")
+        self.assertIn("modelFactsBlock(model)", models,
+                      "the Models page must render the model's own published facts")
+        self.assertIn("modelLongFormBlock(model)", models,
+                      "the long-form facts must be on the pane, not only in the payload")
+        self.assertIn('Text("Long-form delivery")', VIEWS,
+                      "the block must name what it is")
+        # The list row marks the section size and the speed route, so scanning the library does not
+        # need a click per model; the row is its own helper, which is where it is read from.
+        row = VIEWS[VIEWS.index("private func modelListRow("):]
+        row = row[:row.index("\n    }")]
+        self.assertIn("model.longForm", row, "the list must mark sectioning without a click")
+        self.assertIn("speedDelivery", row, "the list row must say how speed is delivered")
+        long_form = API[API.index("struct NativeLongFormDelivery"):]
+        long_form = long_form[:long_form.index("\n}")]
+        for phrase in ("Section size", "Adjustable range", "Hard cap", "Between sections",
+                       "Speed control"):
+            self.assertIn(f'label: "{phrase}"', long_form,
+                          f"the published long-form facts never carry {phrase!r}")
+        # The step and the engine default are part of the bound, not decoration: a control whose
+        # step nobody published is a step this app invented.
+        self.assertIn("sectionStep", long_form, "the catalogue's own step is not read")
+        self.assertIn("engine default", long_form, "the engine's own default section size is not shown")
+        self.assertIn("delivery", long_form, "how speed is delivered must be part of the fact")
+        for source in ("section_size_control", "hard_cap_characters", "join_pause_milliseconds",
+                       "speed.delivery"):
+            self.assertIn(source, long_form, f"the fact must name the key that stated it: {source}")
+
+    def test_the_parameter_facts_are_the_lanes_own_bounds(self) -> None:
+        """Every parameter a lane publishes is a fact, with the bound the lane enforces.
+
+        This is what makes "the steps range" or "the duration ladder" a read of the producer's
+        numbers: a new parameter, a re-bounded one, or a whole new Studio reaches this screen
+        because `NativeModel.facts` walks `lane_contract.parameters` rather than a table here.
+        """
+        facts = API[API.index("var facts: [NativeModelFact] {"):]
+        facts = facts[:facts.index("\n    }")]
+        self.assertIn("for parameter in contract.parameters", facts,
+                      "the facts must walk the lane's published parameters")
+        self.assertIn("Self.parameterSummary(parameter)", facts,
+                      "each parameter's bound must be rendered from the parameter itself")
+        summary = API[API.index("static func parameterSummary("):]
+        summary = summary[:summary.index("\n    }")]
+        for bound in ("parameter.minimum", "parameter.maximum", "parameter.options",
+                      "parameter.maxCharacters", "parameter.defaultValue"):
+            self.assertIn(bound, summary, f"the summary ignores {bound}, so a bound is not read")
+        # ...and a limit the producer states no value for renders nothing at all.
+        limits = API[API.index("static func limitFacts("):]
+        limits = limits[:limits.index("\n    }")]
+        self.assertIn("guard let value = limit.value", limits,
+                      "a limit with no stated value must render nothing, never a curated number")
+        self.assertIn("case .null: return nil", limits, "a null limit must render nothing")
 
     def test_the_app_decodes_the_published_long_form_policy(self) -> None:
         """The worker publishes the policy per model; the app decoded none of it before."""

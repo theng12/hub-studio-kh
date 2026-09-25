@@ -258,6 +258,13 @@ struct StudioContent: View {
     @State private var modelFilter = "All functions"
     @State private var installedOnly = false
     @State private var selectedModel: String?
+    /// The Studios whose Models section the operator has folded away. A search ignores this, so a
+    /// result can never stay hidden inside a collapsed section.
+    @State private var collapsedModelSections: Set<String> = []
+    /// What the operator has typed into "Your defaults for this model", before it is saved. Cleared
+    /// whenever the model or the Studio's published answer changes, so a stale draft cannot be
+    /// saved onto a model it was not written for.
+    @State private var modelDefaultDraft: [String: NativeJSONValue] = [:]
     @State private var transcriptFormat = "Text"
     @State private var fileActionError: String?
     @State private var hfToken = ""
@@ -1057,6 +1064,10 @@ struct StudioContent: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        // Nothing on the Chat page is seeded from a saved default yet — this page has no
+        // temperature or top-p control — but the Studio's published surface is read here so the
+        // Models tab editor for this model is ready when it is opened.
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedChatModel) }
     }
 
     private var imageWorkspace: some View {
@@ -1137,6 +1148,9 @@ struct StudioContent: View {
         // the status from the one that ended is not its answer.
         .task(id: "\(connected)/\(workspace.connectionGeneration)") {
             await workspace.refreshImageLoadingMode()
+            // ...and the operator's saved defaults for the selected model, so the steps, size,
+            // guidance and seed below open on them rather than on the model's own.
+            await workspace.loadModelDefaultsIfNeeded(for: selectedImageModel)
         }
         .task(id: previewImageJob?.id) {
             imagePreview = nil
@@ -1386,6 +1400,9 @@ struct StudioContent: View {
             }
         }.padding(28)
         .onAppear { seedSample(Self.musicSamples, binding: $workspace.musicPrompt, seeded: $seededMusicSample) }
+        // Duration, steps, guidance, shift and seed open on the operator's saved default for this
+        // model when there is one. Read when the page opens, once per connection.
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedMusicModel) }
         .onChange(of: previewMusicJob?.id) { _, _ in
             // A different clip is showing, so the transport must not pretend to control the old one.
             player.stop()
@@ -1764,6 +1781,9 @@ struct StudioContent: View {
             }
         }.padding(28)
         .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
+        // The speaking pace opens on the operator's saved `speed` default for this model when its
+        // lane publishes one, and on the engine's own pace otherwise.
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedAudioModel) }
     }
 
     /// Where the voice for a clone comes from: the library on the Voices page, and nowhere else.
@@ -2189,6 +2209,397 @@ struct StudioContent: View {
             guard connected else { return }
             await workspace.loadVoicesIfNeeded()
         }
+        // The Subtitle page has no per-run default to seed — the language and the word-timestamp
+        // toggle are per-request — but its Studio's published defaults are read here too, so the
+        // Models tab shows this model's editor without waiting for a visit to that tab.
+        .task(id: modelDefaultsLoadKey) {
+            await workspace.loadModelDefaultsIfNeeded(for: selectedTranscriptionModel)
+        }
+    }
+
+    // MARK: - Models: one section per Studio, and the per-model defaults editor
+
+    /// The Models tab, one section per Studio in the app's own Studio list.
+    ///
+    /// The list comes from `StudioFunction.allCases`, so a Studio added to the app gets a section
+    /// with its own symbol, name and count without an edit here — and a Studio that is missing from
+    /// the list below cannot be missing from the screen.
+    private var modelSections: [NativeModelSection] {
+        workspace.modelSections(search: modelSearch, installedOnly: installedOnly)
+    }
+
+    /// When the Models tab (re)reads every Studio's published defaults: the connection, never the
+    /// search or the selection, so a keystroke cannot start a read.
+    private var modelDefaultsLoadKey: String {
+        "\(connected)/\(workspace.connectionGeneration)"
+    }
+
+    /// Whether a Studio's section shows its models.
+    ///
+    /// A search opens every section it matched: a result hidden inside a collapsed section is a
+    /// result the operator cannot see, which is the one thing a search must never do.
+    private func isModelSectionExpanded(_ function: StudioFunction) -> Bool {
+        !modelSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !collapsedModelSections.contains(function.id)
+    }
+
+    private func modelSectionHeader(_ section: NativeModelSection) -> some View {
+        Button {
+            if collapsedModelSections.contains(section.function.id) {
+                collapsedModelSections.remove(section.function.id)
+            } else {
+                collapsedModelSections.insert(section.function.id)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isModelSectionExpanded(section.function) ? 90 : 0))
+                Image(systemName: section.symbol)
+                Text(section.header).font(.callout.weight(.semibold))
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.header)
+        .accessibilityHint(isModelSectionExpanded(section.function)
+                           ? "Collapse this Studio" : "Expand this Studio")
+        .id(section.id)
+    }
+
+    private func modelListRow(_ model: NativeModel) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: model.function.symbol).foregroundStyle(.secondary).frame(width: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.label).fontWeight(.medium)
+                Text(model.function.rawValue).font(.caption).foregroundStyle(.secondary)
+                // Scanning the library, "how is this one chunked?" should not need a
+                // click per model: the section size and the speed route are the two
+                // facts that differ between families and decide how a long script runs.
+                if let longForm = model.longForm {
+                    Text("Sections of \(longForm.chosenSectionMaxCharacters) chars · speed: \(longForm.speedDelivery == "native" ? "engine" : "post-pass")")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+            if model.paused {
+                Label("Paused", systemImage: "pause.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.callout).foregroundStyle(.orange)
+            }
+            Text(model.cached ? "Installed" : "Not installed").font(.callout).foregroundStyle(.secondary)
+        }.padding(.vertical, 7).tag(model.repo)
+    }
+
+    /// The "jump to section" picker: selecting a Studio unfolds its section and scrolls to it. It
+    /// is not a filter — every other Studio stays on screen, because the point of the picker is to
+    /// save scrolling, not to hide models.
+    private func jumpToModelSection(_ value: String, proxy: ScrollViewProxy) {
+        guard let function = StudioFunction(rawValue: value) else { return }
+        collapsedModelSections.remove(function.id)
+        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(function.id, anchor: .top) }
+    }
+
+    /// Every read-only fact this model publishes, each with the artefact that states it.
+    private func modelFactsBlock(_ model: NativeModel) -> some View {
+        let facts = model.facts
+        return Group {
+            if !facts.isEmpty {
+                Divider()
+                Text("What this model publishes").font(.headline)
+                factRows(facts)
+            }
+        }
+    }
+
+    /// How a long script is cut up for this model, and how its speed control reaches the engine —
+    /// both per-family decisions the runtime makes, rendered from the catalogue's own policy.
+    ///
+    /// Kept as its own named block rather than folded into the fact list because it is the one
+    /// group of facts an operator reads together, and the four lines answer the question the owner
+    /// asked ("how is chunking applied per model?") without opening a terminal.
+    @ViewBuilder private func modelLongFormBlock(_ model: NativeModel) -> some View {
+        if let longForm = model.longForm {
+            Divider()
+            Text("Long-form delivery").font(.headline)
+            factRows(longForm.facts)
+        }
+    }
+
+    /// One row per fact, with the artefact that stated it where there is one.
+    private func factRows(_ facts: [NativeModelFact]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(facts) { fact in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(fact.label).font(.callout)
+                        Spacer(minLength: 12)
+                        Text(fact.value).font(.callout.monospacedDigit())
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    if let source = fact.source, !source.isEmpty {
+                        Text("Source: \(source)").font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    /// "Your defaults for this model": one control per parameter the Studio published as settable.
+    ///
+    /// The controls, their order, their types and their bounds are the lane's own — nothing here
+    /// decides which controls exist. A parameter this editor cannot render (an `array` or an
+    /// `object`) is shown with the lane's note rather than faked; a parameter the lane marks
+    /// required never appears; and a parameter the lane says it ignores is shown as ignored.
+    private func modelDefaultsEditor(_ model: NativeModel) -> some View {
+        let controls = workspace.modelDefaultControls(for: model)
+        let refusals = workspace.modelDefaultRefusals(for: model)
+        let notUsed = workspace.modelDefaultsNotUsed(for: model)
+        return Group {
+            if model.laneContract != nil {
+                Divider()
+                Text("Your defaults for this model").font(.headline)
+                if let file = workspace.modelDefaultsSettingsFile {
+                    Text("Stored on this Mac in \(file), and applied when a request leaves the parameter out.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = workspace.modelDefaultsNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !notUsed.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Saved values this model no longer accepts", systemImage: "exclamationmark.triangle")
+                            .font(.callout).foregroundStyle(.orange)
+                        ForEach(notUsed, id: \.self) { line in
+                            Text(line).font(.caption).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text("They are kept in the file and ignored until you change them; nothing sends them.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if controls.isEmpty {
+                    Text("This model's Studio publishes no settable parameter to default.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(controls) { control in
+                            modelDefaultControlRow(control, refusals: refusals)
+                        }
+                    }
+                    HStack {
+                        Button(workspace.savingModelDefaults ? "Saving…" : "Save Defaults") {
+                            let values = modelDefaultDraftValues(controls)
+                            Task { await workspace.saveModelDefaults(for: model, values: values) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!connected || workspace.savingModelDefaults || !workspace.modelDefaultsLoaded)
+                        Button("Restore This Model's Defaults") {
+                            Task { await workspace.restoreModelDefaults(for: model) }
+                        }
+                        .help("Forget this model's saved defaults and use what its Studio states")
+                        .disabled(!connected || workspace.savingModelDefaults)
+                        if modelDefaultDraft.isEmpty == false {
+                            Text("Unsaved changes.").font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The value a control would send: what the operator typed, or what is in force.
+    private func modelDefaultDraftValues(_ controls: [NativeModelDefaultControl]) -> [String: NativeJSONValue] {
+        var values: [String: NativeJSONValue] = [:]
+        for control in controls where control.sendsValue {
+            if let typed = modelDefaultDraft[control.name] { values[control.name] = typed }
+            else if let value = control.value { values[control.name] = value }
+        }
+        return values
+    }
+
+    @ViewBuilder private func modelDefaultControlRow(
+        _ control: NativeModelDefaultControl, refusals: [String: String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(control.name).font(.callout)
+                if control.chosen {
+                    Text("chosen").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                modelDefaultControl(control)
+            }
+            Text(control.boundText).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let ladder = control.ladder, !ladder.isEmpty, control.sendsValue {
+                modelLadderRow(control, ladder: ladder)
+            }
+            if control.ignored {
+                Label("This model accepts \(control.name) and discards it, so it is not editable here.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let note = control.note, !note.isEmpty {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // A refused value is shown against the field it belongs to, with the lane's own reason.
+            if let reason = refusals[control.name] {
+                Label(reason, systemImage: "exclamationmark.circle.fill")
+                    .font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The lengths a Music lane suggests, offered beside the field that accepts any of them.
+    ///
+    /// They are buttons, not a picker: the parameter stays the bounded number the lane validates,
+    /// so an operator may store a length between the rungs. A rung the lane marks as beyond one
+    /// pass says so — a length that is rendered in sections is a fact about the job, not a detail.
+    private func modelLadderRow(_ control: NativeModelDefaultControl,
+                                ladder: [NativeLadderRung]) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                ForEach(ladder) { rung in
+                    Button {
+                        setDefaultNumber(control, rung.seconds)
+                    } label: {
+                        Text(rung.exceedsSinglePass == true ? "\(rung.label) · sections" : rung.label)
+                            .font(.caption)
+                            .foregroundStyle(rung.exceedsSinglePass == true ? Color.orange : Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(rung.exceedsSinglePass == true
+                                        ? "\(rung.label), rendered in sections" : rung.label)
+                }
+            }
+            Text("Suggested lengths, not the only ones: anything inside this range is accepted.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func setDefaultNumber(_ control: NativeModelDefaultControl, _ seconds: Double) {
+        if control.kind == .integer {
+            modelDefaultDraft[control.name] = .integer(Int(seconds.rounded()))
+        } else {
+            modelDefaultDraft[control.name] = .number(seconds)
+        }
+    }
+
+    @ViewBuilder private func modelDefaultControl(_ control: NativeModelDefaultControl) -> some View {
+        switch control.kind {
+        case .integer:
+            HStack(spacing: 6) {
+                TextField(control.name, value: integerBinding(control), format: .number)
+                    .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                    .frame(width: 90)
+                    .accessibilityLabel(control.name)
+                if let range = integerRange(control) {
+                    Stepper(control.name, value: integerBinding(control), in: range).labelsHidden()
+                }
+            }
+            .disabled(control.ignored)
+        case .number:
+            TextField(control.name, value: numberBinding(control), format: .number)
+                .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                .frame(width: 95)
+                .accessibilityLabel(control.name)
+                .disabled(control.ignored)
+        case .choice(let options):
+            Picker(control.name, selection: choiceBinding(control, options: options)) {
+                ForEach(choiceOptions(control, options), id: \.self) { option in Text(option).tag(option) }
+            }
+            .labelsHidden().frame(maxWidth: 220)
+            .disabled(control.ignored)
+        case .text:
+            TextField(control.name, text: textBinding(control))
+                .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+                .accessibilityLabel(control.name)
+                .disabled(control.ignored)
+        case .toggle:
+            Toggle(control.name, isOn: toggleBinding(control))
+                .labelsHidden().toggleStyle(.switch)
+                .disabled(control.ignored)
+        case .unrenderable:
+            Text("published as \(control.typeName); not editable here")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// A text field will not exceed the lane's published character limit: a value the lane would
+    /// refuse is not allowed to leave the field in the first place.
+    private func clampText(_ text: String, to control: NativeModelDefaultControl) -> String {
+        guard let limit = control.maxCharacters, text.count > limit else { return text }
+        return String(text.prefix(limit))
+    }
+
+    private func integerRange(_ control: NativeModelDefaultControl) -> ClosedRange<Int>? {
+        guard control.kind == .integer else { return nil }
+        guard control.minimum != nil || control.maximum != nil else { return nil }
+        let current = integerBinding(control).wrappedValue
+        let low = control.minimum.map { Int(($0 + (control.minimumExclusive ? 1 : 0)).rounded(.up)) } ?? current
+        let high = control.maximum.map { Int(($0 - (control.maximumExclusive ? 1 : 0)).rounded(.down)) } ?? current
+        return low...max(low, high)
+    }
+
+    private func integerBinding(_ control: NativeModelDefaultControl) -> Binding<Int> {
+        Binding(get: {
+            if let typed = modelDefaultDraft[control.name]?.intValue { return typed }
+            if let value = control.value?.intValue { return value }
+            if let value = control.stated?.intValue { return value }
+            return Int(control.minimum ?? 0)
+        }, set: { modelDefaultDraft[control.name] = .integer($0) })
+    }
+
+    private func numberBinding(_ control: NativeModelDefaultControl) -> Binding<Double> {
+        Binding(get: {
+            if let typed = modelDefaultDraft[control.name]?.doubleValue { return typed }
+            if let value = control.value?.doubleValue { return value }
+            if let value = control.stated?.doubleValue { return value }
+            return control.minimum ?? 0
+        }, set: { modelDefaultDraft[control.name] = .number($0) })
+    }
+
+    private func textBinding(_ control: NativeModelDefaultControl) -> Binding<String> {
+        Binding(get: {
+            modelDefaultDraft[control.name]?.stringValue ?? control.value?.stringValue
+                ?? control.stated?.stringValue ?? ""
+        }, set: { modelDefaultDraft[control.name] = .string(clampText($0, to: control)) })
+    }
+
+    private func toggleBinding(_ control: NativeModelDefaultControl) -> Binding<Bool> {
+        Binding(get: {
+            modelDefaultDraft[control.name]?.boolValue ?? control.value?.boolValue
+                ?? control.stated?.boolValue ?? false
+        }, set: { modelDefaultDraft[control.name] = .bool($0) })
+    }
+
+    private func choiceBinding(_ control: NativeModelDefaultControl,
+                               options: [String]) -> Binding<String> {
+        Binding(get: {
+            modelDefaultDraft[control.name]?.stringValue
+                ?? control.value?.stringValue ?? control.stated?.stringValue
+                ?? options.first ?? ""
+        }, set: { modelDefaultDraft[control.name] = .string($0) })
+    }
+
+    /// The lane's own options, plus the value in force when the lane no longer offers it — shown
+    /// so the operator can see the value rather than have the picker silently move to another one.
+    private func choiceOptions(_ control: NativeModelDefaultControl, _ options: [String]) -> [String] {
+        let current = modelDefaultDraft[control.name]?.stringValue
+            ?? control.value?.stringValue ?? control.stated?.stringValue
+        guard let current, !options.contains(current) else { return options }
+        return [current] + options
     }
 
     private var modelsWorkspace: some View {
@@ -2197,10 +2608,11 @@ struct StudioContent: View {
             if !connected { setup }
             HStack {
                 TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 310)
-                Picker("Function", selection: $modelFilter) {
+                Picker("Jump to", selection: $modelFilter) {
                     Text("All functions").tag("All functions")
                     ForEach(StudioFunction.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }.frame(maxWidth: 230)
+                .help("Jump to one Studio's section. It does not hide the others, and a search still reaches every section.")
                 Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
                 Spacer()
                 Button("Verify All") { Task { await workspace.verifyInstalledModels() } }
@@ -2238,31 +2650,31 @@ struct StudioContent: View {
                 Text(note).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if workspace.refreshing && workspace.models.isEmpty { ProgressView("Reading model library…").controlSize(.small) }
-            else if filteredModels.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(.callout).foregroundStyle(.secondary) }
+            // With nothing in the library at all, the sentence is about the services; with a
+            // library but nothing matching, it is about the filters. Every Studio keeps its section
+            // either way — a Studio with no model listed is a fact, not an empty row to hide.
+            else if workspace.models.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(.callout).foregroundStyle(.secondary) }
+            else if modelSections.isEmpty { Text("No models match this view. Clear the search or turn off Installed only to see the whole library.").font(.callout).foregroundStyle(.secondary) }
             HSplitView {
-                List(filteredModels, selection: $selectedModel) { model in
-                    HStack(spacing: 12) {
-                        Image(systemName: model.function.symbol).foregroundStyle(.secondary).frame(width: 22)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(model.label).fontWeight(.medium)
-                            Text(model.function.rawValue).font(.caption).foregroundStyle(.secondary)
-                            // Scanning the library, "how is this one chunked?" should not need a
-                            // click per model: the section size and the speed route are the two
-                            // facts that differ between families and decide how a long script runs.
-                            if let longForm = model.longForm {
-                                Text("Sections of \(longForm.chosenSectionMaxCharacters) chars · speed: \(longForm.speedDelivery == "native" ? "engine" : "post-pass")")
-                                    .font(.caption2).foregroundStyle(.tertiary)
+                ScrollViewReader { proxy in
+                    List(selection: $selectedModel) {
+                        // One section per Studio, derived from the Studio list itself. A Studio the
+                        // Hub offers no model for still gets its own section: it is a fact about
+                        // that Studio, and a section that vanishes is a section nobody can learn.
+                        ForEach(modelSections) { section in
+                            Section {
+                                if isModelSectionExpanded(section.function) {
+                                    ForEach(section.models) { model in modelListRow(model) }
+                                }
+                            } header: {
+                                modelSectionHeader(section)
                             }
                         }
-                        Spacer()
-                        if model.paused {
-                            Label("Paused", systemImage: "pause.circle.fill")
-                                .labelStyle(.titleAndIcon)
-                                .font(.callout).foregroundStyle(.orange)
-                        }
-                        Text(model.cached ? "Installed" : "Not installed").font(.callout).foregroundStyle(.secondary)
-                    }.padding(.vertical, 7).tag(model.repo)
-                }.listStyle(.inset).frame(minWidth: 380)
+                    }
+                    .listStyle(.inset).frame(minWidth: 380)
+                    .onChange(of: modelFilter) { _, value in jumpToModelSection(value, proxy: proxy) }
+                    .onAppear { if modelFilter != "All functions" { jumpToModelSection(modelFilter, proxy: proxy) } }
+                }
                 ScrollView {
                     if let model = workspace.models.first(where: { $0.repo == selectedModel }) {
                         VStack(alignment: .leading, spacing: 18) {
@@ -2271,29 +2683,15 @@ struct StudioContent: View {
                             LabeledContent("Function", value: model.function.rawValue)
                             LabeledContent("Storage", value: model.cached ? "Installed" : "Not installed")
                             if let size = model.sizeGB { LabeledContent("Estimated size", value: String(format: "%.2f GB", size)) }
-                            // How a long script is cut up for this model, and how its speed control
-                            // reaches the engine. Both are per-family decisions the runtime makes,
-                            // and both were previously answerable only by reading the worker source.
-                            if let longForm = model.longForm {
-                                Divider()
-                                Text("Long-form delivery").font(.headline)
-                                LabeledContent("Section size", value: "\(longForm.chosenSectionMaxCharacters) characters")
-                                if let cap = longForm.hardCapCharacters {
-                                    Label("This engine stops reading past \(cap) characters, so sections are held at or below it.",
-                                          systemImage: "exclamationmark.triangle")
-                                        .font(.caption).foregroundStyle(.orange)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                LabeledContent("Adjustable range", value: "\(longForm.sectionMinimum)–\(longForm.sectionMaximum) characters")
-                                LabeledContent("Between sections", value: String(format: "%.0f ms", Double(longForm.joinPauseMilliseconds)))
-                                LabeledContent("Speed control", value: longForm.speedDelivery == "native"
-                                    ? String(format: "the engine's own pace (%.1f–%.1fx)", longForm.speedMinimum, longForm.speedMaximum)
-                                    : String(format: "one pitch-preserving pass after rendering (%.1f–%.1fx)", longForm.speedMinimum, longForm.speedMaximum))
-                                Text(longForm.note).font(.caption).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text("Source: \(longForm.source.replacingOccurrences(of: "_", with: " "))")
-                                    .font(.caption2).foregroundStyle(.tertiary)
-                            }
+                            // Every fact this model publishes, per generator, with its provenance:
+                            // the lane's operation and every parameter with its enforced bound, the
+                            // size table with its resolution tiers, the long-form section policy,
+                            // model limits — whatever the producers state, and nothing they do not.
+                            modelFactsBlock(model)
+                            modelLongFormBlock(model)
+                            // And, under it, the controls the operator may set a default for, built
+                            // from the same lane contract.
+                            modelDefaultsEditor(model)
                             Divider()
                             // The Models page is where an operator comes to find out why something
                             // will not run, so the gate that is shut is named here as well.
@@ -2380,6 +2778,13 @@ struct StudioContent: View {
                 ScrollView { VStack(spacing: 12) { ForEach(activeDownloads) { downloadRow($0) } } }.frame(maxHeight: 120)
             }
         }.padding(28)
+        // The defaults are read when this tab appears, once per Studio and once per connection: it
+        // is one request each, and nothing on the two-second poll depends on it. Keyed on the
+        // connection, so a reconnect reads the new Hub's answers rather than showing the last one's.
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded() }
+        // A draft belongs to the model it was typed for, and to the answer it was typed against.
+        .onChange(of: selectedModel) { _, _ in modelDefaultDraft = [:] }
+        .onChange(of: workspace.modelDefaultsRevision) { _, _ in modelDefaultDraft = [:] }
     }
 
     private var jobsWorkspace: some View {
@@ -3406,7 +3811,19 @@ struct StudioContent: View {
             restartNotice
 
             LabeledContent("Listening on", value: listenTitle(studio.configuration.listenHost))
-            Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private. A new install starts reachable on its private and Tailscale addresses.")
+            // A setting that changes by itself has to say so, and has to be switchable off. On, the
+            // list below is recomputed at every launch from this Mac's own networks — the owner's
+            // ask was "i keep forgetting to turn on tailscale. i want it already the default on."
+            Toggle("Follow this Mac's networks automatically", isOn: Binding(
+                get: { studio.configuration.listenHostAutomatic },
+                set: { setListenAutomatic($0) }))
+                .toggleStyle(.checkbox)
+            if studio.configuration.listenHostAutomatic {
+                Text("Loopback and every private or Tailscale address this Mac has, recomputed each time it starts. Never a public address.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Pick every network this Mac should be reachable on. It always answers this Mac itself, so choosing nothing here keeps it private.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Several addresses at once, because a Mac serving its office LAN and its tailnet is
             // the normal case; loopback is always included by the Hub, so it is never a choice.
@@ -3417,14 +3834,14 @@ struct StudioContent: View {
                         var hosts = studio.configuration.listenHosts.filter { $0 != "0.0.0.0" }
                         if included { hosts.append(entry.address) }
                         else { hosts.removeAll { $0 == entry.address } }
-                        studio.setListenHosts(hosts)
+                        pinListenHosts(hosts)
                     }))
                 // These are editable while the Hub runs: the change is saved and the notice above
                 // offers the restart that applies it, instead of the control refusing to move.
             }
             Toggle("Any address on any network", isOn: Binding(
                 get: { studio.configuration.listenHosts.contains("0.0.0.0") },
-                set: { studio.setListenHosts($0 ? ["0.0.0.0"] : []) }))
+                set: { pinListenHosts($0 ? ["0.0.0.0"] : []) }))
             // The port is fixed rather than picked at each start, so an address written down on
             // one Mac still names this one tomorrow. Shown with the address a node types, because
             // that string is the whole handshake.
@@ -3837,6 +4254,30 @@ struct StudioContent: View {
         default:
             return "This Mac creates on its own. Nothing else can send it work and it contacts nothing else."
         }
+    }
+
+    /// A manual address choice — ticking one, unticking one, or the wildcard — ends automatic mode.
+    ///
+    /// Without this the operator unticks Tailscale, the preference is saved, and the next launch
+    /// recomputes the list and puts it back: an edit that silently undoes itself is worse than
+    /// either default. So a manual choice pins exactly what is ticked at that moment.
+    private func pinListenHosts(_ hosts: [String]) {
+        studio.configuration.listenHostAutomatic = false
+        studio.setListenHosts(hosts)
+    }
+
+    /// Turn "follow this Mac's networks" on or off, saving the choice.
+    ///
+    /// Turning it on recomputes the list now — this Mac's current private and Tailscale addresses,
+    /// added to whatever was already saved, so it can never remove a way in that worked. Turning
+    /// it off changes nothing about the list: it pins exactly the addresses on screen.
+    private func setListenAutomatic(_ automatic: Bool) {
+        studio.configuration.listenHostAutomatic = automatic
+        if automatic {
+            studio.configuration.listenHost = ShellConfiguration.automaticListenHost(
+                keeping: studio.configuration.listenHost)
+        }
+        studio.saveConfiguration()
     }
 
     private func listenTitle(_ host: String) -> String {
