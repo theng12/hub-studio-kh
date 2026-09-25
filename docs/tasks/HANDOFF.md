@@ -51,26 +51,54 @@ collection by its own `collect_ignore`, so **run it explicitly**; `bash native/b
 
 **Open, with the exact fix rather than a guess:**
 
-- **Pocket TTS 4-bit (MLX 4-bit) cannot reach its eight preset voices.** It ships them (the
-  `pocket-tts-preset-voices` package: `alba`, `azelma`, `cosette`, `eponine`, `fantine`, `javert`,
-  `jean`, `marius`) and also declares cloning, and a model that offers both is reachable in one tab
-  only. Closing it needs two producer fields — a per-model `preset_speakers` roster derived from
-  that package's own file names, and a published `modes` list — plus the app offering the model in
-  each mode it publishes. This is the one shipped feature known to be unreachable.
-- **Audited reference-audio profiles exist only for the Qwen families.** Private-upload reference
-  preparation now refuses **by name** for VoxCPM2 (4-bit/8-bit/bf16), Chatterbox 8-bit, Fish S2 Pro
-  (8-bit/bf16) and Pocket TTS 4-bit instead of using a guessed 24 kHz/no-max copy. The Voices-library
-  path is unaffected. Closing it needs measured profile records, which must not be fabricated.
-- **The voice smoke pilot is stale by construction.** `qualification/model-inputs.json` records
-  `Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit`, cut from the catalog in ST-13.B, so `packaging/smoke_voice.py`
-  now reports the TTS role as unexercised with reasons rather than passing. It needs a shipped
-  model's smoke parameters recorded.
+- **Pocket TTS 4-bit (MLX 4-bit)'s eight preset voices are WON'T-FIX**, decided by the owner on
+  2026-09-25: *"pocket tts's 8 eight can be skipped. it's not needed as long as it has voice clone."*
+  The model ships cloning and that path works, so the `preset_speakers` work is not being done. The
+  roster is still derivable from the `pocket-tts-preset-voices` package (`alba`, `azelma`, `cosette`,
+  `eponine`, `fantine`, `javert`, `jean`, `marius`) if that decision is ever reversed.
+- **The operator no longer adds a voice by picking a loose clip file.** The owner retired that
+  affordance on 2026-09-25 — *"i want to have a button to 'Add Voices' and bring to the voice tab to
+  add 'voices' to the app. that way it can works across all… no need to have a picker for choose a
+  file"* — so the Audio page's Clone tab is **library-only**: the saved-voice picker plus a button to
+  the Voices page, which is the one place a voice is added or deleted. The
+  `POST /api/generate/txt2speech/reference` route itself stays (Gateway/GenStudio transports source
+  bytes through it) and no longer refuses for an un-audited model: it derives the reference contract
+  from the model's own published row and labels it `profile_audited: false` with a source per value,
+  refusing only when a catalogued cloning model publishes nothing derivable (409, with the missing
+  field and both files to fix). See the reference-prep entry below.
+- **Reference-audio profiles, resolved rather than demanded.** A9's first fix refused every
+  un-audited cloning model instead of using a guessed 24 kHz copy — a wrong result traded for no
+  result. The contract is now derived from the model's own published facts (`sample_rate_hz` from its
+  catalog row; the transcript rule from its published guardrails or its family's lane parameters),
+  marked `profile_audited: false` with a per-field source, and a bound nothing publishes is recorded
+  as *not published* rather than defaulted. Measured: VoxCPM2 4-bit (MLX) resolves **48 kHz** where
+  the guess was 24 kHz; Pocket TTS 4-bit (MLX) 24 kHz; Qwen3-TTS 1.7B Base 4-bit (MLX) keeps its
+  audited contract verbatim. The owner's saved-voice workflow was never affected — for VoxCPM2,
+  Chatterbox, Fish and Pocket TTS the library path does not call `prepare()` at all (the sole
+  library caller is gated on `1.7b-base in repo`). **Still missing:** `channels` and reference
+  min/max duration are published nowhere, so an un-audited model enforces no length bound (the 25 MB
+  upload cap still applies) and makes no channel claim — recorded as *not published*, not invented.
+- **The voice smoke pilot records a shipped model now, and it found a real bug doing it.** The
+  historical 0.1.0 entry stays as evidence; `qualification/model-inputs.json` adds a `shipped_smoke`
+  entry for **Qwen3-TTS-12Hz-0.6B-Base-8bit (MLX 8-bit)** with the tracked reference clip and its
+  transcript. `smoke_voice.py` waited for uvicorn's `Uvicorn running on …` line, which uvicorn never
+  prints when the worker supplies its own sockets — so it could never see a worker that had in fact
+  started; it now waits on the worker's ready file and reaches `/api/catalog` in about 2 s. The
+  parameters were proven through the shipped hub-inclusive 0.6.61 bundle: `done`, a 230,444-byte
+  24 kHz WAV, 24.26 s (receipt under `qualification/evidence/voice-runtime-2026-09-25/`).
+  `_stage_voice` now stages `model-manifests/`, which it never did, so a **voice-only** artifact can
+  resolve its own validator and processor; proved inert for a shipped bundle (same tree, with and
+  without the line: `payload_sha256` and every component's `source_sha256` byte-identical).
 - **Two model-keyed *measurement* tables remain on purpose**, and the audit's `Fix status` names
   both: `memory_admission._FLEET_DEFAULTS` (FLUX.2 Klein 4B MLX 4-bit's measured 7.5 GB total floor,
   which is *lower* than its published 16 GB tier and so cannot be expressed through the published
-  fields without being masked by `max()`) and `lane_contract._MEASURED_RUNTIME` (voice runtimes that
-  exist only as prose today). Neither is a gate: the total floor is not enforced, and the runtime
-  table is pinned to shipped repos by a test. The pattern to follow for anything similar is the one
+  fields without being masked by `max()`). It is the *only* one left: the voice lane's curated
+  `_MEASURED_RUNTIME` map was deleted and its numbers now come from
+  `qualification/evidence/voice-runtime-2026-09-25/measured-runtimes.json`, each row naming the probe
+  file it came from — and two numbers were **dropped** rather than kept, because they existed only as
+  prose: Pocket TTS 4-bit (MLX 4-bit)'s 0.30 s and VoxCPM2 4-bit (MLX 4-bit)'s 61.9 s / 738.4 s. They
+  are listed in the record's `withheld` block with their reasons. Neither table is a gate: the total
+  floor is not enforced, and the runtime record is pinned to shipped repos by a test. The pattern to follow for anything similar is the one
   the owner-approved Qwen3-TTS 12Hz 0.6B Base 8-bit floor now follows — **it moved onto the model's
   own catalog row** (`min_free_memory_gb: 3.2`) once the producer published it, and the Hub's
   model-keyed table was deleted.

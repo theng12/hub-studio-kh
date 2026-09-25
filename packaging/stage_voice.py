@@ -177,6 +177,14 @@ def _stage_voice(context: dict) -> dict:
     copy_tracked_tree(source / 'app/backend', voice / 'app/backend', suffix='.py')
     for directory in ('app/frontend', 'model-audits'):
         copy_tracked_tree(source / directory, voice / directory)
+    # The Voice worker resolves its own facts from the shipped manifests: the Qwen clone-quality
+    # validator reads the model's `requires_packages`, and the Whisper tokenizer source comes from
+    # the model's own manifest. Staging only for the Hub (`_stage_hub`) meant a **voice-only**
+    # artifact - which is what the smoke pilot builds - had no manifests at all, so a clone failed
+    # `QWEN_VALIDATOR_MODEL_UNDECLARED` after its reference had prepared fine, and the ASR leg
+    # could not resolve its processor. The fix the smoke needed, and the difference between a
+    # worker that can explain itself and one that cannot.
+    copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
     for name in ('VERSION', 'CHANGELOG.md'):
         shutil.copyfile(ROOT / name, voice / name)
     provenance = context['provenance']
