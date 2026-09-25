@@ -1429,6 +1429,72 @@ class GenerationManager:
                 remaining.append(str(path))
         return not remaining, remaining
 
+    # -- memory policy -------------------------------------------------------
+    # `memory_policy.py` reads the manager through these three methods and releases
+    # through the fourth, the way the Voice and Subtitle workers' policies do.  They are
+    # the single definition of "active" and "resident" for this worker, so a status probe
+    # and a release can never disagree about what is being held.
+    def has_active_jobs(self) -> bool:
+        """Is a job queued or running? A release must never preempt one."""
+        with self.lock:
+            return any(job.get("state") in ("queued", "running")
+                       for job in self.jobs.values())
+
+    def loaded_model_keys(self) -> list[tuple[str, str]]:
+        """Every model this worker is holding, as ``(repo, runtime)`` pairs.
+
+        One spawned engine child holds one model's weights, so a live child *is* resident
+        memory - during its load as much as after it.  Stable Audio 3 never appears here:
+        it runs a fresh subprocess per job and exits, so it has no residency to report.
+        """
+        loaded: list[tuple[str, str]] = []
+        with self.lock:
+            executors = list(self._executors.items())
+        for repo, executor in executors:
+            if getattr(executor, "child_pid", None) is None:
+                continue
+            model = catalog.get_model(repo)
+            loaded.append((repo, model.runtime if model is not None else catalog.ENGINE))
+        return loaded
+
+    def has_loaded_model(self) -> bool:
+        """Is any engine child resident right now? One definition, used by both paths."""
+        return bool(self.loaded_model_keys())
+
+    def release_memory_locked(self, reason: str = "manual") -> dict:
+        """Discard every resident engine child, refusing while work is active.
+
+        This is the only lifecycle that exists: ``EngineExecutor._discard()`` stops the
+        child, and the next submit's ``_ensure_child`` spawns a fresh one that loads the
+        model again.  A child whose exit was not verified stays resident and is reported
+        as ``released: False`` for its own model - a release that did not happen is never
+        reported as one.
+        """
+        if self.has_active_jobs():
+            raise RuntimeError("music generation is active; memory was not released")
+        released = False
+        models: list[list[str]] = []
+        actions: list[dict] = []
+        with self.lock:
+            executors = list(self._executors.items())
+        for repo, executor in executors:
+            pid = getattr(executor, "child_pid", None)
+            if pid is None:
+                continue
+            model = catalog.get_model(repo)
+            models.append([repo, model.runtime if model is not None else catalog.ENGINE])
+            action = {"model": repo, "engine_child_pid": pid}
+            try:
+                discarded = bool(executor._discard())
+            except Exception as exc:  # noqa: BLE001 - report the failure, not a release
+                discarded = False
+                action["error"] = f"{type(exc).__name__}: {exc}"
+            action["released"] = discarded
+            actions.append(action)
+            released = released or discarded
+        return {"released": released, "models": models, "actions": actions,
+                "reason": reason}
+
     def close(self) -> None:
         for executor in self._executors.values():
             executor.close()

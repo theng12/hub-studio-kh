@@ -15,6 +15,8 @@ routes the app calls.
 from __future__ import annotations
 
 import asyncio
+import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -534,6 +536,246 @@ print(json.dumps(out))
         self.assertTrue(out['release']['ok'])
         self.assertEqual(out['worker']['releases'], 1)
         self.assertEqual(out['release']['results'][0]['policy']['loaded_models'], [])
+
+
+class _NoJobs:
+    """The minimum an Image policy reads: the jobs it is running."""
+
+    def list(self) -> list:
+        return []
+
+
+def studio_policy_modules() -> dict:
+    """Every shipped Studio's memory policy, by component name.
+
+    The walk is over the real component tree rather than a list written here, so a Studio
+    added tomorrow is examined without anyone remembering to add it.  The module is
+    imported from its real package path, so this reads the code that actually ships.
+    """
+    modules = {}
+    for worker in sorted((PROJECT_ROOT / "components").glob("*/app/backend/main.py")):
+        name = worker.parents[2].name
+        modules[name] = importlib.import_module(
+            f"components.{name}.app.backend.memory_policy")
+    return modules
+
+
+class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
+    """The invariant the Hub depends on: every Studio answers the memory contract.
+
+    `FleetMemoryControl.targets()` treats every worker modality as a memory-control target,
+    and the machine-wide release pass and the fleet handoff both ask each one.  A Studio that
+    ships with no answer is rendered "Needs an update" (a control the owner cannot use) and
+    counted as a failed release.  A Studio that holds nothing still has to say so - that is
+    what Image's fixed single-mode policy is for - so the next resident Studio cannot ship
+    without controls by simply omitting them.
+    """
+
+    def test_the_walk_finds_every_shipped_studio(self) -> None:
+        """A walk that silently finds nothing would make this module green by construction."""
+        names = set(studio_policy_modules())
+        self.assertTrue(names, "the component walk found no Studio backend at all")
+        self.assertLessEqual({"image", "music", "voice", "subtitle", "chat"}, names,
+                             "a shipped Studio is missing from the component walk")
+
+    def test_every_studio_worker_serves_the_three_fleet_routes(self) -> None:
+        for worker in sorted((PROJECT_ROOT / "components").glob("*/app/backend/main.py")):
+            name = worker.parents[2].name
+            source = worker.read_text(encoding="utf-8")
+            with self.subTest(studio=name):
+                self.assertIn("/api/memory-policy", source,
+                              f"{name} does not serve GET/PUT /api/memory-policy")
+                self.assertIn("/api/memory/release", source,
+                              f"{name} does not serve POST /api/memory/release")
+                self.assertTrue((worker.parent / "memory_policy.py").is_file(),
+                                f"{name} has no memory_policy.py for the Hub to read")
+
+    def test_every_changeable_studio_publishes_voices_mode_table(self) -> None:
+        """The four modes and their thresholds cannot drift between Studios."""
+        voice = importlib.import_module("components.voice.app.backend.memory_policy")
+        for name, module in studio_policy_modules().items():
+            if getattr(module, "FIXED", False):
+                continue
+            with self.subTest(studio=name):
+                self.assertEqual(module.MODES, voice.MODES,
+                                 f"{name}'s modes no longer match Voice's")
+                if hasattr(module, "DEFAULT_MODE"):
+                    self.assertEqual(module.DEFAULT_MODE, voice.DEFAULT_MODE,
+                                     f"{name}'s default no longer matches Voice's")
+
+    def test_image_is_the_only_fixed_policy_and_keeps_its_single_mode(self) -> None:
+        """Image is deliberately correct as it stands: mflux exits after every job.
+
+        The Hub renders a one-mode ("fixed") policy as a sentence rather than four buttons
+        that would do nothing, so nobody should "fix" Image by giving it modes - and nobody
+        should declare a second fixed Studio to dodge the control either.
+        """
+        modules = studio_policy_modules()
+        voice = importlib.import_module("components.voice.app.backend.memory_policy")
+        fixed = sorted(name for name, module in modules.items()
+                       if getattr(module, "FIXED", False))
+        self.assertEqual(fixed, ["image"],
+                         "Image is the documented one-mode exception; every other Studio "
+                         "has a real residency choice")
+        image = modules["image"]
+        self.assertEqual(set(image.MODES), {"immediate"})
+        self.assertEqual(image.MODES["immediate"]["idle_seconds"],
+                         voice.MODES["immediate"]["idle_seconds"])
+
+        row = image.status(_NoJobs())
+        self.assertIs(row["fixed"], True)
+        self.assertEqual(row["mode"], "immediate")
+        self.assertEqual(row["idle_seconds"], 0)
+        self.assertEqual(row["options"],
+                         [{"mode": "immediate", "idle_seconds": 0,
+                           "label": "After every job"}])
+        self.assertEqual(row["loaded_models"], [])
+        self.assertEqual(row["release_policy"],
+                         "The model is released when each job finishes.")
+
+    def test_music_publishes_the_four_modes_and_the_shared_default(self) -> None:
+        """The regression this contract exists to catch: Music had no policy at all."""
+        music = studio_policy_modules()["music"]
+        voice = importlib.import_module("components.voice.app.backend.memory_policy")
+        self.assertFalse(getattr(music, "FIXED", False))
+        self.assertEqual(music.MODES, voice.MODES)
+        self.assertEqual(music.DEFAULT_MODE, "immediate")
+        self.assertEqual(music.MODES["performance"]["idle_seconds"], None)
+        self.assertEqual(music.MODES["balanced"]["idle_seconds"], 600)
+        self.assertEqual(music.MODES["memory_saver"]["idle_seconds"], 120)
+        self.assertEqual(music.MODES["immediate"]["idle_seconds"], 0)
+
+
+class _VerifiedPackageCache:
+    """A package view that reports every model cached, so no weights are needed."""
+
+    def __init__(self, *unused, library=None, **also_unused):
+        self.root = Path(library) / "installed" / "model"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def status(self, **unused):
+        return {"state": "cached", "checkpoints_root": str(self.root)}
+
+
+class _MusicResidentEngine:
+    """A stand-in for the Music worker's resident engine child."""
+
+    def __init__(self):
+        self._pid = 2468
+        self.discards = 0
+
+    @property
+    def child_pid(self):
+        return self._pid
+
+    def _discard(self):
+        self.discards += 1
+        self._pid = None
+        return True
+
+    def close(self):
+        self._discard()
+
+
+class MusicRowThroughTheHubController(PackagedMachine):
+    """`GET /api/hub/memory/policy` must show the Music row as ready, with its four modes.
+
+    The native Settings screen reads that route, and the route reads every Studio through
+    `FleetMemoryControl.inventory()`.  This drives the real controller against the real
+    Music FastAPI app and the real `GenerationManager`; only the transport is an adapter
+    onto its TestClient, since a socket would not change the contract being read.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the system test interpreter")
+        from fastapi.testclient import TestClient
+        from components.music.app.backend import catalog, generation, memory_policy
+        from components.music.app.backend.main import create_app
+
+        self.catalog = catalog
+        self.memory_policy = memory_policy
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        (root / "models").mkdir()
+        (root / "engine").mkdir()
+        with patch.object(generation.cache_module, "MusicCache", _VerifiedPackageCache):
+            self.manager = generation.GenerationManager(
+                root / "data", engine_root=str(root / "engine"),
+                library_dir=str(root / "models"), runtime_sha256="f" * 64)
+        self.addCleanup(self.manager.close)
+        self.addCleanup(self._unbind_policy)
+        self.manager._engine_contract_reason = lambda: None
+        self.client = TestClient(create_app(self.manager, "secret"))
+
+    def _unbind_policy(self) -> None:
+        self.memory_policy._MANAGER = None
+        self.memory_policy._STATE_DIR = None
+
+    def control(self):
+        # The packaged Hub registers each owned worker with the same credential in both
+        # fields (`hub_worker.worker_specs`), which is what the worker's middleware checks.
+        studios = [{"id": "music", "title": "Music Studio", "modality": "music",
+                    "host": "127.0.0.1", "port": 51107, "machine": "local",
+                    "local": True, "hub_token": "secret", "studio_token": "secret"}]
+        app_client = self.client
+
+        class Client:
+            async def request(self, method, url, headers=None, json=None, timeout=None):
+                response = app_client.request(method, urlsplit(url).path,
+                                              headers=headers, json=json)
+                return FakeResponse(response.status_code, response.json())
+
+        class Monitor:
+            registry = studios
+            status = {"music": {"status": "up"}}
+
+        return memory_control().FleetMemoryControl(Monitor(), client=Client())
+
+    def test_the_music_row_is_ready_with_four_modes(self) -> None:
+        inventory = asyncio.run(self.control().inventory())
+        row = inventory["studios"][0]
+        self.assertEqual(row["id"], "music")
+        self.assertEqual(row["state"], "ready", row.get("detail"))
+        self.assertNotEqual(row["state"], "update_required",
+                            "Music must not read 'Run Update on this Studio to add "
+                            "memory controls'")
+        self.assertTrue(row["supported"])
+        self.assertIsNone(row["detail"])
+        policy = row["policy"]
+        self.assertEqual(policy["mode"], "immediate")
+        self.assertEqual(policy["default_mode"], "immediate")
+        self.assertEqual(policy["idle_seconds"], 0)
+        self.assertEqual([option["mode"] for option in policy["options"]],
+                         ["performance", "balanced", "memory_saver", "immediate"])
+        self.assertEqual([option["label"] for option in policy["options"]],
+                         ["Performance", "Balanced", "Memory Saver", "Immediate"])
+
+    def test_set_mode_changes_the_music_policy_and_the_hub_reads_it_back(self) -> None:
+        control = self.control()
+        result = asyncio.run(control.set_mode("memory_saver"))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["results"][0]["result"], "updated")
+        self.assertEqual(self.memory_policy.status()["mode"], "memory_saver")
+        self.assertEqual(
+            json.loads(self.memory_policy.settings_file().read_text(encoding="utf-8")),
+            {"mode": "memory_saver"})
+        # Reflected back through the same route the app calls.
+        row = asyncio.run(control.inventory())["studios"][0]
+        self.assertEqual(row["state"], "ready")
+        self.assertEqual(row["policy"]["mode"], "memory_saver")
+        self.assertEqual(row["policy"]["idle_seconds"], 120)
+
+    def test_release_through_the_hub_discards_the_resident_engine(self) -> None:
+        engine = _MusicResidentEngine()
+        self.manager._executors[self.catalog.MAIN_REPO] = engine
+        result = asyncio.run(self.control().release())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["results"][0]["result"], "released")
+        self.assertEqual(engine.discards, 1)
+        self.assertEqual(result["results"][0]["policy"]["loaded_models"], [])
 
 
 if __name__ == '__main__':

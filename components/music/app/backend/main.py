@@ -19,7 +19,7 @@ import subprocess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import catalog
+from . import catalog, memory_policy
 from .generation import GenerationManager, final_matches, lane_contract
 
 from components import app_version
@@ -61,6 +61,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     if not token:
         raise ValueError("Private Music worker requires its owning Hub credential")
     app = FastAPI(title="Studio Hub Music", version="1")
+    # One resident ACE-Step engine child, released when the operator's policy says so.
+    # Before this module existed the only things that stopped that child were a cancel and
+    # the worker exiting, so its DiT and planner stayed in unified memory between jobs -
+    # the residency a machine shared by several Studios cannot afford.
+    memory_policy.start_background(manager)
 
     @app.middleware("http")
     async def require_owner(request: Request, call_next):
@@ -233,6 +238,31 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     @app.get("/api/cache")
     def cache_root() -> dict:
         return cache_status()
+
+    # ── model memory policy ────────────────────────────────────────────────
+    # The fleet contract every Studio publishes, matching the Voice worker's
+    # `GET/PUT /api/memory-policy` and `POST /api/memory/release`. The Hub's
+    # FleetMemoryControl reads all of them through this one shape, and renders a Studio
+    # without it as "Needs an update".
+
+    @app.get("/api/memory-policy")
+    def get_memory_policy() -> dict:
+        return memory_policy.status()
+
+    @app.put("/api/memory-policy")
+    def put_memory_policy(body: dict | None = None) -> dict:
+        try:
+            return memory_policy.save((body or {}).get("mode"))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/memory/release")
+    def release_memory() -> dict:
+        try:
+            return memory_policy.release_now()
+        except RuntimeError as exc:
+            # 409, like Image and Subtitle: the work is active, not the request malformed.
+            raise HTTPException(409, str(exc)) from exc
 
     # A stopped worker must not leave a 4-5 GB engine child holding the model.
     # Uvicorn runs shutdown handlers on SIGTERM/SIGINT before the process ends.
