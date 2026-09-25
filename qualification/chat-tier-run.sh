@@ -719,7 +719,12 @@ fi
   echo "Manifest qualifies it at: ${QUAL_GB:-none published} GB (qualification.minimum_unified_memory_gb)"
   echo "Engine: mlx ${MLX_VERSION:-?} / mlx-lm (bundled) · catalog context ${CAT_CONTEXT:-?} / max output ${CAT_MAXOUT:-?} tokens"
   echo "Worker's own host verdict: eligible=$CAT_ELIGIBLE, ready=$CAT_AVAILABLE${MEMORY_WARNING:+, warning: $MEMORY_WARNING}"
-  echo "Memory policy pinned to: $POLICY_MODE (the shipped default is immediate, which would release the model between runs)"
+  # This sentence used to read "the shipped default is immediate, which would release the model
+  # between runs". That is wrong on the tier this script exists to measure: the shipped default is
+  # `auto`, and `auto` resolves to `balanced` at 16 GiB and above (components/memory_modes.py,
+  # AUTO_BALANCED_MIN_BYTES), which HOLDS the model for ten idle minutes. A verdict block that
+  # misstated the shipped default is the one line here an operator would act on.
+  echo "Memory policy pinned to: $POLICY_MODE for the measurement (the shipped default is auto, which on a 16 GB Mac resolves to balanced and holds the model for 10 idle minutes; this run pins it so no measurement can be affected by a release between runs)"
   echo "Prompt (${MAX_TOKENS} max tokens, temperature 0, top_p 1, seed 42, thinking off): $PROMPT"
   echo "Memory at start: ${AVAIL_GB:-?} GB available (floor ${FLOOR_GB:-?} GB), swap ${SWAP_START_MB:-?} MB used"
   printf '  %-17s %8s %8s %10s %8s %9s %11s %10s  %s\n' run prompt_tok compl_tok engine_s wall_s tok_per_s swap_peak load_s result

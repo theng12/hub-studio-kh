@@ -133,8 +133,24 @@ class ModelManifestCatalogTests(unittest.TestCase):
                 self.assertRegex(manifest["revision"], REVISION)
                 self.assertEqual(manifest["schema_version"], 1)
                 self.assertEqual(manifest["minimum_macos"], "14.0")
-                self.assertEqual(manifest["qualification"]["status"], "unqualified")
                 details = CAPTURE.DETAILS[package_id]
+                # A tier is `qualified` only where the capture spec records a measurement, and
+                # `unqualified` everywhere else. This asserted the literal string "unqualified" for
+                # every manifest, which is the shape that keeps a measured tier unpublished: it
+                # pinned the blanket answer rather than the rule, so recording a real measurement
+                # failed the suite instead of being the thing the suite wanted.
+                declared = details.get("qualification") or {}
+                self.assertEqual(manifest["qualification"]["status"],
+                                 declared.get("status", "unqualified"))
+                if declared.get("status") == "qualified":
+                    # And a claim of qualification has to say what qualified it. A status is an
+                    # evidence claim, so the evidence has to be in the same block.
+                    self.assertIn("MEASURED", manifest["qualification"]["memory_evidence"],
+                                  "a qualified tier must name the measurement that qualified it")
+                    self.assertTrue(declared.get("reason"),
+                                    "and a qualified tier must carry its own reason")
+                else:
+                    self.assertIn("unqualified", manifest["qualification"]["status"])
                 self.assertEqual(manifest["defaults"], details["defaults"])
                 self.assertEqual(
                     [manifest["qualification"]["minimum_unified_memory_gb"],
@@ -239,7 +255,12 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
             "z-image-turbo-mflux-4bit": "df042f1a8eec72df794036e76cd3e48601408d8f11d06f035ddd7d610665ed2d",
-            "qwen3-5-9b-4bit": "31a7cf2393d673bcb21a10ef51252455a34fd10b0bbf1c941861d2c2cdd87806",
+            # Recaptured 2026-09-25: the qualification is now a MEASUREMENT rather than
+            # catalog arithmetic. Three 16 GB Macs (M1, M2, M4) each completed a 256-token
+            # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from
+            # `unqualified` to `qualified` and `memory_evidence` records the runs and their
+            # source. Nothing about the pinned revision or the file inventory changed.
+            "qwen3-5-9b-4bit": "e4ecdd89853238cb07ff516e9ae44549a37aae008e82a95549f3fc87aaefea3d",
             "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
             "qwen3-tts-12hz-0-6b-base-8bit": "23404870afb1a3ef651c496de9d0891f20c9f99488a92792bebcfd08ec54233e",
             "qwen3-tts-12hz-1-7b-base-4bit": "f514eb0f48dda5f3173c08ac954e644e11802aa5525c821cdaff752a9ad722d7",

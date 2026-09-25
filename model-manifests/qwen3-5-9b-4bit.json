@@ -108,11 +108,11 @@
   "model_id": "mlx-community/Qwen3.5-9B-4bit",
   "package_id": "qwen3-5-9b-4bit",
   "qualification": {
-    "memory_evidence": "Owner-chosen common fleet model, uniform 4-bit MLX: 5.98 GB of weights loads inside the 16 GB tier with room for context. 8 GB is not viable. Local import and inference qualification remain required. See research/story-text-llm-shortlist.md.",
+    "memory_evidence": "Owner-chosen common fleet model, uniform 4-bit MLX. MEASURED on the 16 GB tier, 2026-09-25: three 16 GB Macs (M1, M2, M4) each completed a 256-token completion at 12.40-18.60 tok/s, peak MLX 5.23 GB (5226237062 bytes, identical on all three - it is the model's footprint, not the host's), load 9.08-13.69 s, swap 0.00 MB on two Macs and 0.25 MB on the third. Memory available at start was 7.70-8.85 GB against the checkpoint's own 5.98 GB plus 0.5 GB of working room. Source: qualification/chat-tier-run.sh on each Mac; verdict blocks recorded in the owner's 'StudioHub Chat Tier Run m{1,2,4}-16*' folders. NOT MEASURED on 8 GB: the run did not start on the owner's 8 GB Mac, and whether the harness refused on available memory or the model aborted is not yet recorded - so nothing is claimed for that tier here. This replaces the earlier catalog-arithmetic note, which read '8 GB is not viable' as an inference from the weight size and 'local import and inference qualification remain required'.",
     "minimum_unified_memory_gb": 16,
-    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "reason": "Qualified on the 16 GB tier by measurement, 2026-09-25: three 16 GB Macs completed runs. The 8 GB tier is unmeasured - a run there did not start and the reason is not yet recorded.",
     "recommended_unified_memory_gb": 16,
-    "status": "unqualified"
+    "status": "qualified"
   },
   "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
   "schema_version": 1,
@@ -132,7 +132,7 @@
         "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/revision/8b2b98c00a6b4d291155e4890773ca8f769aee53",
-        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true&limit=100"
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true"
       }
     ]
   }

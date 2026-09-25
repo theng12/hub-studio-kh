@@ -30,6 +30,10 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+# `sys` was used five times and never imported, so every path that reaches the withhold branch —
+# the branch that refuses to replace a manifest, which is the one protecting a package from being
+# silently regenerated — died with a NameError instead of saying why it would not write.
+import sys
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -159,7 +163,8 @@ DETAILS: dict[str, dict[str, Any]] = {
     # generation_config.json, so the old pointer named a file nobody could read and the Chat
     # worker silently used its own defaults. The shipped manifest records the file the worker
     # actually reads.
-    "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Owner-chosen common fleet model, uniform 4-bit MLX: 5.98 GB of weights loads inside the 16 GB tier with room for context. 8 GB is not viable. Local import and inference qualification remain required. See research/story-text-llm-shortlist.md.")},
+    "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Owner-chosen common fleet model, uniform 4-bit MLX. MEASURED on the 16 GB tier, 2026-09-25: three 16 GB Macs (M1, M2, M4) each completed a 256-token completion at 12.40-18.60 tok/s, peak MLX 5.23 GB (5226237062 bytes, identical on all three - it is the model's footprint, not the host's), load 9.08-13.69 s, swap 0.00 MB on two Macs and 0.25 MB on the third. Memory available at start was 7.70-8.85 GB against the checkpoint's own 5.98 GB plus 0.5 GB of working room. Source: qualification/chat-tier-run.sh on each Mac; verdict blocks recorded in the owner's 'StudioHub Chat Tier Run m{1,2,4}-16*' folders. NOT MEASURED on 8 GB: the run did not start on the owner's 8 GB Mac, and whether the harness refused on available memory or the model aborted is not yet recorded - so nothing is claimed for that tier here. This replaces the earlier catalog-arithmetic note, which read '8 GB is not viable' as an inference from the weight size and 'local import and inference qualification remain required'."),
+                       "qualification": {"status": "qualified", "reason": 'Qualified on the 16 GB tier by measurement, 2026-09-25: three 16 GB Macs completed runs. The 8 GB tier is unmeasured - a run there did not start and the reason is not yet recorded.'}},
     # ── ST-13.A: Pocket TTS 4-bit and the two companions it cannot run without ──
     # The owner's listening review on 2026-09-24 measured a 1.9 GB peak and judged this the
     # best-sounding English cloning model on the menu. A local render through the app's own
@@ -387,12 +392,18 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
         "minimum_macos": "14.0",
         "files": sorted(selected, key=lambda item: item["path"]),
         "defaults": details["defaults"],
+        # A measured tier says so; everything else keeps the honest catalog-metadata wording. The
+        # table above carries the override, so a qualification is recorded where the measurement is
+        # recorded rather than by editing the manifest, which is a generated artefact and is tested
+        # for reproducibility by this very tool.
         "qualification": {
-            "status": "unqualified",
+            "status": details.get("qualification", {}).get("status", "unqualified"),
             "minimum_unified_memory_gb": details["memory"][0],
             "recommended_unified_memory_gb": details["memory"][1],
             "memory_evidence": details["memory"][2],
-            "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+            "reason": details.get("qualification", {}).get(
+                "reason",
+                "Catalog metadata records expected bytes; local import and inference qualification remain required."),
         },
         "source": {"provider": "huggingface", "captured_at": CAPTURE_DATE, "sources": sources,
                    "layout": layout},
