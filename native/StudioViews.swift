@@ -1034,6 +1034,12 @@ struct StudioContent: View {
                                                 .textSelection(.enabled)
                                                 .fixedSize(horizontal: false, vertical: true)
                                         }
+                                        // How fast the model answered: its own stated token count
+                                        // over its own stated generation time, and nothing else.
+                                        // A reply whose worker stated no time shows no rate.
+                                        if !turn.speed.isEmpty {
+                                            Text(turn.speed).font(.caption).foregroundStyle(.secondary)
+                                        }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(10)
@@ -1088,6 +1094,7 @@ struct StudioContent: View {
                                 Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
                             }
                         }
+                        imageLoadingModeControl
                         if let configuration = workspace.imageConfiguration, workspace.imageSettings != nil {
                             imageControls(configuration)
                             Button("Restore Generation Defaults") { workspace.restoreImageDefaults() }
@@ -1124,6 +1131,13 @@ struct StudioContent: View {
             }
         }.padding(28)
         .onAppear { seedSample(Self.imageSamples, binding: $workspace.imagePrompt, seeded: $seededImageSample) }
+        // The worker's own per-machine loading setting: read when the page opens rather than on
+        // the two-second poll, because it is one extra read and nothing else on the page needs it.
+        // Keyed on the connection, not on the page: a reconnect is a different Image worker, and
+        // the status from the one that ended is not its answer.
+        .task(id: "\(connected)/\(workspace.connectionGeneration)") {
+            await workspace.refreshImageLoadingMode()
+        }
         .task(id: previewImageJob?.id) {
             imagePreview = nil
             guard let job = previewImageJob else { return }
@@ -1135,6 +1149,42 @@ struct StudioContent: View {
                 guard let image = NSImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }
                 imagePreview = image
             } catch { if !Task.isCancelled { fileActionError = error.localizedDescription } }
+        }
+    }
+
+    /// Which mflux memory configuration the next Image job loads with, on this Mac.
+    ///
+    /// Everything shown here was published: the options and their sentences are the selected
+    /// model's own catalogue row — they carry the peak memory and wall time that model states for
+    /// each configuration, and the host it states them for — and the line underneath is the
+    /// configuration this Mac will actually use, so `auto` resolving to the bounded configuration
+    /// is visible rather than implied. A model whose row says it has one loading mode renders its
+    /// own `reason` instead, and a row that published no loading modes at all says that: neither
+    /// gets a control that would do nothing. There is deliberately no list of modes here and no
+    /// copy of the worker's threshold rule.
+    @ViewBuilder private var imageLoadingModeControl: some View {
+        if let control = workspace.imageLoadingControl {
+            if control.offersControl {
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Loading mode", selection: Binding(
+                        get: { control.selected },
+                        set: { value in Task { await workspace.setImageLoadingMode(value) } })) {
+                            ForEach(control.options) { option in Text(option.label).tag(option.id) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                        .disabled(!connected || workspace.updatingImageLoadingMode)
+                    if let detail = control.detail {
+                        Text(detail).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let effective = control.effectiveSentence {
+                        Text(effective).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } else if let reason = control.reason {
+                Text(reason).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -2064,6 +2114,17 @@ struct StudioContent: View {
                         Divider().padding(.top, 8)
                         Text("Recognition").font(.headline)
                         modelPicker(.transcription)
+                        // The Subtitle worker's own below-tier sentence, in the same shape the
+                        // Image page uses for its published warning: advice, not a wall, and
+                        // nothing at all when this Mac is at or above the tier. It comes from the
+                        // model's catalogue row (`memory_warning`), the same key and the same place
+                        // Image, Music and Chat publish theirs.
+                        if let warning = selectedTranscriptionModel?.memoryWarning {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Language").font(.callout)
                             TextField("Auto-detect", text: $workspace.transcriptionLanguage).textFieldStyle(.roundedBorder)
@@ -2447,6 +2508,12 @@ struct StudioContent: View {
                         // same name the picker on the Chat page offered.
                         Text("\(modelName(job.model))\(job.generationSuffix)")
                             .font(.caption).foregroundStyle(.secondary)
+                    }
+                    // Tokens per second, derived only from the Chat worker's own stated generation
+                    // time. When the worker stated none there is no rate; the row names the Hub's
+                    // round trip as the round trip rather than passing it off as the model's speed.
+                    if !job.tokenSpeed.isEmpty {
+                        Text(job.tokenSpeed).font(.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
                     if job.state == "done", !job.answer.isEmpty {
@@ -3881,8 +3948,17 @@ struct StudioContent: View {
                     }
                     .pickerStyle(.segmented).labelsHidden()
                     .disabled(!connected || workspace.updatingMemory)
+                    // The Studio's own sentence for the selected mode, which is the only one that
+                    // knows what `auto` resolved to on this Mac. The list above is the Studio's
+                    // published options too, so a fifth mode appears here without an edit.
                     Text(options.first { $0.mode == policy.mode }?.summary ?? "")
                         .font(.callout).foregroundStyle(.secondary)
+                    // ...and when the selection resolved to a different mode than its own name,
+                    // both are named: "Auto resolves to Balanced on this Mac". Both labels come
+                    // from the Studio's payload, so the machine rule is never re-derived here.
+                    if let resolution = policy.resolution {
+                        Text(resolution).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             } else if let detail = row.detail, !detail.isEmpty {
                 Text(detail).font(.callout).foregroundStyle(.secondary)

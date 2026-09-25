@@ -109,6 +109,94 @@ struct NativeImageConfiguration: Equatable {
     }
 }
 
+/// One loading mode as the Image model's own catalogue entry publishes it.
+///
+/// `detail` is the model's own sentence for the option: it carries the peak memory and wall time
+/// the model states for this configuration and the host it stated them on. It is shown verbatim.
+/// A trade worded here in Swift would be a claim the model never made.
+struct NativeImageLoadingOption: Decodable, Identifiable, Equatable {
+    let id: String
+    let label: String
+    let detail: String?
+}
+
+/// The Image worker's loading-size setting as one model's catalogue row publishes it.
+///
+/// This is deliberately not the release policy: that is the Image worker's `/api/memory-policy`,
+/// whose answer is fixed because mflux is built inside a job. This is which mflux memory
+/// *configuration* the next job loads with on this Mac.
+///
+/// `supported: false` means the model has exactly one loading mode: `options` is empty and
+/// `reason` is the model's own sentence explaining why, including — when the machine-wide
+/// setting is `low` — that the setting does not apply to it. No control may be drawn for it.
+struct NativeImageLoadingModes: Decodable, Equatable {
+    let supported: Bool
+    let selected: String?
+    let effective: String?
+    let thresholdBytes: Int64?
+    let options: [NativeImageLoadingOption]?
+    /// The model's own sentence for having a single loading mode, or nil when it has several.
+    let reason: String?
+
+    var publishedOptions: [NativeImageLoadingOption] { options ?? [] }
+}
+
+/// One model's half of `GET /api/loading-mode`, the Image worker's per-machine answer.
+struct NativeImageLoadingModeRow: Decodable, Identifiable, Equatable {
+    let repo: String
+    let supported: Bool
+    let selected: String?
+    let effective: String?
+    let thresholdBytes: Int64?
+    let reason: String?
+
+    var id: String { repo }
+}
+
+/// `GET`/`PUT /studio/image/api/loading-mode`, the Image worker's own payload.
+///
+/// `models` is the same derivation the catalogue publishes, projected per repo, so the two
+/// surfaces cannot disagree about what a model will do.
+struct NativeImageLoadingModeStatus: Decodable, Equatable {
+    let mode: String
+    let defaultMode: String?
+    let options: [NativeImageLoadingOption]?
+    let machineBytes: Int64?
+    let models: [NativeImageLoadingModeRow]?
+
+    var publishedOptions: [NativeImageLoadingOption] { options ?? [] }
+    var publishedModels: [NativeImageLoadingModeRow] { models ?? [] }
+}
+
+/// What the Image page renders for the selected model's loading mode.
+///
+/// Built only from what the producer published: the model's own catalogue row decides whether a
+/// control exists at all, and the Image worker's status read supplies the selection and the
+/// configuration actually in force after a change. `reason` is set exactly when there is no
+/// control to draw.
+struct NativeImageLoadingControl: Equatable {
+    let repo: String
+    /// The options to render, in the producer's order. Empty means no control may be drawn.
+    let options: [NativeImageLoadingOption]
+    let selected: String
+    /// What this Mac will actually load the model as, as the producer states it ("low-ram" on a
+    /// machine under the model's own threshold, "default" at or above it).
+    let effective: String?
+    /// The selected option's own published sentence, when the producer published one.
+    let detail: String?
+    /// The sentence to render instead of a control: the model's own `reason` for having a single
+    /// loading mode, or the fact that its catalogue entry publishes no loading modes at all.
+    let reason: String?
+
+    var offersControl: Bool { !options.isEmpty }
+    /// "In force on this Mac: low-ram" — the operator can see `auto` resolved to the bounded
+    /// configuration here.
+    var effectiveSentence: String? {
+        guard let effective, !effective.isEmpty else { return nil }
+        return "In force on this Mac: \(effective)"
+    }
+}
+
 /// The controls a Music model actually accepts, as the Music worker publishes them.
 ///
 /// The Hub catalogue carries `generation_defaults` and `generation_limits` per model, and the
@@ -299,6 +387,11 @@ struct NativeModel: Identifiable, Equatable {
     /// the WAV will be without opening it; absent for every other function.
     var sampleRateHz: Int? = nil
     var channels: Int? = nil
+    /// The Image worker's loading-size setting as it applies to this model on this Mac, published
+    /// on the model's own catalogue row. Nil means the row published none at all — which is what a
+    /// catalogue row for a manifest the worker has no registered model for looks like — and the
+    /// Image page says so rather than drawing a control that would do nothing.
+    var loadingModes: NativeImageLoadingModes? = nil
     /// Short marker for a picker, where a whole sentence will not fit.
     var pickerSuffix: String { blockReason == nil ? "" : "  —  not available here" }
     /// A cleaned short name for a chooser. The catalogue label carries a recommendation suffix and
@@ -379,8 +472,18 @@ struct NativeMemoryMode: Decodable, Identifiable, Equatable {
     let mode: String
     let label: String
     let idleSeconds: Int?
+    /// The Studio's own sentence for this mode, resolved for this Mac.
+    ///
+    /// It is the only sentence that knows what `auto` resolved to here — "Follows this Mac:
+    /// releases after 10 idle minutes here" on a 32 GB Mac, "…as soon as each job finishes here"
+    /// on an 8 GB one. The derived sentence below cannot know that, so it is only the fallback
+    /// for a worker that published no detail at all.
+    let detail: String?
     var id: String { mode }
     var summary: String {
+        if let detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return detail
+        }
         guard let idleSeconds else { return "Keeps the model loaded until you release it." }
         if idleSeconds == 0 { return "Releases the model as soon as each job finishes." }
         if idleSeconds < 60 { return "Releases after \(idleSeconds) seconds idle." }
@@ -391,6 +494,12 @@ struct NativeMemoryMode: Decodable, Identifiable, Equatable {
 /// What one Studio reports about the model it is holding right now.
 struct NativeMemoryPolicy: Decodable, Equatable {
     let mode: String
+    /// What the selected mode actually resolved to on this Mac. `auto` answers with the machine's
+    /// own mode, so this is what is really in force and `mode` alone is not.
+    let resolvedMode: String?
+    /// What `auto` means on this Mac, published beside the selection. Read only as the fallback
+    /// for `resolvedMode`, so the machine rule is never re-derived here.
+    let machineMode: String?
     /// The Studio's own resolved default, which is chosen from the machine's memory and is
     /// not necessarily the Hub's fleet-wide draft default.
     let defaultMode: String?
@@ -404,9 +513,27 @@ struct NativeMemoryPolicy: Decodable, Equatable {
     let releasePolicy: String?
     let machineBytes: Int64?
 
+    /// The one mode whose answer depends on the machine, as every worker names it. A single
+    /// contract constant, not a list of the modes: the options and their sentences still come
+    /// from the producer's payload.
+    private static let machineResolvedMode = "auto"
+
     var resolvedOptions: [NativeMemoryMode] { options ?? [] }
     var resident: [String] { (loadedModels ?? []).map { $0.joined(separator: " ") } }
     var isFixed: Bool { fixed == true }
+
+    /// Which mode is in force, when the producer says the selected one resolved elsewhere:
+    /// "Auto resolves to Balanced on this Mac". Both names are the producer's own labels from
+    /// its published options, so a mode this build has never heard of still renders.
+    var resolution: String? {
+        let resolved = resolvedMode ?? (mode == Self.machineResolvedMode ? machineMode : nil)
+        guard let resolved, resolved != mode else { return nil }
+        return "\(label(for: mode)) resolves to \(label(for: resolved)) on this Mac"
+    }
+
+    func label(for id: String) -> String {
+        resolvedOptions.first { $0.mode == id }?.label ?? id
+    }
 }
 
 /// One family of cached model files: a model plus the companions it needs, as one unit.
@@ -471,6 +598,11 @@ struct NativeMemoryResult: Decodable, Equatable {
 private struct MemoryModeBody: Encodable {
     let mode: String
     let studioIds: [String]?
+}
+
+/// `PUT /studio/image/api/loading-mode`: the one field the Image worker reads.
+private struct ImageLoadingModeBody: Encodable {
+    let mode: String
 }
 
 /// Truthful identity of the Hub this app is talking to. The Connections screen shows these
@@ -696,6 +828,20 @@ struct NativeChatTurn: Identifiable, Equatable {
     /// inventing one. Display only: the wire keeps the two roles it has always had, and this field
     /// is never sent to the Hub.
     var failure: String?
+    /// The tokens the worker stated it generated for this reply, when it stated a usage block.
+    /// Nil is "not stated" and is never shown as zero.
+    var completionTokens: Int? = nil
+    /// The worker's own stated generation time for this reply (`studio_hub.elapsed_seconds`).
+    /// The live reply carries no Hub-measured round trip, so when the worker stated no time there
+    /// is no rate at all rather than one derived from the app's own clock.
+    var statedGenerationSeconds: Double? = nil
+
+    /// "10 tokens · 1.4 tok/s · 7.2 s", or the token count alone, or nothing.
+    var speed: String {
+        NativeJob.tokenSpeed(completionTokens: completionTokens,
+                             statedGenerationSeconds: statedGenerationSeconds,
+                             roundTripSeconds: nil)
+    }
 }
 
 struct NativeModelStats: Decodable, Equatable, Identifiable {
@@ -728,6 +874,14 @@ struct NativeJob: Identifiable, Equatable {
     /// is the length of the media produced.
     var generationSeconds: Double? = nil
     var runningSeconds: Double? = nil
+    /// The tokens the worker stated it generated, from the item's own `usage` block. Nil is
+    /// "the worker stated none" and is never rendered as zero.
+    var completionTokens: Int? = nil
+    /// The Chat worker's own stated generation time (`generation_s`), which is the only number a
+    /// rate may be derived from. It is deliberately separate from `generationSeconds`, which stays
+    /// the Hub's measured round trip: on a cold turn that includes the model load, so the two are
+    /// different facts and only one of them is the model's speed.
+    var statedGenerationSeconds: Double? = nil
     /// The studio's own label for the phase it is in ("DiT sampling"), when it reports one.
     var progressStage: String? = nil
     /// What a Chat completion answered. Empty for every other Studio, whose result is a file.
@@ -758,6 +912,38 @@ struct NativeJob: Identifiable, Equatable {
             return " · running \(clock(runningSeconds))"
         }
         return ""
+    }
+
+    /// "10 tokens · 1.4 tok/s · 7.2 s", or the token count with the round trip named as such, or
+    /// nothing when the worker stated no token count.
+    ///
+    /// The rate is `completion_tokens / generation_s` and nothing else. `generation_s` is the Chat
+    /// worker's own stated generation time. When the worker stated none, zero or a non-finite
+    /// value there is **no** rate: the Hub's round trip (`runtime_s`) is measured around the whole
+    /// proxied call and includes the model load on a cold turn, so a rate derived from it would
+    /// understate the model and change meaning between the first reply and the second. The round
+    /// trip is still shown where it exists, labelled as the round trip, which is what it is.
+    var tokenSpeed: String {
+        Self.tokenSpeed(completionTokens: completionTokens,
+                        statedGenerationSeconds: statedGenerationSeconds,
+                        roundTripSeconds: generationSeconds)
+    }
+
+    static func tokenSpeed(completionTokens: Int?, statedGenerationSeconds: Double?,
+                           roundTripSeconds: Double?) -> String {
+        // No stated token count, no rate and no token line: a count the worker never gave cannot
+        // be published, not even as the zero a default would produce.
+        guard let completionTokens, completionTokens > 0 else { return "" }
+        if let stated = statedGenerationSeconds, stated.isFinite, stated > 0 {
+            let rate = Double(completionTokens) / stated
+            let speed = rate >= 0.1 ? String(format: "%.1f tok/s", rate)
+                                    : String(format: "%.3f tok/s", rate)
+            return "\(completionTokens) tokens · \(speed) · \(clock(stated))"
+        }
+        guard let roundTripSeconds, roundTripSeconds.isFinite, roundTripSeconds > 0 else {
+            return "\(completionTokens) tokens"
+        }
+        return "\(completionTokens) tokens · \(clock(roundTripSeconds)) round trip"
     }
 
     /// How long something took, at the scale it actually reached.
@@ -1298,6 +1484,38 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var routingPin: String? { didSet { scheduleSave() } }
     @Published private(set) var submittingImage = false
     var imageConfiguration: NativeImageConfiguration? { imageConfigurations[imageModel] }
+    /// The Image worker's loading-size setting for this Mac, as the worker itself publishes it:
+    /// the machine-wide selection, its options, and what each model resolves to. Nil until the
+    /// Image page reads it. This is *not* the release policy in Settings — that is
+    /// `/api/hub/memory/policy`, and Image's answer there is fixed because mflux is built inside
+    /// a job and dropped when it returns.
+    @Published private(set) var imageLoadingMode: NativeImageLoadingModeStatus?
+    @Published private(set) var updatingImageLoadingMode = false
+
+    /// The loading control for the selected Image model, built only from what the producer
+    /// published: whether a control exists at all comes from the model's own catalogue row, and
+    /// the selection and the configuration in force come from the Image worker's status read when
+    /// it has answered (it is fresher than the catalogue after a change).
+    var imageLoadingControl: NativeImageLoadingControl? {
+        guard let model = models.first(where: { $0.function == .image && $0.repo == imageModel })
+        else { return nil }
+        let published = model.loadingModes
+        let options = published?.publishedOptions ?? []
+        let offered = published?.supported == true && !options.isEmpty
+        let status = imageLoadingMode?.publishedModels.first { $0.repo == model.repo }
+        let selected = status?.selected ?? published?.selected ?? ""
+        return NativeImageLoadingControl(
+            repo: model.repo,
+            options: offered ? options : [],
+            selected: selected,
+            effective: status?.effective ?? published?.effective,
+            detail: offered ? options.first { $0.id == selected }?.detail : nil,
+            // The model's own sentence for having one loading mode. The fallback is not a trade:
+            // it names the fact that the catalogue row published no loading modes at all, which
+            // is what a row for a manifest with no registered model looks like.
+            reason: offered ? nil : (published?.reason
+                ?? "This model's catalogue entry publishes no loading mode, so this Mac has no loading setting for it."))
+    }
 
     /// Local Chat Studio: one transcript, one local text model. The page talks to the Hub's
     /// `/api/hub/chat/completions`, which proxies to the packaged Chat worker with the same
@@ -1654,6 +1872,10 @@ final class NativeWorkspaceStore: ObservableObject {
         memoryInventory = nil
         memoryNote = nil
         updatingMemory = false
+        // The loading-size status belongs to the Image worker that answered it; the next
+        // connection reads its own rather than showing this one's `effective`.
+        imageLoadingMode = nil
+        updatingImageLoadingMode = false
         controllerIdentity = nil
         hubVersion = nil
         roleNote = nil
@@ -2104,7 +2326,12 @@ final class NativeWorkspaceStore: ObservableObject {
                 throw NativeAPIError.message("The local Chat worker returned no message.")
             }
             guard let answered = chatTurns.firstIndex(where: { $0.id == turn.id }) else { return }
-            chatTurns.insert(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content),
+            // The reply's own stated facts travel with it: its token count and the worker's own
+            // generation time. Nothing is timed here — the app's wall clock would include the
+            // model load and the network, which is not the model's speed.
+            chatTurns.insert(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content,
+                                            completionTokens: reply.completionTokens,
+                                            statedGenerationSeconds: reply.statedGenerationSeconds),
                              at: answered + 1)
             error = nil
         } catch {
@@ -2199,6 +2426,49 @@ final class NativeWorkspaceStore: ObservableObject {
             }
         } catch {
             if connectionID == requestConnection { self.error = Self.actionable(error, action: "Check the original Image result") }
+        }
+    }
+
+    /// Read the Image worker's loading-size setting for this Mac, through the Hub's generic
+    /// studio proxy exactly like every other Image call.
+    func refreshImageLoadingMode() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let status: NativeImageLoadingModeStatus = try await get(
+                ["studio", "image", "api", "loading-mode"])
+            guard connectionID == requestConnection else { return }
+            imageLoadingMode = status
+        } catch {
+            // An Image worker without this route must not break the page: the catalogue row still
+            // says whether the model offers a control. The reason is kept off the shared banner
+            // because a page that has the catalogue answer is not broken by this read failing.
+            guard connectionID == requestConnection else { return }
+            imageLoadingMode = nil
+        }
+    }
+
+    /// Choose the Image worker's loading mode for everything it will do on this Mac.
+    ///
+    /// The PUT answers with the same payload as the GET, so the new `effective` is on screen at
+    /// once; the catalogue is then refreshed so the model rows carry the new selection too. The
+    /// choice is never assumed here: a refused mode leaves the published one in place and says
+    /// what the worker answered.
+    func setImageLoadingMode(_ mode: String) async {
+        guard let requestConnection = connectionID, !mode.isEmpty else { return }
+        updatingImageLoadingMode = true
+        defer { if connectionID == requestConnection { updatingImageLoadingMode = false } }
+        do {
+            let status: NativeImageLoadingModeStatus = try await sendJSON(
+                ["studio", "image", "api", "loading-mode"], method: "PUT",
+                body: ImageLoadingModeBody(mode: mode))
+            guard connectionID == requestConnection else { return }
+            imageLoadingMode = status
+            error = nil
+            await refresh()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Change the image loading mode")
+            }
         }
     }
 
@@ -4900,6 +5170,12 @@ final class NativeWorkspaceStore: ObservableObject {
         // model twice is wrong even when both rows agree.
         let transcriptionRows = Self.oneEntryPerRepo(
             transcription, repo: { $0.repo }, richness: Self.transcriptionRichness)
+        // The below-tier sentence each catalogue row publishes, by repo. A Studio whose own
+        // availability route carries no tier (Subtitle's) still has its catalogue row in the
+        // aggregate, so the sentence reaches the model rather than being dropped on the floor.
+        let catalogWarnings = catalog.reduce(into: [String: String]()) { result, item in
+            if let warning = item.memoryWarning, !warning.isEmpty { result[item.repo] = warning }
+        }
         let audioModels = catalog.filter { $0.capabilities?.contains("tts") == true }.map { item in
             let family = item.family ?? ""
             let isQwen = family == "qwen3-tts"
@@ -4973,6 +5249,11 @@ final class NativeWorkspaceStore: ObservableObject {
             // The transcription catalog carries no memory tier, so its only gates are the ones
             // the package row reports.
             let block = Self.blockReason(memoryWarning: nil, memoryEligible: nil, package: package)
+            // The RAM tier the Subtitle worker publishes on this same repo's catalogue row. The
+            // availability route the transcription rows come from carries no tier, and the
+            // catalogue row is where Image, Music and Chat publish theirs (`memory_warning`);
+            // reading none of it left the published sentence with no page that could show it.
+            let memoryWarning = catalogWarnings[item.repo]
             let ready = transcriptionAvailable && item.cached == true && block == nil
             // The runtime says which model it would pick; the app does not name one.
             let qualified = item.recommended == true
@@ -4988,6 +5269,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 function: .transcription, cached: item.cached ?? false, supported: supported, supportNote: note,
                 sizeGB: item.sizeGb, capabilities: ["transcription"], languages: item.languageList,
                 runtimeReady: ready, supportsWordTimestamps: item.supportsWordTimestamps ?? false, speakers: [],
+                memoryWarning: memoryWarning,
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
                 pausedStudio: package?.pausedStudio
             )
@@ -5014,7 +5296,10 @@ final class NativeWorkspaceStore: ObservableObject {
                 sizeGB: item.sizeGb, capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
                 supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
                 blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
-                pausedStudio: package?.pausedStudio)
+                pausedStudio: package?.pausedStudio,
+                // The loading-size setting is the model's own catalogue row, read rather than
+                // rebuilt: whether a control exists is the model's answer, not this app's.
+                loadingModes: item.loadingModes)
         }
         // A chat form is whatever the catalogue publishes as one. The capability is spelled
         // several ways across workers (`chat.completion`, `chat`, `text-generation`,
@@ -5202,6 +5487,8 @@ final class NativeWorkspaceStore: ObservableObject {
             durationSeconds: item?.audioDurationS,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
+            completionTokens: item?.usage?.completionTokens,
+            statedGenerationSeconds: item?.generationS,
             progressStage: item?.progressStage,
             answer: item?.text ?? "",
             itemIndex: item?.index ?? 0)
@@ -5723,6 +6010,12 @@ private struct CatalogModel: Decodable {
     /// The fixed WAV shape a Music model publishes. Absent for every other function.
     let sampleRateHz: Int?
     let channels: Int?
+    /// The Image worker's loading-size setting as it applies to this model on this Mac: whether
+    /// the model has more than one loading mode at all, the options and their own measured
+    /// sentences, and the reason a single-mode model carries instead. Published per Image
+    /// catalogue row; absent for every other function, and absent for an image row whose manifest
+    /// the worker has no registered model for.
+    let loadingModes: NativeImageLoadingModes?
     /// Family capability claim from the runtime, so clone vs preset is decided by the catalog
     /// rather than by guessing from the model name.
     let referenceAudio: CatalogReferenceAudio?
@@ -5971,12 +6264,29 @@ private struct HubChatMessage: Codable { let role: String; let content: String }
 /// why an empty string could never be told apart from a real choice - the Hub had nothing to gate
 /// or dispatch by, and a second chat model could not be addressed at all.
 private struct HubChatRequest: Encodable { let model: String?; let messages: [HubChatMessage]; let stream: Bool }
+/// Token usage as a Chat worker states it. Every count is optional: a field the worker did not
+/// publish stays absent, so nothing here can be mistaken for a stated zero.
+private struct HubUsage: Decodable {
+    let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+}
+/// `studio_hub` on a Chat completion: the worker's own generation time for the reply it just
+/// produced. This is the only number a tokens-per-second rate may be derived from.
+private struct HubChatStudio: Decodable { let elapsedSeconds: Double? }
 private struct HubChatCompletion: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable { let content: String }
         let message: Message
     }
     let choices: [Choice]
+    /// The usage the worker stated for this reply, when it stated any.
+    let usage: HubUsage?
+    /// The worker's own stated generation window for this reply. The live reply carries no
+    /// Hub-measured round trip, so when this is absent there is no rate to show.
+    let studioHub: HubChatStudio?
+    var completionTokens: Int? { usage?.completionTokens }
+    var statedGenerationSeconds: Double? { studioHub?.elapsedSeconds }
 }
 private struct HubJobSummary: Decodable { let id: String; let modality: String }
 private struct HubJobDetail: Decodable {
@@ -6016,6 +6326,13 @@ private struct HubJobItem: Decodable {
     /// showed only "4.6 s".
     let runtimeS: Double?
     let elapsedS: Double?
+    /// The tokens the Chat worker stated it generated for this item, when it stated a usage block.
+    /// Absent is "the worker stated none", never zero.
+    let usage: HubUsage?
+    /// The Chat worker's own stated generation time, beside — never derived from — `runtime_s`.
+    /// `runtime_s` is the Hub's measured round trip and includes the model load on a cold turn,
+    /// so a rate computed from it would understate the model.
+    let generationS: Double?
 }
 private struct HubJobParams: Decodable {
     let width: Int?

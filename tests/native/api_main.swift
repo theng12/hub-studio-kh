@@ -237,6 +237,28 @@ final class FixtureProtocol: URLProtocol {
     static func memoryRequest() -> (String, String) { lock.lock(); defer { lock.unlock() }; return (lastMemoryMethod, lastMemoryToken) }
     static func releases() -> Int { lock.lock(); defer { lock.unlock() }; return memoryReleaseCount }
     static func setMemoryUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; memoryUnavailable = value }
+    static var memoryPolicyOverride: Data?
+    static var chatJobGenerationSeconds: Double? = 7.2
+    static var chatReplyCompletionTokens: Int? = 10
+    static var chatReplyElapsedSeconds: Double? = 7.2
+    static var chatJobWithoutStatedTime = false
+    /// When set, `GET /api/hub/memory/policy` answers this payload instead of the default fixture,
+    /// so a machine whose Studios publish the `auto` mode with their own sentences can be read.
+    static func setMemoryPolicyOverride(_ value: Data?) { lock.lock(); defer { lock.unlock() }; memoryPolicyOverride = value }
+    /// The Chat worker's own stated generation time on the fixture's recorded Chat job.
+    /// `nil` means "the worker stated none", which is the case a rate must never be invented for.
+    static func setChatJobGeneration(_ value: Double?) { lock.lock(); defer { lock.unlock() }; chatJobGenerationSeconds = value }
+    /// The tokens and stated generation time on the fixture's live Chat reply.
+    static func setChatReplyUsage(tokens: Int?, elapsed: Double?) {
+        lock.lock(); defer { lock.unlock() }
+        chatReplyCompletionTokens = tokens
+        chatReplyElapsedSeconds = elapsed
+    }
+    /// Whether the Hub's job list also carries a second Chat batch whose item states usage but no
+    /// generation time. Off by default, so the listing the existing assertions read is unchanged.
+    static func setChatJobWithoutStatedTime(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }; chatJobWithoutStatedTime = value
+    }
     static func setPackagesUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; packagesUnavailable = value }
     static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil,
                            trustedPublisher: [String: Any]? = nil) {
@@ -602,10 +624,13 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/version"):
             result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
-            Self.lock.lock(); let memoryDown = Self.memoryUnavailable; Self.lock.unlock()
+            Self.lock.lock()
+            let memoryDown = Self.memoryUnavailable
+            let memoryOverride = Self.memoryPolicyOverride
+            Self.lock.unlock()
             result = memoryDown
                 ? (404, "application/json", Data(#"{"detail":"fixture route missing"}"#.utf8))
-                : (200, "application/json", Self.memoryFixture)
+                : (200, "application/json", memoryOverride ?? Self.memoryFixture)
         case ("PUT", "/api/hub/memory/policy"):
             let body = requestBody()
             Self.lock.lock()
@@ -629,6 +654,28 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Self.transcriptionFixture)
         case ("GET", "/studio/voice/api/generate/availability"):
             result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}],"secondvoice_preset_speakers":[{"id":"Sophea","lang":"km","gender":"female","description":"Clear"},{"id":"Dara","lang":"km","gender":"male","description":"Warm"}]}"#.utf8))
+        case ("GET", "/studio/image/api/loading-mode"):
+            // The Image worker's own per-machine loading-size setting, reached through the Hub's
+            // generic studio proxy exactly like its other routes.
+            Self.lock.lock()
+            Self.lastImageLoadingToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            Self.lock.unlock()
+            result = (200, "application/json", Self.imageLoadingStatus())
+        case ("PUT", "/studio/image/api/loading-mode"):
+            let body = requestBody()
+            let requested = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["mode"] as? String ?? ""
+            Self.lock.lock()
+            Self.lastImageLoadingToken = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            let accepted = ["auto", "low", "full"].contains(requested)
+            if accepted {
+                Self.imageLoadingSelection = requested
+                Self.imageLoadingPuts.append(requested)
+            }
+            Self.lock.unlock()
+            // An unknown mode is refused by name, exactly as the worker's own route refuses it.
+            result = accepted
+                ? (200, "application/json", Self.imageLoadingStatus())
+                : (422, "application/json", Data("{\"detail\":\"unknown memory mode '\(requested)'; must be one of: auto, low, full\"}".utf8))
         case ("GET", "/studio/voice/api/settings"):
             result = (200, "application/json", Data(#"{"hf_token_set":false,"hf_token_masked":""}"#.utf8))
         case ("POST", "/api/hub/model-packages/whisper-turbo/download"):
@@ -670,6 +717,10 @@ final class FixtureProtocol: URLProtocol {
             ]
             if pendingImage { batches.append(["id": "image-uncertain", "modality": "image"]) }
             if pendingMusic { batches.append(["id": "music-uncertain", "modality": "music"]) }
+            Self.lock.lock()
+            let extraChat = Self.chatJobWithoutStatedTime
+            Self.lock.unlock()
+            if extraChat { batches.append(["id": "chat-job-nostated", "modality": "chat"]) }
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["batches": batches]))
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
@@ -763,15 +814,33 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs/chat-job"):
             // The shape the Hub records for a Chat-page completion: one item, the operator's last
             // user turn as `prompt`, the answer as the item's `text` (the Chat worker streams its
-            // completion and keeps no artifact, so the item is the artifact), and the runtime the
-            // Hub measured around the proxied call.
+            // completion and keeps no artifact, so the item is the artifact), the runtime the Hub
+            // measured around the proxied call, and - beside it, never folded into it - the usage
+            // and generation time the Chat worker itself stated. `runtime_s` stays the Hub's round
+            // trip, which includes the model load on a cold turn.
+            Self.lock.lock(); let stated = Self.chatJobGenerationSeconds; Self.lock.unlock()
+            var chatItem: [String: Any] = ["index": 0, "state": "done", "progress": 1.0,
+                       "prompt": "What is a tokenizer?",
+                       "text": "It turns text into the numbers a model reads.",
+                       "runtime_s": 61.4, "bytes": 48,
+                       "media_type": "text/plain; charset=utf-8",
+                       "usage": ["prompt_tokens": 4, "completion_tokens": 10, "total_tokens": 14]]
+            if let stated { chatItem["generation_s"] = stated }
             let chatJob: [String: Any] = ["id": "chat-job", "modality": "chat",
-                "model": "Qwen/Qwen3.5-9B", "created_at": 40,
+                "model": "Qwen/Qwen3.5-9B", "created_at": 40, "items": [chatItem]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: chatJob))
+        case ("GET", "/api/hub/jobs/chat-job-nostated"):
+            // The other half of the same contract: the worker stated a usage block but no
+            // generation time, so there is no rate to derive and the row must not invent one from
+            // the Hub's round trip.
+            let chatJob: [String: Any] = ["id": "chat-job-nostated", "modality": "chat",
+                "model": "Qwen/Qwen3.5-9B", "created_at": 41,
                 "items": [["index": 0, "state": "done", "progress": 1.0,
-                           "prompt": "What is a tokenizer?",
-                           "text": "It turns text into the numbers a model reads.",
+                           "prompt": "How fast was that?",
+                           "text": "This reply states tokens and no generation time.",
                            "runtime_s": 61.4, "bytes": 48,
-                           "media_type": "text/plain; charset=utf-8"]]]
+                           "media_type": "text/plain; charset=utf-8",
+                           "usage": ["prompt_tokens": 4, "completion_tokens": 10, "total_tokens": 14]]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: chatJob))
         case ("POST", "/api/hub/jobs"):
             Self.lock.lock(); let shouldHold = Self.holdGeneration; Self.lock.unlock()
@@ -821,8 +890,22 @@ final class FixtureProtocol: URLProtocol {
                 result = (failure, "application/json",
                           Data(#"{"detail":"the local Chat worker is not answering"}"#.utf8))
             } else {
+                // The live reply carries what the worker stated for this answer: its usage block
+                // and its own generation time under `studio_hub.elapsed_seconds`. A reply that
+                // states no elapsed time states no rate either.
+                Self.lock.lock()
+                let tokens = Self.chatReplyCompletionTokens
+                let elapsed = Self.chatReplyElapsedSeconds
+                Self.lock.unlock()
+                var payload: [String: Any] = ["choices": [[
+                    "message": ["role": "assistant", "content": "Fixture reply."]]]]
+                if let tokens {
+                    payload["usage"] = ["prompt_tokens": 4, "completion_tokens": tokens,
+                                        "total_tokens": tokens + 4]
+                }
+                if let elapsed { payload["studio_hub"] = ["elapsed_seconds": elapsed] }
                 result = (200, "application/json",
-                          Data(#"{"choices":[{"message":{"role":"assistant","content":"Fixture reply."}}]}"#.utf8))
+                          try! JSONSerialization.data(withJSONObject: payload))
             }
         case ("POST", "/api/hub/transcription/jobs"):
             let body = requestBody()
@@ -905,8 +988,20 @@ final class FixtureProtocol: URLProtocol {
     private static let statisticsFixture = Data(#"{"total":3,"by_machine":{"local":{"count":3,"avg_s":45.5,"modalities":{"image":1,"transcription":2}}},"by_modality":{"image":{"count":1,"avg_s":94.47},"transcription":{"count":2,"avg_s":21.02}},"by_model":{"fixture/flux":{"count":1,"avg_s":94.47,"modality":"image"},"mlx-community/whisper-large-v3-turbo":{"count":2,"avg_s":21.02,"modality":"transcription"}},"model_rows":[{"model":"fixture/flux","count":1,"avg_s":94.47,"modality":"image"},{"model":"mlx-community/whisper-large-v3-turbo","count":2,"avg_s":21.02,"modality":"transcription"},{"model":"mlx-community/whisper-base-mlx","count":1,"avg_s":null,"modality":"transcription"}],"matrix":[],"by_source":{"job":3},"available_machines":["local"],"available_modalities":["image","voice","transcription"]}"#.utf8)
 
     private static let memoryFixture = Data(#"{"default_mode":"immediate","options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"image","title":"Image Studio","modality":"image","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"immediate","label":"After every job","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"fixed":true,"release_policy":"The model is released when each job finishes.","machine_bytes":17179869184}},{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"immediate","default_mode":"immediate","idle_seconds":0,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[["whisper-large-v3-turbo"]],"active_work":false,"busy":false,"machine_bytes":17179869184}},{"id":"voice","title":"Voice Studio","modality":"voice","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"balanced","default_mode":"balanced","idle_seconds":600,"options":[{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":true,"busy":true,"machine_bytes":17179869184}}],"summary":{"total":3,"ready":3,"offline":0,"update_required":0}}"#.utf8)
-    private static let catalogFixture = Data(
-#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","modes":["preset"],"size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","modes":["preset"],"size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","modes":["cloning","design"],"size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","modes":["cloning"],"size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","modes":["cloning"],"size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","modes":["preset"],"size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","modes":["preset"],"size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","modes":["cloning","preset"],"size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","modes":["preset"],"size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/two-mode-voice","label":"Two-mode voice fixture 4-bit","family":"fixture-two-mode","size_gb":2.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"modes":["cloning","design"],"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"fixture/unreported-modes","label":"Voice model with unreported modes","family":"fixture-unreported-modes","size_gb":1.2,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
+
+    /// A 32 GB Mac whose Subtitle Studio publishes the fifth mode, `auto`, with the worker's own
+    /// sentence for what it resolved to here. The `detail` strings are the worker's; the app must
+    /// render them rather than its own derivation, because only the worker knows the machine.
+    static let memoryAutoFixture = Data(#"{"default_mode":"auto","options":[{"mode":"auto","label":"Auto","idle_seconds":600,"detail":"Follows this Mac: releases after 10 idle minutes here"},{"mode":"performance","label":"Performance","idle_seconds":null},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"studios":[{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"auto","resolved_mode":"balanced","default_mode":"auto","idle_seconds":600,"machine_mode":"balanced","machine_bytes":34359738368,"options":[{"mode":"auto","label":"Auto","idle_seconds":600,"detail":"Follows this Mac: releases after 10 idle minutes here"},{"mode":"performance","label":"Performance","idle_seconds":null,"detail":"Keeps the model loaded until you release it"},{"mode":"balanced","label":"Balanced","idle_seconds":600,"detail":"Releases the model after 10 idle minutes"},{"mode":"memory_saver","label":"Memory Saver","idle_seconds":120,"detail":"Releases the model after 2 idle minutes"},{"mode":"immediate","label":"Immediate","idle_seconds":0,"detail":"Releases the model as soon as each job finishes"}],"loaded_models":[],"active_work":false,"busy":false,"machine_bytes":34359738368}}],"summary":{"total":1,"ready":1,"offline":0,"update_required":0}}"#.utf8)
+
+    /// The same machine from a worker that publishes no `detail` at all: the app falls back to its
+    /// own derived sentence, which is only ever a fallback for a payload that stated nothing.
+    static let memoryNoDetailFixture = Data(#"{"default_mode":"auto","options":[{"mode":"auto","label":"Auto","idle_seconds":600}],"studios":[{"id":"subtitle","title":"Subtitle Studio","modality":"transcription","machine_label":"This Mac","health":"up","state":"ready","supported":true,"detail":null,"policy":{"mode":"auto","resolved_mode":"balanced","default_mode":"auto","idle_seconds":600,"machine_mode":"balanced","machine_bytes":34359738368,"options":[{"mode":"auto","label":"Auto","idle_seconds":600},{"mode":"balanced","label":"Balanced","idle_seconds":600},{"mode":"immediate","label":"Immediate","idle_seconds":0}],"loaded_models":[],"active_work":false,"busy":false,"machine_bytes":34359738368}}],"summary":{"total":1,"ready":1,"offline":0,"update_required":0}}"#.utf8)
+    /// The catalogue's fixed rows. The served catalogue is `catalogFixture` below, which projects
+    /// each image row's `loading_modes` for the selection the fixture's stub Image worker is
+    /// currently holding.
+    private static let catalogBaseFixture = Data(
+#"{"models":[{"repo":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","label":"Qwen CustomVoice","family":"qwen3-tts","modes":["preset"],"size_gb":1.9,"capabilities":["tts","multilingual","expressive"],"languages":["en","zh"],"runtime_ready":true,"cache":{"state":"cached"},"execution_contract":{"qualification_source":"audit","text_max_characters":4000}},{"repo":"other/tts","label":"Other TTS","family":"other","modes":["preset"],"size_gb":2.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/paused","label":"Paused fixture","family":"other","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/whisper-base-mlx","label":"Whisper base","languages":"Multilingual"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"subtitle-mlx","size_gb":1.6,"capabilities":["transcription"],"languages":"Multilingual","runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/flux","label":"FLUX fixture","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":false,"selected":"auto","effective":"default","threshold_bytes":null,"options":[],"measured":{"default":{"peak_gb":null,"seconds":null},"low_ram":{"peak_gb":null,"seconds":null},"measured_on":null,"evidence":"unmeasured","scene":null,"note":"This model states no bounded configuration."},"reason":"No memory knobs on purpose: this fixture is qualified at 16 GB, and adding an mflux memory knob would be an unverified change to a verified path. This machine-wide setting does not change how it loads."},"generation_defaults":{"width":1280,"height":720,"steps":4,"guidance":1.0,"seed":-1},"image_sizes":[{"id":"16:9","label":"Wide 16:9","width":1280,"height":720},{"id":"1:1","label":"Square","width":1024,"height":1024}],"generation_limits":{"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":10.0,"min_seed":-1,"max_seed":4294967295}},{"repo":"mlx-community/VoxCPM2-4bit","label":"VoxCPM2 4-bit","family":"voxcpm-mlx","modes":["cloning","design"],"size_gb":3.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"ACE-Step/Ace-Step1.5","label":"ACE-Step 1.5 Turbo","family":"ace-step-1.5","size_gb":7.7,"capabilities":["music","instrumental","text-to-music","lyrics","long-form"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":30.0,"steps":8,"guidance_scale":1.0,"shift":3.0,"seed":-1,"instrumental":true,"lyrics":"[Instrumental]","vocal_language":"unknown","dit_model":"acestep-v15-turbo","lm_model":"acestep-5Hz-lm-0.6B"},"generation_limits":{"min_duration_seconds":1.0,"max_duration_seconds":600.0,"single_pass_max_seconds":480,"min_steps":1,"max_steps":50,"min_guidance":0.0,"max_guidance":30.0,"min_seed":-1,"max_seed":4294967295},"sample_rate_hz":48000,"channels":2},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit","size_gb":3.4},{"repo":"mlx-community/chatterbox-8bit","label":"Chatterbox 8-bit (MLX)","family":"chatterbox-mlx","modes":["cloning"],"size_gb":3.4,"capabilities":["tts","voice-cloning","expressive","multilingual"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"mlx-community/fish-audio-s2-pro-8bit","label":"Fish Audio S2 Pro 8-bit (MLX)","family":"fish-audio-mlx","modes":["cloning"],"size_gb":6.7,"capabilities":["tts","voice-cloning","multilingual","expressive"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"khmerttsopensource/khmer-tts","label":"Khmer TTS (MMS VITS)","family":"khmer-tts-mms","modes":["preset"],"size_gb":0.4,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"sengtha/khmer-tts-female-v2","label":"Khmer TTS Female (VITS/ONNX)","family":"khmer-tts-onnx","modes":["preset"],"size_gb":0.12,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"mlx-community/pocket-tts-4bit","label":"Pocket TTS 4-bit (MLX)","family":"pocket-tts","modes":["cloning","preset"],"size_gb":1.1,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"uncached"},"reference_audio":{"declared":true,"supported":true}},{"repo":"fixture/unwired-voice","label":"Voice model with no runtime","family":"fixture-unwired-voice","modes":["preset"],"size_gb":1.0,"capabilities":["tts"],"languages":["en"],"runtime_ready":false,"cache":{"state":"cached"}},{"repo":"mlx-community/S3TokenizerV2","label":"S3 speech tokenizer","family":"s3tokenizer","size_gb":0.5,"capabilities":["codec"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/zimage","label":"Z-Image fixture 4-bit","family":"z-image","size_gb":3.2,"capabilities":["txt2img"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"loading_modes":{"supported":true,"selected":"auto","effective":"low-ram","threshold_bytes":24000000000,"options":[{"id":"auto","label":"Auto","detail":"Chooses from this Mac's unified memory: the bounded configuration below 24 GB, the default at or above it. The trade: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"low","label":"Low RAM","detail":"Runs mflux's bounded configuration: about 7.1 GB peak instead of 17.7 GB, and about 236 s instead of 166 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."},{"id":"full","label":"Full","detail":"Runs mflux's default configuration: about 17.7 GB peak instead of 7.1 GB, and about 166 s instead of 236 s, measured on 32 GiB M2 Max, mflux 0.20.0, 4-bit pack."}],"measured":{"default":{"peak_gb":17.67,"seconds":166},"low_ram":{"peak_gb":7.12,"seconds":236},"measured_on":"32 GiB M2 Max, mflux 0.20.0, 4-bit pack","evidence":"measured","scene":"1280x720, 9 steps, seed 42","note":null},"reason":null},"generation_defaults":{"width":1024,"height":1024,"steps":8,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-music","label":"Second Music fixture","family":"stable-audio","size_gb":4.1,"capabilities":["music","instrumental"],"runtime_ready":true,"memory_eligible":true,"cache":{"state":"cached"},"generation_defaults":{"duration_seconds":20.0,"steps":10},"generation_limits":{"min_duration_seconds":5.0,"max_duration_seconds":60.0},"sample_rate_hz":44100,"channels":2},{"repo":"fixture/flux-unpackaged","label":"Unregistered Image fixture 4-bit","family":"flux2-klein","capabilities":["txt2img"],"runtime_ready":true,"cache":{"state":"cached"},"generation_defaults":{"width":1024,"height":1024,"steps":4,"seed":-1},"generation_limits":{"min_steps":1,"max_steps":20,"min_seed":-1,"max_seed":4294967295}},{"repo":"fixture/second-preset","label":"Second Preset Voice","family":"secondvoice","modes":["preset"],"size_gb":0.9,"capabilities":["tts","multilingual"],"languages":["km"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/two-mode-voice","label":"Two-mode voice fixture 4-bit","family":"fixture-two-mode","size_gb":2.0,"capabilities":["tts","voice-cloning"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"},"modes":["cloning","design"],"reference_audio":{"declared":true,"supported":true,"transcript":"optional"}},{"repo":"fixture/unreported-modes","label":"Voice model with unreported modes","family":"fixture-unreported-modes","size_gb":1.2,"capabilities":["tts"],"languages":["en"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"Qwen/Qwen3.5-9B","label":"Qwen3.5-9B 4-bit","family":"chat-mlx","size_gb":5.5,"capabilities":["chat.completion","text-generation"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-conversational","label":"Fixture Conversational 4-bit","family":"qwen3","size_gb":2.2,"capabilities":["conversational"],"runtime_ready":true,"cache":{"state":"cached"}},{"repo":"fixture/chat-family","label":"Fixture Chat Family 4-bit","family":"chat-mlx","size_gb":1.1,"capabilities":["text2text"],"runtime_ready":true,"cache":{"state":"uncached"}},{"repo":"fixture/chat-annotated","label":"Fixture Annotated Chat 4-bit","family":"fixture-llm","size_gb":0.8,"capabilities":["text2text"],"hub_modality":"chat","runtime_ready":true,"cache":{"state":"cached"}}]}"#.utf8)
 
     /// Shaped like the Hub's own reply. The same repo appears four times at different levels of
     /// detail, exactly as the aggregate catalogue delivers it — one studio publishes the full
@@ -923,6 +1018,118 @@ final class FixtureProtocol: URLProtocol {
     static var catalogModels: [[String: Any]] {
         ((try? JSONSerialization.jsonObject(with: catalogFixture)) as? [String: Any])?["models"]
             as? [[String: Any]] ?? []
+    }
+
+    // MARK: The Image worker's loading-size setting
+
+    /// The selection the fixture's stub Image worker is holding. A test changes it only by PUTting
+    /// a mode, the way the app does.
+    static var imageLoadingSelection = "auto"
+    static var imageLoadingPuts: [String] = []
+    static var lastImageLoadingToken = ""
+    static func imageLoadingPutModes() -> [String] {
+        lock.lock(); defer { lock.unlock() }; return imageLoadingPuts
+    }
+    static func imageLoadingToken() -> String {
+        lock.lock(); defer { lock.unlock() }; return lastImageLoadingToken
+    }
+    static func resetImageLoadingPuts() {
+        lock.lock(); defer { lock.unlock() }; imageLoadingPuts = []
+    }
+
+    /// What the fixture's stub Image worker will load each model as, for each selection it can
+    /// hold. Written out as test data rather than computed: this fixture exists to check what the
+    /// app renders, and a copy of the worker's threshold rule here would only agree with itself.
+    static let imageLoadingEffective: [String: [String: String]] = [
+        "fixture/flux": ["auto": "low-ram", "low": "low-ram", "full": "default"],
+        "fixture/zimage": ["auto": "default", "low": "default", "full": "default"],
+    ]
+
+    // MARK: The Subtitle worker's below-tier warning
+
+    /// The repo whose catalogue row carries the Subtitle worker's `memory_warning`.
+    static let subtitleWarningRepo = "mlx-community/whisper-large-v3-turbo"
+    /// The worker's own sentence, from `engine.host_eligibility()` on a host below the tier.
+    static let subtitleWarningSentence = "This Mac has 8 GB of unified memory. Whisper is qualified on 8 GB, so transcription here is below the qualified tier and may be slow if other Studios are holding models."
+    /// Whether the fixture's catalogue row carries it. `nil` is the machine that is at or above the
+    /// tier: the worker publishes nothing at all, not a reassuring message.
+    static var subtitleMemoryWarning: String? = subtitleWarningSentence
+    static func setSubtitleMemoryWarning(_ value: String?) {
+        lock.lock(); defer { lock.unlock() }; subtitleMemoryWarning = value
+    }
+
+    /// The catalogue exactly as the fixture's Hub serves it: the fixed rows, with each image row's
+    /// `loading_modes` projected for the selection the stub worker holds — the way the real
+    /// worker's catalogue is re-derived after a PUT — so the app's post-change catalogue refresh
+    /// shows the new `selected` and `effective`, and a single-mode model's reason gains the clause
+    /// saying the machine-wide setting does not apply to it.
+    static var catalogFixture: Data {
+        lock.lock()
+        let selection = imageLoadingSelection
+        let subtitleWarning = subtitleMemoryWarning
+        lock.unlock()
+        let models = catalogBaseModels.map { entry -> [String: Any] in
+            var patched = entry
+            // The Subtitle worker's own below-tier sentence, on its own catalogue row and under
+            // the same top-level key Image, Music and Chat use. `null` when this Mac is at or
+            // above the tier, which is the case the page must render nothing for.
+            if (entry["repo"] as? String) == subtitleWarningRepo {
+                patched["memory_warning"] = subtitleWarning ?? NSNull()
+            }
+            guard (entry["capabilities"] as? [String])?.contains("txt2img") == true,
+                  let repo = entry["repo"] as? String,
+                  var modes = entry["loading_modes"] as? [String: Any] else { return patched }
+            modes["selected"] = selection
+            modes["effective"] = imageLoadingEffective[repo]?[selection] ?? modes["effective"]
+            if modes["supported"] as? Bool == false, let reason = modes["reason"] as? String {
+                modes["reason"] = selection == "auto" ? reason
+                    : reason + " The setting is '\(selection)' on this Mac; this model still loads its default configuration."
+            }
+            patched["loading_modes"] = modes
+            return patched
+        }
+        return try! JSONSerialization.data(withJSONObject: ["models": models])
+    }
+
+    private static var catalogBaseModels: [[String: Any]] {
+        ((try? JSONSerialization.jsonObject(with: catalogBaseFixture)) as? [String: Any])?["models"]
+            as? [[String: Any]] ?? []
+    }
+
+    /// `GET`/`PUT /studio/image/api/loading-mode`, built from the same catalogue rows the Hub
+    /// serves so the two surfaces cannot disagree about a model.
+    static func imageLoadingStatus() -> Data {
+        lock.lock()
+        let selection = imageLoadingSelection
+        lock.unlock()
+        var rows: [[String: Any]] = []
+        for entry in catalogModels {
+            guard let repo = entry["repo"] as? String,
+                  let modes = entry["loading_modes"] as? [String: Any] else { continue }
+            rows.append([
+                "repo": repo,
+                "supported": modes["supported"] ?? false,
+                "selected": selection,
+                "effective": modes["effective"] ?? NSNull(),
+                "threshold_bytes": modes["threshold_bytes"] ?? NSNull(),
+                "reason": modes["reason"] ?? NSNull(),
+            ])
+        }
+        let payload: [String: Any] = [
+            "mode": selection,
+            "default_mode": "auto",
+            "options": [
+                ["id": "auto", "label": "Auto",
+                 "detail": "Each model decides from this Mac's unified memory: its bounded low-RAM configuration below the model's own threshold, its default configuration at or above it."],
+                ["id": "low", "label": "Low RAM",
+                 "detail": "Force the bounded configuration on every model that declares one. A model that declares none has a single loading mode: it loads unchanged, and its catalogue entry says this setting does not apply."],
+                ["id": "full", "label": "Full",
+                 "detail": "Force each model's default configuration whatever this Mac's memory is. A default measured on a larger Mac may exceed a smaller one's memory; the job's own recorded mode shows which configuration ran."],
+            ],
+            "machine_bytes": 34_359_738_368,
+            "models": rows.sorted { ($0["repo"] as? String ?? "") < ($1["repo"] as? String ?? "") },
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload)
     }
 
     /// The repos the fixture's Hub reports a package for.
@@ -1962,6 +2169,40 @@ struct NativeAPITests {
         require(imageMemory?.policy?.resident.isEmpty == true, "Image holds nothing between jobs")
         require(memory?.studios.first { $0.id == "voice" }?.policy?.busy == true, "a working Studio must be shown as busy")
 
+        // The fifth mode: `auto`, with the Studio's own sentence for what it resolved to here.
+        //
+        // The mode list renders from the Studio's published `options`, so `auto` appears without a
+        // list in the app. What the app must not keep is its own sentence: only the worker knows
+        // what `auto` means on this Mac, and "Follows this Mac: releases after 10 idle minutes
+        // here" is a fact the local derivation cannot produce.
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        await store.refreshMemoryPolicy()
+        let autoStudio = store.memoryInventory?.studios.first { $0.id == "subtitle" }
+        require(autoStudio?.policy?.mode == "auto", "the Studio's selected mode must be the published one")
+        require(autoStudio?.policy?.resolvedOptions.count == 5,
+                "every mode the Studio publishes must be selectable, got \(autoStudio?.policy?.resolvedOptions.count ?? -1)")
+        require(autoStudio?.policy?.resolvedOptions.map(\.mode).first == "auto",
+                "the modes must render in the Studio's own published order")
+        let autoOption = autoStudio?.policy?.resolvedOptions.first { $0.mode == "auto" }
+        require(autoOption?.summary == "Follows this Mac: releases after 10 idle minutes here",
+                "the worker's own sentence must be rendered, not a locally derived one, got: \(autoOption?.summary ?? "nil")")
+        require(autoStudio?.policy?.resolution == "Auto resolves to Balanced on this Mac",
+                "the row must name the selected mode and what it resolved to, got: \(autoStudio?.policy?.resolution ?? "nil")")
+        require(autoStudio?.policy?.machineMode == "balanced" && autoStudio?.policy?.machineBytes == 34359738368,
+                "the machine's own answer must come from the published payload")
+
+        // ...and a worker that published no sentence at all still gets a readable row: the derived
+        // sentence is the fallback for a payload that stated nothing, not the rule.
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryNoDetailFixture)
+        await store.refreshMemoryPolicy()
+        let noDetail = store.memoryInventory?.studios.first { $0.id == "subtitle" }?.policy?
+            .resolvedOptions.first { $0.mode == "auto" }
+        require(noDetail?.summary == "Releases after 10 idle minutes.",
+                "a payload with no detail must fall back to the derived sentence, got: \(noDetail?.summary ?? "nil")")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        await store.refreshMemoryPolicy()
+        require(store.memoryInventory?.studios.count == 3, "the default fixture must be restored")
+
         // Connections: the Hub reports its own role and identity, and the credential this app
         // already holds is shown masked rather than printed.
         await store.refreshConnection()
@@ -2142,6 +2383,35 @@ struct NativeAPITests {
         require(recommendedSTT?.supportNote.contains("Recommended") == true,
                 "the model the worker recommends must be described that way, got: \(recommendedSTT?.supportNote ?? "nil")")
 
+        // The Subtitle page's below-tier warning, rendered exactly as the Image page renders its
+        // own. The Subtitle worker publishes the sentence on its catalogue row under
+        // `memory_warning` - the same key and place Image, Music and Chat use - and no Mac in this
+        // fleet is below Subtitle's 8 GB tier, so the fixture is the only way to see it. It stays
+        // advice: the model is still offered and still eligible.
+        let warnedSTT = store.models.first { $0.repo == FixtureProtocol.subtitleWarningRepo }
+        require(warnedSTT?.memoryWarning == FixtureProtocol.subtitleWarningSentence,
+                "the Subtitle worker's published warning must reach the page's model, got: "
+                    + "\(warnedSTT?.memoryWarning ?? "nil")")
+        require(warnedSTT?.supported == true && warnedSTT?.blockReason == nil,
+                "a RAM tier is advice, not a wall: the model must still be offered")
+
+        // The negative control: a Mac at or above the tier publishes no warning at all, so the
+        // page's `if let` draws nothing. A warning shown on a machine that is fine is noise the
+        // operator learns to ignore - and then the real one is ignored too.
+        FixtureProtocol.setSubtitleMemoryWarning(nil)
+        await store.refresh()
+        let unwarnedSTT = store.models.first { $0.repo == FixtureProtocol.subtitleWarningRepo }
+        require(unwarnedSTT?.memoryWarning == nil,
+                "a Mac at or above the tier must render nothing, got: "
+                    + "\(unwarnedSTT?.memoryWarning ?? "nil")")
+        require(unwarnedSTT?.supported == true,
+                "the model must stay selectable on a machine with nothing to warn about")
+        FixtureProtocol.setSubtitleMemoryWarning(FixtureProtocol.subtitleWarningSentence)
+        await store.refresh()
+        require(store.models.first { $0.repo == FixtureProtocol.subtitleWarningRepo }?.memoryWarning
+                    == FixtureProtocol.subtitleWarningSentence,
+                "the warning must come back when the worker publishes it again")
+
         // B24: a second engine of the same modality publishes a different control set. The shipped
         // engine's exact key set is not a membership test — the model's own published controls are.
         let imageCatalog = FixtureProtocol.catalogModels.filter { entry in
@@ -2179,6 +2449,85 @@ struct NativeAPITests {
         store.imageModel = "fixture/flux"
         require(store.imageConfiguration?.guidanceField == 1.0,
                 "switching back must load the shipped engine's own controls")
+
+        // The Image page's loading control. It is one lever - which mflux memory configuration the
+        // next job loads with - and it is not the Settings release policy: Image's
+        // `/api/memory-policy` answer stays the fixed one above.
+        //
+        // Everything the control renders was published. The options and their sentences are the
+        // model's own catalogue row (its measured peak and wall time, and the host they were
+        // measured on), the machine-wide setting is the Image worker's own payload, and a model
+        // with one loading mode renders its own reason instead of a dead control.
+        await store.refreshImageLoadingMode()
+        let fluxRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/flux" }
+        let fluxPublished = ((fluxRow?["loading_modes"] as? [String: Any])?["options"] as? [[String: Any]]) ?? []
+        require(fluxPublished.count == 3, "the fixture's FLUX row must publish the three options")
+        let fluxControl = store.imageLoadingControl
+        require(fluxControl?.repo == "fixture/flux" && fluxControl?.offersControl == true,
+                "a model with more than one loading mode must offer the control")
+        require(fluxControl?.options.map(\.id) == fluxPublished.compactMap { $0["id"] as? String },
+                "the control's options must be the published ones in the published order, got: "
+                    + "\(fluxControl?.options.map(\.id) ?? [])")
+        require(fluxControl?.options.map(\.label) == fluxPublished.compactMap { $0["label"] as? String },
+                "the control's labels must be the published ones, got: \(fluxControl?.options.map(\.label) ?? [])")
+        require(fluxControl?.options.map { $0.detail ?? "" } == fluxPublished.map { $0["detail"] as? String ?? "" },
+                "each option's sentence must be the model's own, with its measured numbers")
+        require(fluxControl?.detail?.contains("7.1 GB") == true && fluxControl?.detail?.contains("236 s") == true
+                    && fluxControl?.detail?.contains("32 GiB M2 Max") == true,
+                "the selected option's own measured sentence must be shown, got: \(fluxControl?.detail ?? "nil")")
+        require(fluxControl?.selected == "auto" && fluxControl?.effective == "low-ram"
+                    && fluxControl?.effectiveSentence == "In force on this Mac: low-ram",
+                "the page must show that auto resolved to the bounded configuration here, got: "
+                    + "\(fluxControl?.effectiveSentence ?? "nil")")
+
+        // Choosing a mode PUTs the chosen id to the Image worker through the Hub proxy, then
+        // refreshes, so the page shows the new selection and the new `effective`.
+        FixtureProtocol.resetImageLoadingPuts()
+        await store.setImageLoadingMode("full")
+        require(FixtureProtocol.imageLoadingPutModes() == ["full"],
+                "choosing a mode must PUT the chosen id, got: \(FixtureProtocol.imageLoadingPutModes())")
+        require(FixtureProtocol.imageLoadingToken() == "native-test-token",
+                "the loading-mode change must be authenticated through the Hub proxy")
+        require(store.imageLoadingControl?.selected == "full",
+                "the page must show the selection the worker accepted, got: \(store.imageLoadingControl?.selected ?? "nil")")
+        require(store.imageLoadingControl?.effectiveSentence == "In force on this Mac: default",
+                "the page must show the new effective after the change, got: "
+                    + "\(store.imageLoadingControl?.effectiveSentence ?? "nil")")
+        require(store.models.first { $0.repo == "fixture/flux" }?.loadingModes?.selected == "full",
+                "the refreshed catalogue must carry the new selection too")
+
+        // A model with exactly one loading mode: its own published reason is the sentence, and no
+        // control is drawn.
+        store.imageModel = "fixture/zimage"
+        let zimageRow = FixtureProtocol.catalogModels.first { $0["repo"] as? String == "fixture/zimage" }
+        let zimageReason = (zimageRow?["loading_modes"] as? [String: Any])?["reason"] as? String
+        let zimageControl = store.imageLoadingControl
+        require(zimageControl?.offersControl == false,
+                "a single-mode model must not be given a control the lane would discard")
+        require(zimageControl?.reason == zimageReason && zimageReason?.isEmpty == false,
+                "the model's own reason must be the sentence shown, got: \(zimageControl?.reason ?? "nil")")
+        require(zimageControl?.effectiveSentence == "In force on this Mac: default",
+                "a single-mode model still says what it loads as")
+
+        // ...and when the machine-wide setting is low, the model's reason gains the clause saying
+        // the setting does not apply to it — the half of the sentence the catalogue re-derives.
+        await store.setImageLoadingMode("low")
+        let lowReason = store.imageLoadingControl?.reason ?? ""
+        require(lowReason.contains("still loads its default configuration"),
+                "a forced setting must be named in the model's own reason, got: \(lowReason)")
+        require(store.imageLoadingControl?.offersControl == false,
+                "the reason must never become a control")
+        await store.setImageLoadingMode("auto")
+        require(store.imageLoadingControl?.effectiveSentence == "In force on this Mac: default",
+                "auto must resolve back to the default for a single-mode model")
+
+        // A catalogue row for a manifest the worker has no registered model for publishes no
+        // loading modes at all; the page says so rather than drawing a dead control.
+        store.imageModel = "fixture/flux-unpackaged"
+        let unregistered = store.imageLoadingControl
+        require(unregistered?.offersControl == false && unregistered?.reason?.contains("publishes no loading mode") == true,
+                "a row with no published loading modes must say so, got: \(unregistered?.reason ?? "nil")")
+        store.imageModel = "fixture/flux"
 
         // The same rule for Music: a second engine publishing only a length and a step count is
         // still selectable, and the controls it never named are not sent.
@@ -2273,6 +2622,35 @@ struct NativeAPITests {
         require(chatJob.model == "Qwen/Qwen3.5-9B" && chatJob.generationSuffix == " · took 1 min 1 s",
                 "the row must carry the model and how long it took, got: "
                     + "\(chatJob.model)\(chatJob.generationSuffix)")
+
+        // Tokens per second, from the Chat worker's own stated generation time and nothing else.
+        // The Hub's round trip stays a separate fact on the same row: it includes the model load on
+        // a cold turn (61.4 s here) where the worker stated 7.2 s of generation.
+        require(chatJob.completionTokens == 10,
+                "the worker's stated completion tokens must reach the row, got: \(String(describing: chatJob.completionTokens))")
+        require(chatJob.statedGenerationSeconds == 7.2 && chatJob.generationSeconds == 61.4,
+                "the worker's stated generation time and the Hub's round trip must stay distinct, got: "
+                    + "\(String(describing: chatJob.statedGenerationSeconds)) / \(String(describing: chatJob.generationSeconds))")
+        require(chatJob.tokenSpeed == "10 tokens · 1.4 tok/s · 7.2 s",
+                "the row must show the rate the worker's own numbers give, got: \(chatJob.tokenSpeed)")
+
+        // The negative control, through the same decode path: a Chat item that states usage but no
+        // generation time. There is no rate to state - the Hub's round trip is not the model's
+        // speed - so the row names the round trip as the round trip and publishes no `tok/s`.
+        FixtureProtocol.setChatJobWithoutStatedTime(true)
+        await store.refresh()
+        let noStatedTime = store.jobs(for: .chat).first { $0.id == "chat-job-nostated" }
+        require(noStatedTime?.completionTokens == 10 && noStatedTime?.statedGenerationSeconds == nil,
+                "an item that stated no generation time must decode as none, got: "
+                    + "\(String(describing: noStatedTime?.statedGenerationSeconds))")
+        require(noStatedTime?.tokenSpeed.contains("tok/s") == false,
+                "no rate may be derived from the round trip, got: \(noStatedTime?.tokenSpeed ?? "nil")")
+        require(noStatedTime?.tokenSpeed == "10 tokens · 1 min 1 s round trip",
+                "the round trip must be shown labelled as the round trip, got: \(noStatedTime?.tokenSpeed ?? "nil")")
+        FixtureProtocol.setChatJobWithoutStatedTime(false)
+        await store.refresh()
+        require(store.jobs(for: .chat).count == 1,
+                "the fixture's extra batch must be gone once the control is turned off")
         require(store.jobHistories.contains { $0.function == .chat && $0.jobs.count == 1 },
                 "the Chat tab must have a section with the Chat job in it")
         require(store.jobs(for: .video).isEmpty,
@@ -2339,6 +2717,15 @@ struct NativeAPITests {
         require(store.chatTurns.first?.failure == nil, "a successful turn must not be marked as failed")
         require(store.chatTurns.last?.content == "Fixture reply.",
                 "the transcript must carry the worker's own text, got: \(store.chatTurns.last?.content ?? "nil")")
+        // The live reply states its own speed: the worker's token count over the worker's own
+        // generation time, exactly as the Chat job row does. Both come off the reply body.
+        require(store.chatTurns.last?.completionTokens == 10
+                    && store.chatTurns.last?.statedGenerationSeconds == 7.2,
+                "the live reply's stated usage and generation time must reach the turn, got: "
+                    + "\(String(describing: store.chatTurns.last?.completionTokens)) / "
+                    + "\(String(describing: store.chatTurns.last?.statedGenerationSeconds))")
+        require(store.chatTurns.last?.speed == "10 tokens · 1.4 tok/s · 7.2 s",
+                "a live reply must show the same rate the job row does, got: \(store.chatTurns.last?.speed ?? "nil")")
         // The wire body is the conversation and nothing else: the message that was just sent, as a
         // plain user turn. A failure marker is a display fact and must never reach the Hub.
         let chatBody = FixtureProtocol.recordedChatBody()
@@ -2350,6 +2737,23 @@ struct NativeAPITests {
                     && sentMessages?.first?["role"] as? String == "user"
                     && sentMessages?.first?["content"] as? String == "Hello from the fixture",
                 "the request must carry exactly the message that was sent, got: \(sentMessages ?? [])")
+
+        // The live reply's negative control: a worker that states usage but no generation time.
+        // The app does not time the call itself - its own wall clock would include the model load
+        // and the network - so the turn shows the token count and no rate at all.
+        FixtureProtocol.setChatReplyUsage(tokens: 10, elapsed: nil)
+        store.clearChat()
+        store.chatPrompt = "A reply with no stated generation time"
+        await store.sendChat()
+        require(store.chatTurns.last?.statedGenerationSeconds == nil,
+                "a reply that stated no generation time must carry none")
+        require(store.chatTurns.last?.speed == "10 tokens",
+                "a reply with no stated time must show the token count and no rate, got: "
+                    + "\(store.chatTurns.last?.speed ?? "nil")")
+        require(store.chatTurns.last?.speed.contains("tok/s") == false,
+                "a rate must not be invented for a reply that stated no generation time")
+        FixtureProtocol.setChatReplyUsage(tokens: 10, elapsed: 7.2)
+        store.clearChat()
 
         // No model chosen is an absent field, not an empty string. The worker reads a falsy `model`
         // as "serve the model I was started with", so `model: ""` could not be told apart from a
