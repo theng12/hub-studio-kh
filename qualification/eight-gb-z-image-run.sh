@@ -228,7 +228,15 @@ REFUSING TO RUN: the engine found is mflux ${MFVER}, not the 0.20.0 this model w
 cannot be compared with the 32 GB record, and the tier verdict is about this model on this engine.
 
   Engine: $MFLUX
-  Fix:    install the kit's app (it carries mflux 0.20.0), or
+  This advice used to read "install the kit's app (it carries mflux 0.20.0)". That was false, and
+  it sent the owner to reinstall for nothing: releases 0.6.63 to 0.6.67 shipped mflux 0.17.5 after
+  0.6.59 to 0.6.62 had shipped 0.20.0, because the release loop staged the superseded runtime. The
+  kit on a drive made before 0.6.68 carries 0.17.5 too. Check what THIS app carries before acting:
+
+      ls "/Applications/Studio Hub.app/Contents/Resources/runtimes/image"/lib/python*/site-packages \
+        | grep -o 'mflux-[0-9.]*'
+
+  Fix:    a kit at 0.6.68 or later carries mflux 0.20.0 - install that app, or
           uv tool install --force mflux==0.20.0
   Or accept a non-comparable run:  ZIMAGE_ALLOW_OTHER_ENGINE=1 bash "$0"
 

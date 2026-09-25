@@ -515,10 +515,20 @@ Hub's admission — never in the app's `blockReason`.
 2. Write the `CHANGELOG.md` and `release-notes.md` entries (both, every time; the release notes
    are read by the owner, the changelog by a developer).
 3. Stage:
+   **`.build/image-runtime-mflux020` is the only Image runtime to stage.** This line used to read
+   `.build/st03-image-runtime-worker`, the **superseded mflux 0.17.5** tree preserved for the ST-03
+   receipt — and following it shipped 0.17.5 in **every release from 0.6.63 to 0.6.67**, after
+   0.6.59–0.6.62 had shipped 0.20.0. Five releases published Image numbers (Z-Image's 166 s / 236 s,
+   its peaks, its `measured_on`) for an engine the app did not contain. `stage_voice.py` now pins the
+   qualified tree by content digest and refuses anything else, so a stale line cannot repeat it. A
+   version string would not have caught it: both trees carry an `mflux` package and accept the same
+   commands. Found by the owner's 8 GB Z-Image run, whose harness checks the engine and refused — and
+   whose own advice named this path.
+
    ```sh
    .build/voice-runtime/bin/python3 -B packaging/stage_voice.py \
      --runtime .build/voice-runtime --native-shell .build/StudioHub \
-     --image-runtime .build/st03-image-runtime-worker \
+     --image-runtime .build/image-runtime-mflux020 \
      --music-runtime .build/music-runtime \
      --music-engine .build/music-engine-source \
      --output ".build/StudioHub-<n>/Studio Hub.app"
@@ -542,7 +552,7 @@ Hub's admission — never in the app's `blockReason`.
 |---|---|
 | Build runtime (Python, holds `cryptography`) | `.build/voice-runtime` |
 | Native shell binary | `.build/StudioHub` |
-| Image runtime | `.build/st03-image-runtime-worker` |
+| Image runtime (**the only one to stage**) | `.build/image-runtime-mflux020` — mflux 0.20.0, digest pinned in `packaging/stage_voice.py` as `IMAGE_RUNTIME_SHA256` (`c3acf766…`), which now **refuses any other tree**. `.build/st03-image-runtime-worker` is the superseded 0.17.5, kept for the ST-03 receipt and never staged |
 | Music overlay (177 files) | `.build/music-runtime`, digest pinned in `packaging/stage_voice.py` as `MUSIC_OVERLAY_SHA256` |
 | Music engine source | `.build/music-engine-source` |
 | The Mac's model library | `~/StudioHubModels` |

@@ -2,6 +2,43 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.68 — 2026-09-26
+
+### The image engine has been wrong since 0.6.63, and your 8 GB run is what caught it
+
+Z-Image was measured and approved on **mflux 0.20.0**. Releases 0.6.63 through 0.6.67 shipped
+**mflux 0.17.5** instead — so every image timing you've been shown (Z-Image's ~166 s and ~236 s, the
+memory peaks, the "measured on mflux 0.20.0" note) was describing an engine your app didn't have.
+
+It happened because the release instructions pointed at the wrong folder — one that was correct when
+they were written, and was never re-checked after a newer engine was built. I followed that line for
+every release I cut. This build ships the right engine again.
+
+Your 8 GB Z-Image run refused because of it, and the refusal was right. Its advice, though, was
+wrong — it told you to install the kit's app because that carried 0.20.0, and the kit carried 0.17.5
+too. So you'd have reinstalled and been refused again. That advice is now replaced with a command
+that shows you what your app actually has, before the run decides anything.
+
+**Nothing has to be re-measured.** The numbers were taken on 0.20.0 and this build now contains
+0.20.0, so they describe what you're running again.
+
+### The 8 GB Z-Image run is one double-click now
+
+It was a `.sh`, which Finder opens in a text editor — the same thing that happened with the chat
+tier runner. There's now **`RUN-8GB-Z-IMAGE.command`** on every drive beside it. Double-click that
+one.
+
+### The Technical folder on your drives has been tidied
+
+You were right that it was a mess: **29 files where 9 belong**, including three that were exact
+duplicates of each other under different names (two copies of the Z-Image runner, two of its
+readme, two of the launch checker). They're leftovers from older kit layouts that nothing wrote and
+nothing cleaned up.
+
+They've been moved — not deleted — to a `_trash` folder on each drive, and the kit now maintains
+that folder itself, so it can't fill up again. What's left in `Technical/` is the nine files the kit
+actually uses.
+
 ## 0.6.67 — 2026-09-26
 
 ### A picture's timing was wrong, and so was the machine it was measured on

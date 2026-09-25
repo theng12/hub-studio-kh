@@ -549,7 +549,19 @@ class StagingTests(unittest.TestCase):
         self._native_stage()
 
     def test_native_shell_stage_includes_separate_image_runtime_and_source(self):
-        self._native_stage(image=True)
+        manifest = self._native_stage(image=True)
+        # The fixture runtime is synthetic, so the bundle must say its Image runtime is not the
+        # qualified one. A build that could stage the wrong engine silently is how five releases
+        # shipped mflux 0.17.5 while publishing numbers measured on 0.20.0.
+        image = manifest['components']['image']
+        self.assertIs(image['runtime_qualified'], False,
+                      'an unqualified Image runtime must be recorded as unqualified')
+        self.assertIn('fixture', image['runtime_note'])
+        # Both digests are recorded, and they differ: the bundle names the tree it got and the tree
+        # it should have had, so a reader can see the gap without reproducing it.
+        self.assertRegex(image['runtime_sha256_qualified'], r'^[0-9a-f]{64}$')
+        self.assertRegex(image['runtime_sha256_found'], r'^[0-9a-f]{64}$')
+        self.assertNotEqual(image['runtime_sha256_found'], image['runtime_sha256_qualified'])
 
     def _native_stage(self, image=False):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
@@ -606,7 +618,14 @@ class StagingTests(unittest.TestCase):
             artifact = base / 'Studio Hub.app'
             with mock.patch.object(module, 'ROOT', repo):
                 try:
-                    module.stage(runtime, artifact, native_shell=native, **({"image_runtime": runtime} if image else {}))
+                    # The fixture runtime is synthetic, so it is not the tree the models were
+                    # qualified on and `stage_voice` refuses it by design. The override is the
+                    # deliberate way through: it stages and records that the runtime is not the
+                    # qualified one, which is what this test then checks.
+                    module.stage(runtime, artifact, native_shell=native,
+                                 **({'image_runtime': runtime,
+                                     'unqualified_image_runtime': 'synthetic staging fixture'}
+                                    if image else {}))
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
@@ -651,6 +670,7 @@ class StagingTests(unittest.TestCase):
             (contents / 'MacOS/StudioHub').write_bytes(b'changed-native-shell')
             self.assertNotEqual(manifest['payload_sha256'], module.tree_digest(
                 contents, exclude={Path('Resources/release-manifest.json')}))
+            return manifest
 
     def test_native_shell_stage_rejects_missing_binary(self):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')

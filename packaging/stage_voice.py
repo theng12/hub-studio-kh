@@ -19,6 +19,30 @@ MUSIC_ENGINE_SOURCE_SHA256 = 'a55b4bf166464a690e967b4a31862e39efc6bd954ef0214ac9
 # permissions. The tree is unchanged; only the algorithm is, so this was re-derived from the
 # same source rather than re-vendored.
 MUSIC_OVERLAY_SHA256 = 'f17b81b9bc9feb8e055c6c76ef6ccb78461c991be3727d59c86959d7361d6a67'
+
+# The Image runtime this build is qualified against, pinned by content the same way the Music
+# overlay is. It is **mflux 0.20.0** - the engine
+# `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on, and the one
+# the image catalogue publishes in `measured_on`.
+#
+# Nothing pinned this before, and the release loop in `docs/tasks/HANDOFF.md` named
+# `.build/st03-image-runtime-worker` - which is the **superseded 0.17.5** runtime preserved for the
+# ST-03 receipt. Following that line shipped 0.17.5 in every release from 0.6.63 to 0.6.67, after
+# 0.6.59-0.6.62 had shipped 0.20.0: five releases publishing Image numbers - Z-Image's 166 s and
+# 236 s, its peaks, its `measured_on` - for an engine the app did not contain. It was found by the
+# owner's 8 GB Z-Image run, whose harness checks the engine version and refused; the refusal's own
+# advice ("install the kit's app, it carries mflux 0.20.0") was false, because the kit carried
+# 0.17.5 too.
+#
+# A version string would not have caught it - both trees contain an `mflux` package and both accept
+# the same commands. The content digest is what distinguishes them, and refusing here is what makes
+# the mistake impossible rather than merely documented.
+IMAGE_RUNTIME_SHA256 = 'c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f'
+# Kept so the refusal can name what it was handed and where that tree came from.
+IMAGE_RUNTIME_SUPERSEDED = {
+    '7b9b9ff831caa254b928c9d5d05c86df776fbc0fc459a4725cc969c898cba243':
+        '.build/st03-image-runtime-worker (mflux 0.17.5, preserved for the ST-03 receipt)',
+}
 MUSIC_OVERLAY_PACKAGES = {
     'diskcache': '5.6.3', 'einops': '0.8.2', 'einx': '0.3.0',
     'frozendict': '2.4.7', 'loguru': '0.7.3', 'toml': '0.10.2',
@@ -272,13 +296,40 @@ def _stage_music(context: dict) -> dict | None:
 def _stage_image(context: dict) -> dict | None:
     if context['image_runtime'] is None:
         return None
+    found = tree_digest(context['image_runtime'])
+    unqualified_reason = context.get('unqualified_image_runtime')
+    if found != IMAGE_RUNTIME_SHA256 and not unqualified_reason:
+        known = IMAGE_RUNTIME_SUPERSEDED.get(found)
+        raise SystemExit(
+            'REFUSING TO STAGE: the Image runtime handed to this build is not the one the models '
+            'were qualified on.\n'
+            f'  handed:   {found}\n'
+            f'            {context["image_runtime"]}'
+            + (f'\n            -> {known}' if known else '') +
+            '\n'
+            f'  required: {IMAGE_RUNTIME_SHA256}\n'
+            '            mflux 0.20.0, the engine qualification/z-image-turbo-2026-09-24.md '
+            'measured Z-Image-Turbo 6B MLX 4-bit on\n'
+            '  pass --image-runtime .build/image-runtime-mflux020, or update this pin with the '
+            'qualification that moved it.'
+        )
     resources = context['resources']
     image_source = resources / 'components/image'
     copy_tracked_tree(ROOT / 'components/image', image_source)
     shutil.copytree(context['image_runtime'], resources / 'runtimes/image', symlinks=True)
     shutil.copyfile(ROOT / 'packaging/image_worker.py', resources / 'image_worker.py')
     provenance = context['image_provenance']
+    matched = {'runtime_qualified': True} if found == IMAGE_RUNTIME_SHA256 else {
+        # A bundle may carry an unqualified runtime - a staging fixture, or a deliberate trial -
+        # but it has to say so. The same rule as `development_build`: the artefact prints its own
+        # status rather than being trusted to be the qualified one.
+        'runtime_qualified': False,
+        'runtime_note': unqualified_reason,
+        'runtime_sha256_found': found,
+        'runtime_sha256_qualified': IMAGE_RUNTIME_SHA256,
+    }
     return {
+        **matched,
         'upstream_commit': provenance['commit'],
         'upstream_version': provenance['version'],
         'source_sha256': tree_digest(image_source), 'runtime': 'image',
@@ -399,6 +450,7 @@ def staged_import_gaps(resources: Path) -> list[str]:
 
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
+          unqualified_image_runtime: str | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
@@ -479,6 +531,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     context = {
         'resources': resources, 'runtime_hash': runtime_hash, 'include_hub': include_hub,
         'image_runtime': image_runtime, 'music_runtime': music_runtime,
+        'unqualified_image_runtime': unqualified_image_runtime,
         'music_engine': music_engine, 'provenance': provenance,
         'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
     }
@@ -575,6 +628,10 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-shell', type=Path)
     parser.add_argument('--image-runtime', type=Path, help='Include the independently qualified Image runtime and worker')
+    # Staging a runtime that is NOT the qualified one is allowed only by saying why. The reason is
+    # recorded in the release manifest, so an unqualified bundle announces itself.
+    parser.add_argument('--unqualified-image-runtime', metavar='REASON',
+                        help='Stage a non-qualified Image runtime anyway, recording this reason')
     parser.add_argument('--music-runtime', type=Path,
                         help='Include the pinned Music dependency overlay')
     parser.add_argument('--music-engine', type=Path,
@@ -583,4 +640,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
                 include_hub=args.hub, image_runtime=args.image_runtime,
+                unqualified_image_runtime=args.unqualified_image_runtime,
                 music_runtime=args.music_runtime, music_engine=args.music_engine))

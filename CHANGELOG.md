@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.68 — 2026-09-26 · five releases shipped the wrong image engine
+
+**The Image runtime regressed in 0.6.63 and nobody noticed for five releases.** 0.6.59–0.6.62
+shipped **mflux 0.20.0**; 0.6.63–0.6.67 shipped **mflux 0.17.5**. Every Image number this product
+publishes — Z-Image-Turbo 6B MLX 4-bit's 166 s and 236 s, its peak figures, its
+`measured_on: "mflux 0.20.0"` — described an engine the app did not contain.
+
+**How it happened.** The release loop in `docs/tasks/HANDOFF.md` named
+`--image-runtime .build/st03-image-runtime-worker`. That directory is the **superseded 0.17.5** tree,
+preserved as the receipt for the ST-03 packed-app proof — and it was correct when the line was
+written, before mflux 0.20.0 existed as a separate built runtime. The 0.20.0 tree has been sitting at
+`.build/image-runtime-mflux020` ever since, and every release since 0.6.63 staged the wrong one by
+following a stale instruction faithfully. **That is the failure mode this project keeps recording: a
+document that was true when written and was never re-checked against the artefact.**
+
+**How it was found.** The owner ran the 8 GB Z-Image measurement on his 8 GB Mac. The harness checks
+the engine version before it measures, refused, and named the mismatch — five releases after the
+mistake. Its own advice (*"install the kit's app, it carries mflux 0.20.0"*) was **also false**: the
+kit carried 0.17.5 too, so following it would have reinstalled and been refused again.
+
+**The fix is the runtime, not the record.** `.build/image-runtime-mflux020` is byte-for-byte the tree
+0.6.62 shipped — verified by content digest, `c3acf766…`, which is the same digest the 0.6.59 handoff
+records as replacing 0.17.5's. Staging it restores the engine Z-Image-Turbo was qualified on, so its
+published numbers describe the app again.
+
+**And it cannot recur.** `packaging/stage_voice.py` now pins the qualified Image runtime by content
+digest (`IMAGE_RUNTIME_SHA256`) and **refuses to stage anything else**, naming both digests, where
+the handed tree came from, and the path to use. A version string would not have caught this: both
+trees contain an `mflux` package and accept the same commands. This is the same mechanism that
+already pins the Music overlay.
+
+**Also in this release.** `RUN-8GB-Z-IMAGE.command` — the 8 GB Z-Image runner had no double-clickable
+wrapper, which is the same omission that was fixed for the chat tier runner and not for this one; the
+wrapper checks the installed app's mflux version and says so *before* the run refuses. The harness's
+false advice is replaced with a command the operator can run to see what their app carries. And
+`prepare-kit.sh` now treats the kit's `Technical/` folder as a **managed set**: it writes its nine
+files and moves anything else to the volume's `_trash`. The owner found 29 files there, including
+three exact duplicates (`8gb-z-image-run.sh` beside `eight-gb-z-image-run.sh`, and
+`check-everything.sh` beside `verify-launch.sh`) — leftovers from earlier kit layouts that nothing
+wrote and nothing removed.
+
 ## 0.6.67 — 2026-09-26 · three published things that were not true
 
 Three open items, each the same shape: something the product published or relied on with nothing
