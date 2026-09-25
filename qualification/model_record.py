@@ -41,13 +41,16 @@ VOICE_RUNTIMES = (
 )
 DEFAULT_OUTPUT = ROOT / "docs" / "model-benchmarks.md"
 
-# The owner's fleet, from `research/owner-hardware.md`. Kept here so the document can be read
-# against the machines he actually owns rather than a hypothetical one.
+# The owner's fleet. `research/owner-hardware.md` is the canonical home — AGENTS.md says so, and
+# says not to ask him to restate it — so this is a copy and `tests/test_model_record.py` reads that
+# file and fails if the two disagree. It is a copy because the alternative is parsing a prose table
+# at build time, and it is a *checked* copy because this one already went wrong: it said the 32 GB
+# Mac was an M1 Max, the value `research/owner-hardware.md` records as an error it had corrected.
 FLEET = [
     (8, "Apple M1, M2", 2),
     (16, "Apple M1, M2, M4", 3),
     (24, "Apple M4", 1),
-    (32, "Apple M1 Max (Mac Studio)", 1),
+    (32, "Apple M2 Max (Mac Studio)", 1),
 ]
 
 # What each engine is, in the owner's terms, so the table reads without a decoder ring.

@@ -1,14 +1,23 @@
 # The Qwen3.5-9B 4-bit tier run — one command
 
-The last unclaimed measurement in Chat. The shipped model is
-**`mlx-community/Qwen3.5-9B-4bit` (uniform 4-bit MLX, 5.98 GB)**, its manifest qualifies it at
-**16 GB**, and the only run on record is this 32 GiB Mac. Does it do useful work on the 16 GB
-Macs, and what does an 8 GB Mac do? Labels: **[M]** measured, **[V]** vendor claim, **[I]** inference.
+The shipped model is **`mlx-community/Qwen3.5-9B-4bit` (uniform 4-bit MLX, 5.98 GB)** and its
+manifest qualifies it at **16 GB**. Labels: **[M]** measured, **[V]** vendor claim, **[I]** inference.
 
-**Run it on a 16 GB Mac first (M1/M2/M4), then on one 8 GB Mac (M1/M2).** Plug in the kit drive — or
-have the kit's app installed with the model in `~/StudioHubModels`. Close every other app (browsers
-first), plug in power, and leave the Mac alone while it runs. Get the script onto that Mac first
-(AirDrop `qualification/chat-tier-run.sh`, or copy it off the kit drive). Then in Terminal paste:
+**The 16 GB tier is measured and QUALIFIED [M].** Three 16 GB Macs — M1, M2, M4 — each completed a
+256-token completion: 12.40–12.48, 14.14–14.02 and 18.33–18.60 tokens/second, peak MLX 5.23 GB on
+all three, load 9.08–13.69 s. Nothing on this page needs re-running to establish that.
+
+**The 8 GB tier is a documented exclusion and is not an open question.** The model does not run
+there — the owner tried it on his 8 GB Mac — so **the harness refuses an 8 GB Mac immediately**
+rather than probing. An attempt would cost up to 900 s and a swapping model load to rediscover an
+answer already known. There is no 8 GB run to make, and the refusal says so in those words. On that
+tier the kit's Voice, Subtitle and Image models are what run; Chat's job on this fleet is the 16 GB
+and larger Macs.
+
+**To re-measure the 16 GB tier**, on a 16 GB Mac with the kit's app installed and the model in
+`~/StudioHubModels`: close every other app (browsers first), plug in power, leave the Mac alone
+while it runs, and get the script there first (AirDrop `qualification/chat-tier-run.sh`, or copy it
+off the kit drive — or double-click `Technical/RUN-CHAT-TIER.command`). Then in Terminal paste:
 
 ```sh
 bash ~/Desktop/chat-tier-run.sh
@@ -18,9 +27,9 @@ That is the whole command. It finds the 4-bit model through the bundle's own cat
 and its bundled runtime (installed app first, then any mounted kit drive), checks the tier, runs the
 packaged Chat worker against the real weights and prints one block.
 
-**How long:** 3–10 minutes **[I]** on 16 GB — about 10 s to load, then two 256-token completions. An
-8 GB Mac is slower and may swap; one request stops at 900 s and a run whose system swap passes 6 GB
-is stopped, both recorded `ABORTED` and the verdict `INCONCLUSIVE`, never "failed".
+**How long:** 3–10 minutes **[I]** on 16 GB — about 10 s to load, then two 256-token completions.
+One request stops at 900 s and a run whose system swap passes 6 GB is stopped, both recorded
+`ABORTED` and the verdict `INCONCLUSIVE`, never "failed".
 
 **Send back:** the block between `COPY FROM HERE` and `TO HERE`, verbatim. It is also saved as
 `~/Desktop/StudioHub Chat Tier Run/VERDICT.txt`. It carries the chip, memory and macOS; the app

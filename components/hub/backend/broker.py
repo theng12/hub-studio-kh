@@ -464,28 +464,12 @@ def _known_memory_gb(studio: dict) -> float | None:
     return None if memory == float("inf") else memory
 
 
-def _audio_placement_key(studio: dict) -> tuple[int, float, str]:
-    """High-memory first, for audio and video. A machine with no telemetry sorts last."""
-    memory = _known_memory_gb(studio)
-    return (0 if memory is not None else 1, -(memory or 0.0), studio["id"])
-
-
-def _flexible_placement_key(studio: dict) -> tuple[int, float, str]:
-    """Smallest capable machine first, for image and subtitle. Unknown telemetry sorts last."""
-    memory = _known_memory_gb(studio)
-    return (0 if memory is not None else 1, memory or 0.0, studio["id"])
-
-
-# A model whose worker publishes a memory tier at or above this is a large-residency workload
-# for placement purposes.
-LARGE_MODEL_TIER_GB = 16.0
-
-
 def _published_memory_tier_gb(model: str, modality: str) -> float | None:
-    """The strictest total-memory tier the model's workers publish, from cache only.
+    """The strictest total-memory tier this model's workers publish, from cache only.
 
     Never an admission decision - dispatch still reads the exact per-worker catalog and the live
-    RAM governor - this exists so placement can follow the *model* rather than its modality name.
+    RAM governor - this exists so placement can order machines by *this model's* requirement rather
+    than by its modality's name.
     """
     if not model:
         return None
@@ -508,31 +492,45 @@ def _published_memory_tier_gb(model: str, modality: str) -> float | None:
 
 
 def _placement_key(modality: str, model: str | None = None):
-    """The machine-ordering key function for one queued workload.
+    """The machine-ordering key for one queued workload: **smallest machine that can run this
+    model first**, in every lane there is.
 
-    A *preference*, never a filter: the model's own memory floor already excludes a machine that
-    cannot run it, and every healthy capable worker stays in the list.
+    The owner restated the rule on 2026-09-25 after finding the old one spending the machines that
+    only big jobs can use:
 
-    Two producer facts decide it, and there is no literal modality set:
+        "the qwen3 tts 0.6 can run on 8gb machine so it must take up the small ones first. but
+        qwen3 tts 1.7b needs 16+ so it will wait for freed up 16+ machines... this should be
+        generator specific at all. instead this priority case should be model - ram requirement
+        specific."
 
-    * the artifact class the modality's dispatch contract produces (``MODALITY``) - audio and
-      video belong on the high-memory machines, which is the fleet's standing rule; and
-    * the model's own published memory tier, for an auxiliary lane (chat, transcription) that
-      holds a resident model and has no artifact kind of its own. The 9B Chat model publishes a
-      16 GB tier and used to fall into the flexible branch, which prefers the *smallest* capable
-      Mac, purely because ``chat`` was in neither literal set.
+    He is right, and the data was already published. The key used to branch on the *artifact class*
+    a modality produces, so every audio job sorted high-memory first whatever model it named: the
+    0.6B Qwen3-TTS, whose floor is 8 GB, took a 32 GB Mac that a Z-Image-class job needed, while the
+    1.7B (12 GB), VoxCPM2 (16 GB) and Fish Audio (24-32 GB) - the ones that genuinely need a big Mac
+    - queued behind it. Ordering by modality cannot see that. Ordering by the model can.
 
-    Everything else keeps the flexible preference: image and subtitle use the small Macs and
-    leave the 16 GB+ machines for audio.
+    Three bands, and the model's own published floor decides the first two:
+
+    * a machine below this model's floor sorts **after every machine that can run it** - it is not
+      a candidate, and putting it first would spend a dispatch discovering that;
+    * among machines that can run it, **the smallest comes first**, so the 16 GB+ Macs stay free
+      for work that has nowhere else to go;
+    * a machine with no telemetry sorts last: an unknown is not evidence of a small Mac.
+
+    A preference, never a filter: every studio stays in the list, because the live RAM governor -
+    not this ordering - is what refuses a machine that cannot take the job right now.
     """
-    artifact_kind = (MODALITY.get(modality) or (None, None, None))[2]
-    if artifact_kind in {"audio", "video"}:
-        return _audio_placement_key
-    if modality in _EXTERNAL_LANES and model:
-        tier = _published_memory_tier_gb(model, modality)
-        if tier is not None and tier >= LARGE_MODEL_TIER_GB:
-            return _audio_placement_key
-    return _flexible_placement_key
+    floor = _published_memory_tier_gb(model, modality) if model else None
+
+    def key(studio: dict) -> tuple[int, float, str]:
+        memory = _known_memory_gb(studio)
+        if memory is None:
+            return (2, 0.0, studio["id"])
+        if floor is not None and memory < floor:
+            return (1, memory, studio["id"])
+        return (0, memory, studio["id"])
+
+    return key
 
 
 def _batch_memory_constraint_gb(batch: dict) -> float:
@@ -2783,10 +2781,10 @@ def _eligible_studios(modality: str, routing: str,
             s["id"],
         ))
     else:
-        # Audio and video belong on the high-memory machines: this fleet is many 8 GB Macs and a
-        # few 16 GB+ ones, and image/subtitle stay off the large Macs so they stay free for the
-        # memory-heavy work. Which class a workload is in comes from its artifact kind and the
-        # model's own published memory tier - see `_placement_key` - never from a modality set.
+        # Smallest capable machine first, for every lane. Capability is the model's own published
+        # floor and admission enforces it; this only orders the machines that can all run the job,
+        # so the few 16 GB+ Macs stay free for work that has nowhere else to go. The rule belongs
+        # to the model, not the modality - see `_placement_key`.
         out.sort(key=_placement_key(modality, model))
     return out
 

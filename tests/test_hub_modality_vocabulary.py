@@ -271,23 +271,33 @@ class PlacementTests(unittest.TestCase):
         with mock.patch.object(broker, "_packaged_monitor", self._Monitor(rows)):
             return broker._placement_key(modality, model).__name__
 
-    def test_audio_and_video_artifacts_prefer_the_large_machines(self) -> None:
-        for modality in ("voice", "music", "video"):
+    def test_placement_is_one_rule_for_every_lane(self) -> None:
+        """The placement key is the model's, not the modality's.
+
+        It used to branch on the artifact class the modality produces, so **every** audio job went
+        to the high-memory machines whatever model it named. The owner found it: the 8 GB-floor
+        Qwen3-TTS 0.6B took a 32 GB Mac that a Z-Image-class job needed, while the 12-32 GB voice
+        models queued behind it. There is no branch left to test, so what is pinned here is that
+        every lane resolves to the same single key.
+        """
+        for modality in ("voice", "music", "video", "image", "subtitle", "chat", "transcription"):
             with self.subTest(modality=modality):
-                self.assertEqual(self._key_names(modality, "org/model", 8.0),
-                                 "_audio_placement_key")
+                self.assertEqual(broker._placement_key.__name__, "_placement_key")
+                self.assertFalse(hasattr(broker, "_audio_placement_key"),
+                                 "the modality branch is gone; a resurrected one would sort audio "
+                                 "onto the big Macs again")
+                self.assertFalse(hasattr(broker, "_flexible_placement_key"),
+                                 "one key: there is no second ordering to drift from it")
 
-    def test_a_resident_auxiliary_lane_follows_its_published_floor(self) -> None:
-        """Chat's 9B model publishes 16 GB; transcription's Whisper publishes 8 GB."""
-        self.assertEqual(self._key_names("chat", "mlx-community/Qwen3.5-9B-4bit", 16.0),
-                         "_audio_placement_key")
-        self.assertEqual(self._key_names("transcription", "mlx-community/whisper-turbo", 8.0),
-                         "_flexible_placement_key")
-
-    def test_an_artifact_lane_keeps_the_small_machines_free(self) -> None:
-        """Image publishes a 16 GB tier and still belongs on the small Macs by fleet policy."""
-        self.assertEqual(self._key_names("image", "org/flux", 16.0),
-                         "_flexible_placement_key")
+    def test_placement_order_ignores_the_modality_and_follows_the_machine(self) -> None:
+        """The same two machines order the same way whichever lane is asking."""
+        small = {"id": "small", "machine": "a"}
+        big = {"id": "big", "machine": "b"}
+        with mock.patch.object(broker, "_known_memory_gb",
+                               lambda studio: 8.0 if studio["id"] == "small" else 32.0):
+            self.assertEqual([s["id"] for s in sorted([big, small],
+                                                     key=broker._placement_key("voice", None))],
+                             ["small", "big"])
 
     def test_a_chat_model_is_actually_ordered_onto_the_larger_mac(self) -> None:
         from components.hub.backend import peers

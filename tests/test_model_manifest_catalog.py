@@ -260,7 +260,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from
             # `unqualified` to `qualified` and `memory_evidence` records the runs and their
             # source. Nothing about the pinned revision or the file inventory changed.
-            "qwen3-5-9b-4bit": "7e9a736128798d2282ae0f32ce18ae422a33df8919e6e0cd92f05bae5ccfd1d9",
+            "qwen3-5-9b-4bit": "d811e6cfd6604d99d2bdd79e41553e12935d6150099963973edb4806bd1c81e9",
             "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
             "qwen3-tts-12hz-0-6b-base-8bit": "23404870afb1a3ef651c496de9d0891f20c9f99488a92792bebcfd08ec54233e",
             "qwen3-tts-12hz-1-7b-base-4bit": "f514eb0f48dda5f3173c08ac954e644e11802aa5525c821cdaff752a9ad722d7",

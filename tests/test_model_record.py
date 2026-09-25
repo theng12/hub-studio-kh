@@ -91,6 +91,50 @@ class ModelRecordTests(unittest.TestCase):
                             f"{row['model']} is measured but its reading states no quantization")
             self.assertNotIn(row["quantization"].strip().lower(), ("", "n/a", "unknown"))
 
+class FleetTableTests(unittest.TestCase):
+    """The record's machine table must match the file that owns that fact.
+
+    `research/owner-hardware.md` is canonical (AGENTS.md: "do not ask the owner to restate his
+    machines"). The generator keeps a copy because the alternative is parsing prose at build time,
+    and a copy is only safe if something checks it — this one had already drifted, naming the 32 GB
+    Mac an M1 Max, which that file records as a correction it had made.
+    """
+
+    def test_the_generator_fleet_matches_the_canonical_file(self) -> None:
+        canonical = (ROOT / "research" / "owner-hardware.md").read_text(encoding="utf-8")
+        rows = []
+        for line in canonical.splitlines():
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) < 3 or not cells[0].endswith("GB"):
+                continue
+            try:
+                size = int(cells[0].split()[0])
+                count = int(cells[2])
+            except ValueError:
+                continue
+            rows.append((size, cells[1], count))
+        self.assertTrue(rows, "no fleet table found in research/owner-hardware.md")
+
+        def facts(entries):
+            """The fact, not the phrasing: 'Apple M2 Max (Mac Studio)' and 'M2 Max' are one machine.
+
+            The canonical table writes a chip list; the generator may qualify it or name the model.
+            What must agree is which sizes exist, what silicon they are, and how many of each — the
+            three things a reader acts on.
+            """
+            normalised = []
+            for size, chips, count in entries:
+                text = chips.replace("Apple ", "")
+                text = text.split("(")[0].strip().rstrip(",")
+                normalised.append((size, " ".join(text.split()), count))
+            return sorted(normalised)
+
+        self.assertEqual(
+            facts(rows), facts(load_generator().FLEET),
+            "qualification/model_record.py's FLEET disagrees with research/owner-hardware.md; the "
+            "canonical file wins and the generator's copy must be corrected")
+
+
 def json_package_id(path: Path) -> str:
     import json
     return json.loads(path.read_text(encoding="utf-8"))["package_id"]

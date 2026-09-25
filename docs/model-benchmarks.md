@@ -15,10 +15,10 @@ checked against what is actually on disk.
 
 | Unified memory | Chips | How many |
 | --- | --- | ---: |
-| 8 GB | Apple M1, M2 | 30 |
-| 16 GB | Apple M1, M2, M4 | 10 |
-| 24 GB | Apple M4 | 2 |
-| 32 GB | Apple M1 Max (Mac Studio) | 1 |
+| 8 GB | Apple M1, M2 | 2 |
+| 16 GB | Apple M1, M2, M4 | 3 |
+| 24 GB | Apple M4 | 1 |
+| 32 GB | Apple M2 Max (Mac Studio) | 1 |
 
 ## What each machine can run
 

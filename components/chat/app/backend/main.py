@@ -175,10 +175,16 @@ def _host_eligibility(engine) -> dict:
                  if qualified_bytes else
                  "the model manifest publishes no qualified memory tier")}
     if qualified_bytes and memory < qualified_bytes:
+        # The 8 GB tier is not a tight fit to be attempted, it is an exclusion, and the sentence
+        # now says so. It used to read "it will swap or fail", which invited the attempt: the owner
+        # did attempt it, it does not run, and each try costs up to the harness's 900 s timeout plus
+        # a load that swaps the SSD. A warning that understates a known exclusion is the reason he
+        # spent that time.
         state["memory_warning"] = (
-            f"This Mac has {memory / 1024**3:.0f} GB of unified memory. {label} is qualified at "
-            f"{qualified_bytes / 1e9:g} GB; on a smaller Mac it will swap or fail, especially "
-            "with another Studio holding a model.")
+            f"This Mac has {memory / 1024**3:.0f} GB of unified memory, and {label} does not run "
+            f"here. It is qualified at {qualified_bytes / 1e9:g} GB and excluded below it: the "
+            "weights need working room on top that this Mac does not have. Run it on a 16 GB or "
+            "larger Mac. This is a decision from a measured tier, not a caution.")
     return state
 
 

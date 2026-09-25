@@ -334,24 +334,40 @@ EOF
     exit 3
   fi
 fi
-# On the 8 GB tier the floor is expected to be unmet and must not be a gate. The floor exists so a
-# run on a bigger Mac is not measuring the SSD instead of the tier; on 8 GB the question *is* what
-# happens below it, and refusing answered nothing — the owner ran this on his 8 GB Mac and got a
-# refusal, which told him only that macOS and his other apps were holding memory. So this tier
-# attempts by default, and the guards that actually bound the attempt are kept: the wall-clock
-# timeout and the swap cap above, which stop a run that thrashes. The record says it started below
-# the floor, so a reader can weigh it.
-if [ "${CHAT_SMOKE:-0}" != "1" ] && [ "$TIER" = "8 GB" ] && [ -n "$FLOOR_GB" ] \
-   && [ "${CHAT_IGNORE_FREE_FLOOR:-0}" != 1 ]; then
-  if awk -v b="$AVAIL_BYTES" -v f="$FLOOR_GB" 'BEGIN{exit !(b < f*1e9)}'; then
-    STARTED_BELOW_FLOOR=yes
-    echo "NOTE: ${AVAIL_GB} GB available is below the ${FLOOR_GB} GB floor this model asks for."
-    echo "      This tier is being attempted anyway, because on an 8 GB Mac that is the question"
-    echo "      rather than a reason to stop. The run is stopped if swap passes ${CHAT_MAX_SWAP_GB:-6} GB of swap or"
-    echo "      a single request passes ${CHAT_TIMEOUT:-900} s, and the record will say it started below the"
-    echo "      floor. Quit other apps first if you want it to have the best chance."
-    echo
-  fi
+# ── the 8 GB tier is a documented exclusion, refused here and not probed ─────────────
+# This model is not run on an 8 GB Mac. The owner tried it, it does not run there, and probing it
+# again costs up to CHAT_TIMEOUT (900 s by default) per attempt plus the SSD traffic of a load that
+# swaps — for an answer already known. So the refusal is immediate and says so, rather than leaving
+# a gate that the tier might occasionally pass and then spend fifteen minutes failing.
+#
+# The gate this replaces checked only *available* memory, which on an 8 GB Mac is essentially never
+# 6.48 GB free — so it refused for the wrong reason ("your Mac is busy") when the real answer is
+# that the tier is excluded. A refusal that names the wrong cause sends the owner off to quit apps
+# for nothing.
+if [ "${CHAT_SMOKE:-0}" != "1" ] && [ "$TIER" = "8 GB" ] \
+   && [ "${CHAT_ALLOW_EIGHT_GB:-0}" != 1 ]; then
+  cat <<EOF
+==================== COPY FROM HERE ====================
+NOT RUN · 8 GB · Qwen3.5-9B 4-bit (mlx-community/Qwen3.5-9B-4bit, uniform 4-bit MLX) — a documented exclusion, not a measurement
+Machine: $CHIP · $MEM_GB GB unified memory · macOS $OSV · ${MODEL_ID:-unknown}
+App: Studio Hub $APP_VERSION ($APP_COMMIT)
+Model: $MODEL_ID (uniform 4-bit MLX) @ $REV · ${MODEL_ON_DISK:-?} GB on disk, ${MODEL_FILES:-?} file(s)
+Manifest qualifies it at: ${QUAL_GB:-none published} GB (qualification.minimum_unified_memory_gb)
+Why this is refused outright: the weights are 5.98 GB and the load needs working room on top, so on
+  an 8 GB Mac this is not a tight fit to be measured — it does not run. The owner tried it on his
+  8 GB Mac; it is excluded there by his decision, and an attempt would spend up to ${CHAT_TIMEOUT:-900} s
+  and a swapping model load to rediscover that.
+What this Mac should run instead: the 8 GB tier runs the Voice, Subtitle and Image models this kit
+  carries for it. Chat's job on your fleet is the 16 GB and larger Macs, where it is measured.
+Nothing was run and no record was written. This refusal is not a throughput result.
+If you genuinely want to watch it fail anyway, and you accept the time:
+    CHAT_ALLOW_EIGHT_GB=1 CHAT_IGNORE_FREE_FLOOR=1 bash chat-tier-run.sh
+===================== TO HERE ============================
+EOF
+  echo >&2
+  echo "REFUSING TO RUN: Qwen3.5-9B 4-bit is excluded on the 8 GB tier — it does not run there." >&2
+  echo "The block above is on standard output, for sending back. Nothing was run." >&2
+  exit 3
 fi
 
 # ── where the record goes ──────────────────────────────────────────────────────────
