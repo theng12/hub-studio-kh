@@ -64,7 +64,8 @@ function studio() {
       error: null,
       device: null,                // "mps" | "cuda" | "cpu"
       kokoro_voices: [],           // [{id, label, lang, gender}, ...]
-      qwen3_preset_speakers: [],   // [{id, lang, gender, description}, ...]
+      qwen3_preset_speakers: [],   // the first published roster, for readers of this name
+      preset_rosters: [],          // every `<family>_preset_speakers` the payload carried
       voxtral_voices: [],          // [{id, lang, gender, label}, ...]
       marvis_voices: [],           // [{id, lang, gender, label}, ...]
       orpheus_voices: [],          // [{id, lang, gender, label}, ...]
@@ -2591,7 +2592,22 @@ function studio() {
         this.gen.error = data.error;
         this.gen.device = data.device;
         this.gen.kokoro_voices = data.kokoro_voices || [];
-        this.gen.qwen3_preset_speakers = data.qwen3_preset_speakers || [];
+        // Every ready-made roster the payload carries, found by the shape of its key rather than
+        // by one family's name. The worker publishes each family's roster as
+        // `<family>_preset_speakers` (the Qwen one is `qwen3_preset_speakers`), and the native app
+        // has always joined on that shape. Reading the one exact key here meant a second roster
+        // family would never reach this picker: the roster would be published, shipped and
+        // correct, and simply invisible — the same defect that once hid six voice packages from
+        // the Audio picker, in miniature.
+        //
+        // Kept name-compatible: `this.gen.qwen3_preset_speakers` is filled with the first roster
+        // found when it is the Qwen one, so anything still reading it by that name keeps working.
+        const rosters = Object.keys(data)
+          .filter(k => /_preset_speakers$/.test(k) && Array.isArray(data[k]))
+          .map(k => data[k]);
+        this.gen.preset_rosters = rosters;
+        this.gen.qwen3_preset_speakers =
+          data.qwen3_preset_speakers || (rosters.length ? rosters[0] : []);
         this.gen.voxtral_voices = data.voxtral_voices || [];
         this.gen.marvis_voices = data.marvis_voices || [];
         this.gen.orpheus_voices = data.orpheus_voices || [];
@@ -2850,7 +2866,11 @@ function studio() {
       return "custom";
     },
     qwen3PresetSpeakersFor(lang) {
-      return (this.gen.qwen3_preset_speakers || []).filter(s => s.lang === lang);
+      // Every published roster, not just the first family's: see where `preset_rosters` is filled.
+      const all = (this.gen.preset_rosters && this.gen.preset_rosters.length)
+        ? this.gen.preset_rosters.flat()
+        : (this.gen.qwen3_preset_speakers || []);
+      return all.filter(s => s.lang === lang);
     },
     setVoiceDesignExample(text) {
       this.gen.voice_design_prompt = text;

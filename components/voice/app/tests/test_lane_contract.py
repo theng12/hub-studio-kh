@@ -400,3 +400,27 @@ def test_every_parameter_shape_reaches_a_published_contract() -> None:
         "Either a family that honours the parameter declares it in its `lane_parameters`, or the "
         "shape is removed — a bound nobody can discover is not a contract."
     )
+
+
+def test_every_roster_consumer_joins_on_the_published_key_shape() -> None:
+    """A consumer may not name one family's roster key.
+
+    `components/voice/app/frontend/app.js` read the exact key `qwen3_preset_speakers` in three
+    places while the worker publishes each family's roster as `<family>_preset_speakers`. A second
+    roster family would have been published, shipped and correct — and simply invisible in that
+    picker, which is the defect that once hid six voice packages from the Audio picker. The native
+    app has always joined on the key *shape*; this checks that neither consumer names a family.
+    """
+    frontend = (REPO_ROOT / 'components/voice/app/frontend/app.js').read_text(encoding='utf-8')
+    assert "_preset_speakers$/.test(k)" in frontend, (
+        'the web picker must discover rosters by the shape of the key, not by one family name')
+    assert 'preset_rosters' in frontend, 'and it must keep what it found'
+    native = (REPO_ROOT / 'native/StudioAPI.swift').read_text(encoding='utf-8')
+    assert 'hasSuffix("_preset_speakers")' in native or 'hasSuffix("preset_speakers")' in native, (
+        'the native app must keep joining rosters on the key shape')
+    # And no shipped consumer may ask for one family by name again.
+    # The *code* shape, not the phrase: a comment explaining why the branch was removed quotes it.
+    for path, text in (('components/voice/app/frontend/app.js', frontend),
+                       ('native/StudioAPI.swift', native)):
+        assert 'isQwen = family' not in text and 'isQwen=' not in text, (
+            f'{path} decides something from a family name again; that is the hardcoded-consumer rule')

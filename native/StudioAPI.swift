@@ -6348,8 +6348,6 @@ final class NativeWorkspaceStore: ObservableObject {
             if let tier = item.memoryTier { result[item.repo] = tier }
         }
         let audioModels = catalog.filter { $0.capabilities?.contains("tts") == true }.map { item in
-            let family = item.family ?? ""
-            let isQwen = family == "qwen3-tts"
             // What a model can do is published by the catalog, and this app reads it instead of
             // keeping its own list of families. `modes` is the runtime's own answer to "how can
             // this model be told what to sound like?"; a family allowlist here is what made six of
@@ -6361,7 +6359,16 @@ final class NativeWorkspaceStore: ObservableObject {
             // its transcript is required only where the catalog's audited profile says so.
             let isClone = modes.contains(.cloning)
             let transcriptRequired = isClone
-                && (item.referenceAudio?.transcript ?? (isQwen ? "required" : "optional")) == "required"
+                // The transcript is required only where a **producer states that it is**. The
+                // catalogue's own `reference_audio.transcript` says so for the Qwen3-TTS Base
+                // tiers ('required'); where a model states nothing, the answer is "not required"
+                // rather than a guess — and until this change the guess was
+                // `family == "qwen3-tts"`, a hardcoded family name in a consumer, which is the
+                // rule this project keeps paying for. Checked against every shipped cloning model
+                // before removing it: the two that need a transcript both publish 'required', and
+                // every model that fell back to the name resolves to 'optional' anyway, so this
+                // changes nothing today and stops the next family having to be added here.
+                && item.referenceAudio?.transcript == "required"
             let package = packages[item.repo]
             // Support is a property of the pair (catalog entry, Hub package), not of a family name:
             // every TTS entry this Hub can dispatch is offered, so nothing shipped can be hidden by
