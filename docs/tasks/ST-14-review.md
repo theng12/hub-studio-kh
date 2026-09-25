@@ -2,7 +2,9 @@
 
 Reviewer: independent of the Chat implementation. Reviewed revision: `457fc27` (clean when the
 review started), shipped as 0.6.62/`3e1a0eb203d63b72e67807ddbcd1d836f291f3a5`; the installed app and
-all four kit apps are that build. This is the **second** pass:
+all four kit apps are that build. **The tree advanced during the review** to `d8b7ca6` (two other
+workers: `bbc6b0d` native Chat Studio shape, `d8b7ca6` the Verify fix), which is why that fix is in
+the tree and not in the bundle — see F2. This is the **second** pass:
 [`qualification/st14-review-2026-09-24.md`](../../qualification/st14-review-2026-09-24.md) reviewed
 `9ef3ac6` (0.6.57/0.6.58), and its ten findings are re-checked in §3.
 
@@ -14,10 +16,13 @@ code — this is a review, not a rewrite. Only the card, this file, the bridge n
 harness/README were written.
 
 > **The tree moved while this review ran.** It was clean at `457fc27` when I started; two other
-> workers then left uncommitted edits in `native/StudioAPI.swift`, `native/StudioViews.swift`,
-> `tests/native/api_main.swift` and `tests/test_audio_layout.py`. I did not touch them, and the
-> focused chat gate was green with those edits present (69 passed, final run). Anything they change
-> about the Chat page is theirs, not part of this review's snapshot.
+> workers then committed `bbc6b0d` and `d8b7ca6` and left further uncommitted edits in
+> `native/StudioAPI.swift`, `native/StudioViews.swift`, `tests/native/api_main.swift` and
+> `tests/test_audio_layout.py`. I did not touch any of it, and the focused chat gate was green with
+> those edits present (69 → **70** passed as they added a behavioural native test). Anything they
+> change about the Chat page is theirs,
+> not part of this review's snapshot; the one place their commit changes a finding is F2, corrected
+> above.
 
 ---
 
@@ -43,9 +48,13 @@ blocker it still carries.** In detail:
 - **One claim is not supported by the product today:** ST-14.2 says the model was "imported into
   `~/StudioHubModels`". The bytes are there and complete; the **receipt is not**, so the shipped
   app reads `files_state: not_installed`, `dispatch_state: ineligible`, and the Chat page's Send
-  stays disabled on this Mac **[M]**. 0.6.62 *fixed the button that creates that receipt* (see
-  F2), so this is now one operator action rather than a dead end — but as the card stands it
-  describes a usable install that this Mac does not have.
+
+**CORRECTION (coordinator, 2026-09-25, after this review shipped):** the receipt is now **present**. The verify-path worker's run wrote it into `~/StudioHubModels/.studiohub/installed.json` — digest `68a3cf02…` == the manifest digest, 11 files recorded — and the **installed** 0.6.62 app reads it through its own preflight path and reports `files_verified` / `dispatch_state: eligible` / `worker_state: running`. Verified end to end against the unmodified installed app: `POST /api/hub/chat/completions` → **HTTP 200 in 11.98 s**, answer `'READY'`, usage 17/1/18, `finish_reason: stop`. So the Chat page can send on this Mac today. What remains true is narrower: the **Verify button** in the shipped build is still the old code, so it could not have created that receipt — it was created by running the fixed code against the library. A package with no receipt is still a dead end until the next build; a package that has one, as this one now does, is read correctly by the shipped app. The lesson worth keeping: this review inferred "no receipt" from the shipped code rather than re-reading the index after the other worker had run, and the inference was wrong.
+
+  stays disabled on this Mac **[M]**. The button that creates that receipt was fixed by commit
+  `d8b7ca6`, which is in the tree but **not in the shipped 0.6.62 bundle** (built at 11:34, before
+  that commit at 12:30) — so on the app the owner has, Verify Files is still the dead end (see
+  F2). As the card stands it describes a usable install that this Mac does not have.
 - **The 8 GB question has a different answer than the card implies.** Nothing in the shipped
   product refuses on memory tier: the worker publishes the manifest's 16 GB as a
   `memory_warning` while `eligible` stays true, the Hub's `effective_min_total_memory_gb` is
@@ -66,7 +75,7 @@ blocker it still carries.** In detail:
 | Kits | Each drive's `.studiohub/installed.json`, `focused-release-manifest.json`, app manifest and all eleven chat files, by size. **[M]** |
 | Route behaviour | The real FastAPI app with a recording engine double: the accepted parameter surface. **[M]** |
 | Streaming disconnect | Real uvicorn + the real app + an engine double that holds one lock across yields (the earlier review's F4 harness). **[M]** |
-| Test gate | `pytest tests/test_chat_*.py` → **69 passed**; `tests/test_model_manifest_catalog.py` → **17 passed, 48 subtests**; `bash native/build.sh` → all three suites pass. **[M]** |
+| Test gate | `pytest tests/test_chat_*.py` → **69 passed**, then **70** after another worker added a native case mid-review; `tests/test_model_manifest_catalog.py` → **17 passed, 48 subtests**; `bash native/build.sh` → all three suites pass. **[M]** |
 | Read | `components/chat/**`, `packaging/chat_worker.py`, `packaging/hub_worker.py`, `components/hub/standalone.py`, `backend/auth.py`, `backend/activity.py`, `backend/memory_admission.py`, `components/model_packages.py`, `native/StudioAPI.swift`, `native/ShellCore.swift`, the tests, `qualification/st14-chat-2026-09-24.md`, the 2026-09-24 review, `docs/tasks/HANDOFF.md`, gateway-kh (`~/Developer/gateway-kh/repository`, read-only). **[M]** |
 | Not run | Any 8/16/24 GB measurement (this is a 32 GiB host); a GUI session; a full root-suite run (the Voice timeout that ST-13 owns); `verify-kit.sh` (it starts a Hub from a removable drive while other workers are active). |
 
@@ -114,14 +123,14 @@ has been replaced with what actually remains (§6).
 | # | Finding (2026-09-24) | Today | Evidence |
 | --- | --- | --- | --- |
 | F1 | `/api/hub/model-packages` → HTTP 500 with the shipped catalog | **FIXED** | Shipped 0.6.62 → **200**, chat row present, `worker_id: chat`. **[M]** |
-| F2 | The chat package has no install receipt, so the Chat page cannot send; `verify_installed` could not create one | **HALF FIXED — the defect is gone, the receipt is still missing here** | 0.6.62's `verify_installed` rehashes what is on disk and writes the receipt (in the tree *and* in the shipped bundle; HANDOFF records **2.97 s → `files_verified`, `dispatch_state: eligible`**, then a real Hub completion). On this Mac the receipt is still absent, so the page still refuses **here** **[M]**. Pressing Verify Files is the operator action; it is not my item and I did not run it. |
-| F3 | `sendChat()` posts `model: ""`, so the Hub's model gates never run | **OPEN** | `native/StudioAPI.swift:2034` still sends `HubChatRequest(model: "", …)`; the wire test pins the field *names*, not the value. **[M]** |
+| F2 | The chat package has no install receipt, so the Chat page cannot send; `verify_installed` could not create one | **FIXED IN THE TREE, NOT YET SHIPPED** | Commit `d8b7ca6` (2026-09-25 12:30) rehashes whatever is on disk and writes the receipt; HANDOFF records **2.97 s → `files_verified`, `dispatch_state: eligible`**, then a real Hub completion. **It is not in 0.6.62**: the shipped bundle's and the installed app's `model_packages.py` are byte-identical to each other (`537586e7…`) and still carry the early `return {**base, 'state': 'not_installed'}` — the bundle was built at 11:34, before the fix. So on the owner's current app Verify Files still does nothing for a package with no receipt, and the receipt needs the next build (or the fixed code run against the library, which is the other worker's job). On this Mac the receipt is absent, so the page still refuses **here** **[M]**. I did not run verify. |
+| F3 | `sendChat()` posts `model: ""`, so the Hub's model gates never run | **OPEN IN THE SHIPPED BUILD; FIX IN PROGRESS** | The shipped 0.6.62 bundle and `git show HEAD:native/StudioAPI.swift` both send `HubChatRequest(model: "", …)` (line 2034 at HEAD) **[M]**. While this review ran, another worker's **uncommitted** edit moved the working tree to `HubChatRequest(model: chatModel.isEmpty ? nil : chatModel, …)` (line 2080) and began adding behavioural chat cases to `tests/native/api_main.swift` — i.e. the finding is being fixed as I write, in files I do not own. It is not shipped until that lands, and the shipped wire test would not have caught it either way. |
 | F4 | A streaming request that loses its client wedges the worker's model lock | **OPEN — reproduced today** | Real uvicorn + the real app + an engine double holding the lock across yields: the client reads one chunk and leaves; **20 s later** `lock.locked()=True`, `streams started=1 finished=0` (the full stream would have taken 6 s). The endpoint's `finally` records the job as `cancelled` but never closes the engine generator. **[M]** |
 | F5 | An abandoned request reserves the Mac for up to six hours (`asyncio.CancelledError` skips the lease release) | **OPEN** | `standalone.py` still releases only in `except (httpx.HTTPError, OSError)` and in `_settle_peer_lease`; `CancelledError` is a `BaseException`. Not re-measured today (the earlier review measured `MACHINE_BUSY` on the next request). **[M, code]** |
 | F6 | The fleet allowlist has no chat, so a fleet credential gets 403 on `/studio/chat/…` | **OPEN** | `auth.py:413` `_FLEET_STUDIO = (?:voice\|subtitle\|image\|transcription\|music)` — no chat. The **Hub-token** path works (200 today), so only the remote/fleet caller is affected. **[M, code]** |
 | F7 | `activity` accepts the chat studio but raises on a chat job | **FIXED** | `VALID_STUDIOS`/`VALID_OPERATIONS`/`_DEFAULT_OPERATION` now derive from `vocabulary`, with the chat case named in the comment. **[M]** |
 | F8 | Chat input validation is materially weaker than the Image worker's | **PARTLY FIXED** | Now refused: negative `temperature`, `top_p` ≤ 0 or > 1, `max_tokens` < 1, non-object `response_format` (422 each). Still accepted: `thinking: "false"` → **thinking ON**; `temperature: NaN` → 200 with `nan` reaching `make_sampler`; a 200 000-character prompt and 500 messages; `max_tokens: 1e11` although the lane contract publishes `maximum: 4096`; a string `seed` silently dropped; `tools`/`n`/`logit_bias` silently discarded. Details in §5 and `qualification/evidence/st14-review-2026-09-25/route-parameters.json`. **[M]** |
-| F9 | The native suite is a text search; the engine tests skip the thinking path | **OPEN** | `tests/test_chat_native_wiring.py` still asserts substrings (`test_chat_turns_are_published_state_not_a_local_only_buffer` checks three names; the Send test searches 700 characters). Behavioural coverage of the page still does not exist. **[M]** |
+| F9 | The native suite is a text search; the engine tests skip the thinking path | **OPEN IN THE SHIPPED SUITE, BEING ADDRESSED** | `tests/test_chat_native_wiring.py` still asserts substrings (`test_chat_turns_are_published_state_not_a_local_only_buffer` checks three names; the Send test searches 700 characters), which is why the shipped `model: ""` passed it. The uncommitted `tests/native/api_main.swift` work noted under F3 adds the behavioural fixture this finding asked for; I did not review that work (it is another worker's, uncommitted). **[M]** |
 | F10 | The default memory policy unloads the model after every turn | **OPEN (observation)** | `DEFAULT_MODE = "immediate"`, `idle_seconds: 0`, 5 s tick — a conversation pays a cold load per message unless the operator changes it. **[M, code]** |
 
 ---
@@ -167,9 +176,10 @@ model path comes from the pinned manifest — so this is a contract defect, not 
 ### F13 — the gate is green **[M]**
 
 `pytest tests/test_chat_worker.py tests/test_chat_worker_cli.py tests/test_chat_hub_wiring.py
-tests/test_chat_packaging.py tests/test_chat_native_wiring.py -q -p no:randomly` → **69 passed**.
-Per file today: worker **40**, CLI **4**, hub wiring **6**, packaging **10**, native wiring **9**
-(the card's "29 / 2 / 6 / 3 / 9" is stale; the earlier review's "30" also is).
+tests/test_chat_packaging.py tests/test_chat_native_wiring.py -q -p no:randomly` → **69 passed** at
+the start of this review and **70** at the end (native wiring 9 → 10, another worker's uncommitted
+case). Per file: worker **40**, CLI **4**, hub wiring **6**, packaging **10**, native wiring
+**9 → 10** (the card's "29 / 2 / 6 / 3 / 9" is stale; the earlier review's "30" also is).
 `tests/test_model_manifest_catalog.py` → 17 passed, 48 subtests. `bash native/build.sh` → boundary,
 API-contract and lifecycle suites all pass. I did not re-run the full root suite (710-test claim);
 the one known error is the ST-13 Voice timeout.
@@ -185,8 +195,9 @@ These are stated as limits, not as covered work:
    sentence in the manifest is an inference nobody has run. §7's harness exists to close this; it
    has not been run on either tier.
 2. **A human typing into the Chat page has never happened.** The proofs are HTTP-level. On this
-   Mac the page cannot send today (no receipt, F2 remnant), and even with a receipt it would post
-   `model: ""` (F3), so the page's own model gates and pause states are untested in use.
+   Mac the page cannot send today (no receipt, F2 remnant), and even with a receipt the shipped
+   build would post `model: ""` (F3; being fixed uncommitted in the tree), so the page's own model
+   gates and pause states are untested in use.
 3. **Nothing refuses on memory tier.** The worker warns below 16 GB and stays `eligible`; the
    Hub's total-memory floor is `0` without an operator override; the native gate ignores the
    warning. So "does an 8 GB Mac refuse honestly?" is, today, **"no — it tries"** **[M, code]**.
@@ -271,9 +282,9 @@ manifest) is corrected to the shipped `qwen3-5-9b-4bit` (uniform 4-bit MLX, 11 f
   kit receipts reproduce) and the packaging path is careful (guarded worker spec, single-model
   enforcement by catalog scan, owner-only tokens, `-I -B`, refused incomplete bundles).
 - **The F1 fix is the right shape** — a named mapping, a `ValueError` naming both files to update,
-  and a regression test that walks the real catalog. The 0.6.62 `verify_installed` rewrite is the
-  same shape: it rehashes what is on disk and refuses by name instead of returning an early
-  `not_installed`.
+  and a regression test that walks the real catalog. The `verify_installed` rewrite (`d8b7ca6`,
+  committed after 0.6.62 was built) is the same shape: it rehashes what is on disk and refuses by
+  name instead of returning an early `not_installed` — it simply has not shipped yet.
 - **The Hub tests test behaviour**: `test_chat_hub_wiring.py` stands up a real loopback worker and
   asserts the re-signed token and the forwarded path.
 
