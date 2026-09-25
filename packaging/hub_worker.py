@@ -354,6 +354,13 @@ def main():
                 'ready': child_ready, 'runtime_id': spec['runtime_id'],
                 'outputs': spec['outputs'],
             })
+        # The Hub publishes what it was told to listen on, so "is this Mac reachable, and on
+        # what" is a fact an operator or a gateway can read rather than infer from a failed
+        # connection. The shell decides the list (`--listen-auto` recomputes it from this Mac's
+        # own addresses); this process only reports the answer it was launched with, which is why
+        # it is passed through the environment rather than re-derived here.
+        os.environ['STUDIOHUB_BOUND_HOST'] = _bind_host(args.host)
+        os.environ['STUDIOHUB_BOUND_PORT'] = str(args.port)
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
                    token=token, factory=True, shutdown_callback=cleanup, host=_bind_host(args.host))
     finally:

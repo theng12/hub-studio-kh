@@ -755,6 +755,60 @@ def _peer_refusal_response(refusal: dict[str, Any]) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
+def _bind_facts() -> dict[str, Any]:
+    """What this Hub was launched to listen on, in the words a caller can act on.
+
+    One definition, read by both `/api/health` and `/api/hub/settings`, because the two answers
+    drifting is the defect this exists to remove.
+
+    The shell decides the list — `--listen-auto` recomputes it from this Mac's own private and
+    Tailscale addresses on every launch — and `hub_worker.py` passes the answer it was given
+    through the environment rather than re-deriving it here. So this reports what is bound, not
+    what someone hoped: a Mac that came up loopback-only says so, which is the fact a gateway
+    needs to report instead of discovering it as a timeout.
+
+    Classification is by the same rules `LocalAddresses` uses on the shell side (RFC1918,
+    link-local, and Tailscale's carrier-grade NAT range), so "tailnet" means the same thing in
+    both places. A name is never guessed: an address that matches none of them is `other`.
+    """
+    import ipaddress
+
+    raw = (os.environ.get("STUDIOHUB_BOUND_HOST") or "").strip()
+    hosts = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    if not hosts:
+        return {"known": False,
+                "reason": "this Hub was started without the launcher that records its bind"}
+
+    def classify(host: str) -> str:
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return "other"
+        if address.is_loopback:
+            return "loopback"
+        if address.version == 4:
+            first, second = int(host.split(".")[0]), int(host.split(".")[1])
+            if first == 100 and 64 <= second <= 127:
+                return "tailnet"
+            if first == 10 or (first == 172 and 16 <= second <= 31) or (first == 192 and second == 168):
+                return "lan"
+        return "other"
+
+    classified = {host: classify(host) for host in hosts}
+    classes = sorted(set(classified.values()))
+    return {
+        "known": True,
+        "hosts": hosts,
+        "classes": classified,
+        "port": int(os.environ.get("STUDIOHUB_BOUND_PORT") or 0) or None,
+        # The two questions a caller actually asks, answered rather than left to be worked out.
+        "loopback_only": classes == ["loopback"],
+        "reachable_off_this_mac": any(kind in {"lan", "tailnet", "other"} for kind in classes),
+        "tailnet": [host for host, kind in classified.items() if kind == "tailnet"],
+        "wildcard": any(host in {"0.0.0.0", "::"} for host in hosts),
+    }
+
+
 def create_app(*, start_background: bool = True) -> FastAPI:
     """Create one owner-authenticated Hub bound to packaged worker descriptors."""
     monitor = StudioMonitor()
@@ -844,7 +898,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "workers": len(monitor.registry), "role": control_plane.load_settings()["role"]}
+        # The bind is here, on the route that answers "is this Mac there?", rather than only on
+        # `/api/hub/settings`: that route is owner-only and about output storage, so a controller
+        # could not read it, and a controller is exactly who needs to know that a node came up
+        # loopback-only instead of discovering it as a timeout.
+        return {"ok": True, "workers": len(monitor.registry),
+                "role": control_plane.load_settings()["role"], "bind": _bind_facts()}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
@@ -852,8 +911,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "source": "studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}
 
     @app.get("/api/hub/settings")
-    def settings() -> dict[str, dict[str, int | bool]]:
-        return standalone_config.load_device_settings()
+    def settings() -> dict[str, Any]:
+        # The same `_bind_facts()` the health route publishes, so the two cannot disagree.
+        return {**standalone_config.load_device_settings(), "bind": _bind_facts()}
 
     @app.put("/api/hub/settings")
     def save_settings(body: dict[str, Any]) -> dict[str, dict[str, int | bool]]:
