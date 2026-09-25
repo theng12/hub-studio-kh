@@ -1571,6 +1571,15 @@ def serialize_model(m: ModelEntry, defaults: Mapping[str, object] | None = None)
         # New in v1.1 — structured use cases + hardware fit verdict.
         "use_cases": [{"kind": k, "text": t} for k, t in m.use_cases],
         "fit": fit,
+        # The below-tier warning, under the **same key and in the same place** as the other four
+        # Studios (Image, Music, Subtitle, Chat), so the Audio page draws it with the same render
+        # site they use. Voice was the one worker that published a structured `fit` verdict and no
+        # sentence, so the page had nothing to show and the operator was never told (SH-3).
+        #
+        # Derived from `fit` rather than from a second comparison: `risky` IS this worker's own
+        # answer to "this host is below the model's floor", and `hint` already names both numbers.
+        # A second threshold here would be free to disagree with the chip beside it.
+        "memory_warning": fit.get("hint") if fit and fit.get("state") == "risky" else None,
     }
 
 

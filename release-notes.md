@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.69 — 2026-09-26
+
+### The Audio page can tell you when a model is too big for this Mac
+
+Every other page already did — Image, Music, Subtitle and Chat all warn you when a model asks for
+more memory than the Mac has, and then let you try anyway. Audio was the one that said nothing.
+
+Fixing that turned up why it *couldn't* have said anything: the part of the app that works out how
+much memory your Mac has **had never worked**. It asked for `sysctl` by name, and on macOS that tool
+isn't somewhere the app looks — so it got nothing back, quietly, and every Audio model has been
+recorded as "memory: unknown" the whole time. It reads your Mac properly now.
+
+So on the Audio page you'll see an orange note under the model when it wants more than this Mac has
+— the same note the other pages show, in the same place. It's advice: you can still press Generate.
+
+### Two smaller things
+
+The web picker inside the app now finds every model's ready-made voices, not just one family's — so
+a future voice model's voices will show up without anyone editing a list. And the app no longer
+decides whether a cloning model needs a transcript from its family name; it reads what the model
+itself says, which is what the two models that need one already publish.
+
 ## 0.6.68 — 2026-09-26
 
 ### The image engine has been wrong since 0.6.63, and your 8 GB run is what caught it

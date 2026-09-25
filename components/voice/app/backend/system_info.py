@@ -23,18 +23,35 @@ from functools import lru_cache
 from typing import Optional
 
 
+#: Where `sysctl` actually is. It is in `/usr/sbin`, which is **not on PATH** for a packaged
+#: worker launched by the Hub or from Finder, and on this fleet's own development shell it is not
+#: on PATH either — so the bare name below never ran.
+SYSCTL_CANDIDATES = ("/usr/sbin/sysctl", "/usr/bin/sysctl")
+
+
 def _sysctl(key: str) -> Optional[str]:
     """Run `sysctl -n <key>` and return stdout, or None on any failure.
-    2-second timeout so a hung sysctl can't block startup."""
-    try:
-        result = subprocess.run(
-            ["sysctl", "-n", key],
-            capture_output=True, text=True, timeout=2,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip() or None
-    except Exception:
-        pass
+
+    By absolute path first, and only then by name. This called a bare `sysctl` and swallowed every
+    failure, so on a machine where the tool is not on PATH it returned None for everything —
+    `detect_memory_gb()` and `detect_chip()` were both None here, and **every model's `fit` verdict
+    has read "unknown" for as long as that has been true**, which is also why the Audio page could
+    never show a below-tier warning. A silent `except: return None` around a missing tool is a
+    reading that looks like an answer, and this one was wrong for the whole fleet.
+
+    The chat tier harness carries the same lesson and the same fix: a bare `sysctl` that silently
+    failed once made a swap sampler report a peak of 0 MB, which looked like a measurement.
+    """
+    for candidate in (*SYSCTL_CANDIDATES, "sysctl"):
+        try:
+            result = subprocess.run(
+                [candidate, "-n", key],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() or None
+        except Exception:
+            continue  # a missing candidate is expected; the next one is the point
     return None
 
 

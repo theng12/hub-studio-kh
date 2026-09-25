@@ -1675,6 +1675,19 @@ struct StudioContent: View {
                         Text("Generation").font(.headline)
                         voiceModeTabs
                         modelPicker(.audio)
+                        // The sentence the Voice worker publishes when this Mac is below the
+                        // model's own RAM floor (SH-3), drawn exactly as the Image, Music,
+                        // Subtitle and Chat pages draw theirs — same triangle, same orange, same
+                        // position under the picker. It was the one Studio with no warning, so a
+                        // model the worker had judged too large for this Mac was offered with
+                        // nothing said. Advice, never a refusal: Generate stays enabled and the
+                        // Hub's own governor owns the live decision.
+                        if let warning = selectedAudioModel?.memoryWarning {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                         if workspace.audioMode == .cloning {
                             // Cloning is library-only: the voice comes from the Voices page and is
                             // chosen here. There is no loose-clip path on this page any more, so

@@ -145,11 +145,15 @@ class EveryPublishedWarningHasAPageTests(unittest.TestCase):
     def test_the_four_shipped_warnings_are_the_ones_renderable(self) -> None:
         # A guard on the test itself: if a refactor renames the Swift accessors, the check above
         # would silently pass by finding nothing to compare.
+        # **Voice joined this list on 2026-09-26 (SH-3).** It was the one Studio that published a
+        # structured `fit` verdict and no sentence, so the Audio page had nothing to draw — and its
+        # warning could never have fired anyway, because `system_info._sysctl` called a bare
+        # `sysctl` that is not on PATH, leaving every model's fit verdict "unknown" fleet-wide.
         self.assertEqual(sorted(self._publishing_workers()),
-                         ["chat", "image", "music", "subtitle"],
+                         ["chat", "image", "music", "subtitle", "voice"],
                          "the set of workers publishing a below-tier warning has changed; if that "
                          "is deliberate, update STUDIO_ACCESSOR and this expectation together")
-        self.assertTrue({"Chat", "Image", "Music", "Transcription"} <= set(
+        self.assertTrue({"Chat", "Image", "Music", "Transcription", "Audio"} <= set(
             re.findall(r"selected(\w+)Model\?\.memoryWarning", VIEWS)),
             "the render sites this invariant is measured against have been renamed or removed")
 

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.69 — 2026-09-26 · Voice's memory verdict never worked, and now it is shown
+
+**SH-3, and it was worse than "no warning".** Voice was the one Studio that published no
+below-tier sentence, so the Audio page had nothing to draw. Fixing that exposed the reason it could
+not have drawn one anyway: `components/voice/app/backend/system_info.py` called a **bare `sysctl`**,
+and `sysctl` lives in `/usr/sbin` — which is not on PATH for a packaged worker launched by the Hub
+or from Finder, and is not on PATH in this project's own development shell either.
+`_sysctl` swallowed the failure and returned None, so **`detect_memory_gb()` and `detect_chip()`
+were both None and every model's `fit` verdict has read "unknown", fleet-wide, for as long as that
+has been true.** The probe is looked up by absolute path now, and reports this Mac's 32 GB and its
+M2 Max.
+
+This is the defect the chat tier harness carries a warning about in its own header: a bare `sysctl`
+that failed silently once made a swap sampler report a peak of 0 MB, which looked like a reading.
+
+**The warning, wired end to end.** `catalog.serialize_model` publishes `memory_warning` under the
+same key and in the same place as the other four Studios, derived from the `fit` verdict this worker
+already computes — `risky` *is* "this host is below the model's floor", and its `hint` already names
+both numbers, so there is no second threshold to disagree with the chip beside it. The native audio
+model carries it, and the Audio page draws it with the same triangle the Image, Music, Subtitle and
+Chat pages use. **Advice, never a refusal**: the model stays offered and `blockReason` remains the
+only field that stops a job.
+
+**Guarded from both ends.** `tests/test_below_tier_warning.py` now requires **five** publishing
+workers and a render site for each — the expectation it was written to enforce, finally including
+Voice. `components/voice/app/tests/test_system_info.py` pins the probe: it must read this machine,
+it must work with `PATH` set to `/nonexistent`, and a host below the floor must be told with both
+numbers while a host at the floor is not warned at all. Proved: reverting the probe to the bare
+name fails two of the three.
+
+**Also in this release.** SH-17's two consumers: the web picker now discovers every ready-made
+roster by the *shape* of its key (`<family>_preset_speakers`) instead of naming one family's, and
+the native app no longer decides whether a transcript is required from `family == "qwen3-tts"` —
+the catalogue states that itself, and every shipped cloning model was checked before it was removed.
+
 ## 0.6.68 — 2026-09-26 · five releases shipped the wrong image engine
 
 **The Image runtime regressed in 0.6.63 and nobody noticed for five releases.** 0.6.59–0.6.62

@@ -6410,7 +6410,14 @@ final class NativeWorkspaceStore: ObservableObject {
                 // The tabs the Audio page shows are the modes the producer published, in its order.
                 // This used to be one derived mode per model, which showed a single tab for a model
                 // that supports two and sent the request down the wrong path for the other.
-                voiceModes: modes, requiresTranscript: transcriptRequired, blockReason: block,
+                voiceModes: modes, requiresTranscript: transcriptRequired,
+                // The sentence the Voice worker publishes when this Mac is below the model's own
+                // RAM floor (SH-3). It was the one Studio that carried no warning: the worker
+                // published a structured `fit` verdict and no sentence, this construction dropped
+                // even that, and the Audio page had nothing to draw. Advice, never a refusal —
+                // `blockReason` is the only field that stops a job.
+                memoryWarning: item.memoryWarning,
+                blockReason: block,
                 paused: package?.paused == true, pausedReason: package?.pausedReason,
                 longForm: NativeLongFormDelivery(item.longFormDelivery),
                 pausedStudio: package?.pausedStudio,
