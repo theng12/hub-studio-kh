@@ -32,6 +32,12 @@ exist to make a row cheap to *disprove*.
 5. **Cross-project rows say who owes whom**, so "open" is never ambiguous at handoff time.
 6. **Nothing is restated from a project's own tracker.** Link it. Two copies of one status is one
    copy too many.
+7. **`.models[0]` is not a comparable row across two endpoints.** GatewayKH measured three surfaces
+   by taking the first element of each list and concluded the surfaces disagreed; index 0 was a
+   *voice* model on one, a *chat* model on another and a *music* model on the third, so they had
+   measured a **lane** difference and written it up as a surface difference. Compare by model id, or
+   do not compare. This is a general trap, not theirs: any two endpoints that return a list will
+   differ at index 0 for reasons that have nothing to do with either endpoint.
 
 ## Open — Studio Hub owes
 
@@ -52,8 +58,6 @@ exist to make a row cheap to *disprove*.
 | # | Item | Owed by | What we need |
 |---|---|---|---|
 | SH-10 | **`_handoffs/2026-09-25-gateway-chat-lane-shipped.md` has never been read by Studio Hub.** Only its one-line summary reached us. If it asks Studio Hub for anything beyond the 401 (which is GatewayKH's to fix by re-joining that node), that ask is currently invisible to us. | GatewayKH | The document, or a line confirming the summary is the whole of it |
-| SH-11 | **The Story Studio model-id / two-pass question.** Studio Hub's part is answered: the field is `lane_contract.structured_output`, stating *how* the JSON guarantee is kept rather than asserting a technique. **It is NOT in 0.6.63** — it is committed as `363e50e` and ships in **0.6.64**. GatewayKH re-measured the running 0.6.63 build and found it absent from `/api/hub/catalog`, `/studio/chat/api/catalog` and `/api/hub/model-packages`, and they were right; this row said "live on every chat row" when it was live only in an unpushed working tree. | Story Studio (via GatewayKH) | 2026-09-25 — `git show a4a78dc:components/chat/app/backend/main.py \| grep -c structured_output` → `0`; `git show HEAD:…` → `1` | Whether two-pass is needed at all. If it is, the trigger belongs in Story over the published facts, **not** an id shape — three separate defects in this project came from matching a name where a fact could have been published. GatewayKH needs only the **version**: **0.6.64**, commit `363e50e` |
-| SH-13 | **Disagreement about the lane-contract key sets on three surfaces.** GatewayKH measured `/api/hub/catalog` → `…, cancel, dispatch, …`; `/studio/chat/api/catalog` → the same without `dispatch`; `/api/hub/model-packages` → `…, deadline_seconds, …, runtime_seconds, …` with neither `dispatch` nor the same set. **Studio Hub cannot reproduce it from the code**: `dispatch` appears nowhere in `components/hub/` — it is a **Voice-lane** field (`components/voice/app/backend/lane_contract.py`), and the Hub publishes a worker's contract verbatim except for adding `deadline_seconds`. So a *chat* row cannot carry `dispatch` on any Hub surface. Most likely the three rows are three different models. | GatewayKH | 2026-09-25 — `grep -rn '"dispatch"' components/hub/` → no hits; the only publisher is the Voice lane | Each key set re-measured **with its model id beside it**. If all three rows really are the same model, this is a real inconsistency and we want it |
 | SH-12 | **Whether GatewayKH wants `--fleet-mode` wired into its install flow.** The flag exists and persists (listen automatic + start at login + start services at login); it deliberately does not touch sleep. | GatewayKH | A yes/no, and whether sleep belongs in scope |
 
 ## Closed, with what closed them
@@ -63,5 +67,7 @@ exist to make a row cheap to *disprove*.
 | — | Chat dispatchable by a Fleet credential (review finding F6) | 2026-09-25 | `7267e62`; `tests/test_chat_hub_wiring.py` |
 | — | The listen setter GatewayKH asked to be named | 2026-09-25 | `--listen-auto`; automatic by default; `7fcb0fb` |
 | — | The bind as a readable fact | 2026-09-25 | `/api/health` + `/api/hub/settings`, one helper; `154f0b4` |
+| SH-11 | The Story Studio id / two-pass question | 2026-09-25 | Answered by `lane_contract.structured_output`; GatewayKH asked only for the **version**, and confirmed the absence themselves (`git show a4a78dc:… \| grep -c structured_output` → 0). Ships in **0.6.64**, commit `363e50e`. **Correction to their note:** it is no longer unpushed — `363e50e` is an ancestor of `origin/main` (`2bb74f7`) as of this release |
+| SH-13 | The lane-contract key-set "difference" | 2026-09-25 | **Retracted by GatewayKH as their measurement error**, and the retraction is the good kind: they showed what `.models[0]` actually was on each surface (voice / chat / music) and re-ran it joined by model id — 21 model ids on both surfaces, packages adds `deadline_seconds` and drops nothing, 21 of 21; `dispatch` is Voice's own field on both surfaces, 13 of 13. No defect, no spec line. Verified here independently: `deadline_seconds` is added by spread at `standalone.py:333`, and `\"dispatch\"` appears in exactly two files, both Voice |
 | — | Subtitle's warning published where nothing read it | 2026-09-25 | `9506c8c` |
 | — | The staging guard refusing a bundle over a dead import | 2026-09-25 | `95ad36e` |
