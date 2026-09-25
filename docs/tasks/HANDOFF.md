@@ -49,6 +49,43 @@ collection by its own `collect_ignore`, so **run it explicitly**; `bash native/b
 3. A read-only library keeps them named-not-ready with the reason shown in the app instead of
    failing at generation time.
 
+**Since 0.6.61 shipped, HEAD has moved on — and the installed app has not.** Five commits are
+pushed but **not** in `/Applications` or the four kits: the A9 reference derivation (`96eb792`), the
+staging fix and corrections (`3c3d9d0`), the voice `modes`/runtime/smoke work (`1e1873d`), the Clone
+tab rebuild (`c1fde64`), the Hub's voice-mode fix (`849d211`) and the audit row (`1ed03de`). The
+shipped identity is still `f20fd1a`. **A re-release is what puts the Clone tab fix in front of the
+owner**, and until it happens he cannot see it.
+
+**The Clone tab is fixed and the fix is verified on a real bundle.** The owner reported no voice
+picker on the Clone tab until he visited the Voices page. Measured cause: a voice-library read
+cancelled mid-flight wiped the list and published "the voice library is unavailable" — the store
+treated cancellation as failure. The diagnosis was half wrong and the correction mattered: a
+cancelled `URLSession` read throws `URLError -999`, not `CancellationError`, and it was being
+wrapped into a transport error before the store saw it, so a `CancellationError` guard alone would
+have fixed nothing. The library is now read once **as part of connecting**, so no page task is on
+the critical path; a cancelled load changes nothing; the picker says whether it is reading, empty,
+unreadable, or short of transcripts; and every saved voice is listed with the unusable ones marked
+rather than hidden.
+
+**The Clone tab is library-only, per the owner's decision (2026-09-25).** His words: *"i don't want
+to just drop in any voice and starts cloning no. i want to have a button to 'Add Voices' and bring
+to the voice tab to add 'voices' to the app. that way it can works across all… no need to have a
+picker for choose a file."* The clip chooser, the reference-clip and transcript blocks, `Transcribe
+Clip` and `Prepare Voice` are gone from the Audio page; the saved-voice picker plus `Add Voice…` /
+`Manage Voices` remain, and adding or deleting a voice happens only on the Voices page. The
+`POST /api/generate/txt2speech/reference` route stays for Gateway/GenStudio.
+
+**Verified end to end on a staged bundle, because the app now requires it**: all **13** voice rows
+serve `modes`, and `/api/hub/capabilities` maps every one into its control vocabulary —
+`[reference_audio_clone, voice_design]` for VoxCPM2 4-bit/8-bit/bf16 (MLX) and OmniVoice bf16 (MLX),
+`[preset_voice]` for khmer-tts-mms (MMS VITS) and khmer-tts-female-v2 (ONNX VITS),
+`[reference_audio_clone, preset_voice]` for pocket-tts-4bit (MLX 4-bit). The Hub's own derivation
+had been **losing** `voice_design` for those four models and inventing `preset_voice` for
+pocket-tts; it now reads the producer's field through one table and fails loudly on an unknown mode.
+The native build has no fallback for a missing `modes`: a model that publishes none stays listed
+with no tabs and generation blocked, naming what to update. **App and worker must ship together**,
+which they do — one bundle.
+
 **Open, with the exact fix rather than a guess:**
 
 - **Pocket TTS 4-bit (MLX 4-bit)'s eight preset voices are WON'T-FIX**, decided by the owner on
@@ -102,6 +139,23 @@ collection by its own `collect_ignore`, so **run it explicitly**; `bash native/b
   the owner-approved Qwen3-TTS 12Hz 0.6B Base 8-bit floor now follows — **it moved onto the model's
   own catalog row** (`min_free_memory_gb: 3.2`) once the producer published it, and the Hub's
   model-keyed table was deleted.
+- **An unexplained shell anomaly, recorded rather than explained away.** While building the fix,
+  a hosted-window harness (on-screen and off-screen, four variants) showed the Audio page's **outer**
+  `.task(id:)` / `.onAppear` chain never firing at all, while the Voices page's `.task(id: connected)`
+  does and the Audio page's inner views do appear. A minimal SwiftUI replica of the same shapes fires
+  correctly, so it is specific to that view in this tree and nobody has explained it. **The fix does
+  not depend on it** — the voice library is read during connecting — but any *future* page that puts
+  required loading in an outer `.task` should not assume it runs. Worth an hour with the real app
+  open; needs a human driving the UI.
+- **Two tracked test modules share the basename `test_qwen_base_standalone`** (one in `tests/`, one
+  in `components/voice/app/tests/`, both added in `d24150f` on 2026-09-15), so the two suites cannot
+  be collected in one pytest invocation. **Deliberately not fixed:** renaming one would edit an owned
+  path documented in `docs/tasks/ST-04.md` and diverge from the historical run log at
+  `qualification/evidence/takeover-2026-09-20/final-project-tests.log`, and the alternatives
+  (`__init__.py` in either directory) would break the sibling-module imports both suites rely on.
+  The gate already runs them separately, and `tests/test_voice_product_suite.py` is the bridge that
+  keeps the component suite in `unittest discover`. The cost is one extra command, which is cheaper
+  than the change.
 - **`capture_model_manifests.py --write` still withholds two packages** (`ace-step-1-5-turbo`, whose
   planner and two files come from other sources, and `stable-audio-3-medium`, whose publisher path
   differs in case). It refuses and exits 3 rather than overwriting; extending the capture to
