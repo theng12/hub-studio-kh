@@ -3,13 +3,41 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.74** (the Voice worker's loops start with the app, 2026-09-26).
+Last updated: **0.6.75** (the installer cannot leave a broken app, and the disk stops ratcheting, 2026-09-26).
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
 shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
 `_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
 
+> **0.6.75 — the installer can no longer leave a half-installed app, and the disk has a keeper.**
+> The install that filled the disk left `/Applications/Studio Hub.app` with **no `Info.plist` and no
+> `MacOS`**, and the rollback is what made it unrecoverable: `rm -rf "$TARGET"` could not clear the
+> wreckage (the image runtime's `tcl9` directories are `dr-xr-xr-x`, and unlinking an entry needs write
+> permission on its *parent*), so the `mv` that should have restored the previous app put it **inside**
+> the wreckage instead. `install_local.sh` now (a) **refuses to start when the copy would fill the
+> disk**, before quitting the app, (b) rolls back through a `chmod`-then-verify path that stops rather
+> than nesting, and (c) counts entries against the stage instead of checking one file — the old guard's
+> `runtimes/voice/bin/python3` survives a copy that stopped inside `runtimes/`, which is exactly how a
+> bundle with no `Info.plist` passed it. Both guards are proved to fire on the defect by
+> `tests/test_install_local.py`; `STUDIOHUB_INSTALL_TARGET` and `STUDIOHUB_INSTALL_DATA` exist so they
+> can be tested without touching `/Applications` or the operator's readiness markers.
+>
+> **`.build/` was the ratchet, not `_trash/`.** The owner cleared `_trash/` by hand and recovered
+> **38 GB**; the audit then measured `.build/` at **100.9 GB, 70.7 GB of it 32 superseded staged
+> bundles** — every release staged ~2.9 GB and the previous DMG moved to `_trash/`, which is on the
+> same volume, so nothing was ever reclaimed. Those 32 stages are now on **KH-STUDIO-NOVA**
+> (`_build-archive/studio-hub-kh/`), each verified by sha256 manifest on both sides before the local
+> copy was removed — and the check earned its keep twice: it caught a truncated copy from an
+> interrupted run, and it caught a "newest by mtime" stage-selection pass that proposed moving the
+> 0.6.74 stage this release was built from (`chmod` updates a directory's mtime). The step that keeps
+> it that way is `packaging/prune-build-scratch.sh`: it keeps the stage named in `VERSION`, keeps the
+> newest of the rest, moves the remainder to a drive, and does nothing when no drive has room.
+> **Disk: 462 MB free before → 101 GB after.**
+>
+> **`8bd8495`…`b860e6f`; DMG `dist/StudioHub-0.6.75-b860e6f.dmg`; installed to `/Applications` and
+> verified; the previous DMG moved to `_trash/dist/` — nothing `rm`d.**
+>
 > **0.6.74 — the Voice worker's background loops started on `import`, not on startup.** Both the
 > idle-release ticker and the output-retention loop ran in *any* process that imported
 > `backend.main`, a test run included. That made `test_memory_policy.py` fail intermittently
