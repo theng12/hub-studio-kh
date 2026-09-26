@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.78 — 2026-09-26 · The video lane's free-memory floor deadlocked it
+
+**Found by the first real chain job, not by a unit test.** The gateway submitted one
+image-to-video request through the whole path and the Hub held it `queued` with:
+
+```
+governor_note: video: released 5 idle sibling(s); waiting for memory: needs ~16.5GB, ~14.2GB free
+```
+
+The item never reached the worker. `min_free_memory_gb=16.5` was copied from the measured *process
+footprint* (16.38 GB), and that is not a free-memory requirement: on a healthy 32 GB Mac, available
+memory (free + inactive + speculative) sits around 13–20 GB because macOS fills inactive pages with
+file cache — and those pages are exactly what the footprint is made of, reclaimable on demand. The
+Hub answers an unmet free floor with **wait, not skip** (`broker._memory_gate`), so the lane waited
+for memory that was never going to arrive while it had already released every idle model.
+
+The floor is now **8 GB**: a guard against starting into a genuinely full machine, with room for the
+run that was measured here to begin. The Image lane recorded this same lesson when it lowered
+Z-Image's floor from its 7.1 GB footprint to 3.0 GB, and `tests/test_video_worker.py` now pins the
+shape: the live floor must be below the model's tier *and* below the measured footprint.
+
+**What would raise it:** a hardware measurement showing a start below 8 GB free swapping through the
+load on a 24/32 GB Mac — which is what the 16 GB/24 GB hardware tests are for.
+
 ## 0.6.77 — 2026-09-26 · The text encoder is a dependency, not a video model
 
 **Found on the installed 0.6.76 Hub, in the live catalog.** The Video worker published a catalog row

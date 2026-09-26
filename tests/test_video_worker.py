@@ -43,6 +43,26 @@ class MemoryTierTests(unittest.TestCase):
         self.assertFalse(generation.memory_eligible(model, 8 * 1024**3))
         self.assertTrue(generation.memory_eligible(model, 16 * 1024**3))
 
+    def test_the_free_memory_floor_is_a_start_guard_not_the_footprint(self) -> None:
+        """The measured footprint is not a free-memory requirement.
+
+        The Hub answers an unmet free floor with "wait", not "skip" (`broker._memory_gate`), so
+        a floor equal to the footprint waits for memory that a healthy Mac keeps in reclaimable
+        inactive pages. Measured 2026-09-26: a chain job sat queued at `needs ~16.5GB, ~14.2GB
+        free` and every idle sibling model had already been released. The Image lane lowered
+        Z-Image's floor from its 7.1 GB footprint to 3.0 GB for the same reason.
+        """
+        model = generation.LTX_23
+        self.assertIsNotNone(model.min_free_memory_gb)
+        self.assertLess(model.min_free_memory_gb, model.qualified_minimum_memory_gb,
+                        "the live floor must be below the tier it guards")
+        footprint = model.qualification["measured_runs"][0]["peak_process_footprint_gb"]
+        self.assertLess(model.min_free_memory_gb, footprint,
+                        "a floor at or above the measured footprint waits for memory that never "
+                        "becomes free on a healthy Mac")
+        self.assertGreaterEqual(model.min_free_memory_gb, 4.0,
+                                "a floor near zero would start into a full machine")
+
     def test_an_unmeasurable_host_is_never_eligible(self) -> None:
         for model in generation.MODELS.values():
             with self.subTest(model=model.package_id):

@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.78 — 2026-09-26
+
+### Video jobs could sit waiting for memory that never came free
+
+The first real video job sent through the whole chain never started: the Hub held it waiting for
+16.5 GB of *free* memory, which a healthy 32 GB Mac does not keep aside — macOS uses that memory for
+file cache, and it hands it back the moment a program needs it. The wait was for a number that could
+not arrive.
+
+The gate is now 8 GB, which still refuses to start work on a Mac that is genuinely full. The rule
+that decides whether a Mac can run the big video model at all is unchanged: 24 GB of total memory.
+
 ## 0.6.77 — 2026-09-26
 
 ### A support file no longer looks like a model

@@ -205,9 +205,21 @@ LTX_23 = VideoModel(
     # Tier: 24 GB. The measured footprint is 16.38 GB on a machine where MLX had no pressure to
     # trim; the vendor's "12 GB RAM" name describes the packed weights, not the process.
     qualified_minimum_memory_gb=24.0,
-    # The measured footprint, rounded up: below this much free memory the Hub's governor waits
-    # instead of starting a job that would swap through a 5-minute load.
-    min_free_memory_gb=16.5,
+    # **A start guard, not the footprint. This number was 16.5 and it deadlocked the lane.**
+    # Measured 2026-09-26 on this 32 GB Mac, on the first real chain job: the Hub's governor
+    # answered `waiting for memory: needs ~16.5GB, ~14.2GB free` and held the item queued while
+    # it released every idle sibling model. Available memory (free+inactive+speculative) sits
+    # around 13-20 GB on a healthy 32 GB Mac, because macOS fills inactive pages with file
+    # cache — and those pages ARE reclaimable, which is exactly what the 16.38 GB footprint is
+    # made of. The Image lane recorded this same lesson when it lowered Z-Image's floor from
+    # its 7.1 GB footprint to 3.0 GB: a *footprint* is not a *free-memory* requirement, and the
+    # Hub answers an unmet free floor with "wait", not "skip", so an over-strict floor waits
+    # for memory that is never going to arrive.
+    #
+    # 8 GB stops a start into a genuinely full machine while leaving the run that was measured
+    # here room to begin. What would raise it: a hardware measurement showing a start below
+    # 8 GB free swapping through the load on a 24/32 GB Mac.
+    min_free_memory_gb=8.0,
     measured_runtime={
         'measured': [{
             'seconds': 298.5, 'task': 'image-to-video', 'frames': 97, 'frame_rate': 24.0,
