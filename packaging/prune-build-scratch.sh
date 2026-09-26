@@ -22,6 +22,8 @@
 #   bash packaging/prune-build-scratch.sh                    # pick a mounted kit drive automatically
 #   bash packaging/prune-build-scratch.sh --to /Volumes/KH-STUDIO-NOVA
 #   bash packaging/prune-build-scratch.sh --keep 2           # keep the newest two stages
+#   bash packaging/prune-build-scratch.sh --cap-trash-dmgs   # also thin `_trash/dist/` (off by default:
+#                                                            # `_trash/` is the owner's to sort out)
 #
 # Exits non-zero without changing anything when there is no drive with room. That is deliberate:
 # a half-archived stage is worse than an unpruned one.
@@ -33,6 +35,7 @@ TRASH_DIST="$REPO_ROOT/_trash/dist"
 STAGE_GLOB="${STAGE_GLOB:-StudioHub-*}"
 KEEP_STAGES=1
 KEEP_DMGS=1
+CAP_TRASH_DMGS=0
 DEST_ROOT=""
 DRY_RUN=0
 
@@ -41,6 +44,10 @@ while [ $# -gt 0 ]; do
     --to) DEST_ROOT="${2:?--to needs a volume}"; shift 2 ;;
     --keep) KEEP_STAGES="${2:?--keep needs a number}"; shift 2 ;;
     --keep-dmgs) KEEP_DMGS="${2:?--keep-dmgs needs a number}"; shift 2 ;;
+    # **`_trash/` is the owner's, and the rule says never tidy inside it.** Capping the DMG history
+    # that `make-dmg.sh` keeps there is therefore opt-in: without this flag the script does not look
+    # at `_trash/` at all. `.build/` is different - it is gitignored scratch, not a record.
+    --cap-trash-dmgs) CAP_TRASH_DMGS=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -85,7 +92,7 @@ done < "$ranked_sorted"
 rm -f "$ranked" "$ranked_sorted"
 
 dmg_candidates=()
-if [ -d "$TRASH_DIST" ]; then
+if [ "$CAP_TRASH_DMGS" -eq 1 ] && [ -d "$TRASH_DIST" ]; then
   while IFS= read -r line; do [ -n "$line" ] && dmg_candidates+=("$line"); done < <(ls -dt "$TRASH_DIST"/*.dmg 2>/dev/null)
 fi
 
@@ -104,7 +111,11 @@ for f in "${dmgs_to_move[@]:-}"; do [ -n "$f" ] && need_kb=$(( need_kb + $(size_
 echo "stages on disk: ${#stages[@]} + ${#kept_for_release[@]} for the current release ($CURRENT_VERSION)"
 echo "  keeping  : the $CURRENT_VERSION stage(s) and the newest $KEEP_STAGES of the rest"
 echo "  moving   : $(count_of "${stages_to_move[@]:-}") stages"
-echo "old DMGs in _trash/dist: ${#dmg_candidates[@]} | keeping the newest $KEEP_DMGS, moving $(count_of "${dmgs_to_move[@]:-}")"
+if [ "$CAP_TRASH_DMGS" -eq 1 ]; then
+  echo "old DMGs in _trash/dist: ${#dmg_candidates[@]} | keeping the newest $KEEP_DMGS, moving $(count_of "${dmgs_to_move[@]:-}")"
+else
+  echo "old DMGs in _trash/dist: left alone (--cap-trash-dmgs to include them; _trash/ is the owner's)"
+fi
 echo "to move: $(( need_kb / 1048576 )) GB"
 
 if [ "$need_kb" -eq 0 ]; then echo "nothing to do."; exit 0; fi
