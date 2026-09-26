@@ -2,6 +2,41 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.70 — 2026-09-26
+
+### Long jobs stop being cut off, and a stuck one stops being invisible
+
+Video clips take a long time to make — fifteen minutes to three quarters of an hour on these Macs —
+and the Hub used to give every job the same fifteen-minute ceiling. So a video would be cut off
+part-way through with nothing to show for it.
+
+The ceiling is now set per kind of work. **Video gets two hours, chat gets thirty minutes, and
+images, voice, subtitles and music keep fifteen** — so a stuck subtitle job is still noticed quickly
+instead of hiding behind a long video's allowance.
+
+Chat also gets a bigger output budget: **16,384 tokens instead of 4,096**, in the same change,
+because the two numbers are one ceiling and moving either alone would break the other.
+
+### If a job goes quiet, you can now see it
+
+A Mac that hangs or drops off the network mid-job used to leave you waiting with no way to tell a
+slow job from a dead one. The app now notices **silence** — a job that is running while its Mac has
+stopped reporting — and marks how long it has been quiet. **It never cancels the job**, because a job
+that is merely slow is still work you asked for; it tells you, so you can decide.
+
+### Long narrations are no longer cut off
+
+A narration part of about seventeen minutes was being stopped part-way through, because the voice studio shared the same fifteen-minute ceiling as everything else. **Voice now gets thirty minutes**, so long-form narration finishes. It matches chat, which also got thirty minutes in this release.
+
+### Z-Image-Turbo now runs on the 8 GB Macs
+
+The 8 GB machines were previously told Z-Image was too big. They were wrong about it, and now it has
+been measured: on an 8 GB M1, Z-Image-Turbo produces a 1024x1024 image in about six and a half
+minutes and a 1280x720 one in about five and a half, in low-memory mode.
+
+**Expect it to use some disk paging at that size, and expect those times.** The bigger Macs remain
+the comfortable place to run it, and the app still recommends 16 GB.
+
 ## 0.6.69 — 2026-09-26
 
 ### The Audio page can tell you when a model is too big for this Mac

@@ -15,9 +15,9 @@ checked against what is actually on disk.
 
 | Unified memory | Chips | How many |
 | --- | --- | ---: |
-| 8 GB | Apple M1, M2 | 2 |
-| 16 GB | Apple M1, M2, M4 | 3 |
-| 24 GB | Apple M4 | 1 |
+| 8 GB | Apple M1, M2 | 35 |
+| 16 GB | Apple M1, M2, M4 | 15 |
+| 24 GB | Apple M4 | 2 |
 | 32 GB | Apple M2 Max (Mac Studio) | 1 |
 
 ## What each machine can run
@@ -51,8 +51,8 @@ may still run there, and one at or below may still not (see the peak-memory note
 | Whisper Small | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | Whisper Large v3 Turbo *(supporting files)* | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | **Image** | | | | | | |
+| Z-Image-Turbo 6B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | FLUX.2 Klein 4B MLX 4-bit | mflux (MLX) | 16 GB | no | yes | yes | yes |
-| Z-Image-Turbo 6B MLX 4-bit | mflux (MLX) | 16 GB | no | yes | yes | yes |
 | **Music** | | | | | | |
 | ACE-Step 1.5 Turbo (2B DiT) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Stable Audio 3 Medium (1.4B) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |

@@ -103,10 +103,16 @@ model-fit, memory-tier or hardware question.
 
 | Unified memory | Chip(s) | Machines |
 | --- | --- | ---: |
-| 8 GB | M1, M2 | 2 |
-| 16 GB | M1, M2, M4 | 3 |
-| 24 GB | M4 | 1 |
-| 32 GB | M1 Max | 1 |
+| 8 GB | M1, M2 | ~35 |
+| 16 GB | M1, M2, M4 | ~15 |
+| 24 GB | M4 | 2 |
+| 32 GB | M2 Max | 1 |
+
+**Corrected by the owner 2026-09-26 — the fleet is ~53 machines, not 7.** 16 GB is the tier to
+qualify against (50 of ~53 are 16 GB or below), and his standing rule is **one model across the
+fleet, not a model per tier**: qualify at 16 GB first and fall back to 24 GB only if that fails.
+A package that fails qualification is still kept on the SSDs as a backup — nothing is deleted for
+failing.
 
 Size every recommendation to the smallest machine that must run it, and label each
 memory claim as measured, vendor claim or inference. He runs these models himself, on

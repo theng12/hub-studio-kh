@@ -12,7 +12,7 @@ import statistics
 import time
 from collections import defaultdict
 
-from . import control_plane, ledger, vocabulary
+from . import control_plane, ledger, stall, vocabulary
 
 SCHEMA = "kh-studio.activity.v1"
 VALID_STATES = frozenset({"queued", "running", "cancel_requested", "uncertain", "done", "error", "cancelled"})
@@ -389,6 +389,13 @@ def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
             result.append({**row, "observed_at": now, "activity_received_at": now,
                            "reported_at": now})
             seen.add(marker)
+    # A job whose worker has stopped reporting while still holding it. **Visible, never
+    # destructive** — `stall.py` explains why this is not a timeout, and why shortening a deadline
+    # could never have found it. Silence is only meaningful while a job is active: a queued job has
+    # not started, and a terminal one has nothing left to wait for.
+    for row in result:
+        row["stalled_seconds"] = stall.stall_seconds(
+            row.get("state"), row.get("activity_received_at"), now)
     return result
 
 

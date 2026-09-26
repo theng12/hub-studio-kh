@@ -53,7 +53,7 @@ class EngineFileTests(unittest.TestCase):
                 json.dumps({"text_config": {"max_position_embeddings": 262144}}))
             engine = ChatEngine(model_dir=model_dir, model_id="m", revision="r")
             self.assertEqual(engine.context_window_tokens, 262144)
-            self.assertEqual(engine.max_output_tokens, 4096)
+            self.assertEqual(engine.max_output_tokens, FALLBACK_MAX_OUTPUT_TOKENS)
 
     def test_context_window_absent_is_none_not_invented(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,7 +78,9 @@ class _FakeEngine:
     model_id = "mlx-community/Qwen3.5-9B-4bit"
     revision = REVISION
     context_window_tokens = 262144
-    max_output_tokens = 4096
+    # No generation_config, so the worker fallback is this model's ceiling. The attribute and
+    # model_limits() must agree, or the fixture contradicts itself.
+    max_output_tokens = FALLBACK_MAX_OUTPUT_TOKENS
 
     def __init__(self, *, verified: bool = False) -> None:
         self._verified = verified
@@ -341,7 +343,11 @@ class _RecordingEngine:
     label = "Qwen3.5-9B-4bit"
     family = "qwen3_5"
     context_window_tokens = 262144
-    max_output_tokens = 4096
+    # The base recorder states NO ceiling of its own — adding one is exactly what the
+    # `_StatedLimitEngine` subclass exists to do — so its ceiling is the worker's fallback, and
+    # `model_limits()` below says so. Attribute and published limit must agree, or the fixture
+    # contradicts itself and the contract test fails.
+    max_output_tokens = FALLBACK_MAX_OUTPUT_TOKENS
     minimum_unified_memory_gb = 16.0
 
     def __init__(self, *, verified: bool = True) -> None:
@@ -370,7 +376,7 @@ class _RecordingEngine:
                 "value": 262144,
                 "source": "model/config.json text_config.max_position_embeddings"},
             "max_output_tokens": {
-                "value": 4096,
+                "value": FALLBACK_MAX_OUTPUT_TOKENS,
                 "source": "worker default: the checkpoint ships no generation_config.json"},
         }
 
@@ -495,11 +501,16 @@ class ChatParameterSurfaceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         detail = response.json()["detail"]
         self.assertIn("100000000000", detail, "the refusal does not name the value received")
-        self.assertIn("4096", detail, "the refusal does not name the published maximum")
-        self.assertEqual(self._post(client, {**self.MESSAGE, "max_tokens": 4097}).status_code, 422)
+        self.assertIn(str(engine.max_output_tokens), detail,
+                      "the refusal does not name the published maximum")
+        self.assertEqual(
+            self._post(client, {**self.MESSAGE,
+                                "max_tokens": engine.max_output_tokens + 1}).status_code, 422)
         engine.seen = []
-        self.assertEqual(self._post(client, {**self.MESSAGE, "max_tokens": 4096}).status_code, 200)
-        self.assertEqual(engine.seen[-1]["max_tokens"], 4096)
+        self.assertEqual(
+            self._post(client, {**self.MESSAGE,
+                                "max_tokens": engine.max_output_tokens}).status_code, 200)
+        self.assertEqual(engine.seen[-1]["max_tokens"], engine.max_output_tokens)
         self.assertEqual(
             self._post(client, {**self.MESSAGE, "max_completion_tokens": 4096}).status_code, 200)
 
@@ -750,10 +761,13 @@ class RealEngineIntegrationTests(unittest.TestCase):
     def _model_dir(self, root: Path) -> Path:
         model_dir = root / "model"
         model_dir.mkdir()
-        # 8192, not 4096: the request below asks for the worker's default output budget, and a
-        # prompt plus that budget has to fit the context the model states.
+        # Sized so the request below — the worker's default output budget plus a prompt — fits
+        # the context the model states. The old value was 8192, hand-tuned against a 4096-token
+        # fallback; when the fallback went to 16,384 this fixture became the binding constraint
+        # and the request was refused, which is the refusal working correctly. Keep it
+        # comfortably above FALLBACK_MAX_OUTPUT_TOKENS so the fallback is what binds.
         (model_dir / "config.json").write_text(
-            json.dumps({"text_config": {"max_position_embeddings": 8192}}))
+            json.dumps({"text_config": {"max_position_embeddings": 65536}}))
         (model_dir / "model.safetensors").write_bytes(b"weights")
         (model_dir / "tokenizer.json").write_text("{}")
         return model_dir
@@ -786,7 +800,7 @@ class RealEngineIntegrationTests(unittest.TestCase):
             self.assertNotIn("temp", captured["kwargs"])
             self.assertEqual(body["usage"], {"prompt_tokens": 1, "completion_tokens": 2,
                                              "total_tokens": 3})
-            self.assertEqual(engine.context_window_tokens, 8192)
+            self.assertEqual(engine.context_window_tokens, 65536)
 
     def test_engine_from_environment_resolves_the_library_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -796,15 +810,15 @@ class RealEngineIntegrationTests(unittest.TestCase):
             manifest.write_text(json.dumps({
                 "package_id": "qwen3-5-9b-4bit", "revision": "c" * 40,
                 "model_id": "mlx-community/Qwen3.5-9B-4bit",
-                "qualification": {"context_window_tokens": 8192},
+                "qualification": {"context_window_tokens": 65536},
             }))
             with mock.patch.dict(os.environ, {
                     "STUDIOHUB_MODELS_DIR": str(models),
                     "STUDIOHUB_CHAT_MANIFEST": str(manifest)}):
                 engine = engine_from_environment()
         self.assertEqual(engine.model_dir, models / "qwen3-5-9b-4bit" / ("c" * 40) / "model")
-        self.assertEqual(engine.context_window_tokens, 8192)
-        self.assertEqual(engine.max_output_tokens, 4096)
+        self.assertEqual(engine.context_window_tokens, 65536)
+        self.assertEqual(engine.max_output_tokens, FALLBACK_MAX_OUTPUT_TOKENS)
 
 
 class StreamLockTests(unittest.TestCase):
@@ -1319,7 +1333,7 @@ class ChatLaneContractTests(unittest.TestCase):
             "source": "model/config.json text_config.max_position_embeddings",
         })
         self.assertEqual(catalog["model_limits"]["max_output_tokens"], {
-            "value": 4096,
+            "value": FALLBACK_MAX_OUTPUT_TOKENS,
             "source": "worker default: the checkpoint ships no generation_config.json",
         })
 
@@ -1554,13 +1568,13 @@ class ChatLaneContractTests(unittest.TestCase):
 class _StatedLimitEngine(_RecordingEngine):
     """A model that states an output ceiling of its own, above this worker's fallback.
 
-    The shipped Qwen3.5-9B 4-bit ships no `generation_config.json`, so its ceiling and this
-    worker's fallback are both 4096 and the two are indistinguishable. A model that states 8192
-    is what tells them apart, and the owner's rule is exactly that the default must not be
-    borrowed from whichever model happens to be loaded.
+    The shipped Qwen3.5-9B 4-bit ships no `generation_config.json`, so this worker's fallback is
+    the only bound, and a stated ceiling has to sit *above* it for the two to be told apart.
+    That is what this fixture is for, so its value must move whenever the fallback moves — it
+    was 8192 against a 4096 fallback, and at 16,384 that silently inverted its purpose.
     """
 
-    max_output_tokens = 8192
+    max_output_tokens = 32768
 
     def model_limits(self) -> dict:
         return {
@@ -1568,7 +1582,7 @@ class _StatedLimitEngine(_RecordingEngine):
                 "value": 262144,
                 "source": "model/config.json text_config.max_position_embeddings"},
             "max_output_tokens": {
-                "value": 8192,
+                "value": _StatedLimitEngine.max_output_tokens,
                 "source": "model/generation_config.json max_new_tokens"},
         }
 
@@ -1629,10 +1643,10 @@ class ModelDefaultsRouteTests(unittest.TestCase):
         self.assertFalse(model_defaults.settings_file(data).exists(),
                          "reading the defaults wrote a settings file")
 
-        # The distinction the owner asked for, with a negative control: this model states 8192, and
-        # the default this lane serves with is still the worker's own 4096 fallback - not the
-        # model's ceiling.
-        self.assertEqual(engine.max_output_tokens, 8192)
+        # The distinction the owner asked for, with a negative control: this model states a
+        # ceiling of its own, and the default this lane serves with is still the worker's own
+        # fallback - not the model's ceiling.
+        self.assertEqual(engine.max_output_tokens, _StatedLimitEngine.max_output_tokens)
         self.assertEqual(before["defaults"]["max_tokens"], FALLBACK_MAX_OUTPUT_TOKENS)
         self.assertNotEqual(before["defaults"]["max_tokens"], engine.max_output_tokens)
         published = {parameter["name"]: parameter for parameter in before["parameters"]}

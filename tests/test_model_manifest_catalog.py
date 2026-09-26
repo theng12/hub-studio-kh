@@ -254,7 +254,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
-            "z-image-turbo-mflux-4bit": "df042f1a8eec72df794036e76cd3e48601408d8f11d06f035ddd7d610665ed2d",
+            "z-image-turbo-mflux-4bit": "7d424fb1189b86dc274e2aa533951afe81cc54246790a26c8d56323fabc2182e",
             # Recaptured 2026-09-25: the qualification is now a MEASUREMENT rather than
             # catalog arithmetic. Three 16 GB Macs (M1, M2, M4) each completed a 256-token
             # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from

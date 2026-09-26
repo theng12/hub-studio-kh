@@ -47,9 +47,9 @@ DEFAULT_OUTPUT = ROOT / "docs" / "model-benchmarks.md"
 # at build time, and it is a *checked* copy because this one already went wrong: it said the 32 GB
 # Mac was an M1 Max, the value `research/owner-hardware.md` records as an error it had corrected.
 FLEET = [
-    (8, "Apple M1, M2", 2),
-    (16, "Apple M1, M2, M4", 3),
-    (24, "Apple M4", 1),
+    (8, "Apple M1, M2", 35),
+    (16, "Apple M1, M2, M4", 15),
+    (24, "Apple M4", 2),
     (32, "Apple M2 Max (Mac Studio)", 1),
 ]
 

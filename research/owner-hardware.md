@@ -11,14 +11,43 @@ wins and this file gets fixed — the same rule the handoff uses.
 
 ## The fleet
 
+**Corrected by the owner on 2026-09-26, from his own statement:** *"i think i have about 15 units of
+16gb machines, 2 unit of 24gb machines and the current 1 unit of 32gb machines. and about 35 units
+of 8gb machines."* That is **~53 machines, not 7**, and it changes which tier is the target: the
+fleet is dominated by **8 GB (35 units)** and **16 GB (15 units)** — **50 of ~53 machines are 16 GB
+or below**, so 16 GB is the tier to qualify against. The 7-machine table this replaces is kept
+below as history, because **every measurement recorded in this repo was taken on that subset.**
+
 | Unified memory | Chip(s) | Machines | Notes |
 | --- | --- | ---: | --- |
-| 8 GB | M1, M2 | 2 | The hard constraint. Anything recommended "for the fleet" must have a credible 8 GB path or be explicitly excluded from it. |
-| 16 GB | M1, M2, M4 | 3 | The practical working tier. The repo's packaged-app receipts are all from a **Mac mini M4 16 GiB, macOS 26.6.2** (ST-04/08/10/11). |
-| 24 GB | M4 | 1 | First comfortable tier for larger models and long-context work. |
-| 32 GB | M2 Max | 1 | The ceiling. A **Mac Studio `Mac14,13`** (owner-confirmed 2026-09-24; this file previously said M1 Max in error). Still not a 64/128 GB machine — large-MoE and big-KV-cache plans must be checked, not assumed. |
+| 8 GB | M1, M2 | 35 | Largest group by count. Owner's own reading: *"i doubt it can [run video] since just regular text to image, it's already hot and struggling."* |
+| 16 GB | M1, M2, M4 | 15 | **The tier to qualify against.** The repo's packaged-app receipts are from a Mac mini M4 16 GiB, macOS 26.6.2 (ST-04/08/10/11). |
+| 24 GB | M4 | 2 | The fallback tier if 16 GB fails. |
+| 32 GB | M2 Max | 1 | The ceiling. A **Mac Studio `Mac14,13`**. Still not a 64/128 GB machine. |
 
-Total: 7 machines (2 + 3 + 1 + 1).
+Total: **53 machines (35 + 15 + 2 + 1)**, owner-stated 2026-09-26. **The counts are the owner's own
+approximations** — he said "about 15", "about 35" — and they are recorded here as plain integers
+because `tests/test_model_record.py` parses this table and compares it to
+`qualification/model_record.py::FLEET`; a decorated cell reads as a missing row. The uncertainty
+lives in this sentence rather than in the cell.
+
+**Owner's standing product rule, stated the same day:** *"i don't need different models for every
+machine. one model that can run across the fleet is the best options."* So the qualification ladder is
+**16 GB first, and only if that fails, 24 GB** — one model at a time, not a model per tier. He also
+requires that a downloaded package be **kept on each SSD as a backup even if it fails qualification**
+— nothing is deleted for failing.
+
+## Legacy fleet — superseded 2026-09-26, kept because the measurements reference it
+
+**Recorded as prose, not as a table, on purpose.** `tests/test_model_record.py` parses the fleet
+table out of this file and checks `qualification/model_record.py` against it, so a second markdown
+table here reads as a second fleet and fails the guard. The history still matters — every
+measurement in this repo was taken on these seven machines — but it must not look like canon.
+
+The superseded count was **7 machines**: 2 × 8 GB (M1, M2), 3 × 16 GB (M1, M2, M4), 1 × 24 GB (M4),
+and 1 × 32 GB — the **M2 Max Mac Studio `Mac14,13`**, owner-confirmed 2026-09-24, where this file
+had previously said M1 Max in error. Anything in this repo that says "the fleet" and was written
+before 2026-09-26 is talking about these seven.
 
 ## Chosen common model — owner decision 2026-09-24
 

@@ -169,9 +169,22 @@ Two notes a gateway must not skip:
 - **`video.generation` is a forward declaration.** No video worker ships, so this row must not be
   published until one does — a contract for a lane with no worker is the guess this document exists
   to remove. Gateway's video ask (durations, resolutions, fps, expected runtime) has the same shape
-  as the `image` row and lands with that worker. **Text-to-video is the only video operation the Hub
-  has a route for** (`broker.MODALITY["video"]` → `POST /api/generate/txt2video`); there is no
-  image-to-video operation, so nothing should be built against one until a worker publishes it.
+  as the `image` row and lands with that worker.
+- **Correction, 2026-09-26: the Hub already has an image-to-video path, and it is the one that
+  matters.** This bullet said *"there is no image-to-video operation"*. The code says otherwise and
+  the code wins. `broker._video_multipart_fields` is documented *"Flatten an image-to-video request
+  for Video Studio's multipart API"*, and the reference-image path sets `body["mode"] = "img2video"`
+  and dispatches to `POST /api/generate/video2video`, gated on **`img2video` being in the model's
+  published `capabilities`**. Both paths exist: `broker.MODALITY["video"]` → `POST
+  /api/generate/txt2video` for text-to-video, and the `video2video` multipart route for
+  image-to-video. **The image-to-video path is untested and undocumented — `img2video` and
+  `video2video` appear in `broker.py` and nowhere else in the tree**, which is its own finding and
+  is why a video worker must publish the operation explicitly rather than inherit it.
+- **A worker must publish the operations its consumers actually call.** The only shipping consumer
+  is Story Studio KH, and it retired text-to-video (`routes/ai-video.ts` answers *"400 Text-to-video
+  has been retired"*) and sends **image-to-video only**. So `capabilities` is what a scheduler reads
+  to tell the two apart, and a lane that publishes one while the consumer calls the other is the
+  guess this document exists to remove.
 
 ## Model limits — never publish a number the model did not state
 

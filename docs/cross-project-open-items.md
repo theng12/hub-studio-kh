@@ -39,24 +39,48 @@ exist to make a row cheap to *disprove*.
    do not compare. This is a general trap, not theirs: any two endpoints that return a list will
    differ at index 0 for reasons that have nothing to do with either endpoint.
 
-## Open — Studio Hub owes
+## Open — GatewayKH is waiting on Studio Hub
 
-| # | Item | Truth lives in | Last verified | Evidence of done |
-|---|---|---|---|---|
-| SH-7 | **The 8 GB Z-Image-Turbo 6B MLX 4-bit run.** The copy step now carries it on 8 GB Macs from `CARRY_BELOW_TIER` — *"the owner asked to try it there"*, explicitly not proof. | `qualification/copy_models_for_this_mac.py`; `qualification/README-8gb-z-image.md` | 2026-09-25 — the table prints `floor 8 GB from CARRY_BELOW_TIER … still unmeasured` | A run, which moves the entry to `PROVEN_SMALLER` or documents the exclusion |
+| # | Item | Owed by | What they need |
+|---|---|---|---|
+| SH-20 | **The voice lane's deadline, which their HUB-19 table left at 900 s.** Their note says it outright: *"my last ask — the voice lane stays at 900 s in their new table, and voice is the lane that actually failed us (a ~17-minute narration part killed at 900 s)."* This is not HUB-18/19/20/21/22; it is a row of its own, and the answer is either "raise voice" or "voice stays, and Story Studio lives with the loud failure." | Studio Hub | **Answered: raised to 1,800 s.** See below. |
 
-## Open on the Studio Hub side, after 0.6.69
+**Answered 2026-09-26: voice's floor is 1,800 s.** `MODALITY_DEADLINE_FLOOR_S["voice"] = 1800.0`, in the same change that made the deadline per-generator. **1,800 rather than 1,200**, and the reason is not round numbers: 1,200 is only three minutes of headroom over the 17-minute part that already died, and that part ran on one Mac — the same narration on a slower node among the fleet's 35 eight-GB and 15 sixteen-GB machines takes longer, so "just enough" buys the identical failure again at eighteen minutes. 1,800 is **1.76x** the observed worst case, and it matches chat, so the two long-form lanes share one number.
 
-One item, and it needs a machine rather than code.
+**The reason a 30-minute ceiling is safe now and was not before:** `stall.py` catches a worker that has gone quiet in roughly two minutes *whatever the ceiling is*. The ceiling no longer doubles as a failure detector, which is the only thing that made the shorter number attractive.
 
-| # | Item | Why it is still open |
-|---|---|---|
-| SH-7 | **The 8 GB Z-Image-Turbo 6B MLX 4-bit run.** The copy step carries it on 8 GB Macs from `CARRY_BELOW_TIER` — *"the owner asked to try it there"*, explicitly not proof. | It needs the owner's 8 GB Mac. The run is unblocked on his side as of 0.6.68: every drive carries the app with **mflux 0.20.0** (releases 0.6.63–0.6.67 shipped 0.17.5 and the harness refused, correctly), and `Technical/RUN-8GB-Z-IMAGE.command` is double-clickable and names the engine version before it starts. Either outcome closes the row: a completed run moves the entry to `PROVEN_SMALLER`, an out-of-memory abort documents the exclusion. |
+**Evidence label, stated plainly: 17 minutes is an observation of a failure, not a clean measurement, and 1.76x is inference.** The right end state is to measure a real voice part and derive this the way Z-Image's 8 GB floor was derived from the owner's run. Until then this is a defensible bound, not a measured one.
 
+## Closed — Studio Hub owed, and this one is now empty
 
-**Needing a machine, not code:** SH-7 only (the 8 GB Z-Image-Turbo 6B MLX 4-bit run,
-`qualification/README-8gb-z-image.md`, script on every kit drive). **SH-6 no longer needs a machine:**
-its 16 GB tier is measured and its 8 GB tier is a documented exclusion.
+**SH-7 is done, and it was the last item owed.** Nothing on the Studio Hub side needs a machine any
+more.
+
+| # | Item | Closed | By |
+|---|---|---|---|
+| SH-7 | **The 8 GB Z-Image-Turbo 6B MLX 4-bit run — the tier PASSES.** | 2026-09-26 | The owner's run on an **Apple M1 Mac mini (`Macmini9,1`), 8.0 GB, macOS 26.6.2**, engine **mflux 0.20.0** from the installed app, model pinned at `b3a8f311…`, seed 42, 9 steps. Four configurations, every one `OK`, each with a real PNG: **1024×1024 low-RAM** 392 s at 5.70 GB peak MLX / 5.85 GB footprint; **1280×720 low-RAM** 336 s at 5.70 / 5.85; **1024×1024 low-RAM + vae-tile 256** at 4.95 / 5.50; **1024×1024 default** at 8.93 / 8.72. Evidence in the owner's iCloud at `StudioHub Z-Image 8GB Run/` — `VERDICT.txt`, `results.tsv`, `host.txt`, per-run logs and `.swap-peak` records, four hashed images. |
+
+**Verified here rather than accepted from the summary**, because the summary was the claim:
+the four PNGs are real and correctly sized (`file` reports 1024×1024 ×3 and 1280×720 ×1); the log's
+peak-footprint bytes (`6281456768`) match `results.tsv` exactly; the `.swap-peak` records match the
+table; and both images sampled render clean, legible text rather than noise.
+
+**The one reading in that verdict that is wrong, and it matters.** `VERDICT.txt` says run 04's
+completion *"contradicts the expected result"* and that the app's low-RAM rule *"was not needed
+here."* It was needed. The default run finished with an **8.72 GB footprint on an 8.0 GB machine**
+and **3443 MB of peak swap** — about 2.7× the low-RAM runs' 1274–1857 MB. **It fit by paging, not by
+fitting.** So `Z_IMAGE_LOW_RAM_BELOW_BYTES` stays at 24 GB, and the measured outcome is recorded
+beside it in `generation.py` so the completion cannot later be read as licence to drop the rule.
+
+**What this settles:** the 8 GB floor is real for this model. The manifest's
+`minimum_unified_memory_gb` moves **16 → 8** and its `status` **unqualified → qualified**, with the
+measured numbers and the mandatory-low-RAM caveat in `memory_evidence`. Note what it does *not*
+settle: low-RAM still swaps 1.3–1.9 GB on 8 GB, so this tier runs on **5.6–6.5 minutes per image
+with disk paging**, and it says nothing about the 8 GB tier running video — which needs a different
+model, a different runtime, and its own measurement.
+
+**Needing a machine, not code: nothing, for the first time.** SH-6's 16 GB tier is measured and its
+8 GB tier is a documented exclusion.
 
 ## Open — Studio Hub is waiting on
 
@@ -64,6 +88,41 @@ its 16 GB tier is measured and its 8 GB tier is a documented exclusion.
 |---|---|---|---|
 | SH-10 | **`_handoffs/2026-09-25-gateway-chat-lane-shipped.md` has never been read by Studio Hub.** Only its one-line summary reached us. If it asks Studio Hub for anything beyond the 401 (which is GatewayKH's to fix by re-joining that node), that ask is currently invisible to us. | GatewayKH | The document, or a line confirming the summary is the whole of it |
 | SH-12 | **Whether GatewayKH wants `--fleet-mode` wired into its install flow.** The flag exists and persists (listen automatic + start at login + start services at login); it deliberately does not touch sleep. | GatewayKH | A yes/no, and whether sleep belongs in scope |
+
+## Open — GatewayKH is waiting on Studio Hub
+
+| # | Item | Owed by | What they need |
+|---|---|---|---|
+| SH-19 | **The Hub's peer-proxy deadline is 900 s, and that wall kills every video job.** GatewayKH raised this on 2026-09-26 and asked Studio Hub to raise it, since the Hub is the only party that applies it. | Studio Hub | A raised `PEER_PROXY_TIMEOUT_S`; they then refresh discovery and both sides move together |
+
+**Verified here independently, not accepted on their word.** `components/hub/standalone.py:41` is
+`PEER_PROXY_TIMEOUT_S = 900.0`, and it is both **enforced** and **published**: line 2144 passes it as
+`timeout=httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0)` on the proxied job request, and line 333
+spreads it into every lane contract as `deadline_seconds`. So the deadline a scheduler reads is
+exactly the deadline the Hub holds the job to — their reading of our code is correct, and their
+decision not to carry a second copy (`JOB_DEADLINE_S` as fallback only) is the right shape.
+
+**Why this is now urgent, and not merely tidy: video cannot ship under a 900 s wall.** The LTX-2.3
+runtime's own validated runs on M2 Pro 32 GB hardware are **44:38** for q8 HQ at 480×704×97 and
+**~15 min** for the identity test at 1280×704×97 — that is 2,678 s and 900 s against a 900 s wall.
+The first is **3× over** and the second sits exactly on it. Every video generation on this fleet
+would be cut off mid-flight by the Hub, and `deadline_seconds` would have advertised the wall to any
+scheduler that read it.
+
+**One trap removed while verifying, which is why this row is not simply "raise a number":**
+`tests/test_hub_model_packages.py:487` asserted `contract["deadline_seconds"] == 900.0` — a literal
+that any deliberate raise would break, in a test whose entire purpose is to prove the deadline comes
+from one place. It now asserts the **join** against `standalone.PEER_PROXY_TIMEOUT_S`, so it still
+fails if the Hub stops publishing its own constant, and no longer fails when the constant is
+deliberately changed. `docs/tasks/ST-20.md` had the same defect in prose — it said "the 900 s" and
+pointed at `standalone.py:1867`, a line that no longer exists; it now names the constant and states
+that it deliberately does not restate the value.
+
+**The value is the owner's call, not ours to pick.** It is one constant for every lane, so it is a
+product decision: video's longest measured run is ~45 min, so **2 hours (7,200 s)** gives 2.7×
+headroom and covers every other lane without them noticing. A per-lane deadline was considered and
+rejected — the Hub's own comment records "one constant owned by the party that enforces it", and a
+second copy is the defect this design exists to avoid.
 
 ## Closed, with what closed them
 
@@ -76,7 +135,7 @@ its 16 GB tier is measured and its 8 GB tier is a documented exclusion.
 | SH-1 | The Models tab, and per-model defaults for four of five lanes | 2026-09-25 | `308ff36`, `3e62bc8`, `f8efed4`; `bash native/build.sh` + 12/12 negative controls; two app-side consumptions remain — see SH-14 |
 | SH-2 | Release 0.6.64 — reachability, node-local generation, the bind, the Models tab, `structured_output` | 2026-09-25 | `fabe498` installed, on all four kits, `RESULT: PASS`, pushed |
 | SH-5 | The model-exposure approval surface has no caller | 2026-09-25 | **Closed by the answer to HUB-12**: the gateway does not need one, verified from both sides. `approve()`/`is_approved()` have zero callers, nothing is gated by exposure, and an unapproved model still publishes through `_model_capability`'s direct-evidence path |
-| SH-9 | Video | — | Not an item: the owner shelved it, and it is recorded as a decision rather than work |
+| SH-9 | Video | — | **Shelved by the owner, then deliberately raised by him on 2026-09-26 — the phase is open work again.** The shelving is kept here as the decision it was; what follows supersedes it. The owner's instruction: *"let's begin we the video phase now. we can circle back later for the z-image 8gb. proceed."* Two facts established from the **installed** build before any design work, both checkable: the engine the Image lane ships, **mflux 0.20.0**, exposes 30 `mflux-generate-*` commands and **every one is an image model** — there is no text-to-video and no image-to-video command in it; and the only video-adjacent model present, `mflux-upscale-seedvr2` (**SeedVR2 3B MLX**, optional 7B), is an **image** upscaler in mflux despite its upstream lineage, taking `--image-path` and documented as "highly faithful to the original **image**". The Wan 2.2 3D VAE classes under `models/fibo/` are borrowed for FIBO's image VAE, not a video pipeline. **So video is a new engine, not an extension of the shipped one** — the phase carries a runtime dependency the Image phase did not. Reusable: mflux publishes `mflux-capabilities`, a machine-readable dump of what each CLI honours, discovered from installed console scripts and introspected from the live parsers with the honoured/ignored split read from the same constants the runtime warnings use — a published contract to consume rather than transcribe |
 | HUB-12 | Model exposure becoming an approval step — *"tell us if it does"* | 2026-09-25 | **Closed by GatewayKH answering it from our own code**, and verified here rather than accepted. Four checks reproduce: `approve()` and `is_approved()` have **zero callers** anywhere in `components/` or `packaging/`; there is **no** exposure reference in `standalone.py` at all; `model_exposures.json` **does not exist** on this Mac, which is what "no caller" predicts; and the dispatch gate (`standalone.py:444`) refuses on `MODEL_MODALITY_MISMATCH` / `MODEL_NOT_READY` (files, runtime, macOS, chip) plus studio liveness, with exposure absent. `_model_capability` builds availability from the worker's own `available` / `runtime_ready` / `memory_eligible` / `execution_ready` booleans — the candidate block is read as evidence and withholds nothing. **No work, nothing to read.** They also dropped their own standing watch deliberately: if it ever became a gate the Hub would answer `MODEL_NOT_READY` at submit, which their adapter already maps to `LOCATION_NOT_READY` and re-routes — a lost re-route, not a lost job |
 | SH-13 | The lane-contract key-set "difference" | 2026-09-25 | **Retracted by GatewayKH as their measurement error**, and the retraction is the good kind: they showed what `.models[0]` actually was on each surface (voice / chat / music) and re-ran it joined by model id — 21 model ids on both surfaces, packages adds `deadline_seconds` and drops nothing, 21 of 21; `dispatch` is Voice's own field on both surfaces, 13 of 13. No defect, no spec line. Verified here independently: `deadline_seconds` is added by spread at `standalone.py:333`, and `\"dispatch\"` appears in exactly two files, both Voice |
 | SH-16 | **`preset_speaker` was published by no voice lane contract** — accepted and read by the worker, sent by the app on every preset job, absent from every family's `parameters`, so a scheduler reading only the contract could not learn how a speaking voice is chosen. | 2026-09-25 | **Fixed on both sides, because publishing it alone would have created a default that could not be reached.** Producer: the roster moved to one home (`catalog.PresetRoster`, carried on the family, one source for the picker payload and the contract) and `lane_contract._preset_speaker_parameter` publishes `preset_speaker` with the family's own ids as the enum — for a model that offers preset **and** has a roster, and for no other. Khmer (single built-in voice), Pocket TTS (roster is a won't-fix) and every cloning tier publish nothing, per the lane-discards rule. **No shipped row qualifies today**, because the roster's own model was pruned in ST-13.B; a CustomVoice tier returning to the catalogue publishes it with no code change. App: `HubAudioParams.presetSpeaker` was a non-optional `String` carrying `""` or a name **seeded from the roster** — the same defect as the pace — so a voice stored in the Models tab could never reach the engine and an untouched picker looked like a choice; it is optional now and only a voice the operator actually chose from a roster this model publishes is sent. Two tests that pinned the seeding are replaced by that invariant. |

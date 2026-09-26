@@ -383,7 +383,10 @@ class BelowTierPackagesAreNeverPrunedTests(unittest.TestCase):
             self.assertIn("this Mac is too small", output)
             # The skip has to name the table that lowered the floor, not just mention the table
             # somewhere in its guidance text.
-            self.assertIn(f"floor {COPY.CARRY_BELOW_TIER[package_id]} GB from CARRY_BELOW_TIER",
+            # PROVEN_SMALLER, not CARRY_BELOW_TIER: the owner's 8 GB run graduated this model on
+            # 2026-09-26, so its floor is now a measurement rather than a request to try. The
+            # 4 GB machine is below that floor either way, which is what this test is about.
+            self.assertIn(f"floor {COPY.PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER",
                           output)
 
 
@@ -407,20 +410,34 @@ class FittingPackageTests(unittest.TestCase):
 
 
 class CarryBelowTierTests(unittest.TestCase):
-    """`CARRY_BELOW_TIER` is a request to try, and it must never read as a proven result."""
+    """`CARRY_BELOW_TIER` is a request to try, and it must never read as a proven result.
 
-    def test_z_image_is_carried_on_an_8_gb_mac_by_request_not_by_proof(self):
+    The table is **empty as of 2026-09-26** — its one entry graduated to `PROVEN_SMALLER` when the
+    owner's 8 GB run came back QUALIFIED — but the rule it enforces is still the rule, so the tests
+    now check both directions: a measured model resolves to `PROVEN_SMALLER`, and a request to try
+    never does.
+    """
+
+    def test_z_image_is_now_carried_on_an_8_gb_mac_by_measurement(self):
+        """It was a request to try; the owner's run made it a result.
+
+        This replaces a test that asserted the opposite — that the carry sat *below* the manifest's
+        own floor and named `CARRY_BELOW_TIER` as its origin. When the 8 GB run returned QUALIFIED
+        the manifest's floor moved 16 -> 8, so the only way to keep that assertion green would have
+        been to pin the model to a floor the measurement had already disproved.
+        """
         manifest = read_json(MANIFESTS / "z-image-turbo-mflux-4bit.json")
         declared = manifest["qualification"]["minimum_unified_memory_gb"]
 
+        self.assertEqual(declared, 8, "the measured floor for this model is 8 GB")
         self.assertEqual(COPY.required_gb(manifest), 8)
-        self.assertLess(COPY.required_gb(manifest), declared,
-                        "the carry has to be a deliberate drop below the manifest's own floor")
+        self.assertEqual(manifest["qualification"]["status"], "qualified",
+                         "the manifest has to carry the measurement, not just the floor")
         origin = COPY.floor_origin(manifest)
-        self.assertIn("CARRY_BELOW_TIER", origin,
-                      "a wrong skip has to name the table that caused it")
-        self.assertNotIn("PROVEN_SMALLER", origin,
-                         "a request to try it there is not a measured result")
+        self.assertIn("PROVEN_SMALLER", origin,
+                      "a measured result has to come from the proven table")
+        self.assertNotIn("CARRY_BELOW_TIER", origin,
+                         "it is no longer a request to try")
 
     def test_a_proven_model_still_takes_its_floor_from_the_proven_table(self):
         manifest = read_json(MANIFESTS / "flux2-klein-4b-mlx-4bit.json")

@@ -56,14 +56,19 @@ PROVEN_SMALLER = {
     # FLUX.2 Klein 4B: the manifest says 16 GB, the owner has produced tens of thousands of
     # images on 8 GB Macs. The 16 GB figure is a qualification tier, not a requirement.
     "flux2-klein-4b-mlx-4bit": 8,
+    # Z-Image-Turbo 6B MLX 4-bit: **measured** on an 8 GB Apple M1 Mac mini (`Macmini9,1`,
+    # macOS 26.6.2) with mflux 0.20.0 on 2026-09-26. Low-RAM completed 1024x1024 in 392 s and
+    # 1280x720 in 336 s at 5.70 GB peak MLX / 5.85 GB footprint. The manifest's own floor moved
+    # 16 -> 8 on that evidence, so this is a result rather than a request to try.
+    "z-image-turbo-mflux-4bit": 8,
 }
 
 CARRY_BELOW_TIER = {
-    # Z-Image-Turbo 6B MLX 4-bit: the manifest declares 16 GB and its 8 GB run is still unmeasured
-    # (`qualification/README-8gb-z-image.md`, and `fleet_8gb: pending` in the manifest's own
-    # record), so this is a request to try it, not a result. The owner asked for it to be carried
-    # on the 8 GB Macs anyway. Nothing here is proof of anything.
-    "z-image-turbo-mflux-4bit": 8,
+    # **Empty as of 2026-09-26, and kept deliberately.** Its one entry (Z-Image-Turbo 6B MLX
+    # 4-bit) graduated to PROVEN_SMALLER above when the 8 GB run came back QUALIFIED. The table
+    # stays because the mechanism is still needed: carrying a model below its own declared floor
+    # to *try* it is a real thing this project does, and it must keep saying so out loud rather
+    # than being quietly folded into the proven set. Nothing in here is proof of anything.
 }
 
 

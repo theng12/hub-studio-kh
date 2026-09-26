@@ -35,10 +35,87 @@ from .backend.monitor import StudioMonitor
 # detail of `_model_catalog`, and no worker or manifest may set it.
 _MANIFEST_ERROR = "_manifest_error"
 
-# The one request timeout this Hub enforces on a job request it proxies to a worker. The lane
-# contract's `deadline_seconds` is this number, so the deadline a scheduler reads is the one the
-# Hub will actually hold it to; a worker restating it would be a second copy of a Hub number.
-PEER_PROXY_TIMEOUT_S = 900.0
+# The deadline the Hub holds a proxied job to, and the number it publishes as
+# `deadline_seconds`. One owner — this process, which enforces it — but **not one number**: a
+# subtitle job finishes in seconds and a video job takes the better part of an hour, so a single
+# flat ceiling is either too short for video or so long that a broken subtitle job is not noticed
+# for hours. The owner asked exactly that question, and it is the right one:
+#
+#     "if we raise it too high for, say subtitle and it failed, could we find out or we have to
+#      wait 2 hours to findout?"
+#
+# So the deadline is derived, in one place, from two things that are themselves evidence:
+#
+#   * the model's **own measured runtime**, which the worker publishes as
+#     `lane_contract.runtime_seconds` only when it has a measurement behind it, and
+#   * a **per-generator floor**, for lanes that have no measurement yet.
+#
+# A lane with no measurement gets its floor, and nothing more, because there is no evidence to
+# justify more. A lane that has been measured gets headroom over the real number. Nothing here is
+# invented, and nothing is restated by a worker.
+PEER_PROXY_TIMEOUT_FLOOR_S = 900.0
+
+# The floor each generator starts from when no measurement exists. Keyed by modality, because
+# that is the vocabulary the Hub already routes and enforces on (`vocabulary.WORKER_FOR_MODALITY`).
+# A modality absent from this table gets `PEER_PROXY_TIMEOUT_FLOOR_S` — a conservative default
+# rather than a refusal, since a *short* deadline can only cut a job short, and the alternative
+# (falling through to the longest floor) would be the silent-wait failure this table exists to fix.
+#
+# `video` is the only lane that differs today, and it differs on measurement: the LTX-2.3 runtime's
+# own validated runs on an M2 Pro 32 GB are 44:38 for q8 HQ at 480x704x97 and ~15 min for the
+# 1280x704x97 identity test. 900 s would cut the first off at a third of the way through.
+MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
+    # The LTX-2.3 runtime's own measured runs on an M2 Pro 32 GB: 44:38 for q8 HQ at 480x704x97,
+    # ~15 min for the 1280x704x97 identity test. A 900 s wall cuts the first off a third through.
+    "video": 7200.0,
+    # Chat is the LLM lane, and GatewayKH measured the workload that sets this floor: 30 scenes at
+    # ~403 tokens each is 12,090 tokens, 1,008 s on an M1. They asked for the whole Hub ceiling to
+    # go to 1,800 s to cover it, and stated the cost they were accepting — *"every job may hang 30
+    # min instead of 15, including fast ones."* **That cost is not necessary and is not paid here.**
+    # Because this table is per generator, chat gets 1,800 s and subtitle, voice, music and image
+    # keep 900 s, so a broken subtitle job is still noticed in 15 minutes rather than 30. This is
+    # the whole reason the deadline stopped being one flat number.
+    "chat": 1800.0,
+    # Voice, raised 900 -> 1,800 s on 2026-09-26 at Story Studio's report. This lane is the one
+    # that actually failed in the field: a **~17-minute narration part was killed at the 900 s
+    # wall**, which is the whole reason the flat constant had to go.
+    #
+    # 1,800 rather than 1,200: 1,200 is only three minutes of headroom over the part that already
+    # died, and that part ran on ONE Mac. The same narration on a slower machine among the fleet's
+    # 35 eight-GB and 15 sixteen-GB nodes will take longer, so "just enough" buys the identical
+    # failure again at eighteen minutes. 1,800 is 1.76x the observed worst case, and it matches
+    # chat, so the two long-form lanes now share one number and one story.
+    #
+    # The reason a long ceiling is now safe rather than merely long: `stall.py` catches a worker
+    # that has gone quiet in about two minutes, whatever this number is. The ceiling no longer has
+    # to double as a failure detector, which is exactly what made 1,200 look attractive.
+    #
+    # 17 minutes is an observation of a failure, not a clean measurement, and 1.76x is inference.
+    # The right end state is to measure a real voice part and derive this, as Z-Image's 8 GB floor
+    # was derived from the owner's run.
+    "voice": 1800.0,
+}
+
+
+def deadline_floor_seconds(modality: str | None) -> float:
+    """The deadline this Hub holds one generator's job to, and publishes as `deadline_seconds`.
+
+    **One function, deliberately, because the published number and the enforced one must be the
+    same number.** The old design said so in a comment — "the deadline a scheduler reads is the one
+    the Hub will actually hold it to" — and that promise is easy to break by deriving the published
+    value per *model* while the proxy, which knows the worker but not the model, derives its own.
+    So the deadline is a property of the **generator**, which both call sites can name.
+
+    A per-model refinement built on the worker's own measured `runtime_seconds` is the right next
+    step and is *not* done here, because it would need the model plumbed to the enforcement site
+    first. When it lands it must move this function, so both sides move together.
+    """
+    return MODALITY_DEADLINE_FLOOR_S.get(str(modality or ""), PEER_PROXY_TIMEOUT_FLOOR_S)
+
+
+def modality_for_worker(worker_id: str | None) -> str | None:
+    """The modality a worker serves, from the Hub's own routing vocabulary."""
+    return vocabulary.REQUIRED_WORKERS.get(str(worker_id or ""))
 
 
 def _model_library() -> Path:
@@ -327,10 +404,12 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
         lane_contracts = _lane_contracts(monitor)
     contract = _contract_for(manifest, lane_contracts)
     if contract is not None:
-        # The deadline is the Hub's own proxy timeout - the number this process will actually
-        # hold the request to - not a worker's estimate, so it is added here rather than
-        # restated by five workers. `lane_contract` itself stays verbatim from the studio.
-        contract = {**contract, "deadline_seconds": PEER_PROXY_TIMEOUT_S}
+        # Added here rather than restated by five workers, and derived from the **generator**:
+        # a subtitle job is not given a video job's ceiling, because the owner's question was
+        # exactly that — how long before a broken short job is noticed. Same function the proxy
+        # enforces with, so what a scheduler reads is what this process holds the job to.
+        contract = {**contract, "deadline_seconds": deadline_floor_seconds(
+            _modality_for_engine(manifest["engine"]))}
     # A paused model still reports verified files and a compatible runtime; it is the Hub's own
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
     # then declined before dispatch, which read as the model silently not working.
@@ -2141,7 +2220,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             upstream = await monitor._client.request(
                 request.method, url, headers=headers, content=body or None,
-                timeout=httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0),
+                timeout=httpx.Timeout(
+                    deadline_floor_seconds(modality_for_worker(worker_id)), connect=5.0),
             )
         except (httpx.HTTPError, OSError) as exc:
             if owner is not None:

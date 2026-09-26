@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.6.70 — 2026-09-26 · One deadline became four, and silence became visible
+
+**The Hub's job deadline is no longer one number.** It was a single flat 900 s on every lane. The
+owner asked the question that ended that: *"if we raise it too high for, say subtitle and it failed,
+could we find out or we have to wait 2 hours to findout?"* A shared ceiling is either too short for
+the longest job or so long that a broken short one goes unnoticed. `deadline_seconds` is now derived
+per **generator** by one function, `standalone.deadline_floor_seconds(modality)`, which feeds **both**
+the value published in every lane contract and the timeout the proxy enforces — so what a scheduler
+reads is still what this Hub holds the job to. Video **7,200 s**, chat **1,800 s**, image, voice,
+transcription and music **900 s**, and a modality nobody classified gets the 900 s floor because a
+short deadline can only cut a job short.
+
+**Chat's output fallback moved with it, because the two are one ceiling.** GatewayKH measured the
+pair: 16,384 tokens at 1,800 s is 76/65/51 % on M1/M2/M4 — the same margin 8,192 at 900 s gives
+today — while 16,384 at 900 s times out on every chip including the M4. So
+`FALLBACK_MAX_OUTPUT_TOKENS` went **4,096 → 16,384** and the chat floor went **900 → 1,800** in the
+same build, with the arithmetic recorded beside both. **A model that states its own smaller ceiling
+still binds** — a fallback can never raise a lane above the window its own model publishes.
+
+**Video was classified for a lane that does not exist.** It sat at `NON_DURABLE`, reasoned from
+*"Video and Render answer a terminal result for the POST itself"* — which describes the **legacy**
+Video Studio's synchronous POST, not a lane whose generations run 15 to 45 minutes. Under that class
+a node dying at minute 40 of a 45-minute job lost the job outright: no `uncertain` state, no retained
+attempt, no re-dispatch, while the identical failure in the Image lane was retained and requeued.
+Video is now **`DURABLE_ASYNC`**, which is a requirement on the worker as much as a label.
+
+**A stall is now visible instead of merely long.** `components/hub/backend/stall.py` decides whether a
+worker that has gone quiet while holding a job is stalled, from the `activity_received_at` receipt
+the monitor already collects — and it is wired into every job row the Hub builds as
+`stalled_seconds`. It fires only for active states, never for a job that has not started, never for
+a terminal one, and never for a studio with no receipt at all. **It does not kill the job**: killing a
+merely-quiet job would lose work the long deadline exists to protect. This is the piece that makes a
+30-minute ceiling safe rather than just long.
+
+**Z-Image-Turbo 6B MLX 4-bit is qualified on 8 GB.** The owner ran it on an **Apple M1 Mac mini
+(`Macmini9,1`), 8.0 GB, macOS 26.6.2** with **mflux 0.20.0**: low-RAM completed 1024x1024 in 392 s
+and 1280x720 in 336 s, 5.70 GB peak MLX and 5.85 GB footprint. The manifest's floor moved **16 → 8**
+and its status **unqualified → qualified** — through `capture_model_manifests.py`, its producer,
+not by hand. **The engine default also completed on that Mac, and that must not be read as licence to
+drop the low-RAM rule:** it finished with an **8.72 GB footprint on an 8.0 GB machine** and 3,443 MB
+of peak swap, 2.7x the low-RAM runs. It fit by paging, not by fitting, so
+`Z_IMAGE_LOW_RAM_BELOW_BYTES` stays at 24 GB. Note the cost that remains: even low-RAM swaps
+1.3-1.9 GB at this tier, at 5.6-6.5 minutes an image.
+
+**Voice's deadline was raised to 1,800 s, because voice is the lane that actually failed.** Story Studio reported a **~17-minute narration part killed at the 900 s wall** — the concrete failure the flat constant caused. 1,800 rather than 1,200: 1,200 is three minutes of headroom over the part that died, and that part ran on one Mac, so the same narration on a slower node among the fleet's 35 eight-GB and 15 sixteen-GB machines would hit the identical wall at eighteen minutes. 1,800 is 1.76x the observed worst case and matches chat, so the two long-form lanes share one number. **Seventeen minutes is an observation of a failure, not a clean measurement, and 1.76x is inference** — the end state is to measure a real voice part and derive it, as Z-Image's 8 GB floor was derived from the owner's run.
+
+**The fleet was wrong by a factor of seven.** It was recorded as 7 machines. The owner's own count is
+**~53**: 35 x 8 GB, 15 x 16 GB, 2 x 24 GB, 1 x 32 GB — so **50 of ~53 are 16 GB or below**, which
+inverts which tier a recommendation must be sized against. `AGENTS.md` also still called the 32 GB
+machine an M1 Max; `research/owner-hardware.md` had corrected that to an **M2 Max Mac Studio
+(`Mac14,13`)** on 2026-09-24, but the instructions file had not, and the fleet table guard reads the
+research file rather than the instructions file, which is why it survived.
+
+**Fixed on the way, all the same shape — a test or a document pinning a number.** One test asserted
+`deadline_seconds == 900.0` literally; it now asserts the join, so it still fails if the Hub stops
+publishing its own constant and no longer fails when the constant is deliberately changed. Eight chat
+tests pinned `4096` or were hand-tuned to sit just above it — one carried the comment *"8192, not
+4096: the request below asks for the worker's default output budget"* — and were restored to what
+their fixtures were written to check rather than re-pinned around the new value. `docs/tasks/ST-20.md`
+restated "the 900 s" against a line that no longer existed.
+
 ## 0.6.69 — 2026-09-26 · Voice's memory verdict never worked, and now it is shown
 
 **SH-3, and it was worse than "no warning".** Voice was the one Studio that published no

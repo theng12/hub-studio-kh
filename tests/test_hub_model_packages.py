@@ -484,7 +484,14 @@ class LaneContractRouteTests(unittest.TestCase):
         self.assertIsInstance(contract, dict)
         self.assertEqual(contract["operation"], "audio.transcription")
         self.assertEqual(contract["artifact"]["media_type"], "application/json")
-        self.assertEqual(contract["deadline_seconds"], 900.0)
+        # The invariant is the JOIN, not the number: the Hub publishes the deadline it derives for
+        # this generator, so this must not pin a literal that a deliberate change to the deadline
+        # would break. It asserted `900.0` and was therefore a trap — raising the Hub's ceiling
+        # would have failed a test whose whole job is to prove the number comes from one place.
+        from components.hub import standalone as hub_standalone
+
+        self.assertEqual(contract["deadline_seconds"],
+                         hub_standalone.deadline_floor_seconds("transcription"))
 
     def test_a_worker_that_is_down_leaves_the_contract_null_and_the_route_up(self) -> None:
         payload = self._route()

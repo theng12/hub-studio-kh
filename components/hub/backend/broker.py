@@ -157,9 +157,19 @@ MODALITY_RETRY_CLASS: dict[str, str] = {
     "music": RETRY_CLASS_DURABLE_ASYNC,
     # Voice recovers a dropped attempt by its stable client-request id.
     "voice": RETRY_CLASS_RECEIPT_DURABLE,
-    # Video and Render answer a terminal result for the POST itself, so there is no separate
-    # asynchronous attempt to retain.
-    "video": RETRY_CLASS_NON_DURABLE,
+    # Video is a LONG job — 15 to 45 minutes by the LTX-2.3 runtime's own measured runs on an
+    # M2 Pro 32 GB — so it is asynchronous by nature and cannot answer a terminal result for the
+    # POST under any sane deadline. It was classified non-durable on reasoning that describes the
+    # *legacy inherited* Video Studio (a synchronous POST returning a finished clip), which is not
+    # the lane being built here. Under `NON_DURABLE` a node dying at minute 40 of a 45-minute job
+    # loses the job — no `uncertain` state, no retained attempt, no re-dispatch — while the
+    # identical failure in the Image lane is retained and can be requeued. **This is therefore a
+    # requirement on the video worker, not merely a classification: it must acknowledge the job
+    # before the result exists**, so the attempt is retained rather than silently replayed (a
+    # 45-minute job may already have written a partial MP4, and a blind replay would produce a
+    # duplicate artifact — the exact hazard this table exists to prevent).
+    "video": RETRY_CLASS_DURABLE_ASYNC,
+    # Render is the Hub's own local ffmpeg assembly step and genuinely does answer for the POST.
     "render": RETRY_CLASS_NON_DURABLE,
     # Chat and transcription never enter this queue: each owns its own job module with its own
     # lease (`chat_jobs`, `transcription_jobs`). They do share one per-machine fairness turn.

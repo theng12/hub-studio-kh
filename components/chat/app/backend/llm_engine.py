@@ -21,9 +21,22 @@ import time
 from pathlib import Path
 from typing import Generator
 
-# Conservative default when the model publishes nothing. 4,096 is the floor the app's own
-# long-form budgeting already assumes, not a claim about this model.
-FALLBACK_MAX_OUTPUT_TOKENS = 4096
+# Conservative default when the model publishes nothing. It is the app's own long-form budgeting
+# floor, **not a claim about this model** — Qwen3.5-9B 4-bit's own `config.json` states
+# `max_position_embeddings = 262144`, and this number is two orders of magnitude below it.
+#
+# Raised 4,096 -> 16,384 on 2026-09-26, and it **must move with the Hub's chat deadline**. GatewayKH
+# measured the workload and the coupling:
+#
+#     16,384 tokens at 1,800 s is 76 / 65 / 51 % on M1 / M2 / M4 — the same margin 8,192 at 900 s
+#     gives today. 16,384 at 900 s is 152 / 130 / 101 %, which times out on every chip including
+#     the M4. The two numbers are one ceiling and cannot be changed apart.
+#
+# The Hub side of that pair is `standalone.MODALITY_DEADLINE_FLOOR_S["chat"] = 1800.0`, and it is
+# raised with this one, in the same build. If this constant is raised again, that floor has to be
+# re-derived from the same arithmetic, or the lane publishes a capacity it cannot reach before its
+# own deadline.
+FALLBACK_MAX_OUTPUT_TOKENS = 16384
 
 # This worker's sampling defaults. They live here, not in a route literal, so the value the
 # lane contract publishes and the value a request is served with cannot drift apart.

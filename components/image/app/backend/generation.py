@@ -78,9 +78,16 @@ QUALIFIED_MINIMUM_MEMORY_BYTES = 16_000_000_000
 # the OS, the Hub and the app resident.  Whether the *default* also fits 16 GB is unmeasured,
 # so on tiers below the measured one this worker chooses the configuration with the known
 # bound and pays the measured wall-time cost (166 s -> 236 s at 1280x720 on the same host).
-# 24 GB and up keep the default.  The 8 GB tier is unmeasured while the owner runs it; if it
-# turns out to need 256-pixel VAE tiles, ``low_ram_vae_tile_size`` below is the single knob to
-# set, and this constant is the single tier boundary to move.
+# 24 GB and up keep the default.  **The 8 GB tier is now measured** (owner run, 2026-09-26, Apple
+# M1 Mac mini `Macmini9,1`, macOS 26.6.2, mflux 0.20.0): low-RAM completed 1024x1024 in 392 s and
+# 1280x720 in 336 s, 5.70 GB peak MLX / 5.85 GB footprint, with 1.3-1.9 GB of swap.
+#
+# That run also tried the *default* configuration on the same Mac and it completed too — which
+# looks like this rule is unnecessary, and is not. It finished with an **8.72 GB footprint on an
+# 8.0 GB machine** and **3443 MB peak swap**, roughly 2.7x the low-RAM runs: it fit by paging, not
+# by fitting. The boundary stays where it is. If a future measurement shows low-RAM needs
+# 256-pixel VAE tiles on some host, ``low_ram_vae_tile_size`` below is the single knob to set, and
+# this constant is the single tier boundary to move.
 Z_IMAGE_LOW_RAM_BELOW_BYTES = 24_000_000_000
 
 
