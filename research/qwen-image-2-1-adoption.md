@@ -4,6 +4,42 @@ Date: 2026-09-22 (quantized-Mac findings updated). Status: **research only — n
 adopted, not packaged, not qualified.** Sources are cited inline; third-party
 measurements are labelled as such.
 
+## Update 2026-09-26 — a native mflux q4 pack quantizes the encoder
+
+A new pack,
+[`mlx-community/Qwen-Image-2.1-mflux-q4`](https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4)
+(revision `746a58556820933a2df5c75887a2570f1ad200c0`, added 2026-09-26), changes the analysis
+below: **both the transformer and the Qwen3-VL text encoder are stored in MLX affine 4-bit**
+[M, card]. On disk **≈9.6 GB total** [M, HF API]: text encoder 4.27 GB, transformer 4.00 GB,
+VAE 1.32 GB, tokenizer. License Apache-2.0 (recorded once).
+
+Card-stated measurements, **on a Mac Studio** [V — the pack author's own numbers, not a fleet
+machine]:
+
+| Setting | Peak MLX memory |
+| --- | ---: |
+| 512×512, 40 steps | **4.68 GiB** |
+| 1024×1024, 4 steps | **5.14 GiB** |
+
+Measured with prompt materialization, encoder/transformer eviction, a zero MLX cache and tiled
+VAE decoding; packaged size ≈8.9 GB [V]. **Physical 8 GB and 16 GB qualification is explicitly
+still required** [V].
+
+**Revised fit read (still unqualified):**
+
+| Tier | Read |
+| --- | --- |
+| 8 GB | **Plausible, but tight and unproven.** 5.14 GiB peak MLX plus macOS and the runtime leaves little; for scale, FLUX.2 Klein 4B 4-bit measured ~1.03 GiB peak RSS on this project's packaged proof. |
+| 16 GB | **The realistic first qualification target.** 5.14 GiB peak leaves headroom for macOS and one Studio. |
+| 24 / 32 GB | Comfortable. |
+
+**The blocker is the loader, not the size.** The card says the pack "is intended for the reviewed
+low-memory loader in **Rapid-MLX**", and that **stock mflux 0.20.0 skips text-encoder quantization
+and cannot load this pack without that loader change** [V]. Studio Hub's `image-mflux` engine is
+pinned to mflux 0.17.5, so adopting this means an engine bump **plus** Rapid-MLX's loader (a
+second runtime path), and then a physical 8/16 GB qualification. Do not read the 5.14 GiB figure
+as an 8 GB pass.
+
 ## 1. Verdict for the current fleet (8 / 16 / 24 / 32 GB Apple Silicon)
 
 | Mac unified memory | Any macOS Qwen-Image-2.1 configuration? | Best evidence |

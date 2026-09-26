@@ -120,19 +120,24 @@ model-fit, memory-tier or hardware question.
 | 32 GB | M2 Max | 1 |
 
 **Corrected by the owner 2026-09-26 — the fleet is ~53 machines, not 7.** 16 GB is the tier to
-qualify against (50 of ~53 are 16 GB or below), and his standing rule is **one model across the
-fleet, not a model per tier**: qualify at 16 GB first and fall back to 24 GB only if that fails.
-A package that fails qualification is still kept on the SSDs as a backup — nothing is deleted for
-failing.
+qualify against (50 of ~53 are 16 GB or below), and the ladder is **qualify at 16 GB first, fall
+back to 24 GB only if that fails**. (The earlier "one model across the fleet, not a model per
+tier" preference was relaxed the same day — see the tier direction below.) A package that fails
+qualification is still kept on the SSDs as a backup — nothing is deleted for failing.
 
 Size every recommendation to the smallest machine that must run it, and label each
 memory claim as measured, vendor claim or inference. He runs these models himself, on
 his own Macs, so a fit that only works on the 32 GB machine is not a fleet answer.
 
-**Standing model decision (2026-09-24):** the owner's common local text model is
-**Qwen3.5-9B** (4-bit), text-only accepted, running on the 16 GB machines; the single
-vision call stays on the cloud. Do not re-open the model choice or re-survey candidates
-unless he asks — see [`research/owner-hardware.md`](research/owner-hardware.md).
+**Standing model direction (updated 2026-09-26):** the owner relaxed "one model for
+everything" to **one model per tier** (not per machine): qualify **Granite 4.0 H-Tiny 4-bit
+MLX** for the 8 GB machines and **LFM2.5-8B-A1B 4-bit MLX** for the 16 GB machines, and keep
+**Qwen3.5-9B 4-bit MLX** as the script/prose model until a candidate passes a long-form test.
+Serve the `JSON.parse` call sites as **GGUF + JSON-schema grammar** — JSON validity is an
+engine property, and MLX has no grammar. This is a qualification plan, not an adopted
+decision: sizes, evidence and the exact qualification list are in
+`research/moe-fleet-qualification-handoff.md` and `research/moe-16gb-2026-09.md`. Do not
+re-open the survey unless he asks.
 
 ## Never publish a number the model did not state — 2026-09-25
 

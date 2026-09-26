@@ -31,11 +31,12 @@ because `tests/test_model_record.py` parses this table and compares it to
 `qualification/model_record.py::FLEET`; a decorated cell reads as a missing row. The uncertainty
 lives in this sentence rather than in the cell.
 
-**Owner's standing product rule, stated the same day:** *"i don't need different models for every
-machine. one model that can run across the fleet is the best options."* So the qualification ladder is
-**16 GB first, and only if that fails, 24 GB** — one model at a time, not a model per tier. He also
-requires that a downloaded package be **kept on each SSD as a backup even if it fails qualification**
-— nothing is deleted for failing.
+**Owner's earlier product rule, stated 2026-09-26 and relaxed the same day:** *"i don't need
+different models for every machine. one model that can run across the fleet is the best options."*
+The qualification ladder from that rule still holds — **16 GB first, and only if that fails, 24 GB**
+— but he then relaxed "one model for everything" to **one model per tier** (see the tier plan
+below). He also requires that a downloaded package be **kept on each SSD as a backup even if it
+fails qualification** — nothing is deleted for failing.
 
 ## Legacy fleet — superseded 2026-09-26, kept because the measurements reference it
 
@@ -49,7 +50,10 @@ and 1 × 32 GB — the **M2 Max Mac Studio `Mac14,13`**, owner-confirmed 2026-09
 had previously said M1 Max in error. Anything in this repo that says "the fleet" and was written
 before 2026-09-26 is talking about these seven.
 
-## Chosen common model — owner decision 2026-09-24
+## Chosen common model — owner decision 2026-09-24 (superseded 2026-09-26 by the tier plan below)
+
+**Kept for history.** The tier plan below replaces the single-model preference; the Qwen3.5-9B
+4-bit build named here becomes the script/prose model rather than the only text model.
 
 - **One model across the fleet: `mlx-community/Qwen3.5-9B-4bit`** at
   `8b2b98c00a6b4d291155e4890773ca8f769aee53` (uniform 4-bit MLX, 5.98 GB). It fits all three
@@ -65,6 +69,22 @@ before 2026-09-26 is talking about these seven.
 - **Optional 24 GB quality tier:** `Gemma 4 26B-A4B` QAT 4-bit (15.6 GB) — better prose and
   cheap long context, measured on an M4; `Qwen3.8-27B` 4-bit if prose quality matters more
   than context. Neither is required for the fleet to work.
+
+## Tier model plan — owner direction 2026-09-26 (to qualify, not adopted)
+
+The owner relaxed the single-model preference: *"it doesn't need to be one model for
+everything. a preference doesn't mean you have to match it exactly."* Direction:
+
+| Tier | Model (quantization) | On disk |
+| --- | --- | ---: |
+| 8 GB | **Granite 4.0 H-Tiny 4-bit MLX** (`mlx-community/granite-4.0-h-tiny-4bit`) | 3.92 GB |
+| 16 GB | **LFM2.5-8B-A1B 4-bit MLX** (`LiquidAI/LFM2.5-8B-A1B-MLX-4bit`) | 4.85 GB |
+| script/prose | **Qwen3.5-9B 4-bit MLX** (`mlx-community/Qwen3.5-9B-4bit`) — keep until a candidate passes a long-form test | 5.98 GB |
+
+Serve JSON sites as **GGUF + JSON-schema grammar**; MLX has no grammar. Both candidates are
+supported by `mlx-lm 0.31.3`. This supersedes the single-model preference for the text model
+above, and is **pending qualification**. Qualification list, sizes and sources:
+`research/moe-fleet-qualification-handoff.md` and `research/moe-16gb-2026-09.md`.
 
 ## Standing brief for text/LLM research
 
@@ -116,6 +136,8 @@ wrong. There is no separate M2 Max-32 eighth machine to add — the fleet stands
 ## Related
 
 - Model-research notes: `research/story-text-llm-shortlist.md` (text/LLM),
+  `research/moe-16gb-2026-09.md` (MoE vs dense for 16 GB; LFM2.5-8B-A1B 4-bit, Granite 4.0
+  H-Tiny 4-bit, Qwen3-4B-Instruct-2507 4-bit),
   `research/local-llm-24-32gb-2026-09.md` (24/32 GB deep dive: KV cost, measured M1 Max
   throughput, creative/JSON benchmarks), `research/moe-24-32gb-fit-2026-09.md` (per-model
   MoE fit/quant/speed companion), `research/text-rendering-model-shortlist.md`

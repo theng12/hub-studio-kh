@@ -224,6 +224,8 @@ The historical 0.2.0 evidence recorded 676 passing regression tests after reloca
 - [Khmer TTS personal model stock](research/khmer-tts-stock.md)
 - [Owner hardware fleet and model-research brief](research/owner-hardware.md)
 - [Story Studio text-LLM shortlist](research/story-text-llm-shortlist.md)
+- [MoE vs dense for the 16 GB fleet](research/moe-16gb-2026-09.md)
+- [Fleet text-model tier plan (handoff)](research/moe-fleet-qualification-handoff.md)
 - [Chat Studio → gateway-kh bridge (handoff)](research/chat-studio-gateway-bridge.md)
 - [Local Chat Studio adoption record (ST-14)](research/chat-studio-adoption-2026-09-24.md)
 - [Local LLMs for 24/32 GB Apple Silicon (deep dive)](research/local-llm-24-32gb-2026-09.md)
