@@ -104,7 +104,12 @@ class RemoteStudioTests(unittest.TestCase):
         self.assertEqual(fleet_nodes.remote_studios(), [])
 
     def test_a_node_cannot_claim_a_studio_it_may_not_run(self) -> None:
-        for studios in ([{"id": "image", "modality": "video"}],
+        # `render` is the unrouted example now: it is a closed modality in the Hub's own
+        # broker table (its local ffmpeg step) and deliberately has no worker, while `video`
+        # — this list's original example — became a real worker modality on 2026-09-26.
+        # Note what is *not* invalid: an id that differs from its modality, because a
+        # Subtitle worker legitimately reports `id: subtitle, modality: transcription`.
+        for studios in ([{"id": "image", "modality": "render"}],
                         [{"id": "image", "modality": ""}],
                         [{"id": "BAD ID", "modality": "image"}],
                         [{"id": "image"}],

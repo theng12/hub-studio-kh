@@ -206,7 +206,7 @@ private struct DoubleField: View {
 }
 
 /// Which history an uncertain job belongs to, so one confirmation can act on all three rows.
-private enum DiscardKind { case image, audio, music }
+private enum DiscardKind { case image, audio, music, video }
 
 /// An uncertain job the operator asked to abandon, held until they confirm.
 private struct PendingDiscard: Identifiable {
@@ -322,6 +322,7 @@ struct StudioContent: View {
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
     private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
     private var selectedMusicModel: NativeModel? { workspace.models.first { $0.repo == workspace.musicModel && $0.function == .music } }
+    private var selectedVideoModel: NativeModel? { workspace.models.first { $0.repo == workspace.videoModel && $0.function == .video } }
     private var previewImageJob: NativeJob? { workspace.imageJobs.first { $0.state == "done" && (selectedImageID == nil || $0.id == selectedImageID) } }
     private var previewMusicJob: NativeJob? { workspace.musicJobs.first { $0.state == "done" && (selectedMusicID == nil || $0.id == selectedMusicID) } }
     private var activeImages: [NativeJob] { workspace.imageJobs.filter { active($0.state) } }
@@ -590,6 +591,7 @@ struct StudioContent: View {
             case .image: await workspace.discardImage(pending.job)
             case .audio: await workspace.discardAudio(pending.job)
             case .music: await workspace.discardMusic(pending.job)
+            case .video: await workspace.discardVideo(pending.job)
             }
         }
     }
@@ -613,7 +615,11 @@ struct StudioContent: View {
         HStack(spacing: 0) {
             List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
                 Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
-                ForEach(StudioPage.sidebarSections, id: \.title) { section in
+                // An empty section is not drawn: "Coming later" is a real section with no pages
+                // the moment every Studio has an engine, and a heading over nothing reads as a
+                // missing list rather than as "none". The declared sections keep their names and
+                // order for the tests; this is only what reaches the screen.
+                ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
                     Section(section.title) {
                         ForEach(section.pages) { page in
                             // "Coming later" pages are reachable but deliberately quieter: they
@@ -682,6 +688,7 @@ struct StudioContent: View {
                 case .audio: audioWorkspace
                 case .image: imageWorkspace
                 case .music: musicWorkspace
+                case .video: videoWorkspace
                 case .chat: chatWorkspace
                 case .transcription: transcriptionWorkspace
                 case .models: modelsWorkspace
@@ -690,8 +697,11 @@ struct StudioContent: View {
                 case .connections: connections
                 case .whatsNew: whatsNew
                 case .settings: settings
-                default: unavailableWorkspace
                 }
+                // No `default:` and no unavailable-workspace fallback. Every `StudioPage` case is
+                // handled above, so the compiler now *proves* the property the old fallback only
+                // reported at runtime: a page with an engine and no workspace cannot ship. Adding
+                // a Studio to the enum stops this build until its page is wired.
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
@@ -1662,6 +1672,197 @@ struct StudioContent: View {
         }
     }
 
+    /// Video generation, laid out like Music: the form on the left, the lane's own history on
+    /// the right. Every drop-down is built from the selected model's `lane_contract`, so the page
+    /// cannot offer an option its worker would refuse — and a model that publishes no geometry
+    /// control gets a prompt-only form rather than an invented ladder.
+    private var videoWorkspace: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            heading("Video Studio", "Generate a clip locally with this Mac's published video model.")
+            if !connected { setup }
+            HSplitView {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Prompt").font(.callout)
+                            TextEditor(text: $workspace.videoPrompt)
+                                .font(.body)
+                                .frame(minHeight: 90)
+                                .overlay(RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(nsColor: .separatorColor)))
+                            Text("Describe the shot. The clip is generated locally; nothing leaves this Mac.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        modelPicker(.video)
+                        // The worker's own below-tier sentence, in the same shape every other page
+                        // renders. For Video the tier is also a routing verdict: below it the
+                        // worker publishes `memory_eligible: false` and the model is not offered.
+                        if let warning = selectedVideoModel?.memoryWarning {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if !videoOptions("aspect_ratio").isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Aspect ratio").font(.callout)
+                                Picker("Aspect ratio", selection: $workspace.videoAspectRatio) {
+                                    ForEach(videoOptions("aspect_ratio"), id: \.self) { Text($0).tag($0) }
+                                }.labelsHidden().frame(maxWidth: 220)
+                            }
+                        }
+                        if !videoOptions("resolution").isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Size").font(.callout)
+                                Picker("Size", selection: $workspace.videoResolution) {
+                                    ForEach(videoOptions("resolution"), id: \.self) { Text($0).tag($0) }
+                                }.labelsHidden().frame(maxWidth: 220)
+                            }
+                        }
+                        if !videoDurationChoices.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Duration").font(.callout)
+                                Picker("Duration", selection: $workspace.videoDurationSeconds) {
+                                    ForEach(videoDurationChoices, id: \.self) { Text("\($0) s").tag($0) }
+                                }.labelsHidden().frame(maxWidth: 220)
+                            }
+                        }
+                        HStack {
+                            if workspace.submittingVideo { ProgressView().controlSize(.small) }
+                            Button("Generate Video") { Task { await workspace.generateVideo() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!connected || workspace.submittingVideo
+                                          || workspace.videoPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                          || selectedVideoModel?.cached != true
+                                          || selectedVideoModel?.supported != true
+                                          || selectedVideoModel?.runtimeReady != true)
+                        }
+                        if let note = workspace.videoNote {
+                            Text(note).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider().padding(.top, 8)
+                        Text("Image-to-video is driven from Story Studio, which owns the scene images: it uploads the exact scene and submits the animation here. This page is the lane's own text-to-video surface.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Manage Video Models") { modelFilter = "Video"; studio.select(.models) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 20).padding(.bottom, 20)
+                }
+                .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Recent clips").font(.headline)
+                        Spacer()
+                        Button("All Jobs") { studio.select(.jobs) }
+                    }
+                    if workspace.videoJobs.isEmpty {
+                        empty("Your clips", "Finished video jobs will appear here, with their length and a way to save them.", symbol: "film")
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(workspace.videoJobs.prefix(5)) { job in videoJobRow(job) }
+                            }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 20)
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }.padding(28)
+        // The lane's published defaults, read from the selected model's contract when the page
+        // opens or the model changes. The request itself omits a field the operator never chose,
+        // so this only decides what the controls show.
+        .task(id: workspace.videoModel) {
+            if let value = videoDefault("aspect_ratio"), workspace.videoAspectRatio.isEmpty {
+                workspace.videoAspectRatio = value
+            }
+            if let value = videoDefault("resolution"), workspace.videoResolution.isEmpty {
+                workspace.videoResolution = value
+            }
+            if workspace.videoDurationSeconds == 0, let seconds = videoDefaultSeconds() {
+                workspace.videoDurationSeconds = seconds
+            }
+        }
+    }
+
+    /// The options one lane parameter publishes, in the lane's own order.
+    private func videoOptions(_ name: String) -> [String] {
+        selectedVideoModel?.laneContract?.parameters.first { $0.name == name }?.options ?? []
+    }
+
+    private func videoDefault(_ name: String) -> String? {
+        guard let value = selectedVideoModel?.laneContract?.parameters
+            .first(where: { $0.name == name })?.defaultValue else { return nil }
+        if case .string(let text) = value { return text }
+        return nil
+    }
+
+    private func videoDefaultSeconds() -> Int? {
+        guard let value = selectedVideoModel?.laneContract?.parameters
+            .first(where: { $0.name == "duration_seconds" })?.defaultValue else { return nil }
+        if case .integer(let seconds) = value { return seconds }
+        return nil
+    }
+
+    private var videoDurationChoices: [Int] {
+        (selectedVideoModel?.laneContract?.parameters
+            .first { $0.name == "duration_seconds" }?.options ?? []).compactMap(Int.init)
+    }
+
+    private func videoJobRow(_ job: NativeJob) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: active(job.state) ? "film" : job.state == "done"
+                      ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(stateColor(job.state))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
+                    HStack(spacing: 8) {
+                        stateBadge(job.state)
+                        Text("\(modelName(job.model))\(job.generationSuffix)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    jobProgress(job)
+                    if job.state == "done", !job.assetFacts.isEmpty {
+                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Result details: \(job.assetFacts)")
+                    }
+                    if job.state == "done", let seconds = job.durationSeconds, seconds > 0 {
+                        Text("Clip length \(NativeJob.clock(seconds))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if job.state == "done" {
+                    Button("Save…") { saveVideo(job) }.disabled(!connected)
+                } else if job.state == "uncertain" {
+                    Button("Check Original Result") { Task { await workspace.reconcileVideo(job) } }.disabled(!connected)
+                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .video) }.disabled(!connected)
+                } else if active(job.state) {
+                    Button("Cancel") { Task { await workspace.cancelVideo(job) } }.disabled(!connected)
+                }
+            }
+            if let message = job.error, !message.isEmpty {
+                Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+
+    private func saveVideo(_ job: NativeJob) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "clip-\(job.id).mp4"
+        panel.allowedContentTypes = [.mpeg4Movie]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do { try await workspace.saveVideo(job, to: url) }
+            catch { fileActionError = error.localizedDescription }
+        }
+    }
+
     private var audioWorkspace: some View {
         VStack(alignment: .leading, spacing: 20) {
             heading("Audio", "Write a script, choose a voice and generate spoken audio.")
@@ -2137,7 +2338,7 @@ struct StudioContent: View {
         case .music: return $workspace.musicModel
         case .transcription: return $workspace.transcriptionModel
         case .chat: return $workspace.chatModel
-        case .video: return nil   // No engine in this build, so there is nothing to choose.
+        case .video: return $workspace.videoModel
         }
     }
 
@@ -3055,10 +3256,7 @@ struct StudioContent: View {
         case .music: musicJobRow(job)
         case .transcription: subtitleJobRow(job)
         case .chat: chatJobRow(job)
-        case .video:
-            // No batch history, so `jobHistories` never yields one of these. The Video tab says
-            // that in its own words rather than drawing a row for work that does not exist.
-            EmptyView()
+        case .video: videoJobRow(job)
         }
     }
 
@@ -4412,26 +4610,6 @@ struct StudioContent: View {
         if hosts.isEmpty { return "127.0.0.1" }
         return hosts.contains("0.0.0.0") ? "0.0.0.0" : hosts.joined(separator: ",")
     }
-    private var unavailableWorkspace: some View {
-        // A page whose Studio *does* have an engine but has no workspace wired here is a wiring
-        // hole, and it says so by name with the file to update. Saying "engine not installed" for
-        // it would be a different, false statement.
-        let unwired = studio.selection.function?.hasEngine == true
-        return VStack(alignment: .leading, spacing: 24) {
-            heading(studio.selection.rawValue, workspaceDescription(studio.selection))
-            Spacer()
-            if unwired {
-                empty("No workspace is wired for this Studio",
-                      "\(studio.selection.title) has an engine in this build, but no workspace is wired for it. Add it to the `switch studio.selection` in native/StudioViews.swift.",
-                      symbol: studio.selection.symbol)
-            } else {
-                empty("Engine not installed in this build", "This workspace is part of the standalone app. Its local engine and generation workflow still need to be integrated.", symbol: studio.selection.symbol)
-            }
-            HStack { Spacer(); Button("View Available Workspaces") { studio.select(.overview) }; Spacer() }
-            Spacer()
-        }.padding(28)
-    }
-
     /// Idle-release controls for every Studio on this machine, read from the Hub.
     ///
     /// The mode names and thresholds come from the Studios themselves, so this screen never

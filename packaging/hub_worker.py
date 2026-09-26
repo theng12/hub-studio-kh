@@ -149,6 +149,26 @@ def _music_spec(release: dict, data: Path, runtime: Path, resources: Path) -> di
     }
 
 
+def _video_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    """The Video worker runs on its own Python 3.11 runtime, not the shared base.
+
+    `ltx_pipelines_mlx` needs 3.11 while the base runtime is 3.12, so the staged tree is
+    `runtimes/video` and the digest beside it is the pinned identity — the same shape as Image.
+    """
+    video_runtime = resources / 'runtimes/video'
+    video_id = release['components']['video'].get('runtime_sha256')
+    if (not (video_runtime / 'bin/python3').is_file()
+            or not (resources / 'video_worker.py').is_file()
+            or not (resources / 'components/video/app/backend/main.py').is_file()
+            or not (resources / 'model-manifests/ltx-2-3-22b-ram-12gb-mlx.json').is_file()
+            or not _runtime_id(video_id)):
+        raise ValueError('Incomplete Video worker or release identity')
+    return {
+        'id': 'video', 'modality': 'video', 'python': video_runtime / 'bin/python3',
+        'runtime_id': video_id, 'outputs': data / 'video/outputs', 'extra_args': [],
+    }
+
+
 def _chat_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
     # The chat worker reuses the base runtime (mlx-lm lives there), so its staged identity
     # is expected to equal the base runtime digest unless a dedicated runtimes/chat is added.
@@ -180,6 +200,7 @@ COMPONENT_WORKERS: dict[str, Callable[[dict, Path, Path, Path], dict] | None] = 
     'subtitle': _subtitle_spec,
     'music': _music_spec,
     'chat': _chat_spec,
+    'video': _video_spec,
 }
 
 

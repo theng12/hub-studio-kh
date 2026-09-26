@@ -31,6 +31,9 @@ WORKER_FOR_MODALITY: dict[str, str] = {
     "transcription": "subtitle",
     "music": "music",
     "chat": "chat",
+    # Video is a real worker now, not a placeholder: `components/video` serves both the
+    # text-to-video JSON door and the image-to-video multipart door the broker already had.
+    "video": "video",
 }
 
 # Every modality a node may offer, derived so it cannot drift from the routing table.
@@ -54,6 +57,7 @@ STUDIO_OPERATION: dict[str, str] = {
     "transcription": "transcription",
     "music": "music",
     "chat": "chat",
+    "video": "video",
 }
 
 # The operations the Hub will file a job under when a studio names one of them.

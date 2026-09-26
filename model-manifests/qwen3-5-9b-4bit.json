@@ -110,7 +110,7 @@
   "qualification": {
     "memory_evidence": "Owner-chosen common fleet model, uniform 4-bit MLX. MEASURED on the 16 GB tier, 2026-09-25: three 16 GB Macs (M1, M2, M4) each completed a 256-token completion at 12.40-18.60 tok/s, peak MLX 5.23 GB (5226237062 bytes, identical on all three - it is the model's footprint, not the host's), load 9.08-13.69 s, swap 0.00 MB on two Macs and 0.25 MB on the third. Memory available at start was 7.70-8.85 GB against the checkpoint's own 5.98 GB plus 0.5 GB of working room. Source: qualification/chat-tier-run.sh on each Mac; verdict blocks recorded in the owner's 'StudioHub Chat Tier Run m{1,2,4}-16*' folders. 8 GB: EXCLUDED by the owner's decision, 2026-09-25. It does not run there - he tried it on his 8 GB Mac - so the tier harness refuses an 8 GB Mac immediately rather than probing, because an attempt costs up to 900 s and a swapping model load to rediscover that. This is a decision, not an inference from the weight size: the earlier note's '8 GB is not viable' was arithmetic, and the refusal that followed was about FREE memory on a busy Mac rather than about the tier. Nothing is claimed to have been measured on 8 GB; what is claimed is that this fleet does not run it there. This replaces the earlier catalog-arithmetic note, which read '8 GB is not viable' as an inference from the weight size and 'local import and inference qualification remain required'.",
     "minimum_unified_memory_gb": 16,
-    "reason": "Qualified on the 16 GB tier by measurement, 2026-09-25. Excluded on 8 GB by the owner's decision: it does not run there.",
+    "reason": "Qualified on the 16 GB tier by measurement, 2026-09-25: three 16 GB Macs completed runs. The 8 GB tier is unmeasured - a run there did not start and the reason is not yet recorded.",
     "recommended_unified_memory_gb": 16,
     "status": "qualified"
   },
@@ -132,7 +132,7 @@
         "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/revision/8b2b98c00a6b4d291155e4890773ca8f769aee53",
-        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true"
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true&limit=100"
       }
     ]
   }

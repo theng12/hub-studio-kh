@@ -100,6 +100,28 @@
       "evidence": "M",
       "source": "the like-for-like comparison table in the Z-Image record",
       "source_path": "qualification/z-image-turbo-2026-09-24.md"
+    },
+    {
+      "package_id": "ltx-2-3-22b-ram-12gb-mlx",
+      "model": "LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB)",
+      "quantization": "mixed 2–8 bit MLX (per-tensor, the pack's own loader)",
+      "engine": "video-ltx",
+      "machine": "32 GiB · Apple M2 Max",
+      "tier_gb": 24,
+      "outcome": "one image-to-video generation, 704x448 at 97 frames/24 fps, with audio; run twice — standalone (298.5 s) and through the Video worker's own job path (304.0 s)",
+      "metrics": {
+        "generation_seconds_default": 304.0,
+        "peak_mlx_gb_default": 13.19,
+        "peak_footprint_gb_default": 16.38,
+        "weights_on_disk_gb": 17.81,
+        "output_seconds": 4.04,
+        "resolution": "704x448",
+        "frames": 97,
+        "audio": "yes (one audio track verified in the produced MP4)"
+      },
+      "evidence": "M",
+      "source": "the standalone qualification record and the worker's own job receipt for job 627c7fbc3aef49e8a06c26fab7be0144",
+      "source_path": "qualification/ltx-video-worker-results-20260926-210721/measurement.json"
     }
   ]
 }

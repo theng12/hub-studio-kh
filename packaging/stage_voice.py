@@ -49,6 +49,19 @@ MUSIC_OVERLAY_PACKAGES = {
     'vector-quantize-pytorch': '1.27.20',
 }
 
+# The Video runtime this build is qualified against, pinned by content the same way the Image
+# runtime is. It is **Python 3.11 + ltx-2-mlx at 3b2e77fd73af5f08961f4436ae979c0579d5deed + MLX
+# 0.32.2**, because that is the interpreter `qualification/ltx-video-measure.py` measured the
+# first successful LTX-2.3 image-to-video run on (298.5 s, 704x448, 97 frames, 4.0 s with audio,
+# peak process footprint 16.38 GB). `ltx_pipelines_mlx` needs 3.11 while the base runtime is
+# 3.12, which is why Video carries its own tree.
+#
+# Nothing pinned this before because the lane is new. The rule it inherits is the one the Image
+# runtime's pin exists for: a version string would not distinguish a tree that can load the pack
+# from one that cannot — the pack's mixed 2-8 bit loader lives in the pack, but the pipeline and
+# MLX must be the ones the measurement ran — so the content digest is the identity.
+VIDEO_RUNTIME_SHA256 = 'a45d5319d7bb59ea7ce0361dbac4a74ce9ad5985f2a9079d6186600b6b4daa54'
+
 
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     digest = hashlib.sha256()
@@ -337,6 +350,51 @@ def _stage_image(context: dict) -> dict | None:
     }
 
 
+def _stage_video(context: dict) -> dict | None:
+    """The Video Studio: its own Python 3.11 runtime, pinned by the same content rule as Image.
+
+    Returns None when this build does not include a video runtime, so a Voice-only or Image-only
+    proof build keeps working; a build that *does* pass one gets the pin checked before anything
+    is copied.
+    """
+    if context['video_runtime'] is None:
+        return None
+    found = tree_digest(context['video_runtime'])
+    unqualified_reason = context.get('unqualified_video_runtime')
+    if found != VIDEO_RUNTIME_SHA256 and not unqualified_reason:
+        raise SystemExit(
+            'REFUSING TO STAGE: the Video runtime handed to this build is not the one the LTX '
+            'model was qualified on.\n'
+            f'  handed:   {found}\n'
+            f'            {context["video_runtime"]}\n'
+            f'  required: {VIDEO_RUNTIME_SHA256}\n'
+            '            Python 3.11 + ltx-2-mlx 3b2e77fd73af5f08961f4436ae979c0579d5deed + '
+            'MLX 0.32.2, the interpreter qualification/ltx-video-measure.py measured the first '
+            'successful run on\n'
+            '  pass --video-runtime .build/video-runtime, or update this pin with the '
+            'qualification that moved it.'
+        )
+    resources = context['resources']
+    video_source = resources / 'components/video'
+    copy_tracked_tree(ROOT / 'components/video', video_source)
+    shutil.copytree(context['video_runtime'], resources / 'runtimes/video', symlinks=True)
+    shutil.copyfile(ROOT / 'packaging/video_worker.py', resources / 'video_worker.py')
+    matched = {'runtime_qualified': True}
+    if found != VIDEO_RUNTIME_SHA256:
+        matched = {
+            'runtime_qualified': False,
+            'runtime_note': unqualified_reason,
+            'runtime_sha256_found': found,
+            'runtime_sha256_qualified': VIDEO_RUNTIME_SHA256,
+        }
+    return {
+        **matched,
+        'runtime': 'video',
+        'runtime_sha256': tree_digest(resources / 'runtimes/video'),
+        'source_sha256': tree_digest(video_source),
+    }
+
+
 # One entry per studio that can ship, in the order components appear in the staged bundle and
 # in the release manifest. A stager copies that studio's tracked source and returns its release
 # record, or None when this build does not include it (a Voice-only proof build has no Hub).
@@ -353,6 +411,7 @@ COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
     'chat': _stage_chat,
     'music': _stage_music,
     'image': _stage_image,
+    'video': _stage_video,
 }
 
 
@@ -451,6 +510,7 @@ def staged_import_gaps(resources: Path) -> list[str]:
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           unqualified_image_runtime: str | None = None,
+          video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
@@ -459,6 +519,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     if image_runtime is not None:
         image_runtime = image_runtime.expanduser().resolve()
         validate_runtime(image_runtime)
+        include_hub = True
+    if video_runtime is not None:
+        video_runtime = video_runtime.expanduser().resolve()
+        validate_runtime(video_runtime)
         include_hub = True
     if (music_runtime is None) != (music_engine is None):
         raise ValueError('Music runtime overlay and engine source must be supplied together')
@@ -488,6 +552,12 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         if not subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '--',
                                         'components/image/app/backend/main.py']).strip():
             raise ValueError('Image source must be added to Git before staging the bundle')
+    if video_runtime is not None:
+        if not (ROOT / 'components/video/app/backend/main.py').is_file():
+            raise ValueError('Bundled Video entry point is missing')
+        if not subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '--',
+                                        'components/video/app/backend/main.py']).strip():
+            raise ValueError('Video source must be added to Git before staging the bundle')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = bool(subprocess.check_output(['git', '-C', str(ROOT), 'status', '--porcelain'], text=True).strip())
     version = (ROOT / 'VERSION').read_text().strip()
@@ -532,6 +602,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'resources': resources, 'runtime_hash': runtime_hash, 'include_hub': include_hub,
         'image_runtime': image_runtime, 'music_runtime': music_runtime,
         'unqualified_image_runtime': unqualified_image_runtime,
+        'video_runtime': video_runtime,
+        'unqualified_video_runtime': unqualified_video_runtime,
         'music_engine': music_engine, 'provenance': provenance,
         'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
     }
@@ -632,6 +704,10 @@ if __name__ == '__main__':
     # recorded in the release manifest, so an unqualified bundle announces itself.
     parser.add_argument('--unqualified-image-runtime', metavar='REASON',
                         help='Stage a non-qualified Image runtime anyway, recording this reason')
+    parser.add_argument('--video-runtime', type=Path,
+                        help='Include the pinned Python 3.11 LTX Video runtime and worker')
+    parser.add_argument('--unqualified-video-runtime', metavar='REASON',
+                        help='Stage a non-qualified Video runtime anyway, recording this reason')
     parser.add_argument('--music-runtime', type=Path,
                         help='Include the pinned Music dependency overlay')
     parser.add_argument('--music-engine', type=Path,
@@ -641,4 +717,6 @@ if __name__ == '__main__':
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
                 include_hub=args.hub, image_runtime=args.image_runtime,
                 unqualified_image_runtime=args.unqualified_image_runtime,
+                video_runtime=args.video_runtime,
+                unqualified_video_runtime=args.unqualified_video_runtime,
                 music_runtime=args.music_runtime, music_engine=args.music_engine))

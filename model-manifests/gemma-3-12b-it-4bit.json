@@ -1,0 +1,157 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "video-ltx",
+  "files": [
+    {
+      "path": "model/added_tokens.json",
+      "sha256": "50b2f405ba56a26d4913fd772089992252d7f942123cc0a034d96424221ba946",
+      "size": 35,
+      "source_path": "added_tokens.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/chat_template.json",
+      "sha256": "fe16baf728db49457cde32802cd7efc0ac8a7a9877dbe22fe3322b2d9dc6ccd9",
+      "size": 1615,
+      "source_path": "chat_template.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/chat_template.json"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "73ed96a3f1d596fcf3c07f17ed7e4358fd99be688c97da45f2464fd48dd069ed",
+      "size": 1141,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "e04ecb65db447404710114fb282baaac482d22a95e2244ecaab428b81672ba78",
+      "size": 192,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/model-00001-of-00002.safetensors",
+      "sha256": "995cbd05b7bfd8f5ab5307b476eb5496b5ec3f5256a9dd26366236ce8816c93f",
+      "size": 5367455313,
+      "source_path": "model-00001-of-00002.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model-00001-of-00002.safetensors"
+      ]
+    },
+    {
+      "path": "model/model-00002-of-00002.safetensors",
+      "sha256": "8b7af7eb5ff32109fc65cbcd0af5b8016ac0de46df17f40705f043f899495333",
+      "size": 2661219935,
+      "source_path": "model-00002-of-00002.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model-00002-of-00002.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "788cc42a1a92835df62d9a3791f47105f63504c7c404637a73288e9b11bc7b82",
+      "size": 108605,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "f688d6bb20c5017601c4011de7ca656da8485b540b05013efdaf986c0fcc918d",
+      "size": 570,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/processor_config.json",
+      "sha256": "3ffd5f11778dc73e2b69b3c00535e4121e1badf7018136263cd17b5b34fbaa53",
+      "size": 70,
+      "source_path": "processor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/processor_config.json"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "2f7b0adf4fb469770bb1490e3e35df87b1dc578246c5e7e6fc76ecf33213a397",
+      "size": 662,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+      "size": 33384568,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.model",
+      "sha256": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+      "size": 4689074,
+      "source_path": "tokenizer.model",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer.model"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "0d95398b39395e5cfb290683a78f3fb0551223c672d8b033333c1a5307473760",
+      "size": 1157007,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer_config.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/gemma-3-12b-it-4bit",
+  "package_id": "gemma-3-12b-it-4bit",
+  "qualification": {
+    "memory_evidence": "Companion of the LTX-2.3 22B pack: the pipeline loads this text encoder for every prompt, and its 5.0 GB of weights are inside that pack's measured 16.38 GB process footprint.",
+    "minimum_unified_memory_gb": 24,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 32,
+    "status": "unqualified"
+  },
+  "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/gemma-3-12b-it-4bit",
+        "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/gemma-3-12b-it-4bit",
+        "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/gemma-3-12b-it-4bit/revision/86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/gemma-3-12b-it-4bit/tree/86cc6a8dedbc456dd0e4af01a9d09f396f77e558?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

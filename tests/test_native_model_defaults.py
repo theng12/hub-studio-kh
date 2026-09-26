@@ -87,11 +87,14 @@ class SectionDerivationTests(unittest.TestCase):
         self.assertIn("collapsedModelSections.remove", jump, "jumping must unfold the target")
 
     def test_the_manage_buttons_still_name_their_own_studio(self) -> None:
-        """The five pages hand the Models tab a Studio to jump to; that contract is unchanged."""
+        """Every generator page hands the Models tab a Studio to jump to; Video joined them."""
         manage = re.compile(r'Button\("Manage [A-Za-z]+ Models"\) \{ modelFilter = "([A-Za-z]+)"; '
                             r'studio\.select\(\.models\) \}')
-        self.assertEqual(len(manage.findall(VIEWS)), 5,
+        found = manage.findall(VIEWS)
+        self.assertEqual(len(found), 6,
                          "every generator page still hands over its own Studio")
+        self.assertEqual(found.count("Video"), 1,
+                         "the Video page must jump to the Video section by the enum's own name")
 
 
 class EditorDerivationTests(unittest.TestCase):

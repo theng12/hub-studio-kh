@@ -2018,6 +2018,23 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
             # Completed public items historically expose ``seed``. Make that
             # existing field reproducible when the worker resolved a random seed.
             item["seed"] = resolved_seed
+    if b["modality"] == "video":
+        # The clip's own facts, carried the same way Image's are: a caller reading a finished
+        # video item should not have to fetch the MP4 to learn how long it is. Only values the
+        # worker actually measured are copied.
+        for field in ("width", "height", "frames", "frame_rate"):
+            value = job.get(field)
+            if type(value) is int and value > 0:
+                item[field] = value
+        seconds = job.get("output_seconds")
+        if type(seconds) in (int, float) and math.isfinite(float(seconds)) and seconds > 0:
+            item["duration_seconds"] = round(float(seconds), 3)
+        if type(job.get("has_audio")) is bool:
+            item["has_audio"] = job["has_audio"]
+        resolved_seed = job.get("resolved_seed")
+        if type(resolved_seed) is int:
+            item["resolved_seed"] = resolved_seed
+            item["seed"] = resolved_seed
     if b["modality"] == "voice":
         item["voice_library_id"] = body.get("voice_library_id")
         item["preset_speaker"] = body.get("preset_speaker")
@@ -2220,12 +2237,58 @@ def _validate_music_worker_job(item: dict, job: object, *,
             raise ValueError("Music worker completion lacks a final WAV receipt")
 
 
+def _validate_video_worker_job(item: dict, job: object, *,
+                               remote: bool = False) -> None:
+    """Reject a changed Video identity or a completion without an MP4 receipt.
+
+    The same rule Image and Music already get, for the same reason: a durable-async worker's
+    acceptance is a promise, and its completion must carry enough evidence that the artifact a
+    caller fetches is the one the worker says it produced. Video adds its own fields because the
+    clip has a duration and a frame count that a PNG does not.
+    """
+    if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
+        raise ValueError("Video worker status did not match the accepted job ID")
+    state = job.get("state")
+    if state not in {"queued", "running", "cancel_requested", "done", "error", "cancelled"}:
+        raise ValueError("Video worker status has an unknown state")
+    for field, accepted in (("model_revision", item.get("model_revision")),
+                            ("runtime_revision", item.get("runtime_revision")),
+                            ("worker_id", item.get("worker_id")),
+                            ("machine_id", item.get("machine"))):
+        # See _validate_image_worker_job: a remote worker's own machine id is not the node id.
+        if remote and field == "machine_id":
+            continue
+        if accepted is not None and job.get(field) != accepted:
+            raise ValueError(f"Video worker status changed its {field}")
+    if state == "done" and not job.get("error"):
+        digest = job.get("sha256")
+        generated_at = job.get("generated_at", job.get("finished_at"))
+        if (type(job.get("bytes")) is not int or job["bytes"] <= 0
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+                or job.get("output_url") != f"/api/generate/jobs/{job['id']}/video"
+                or not isinstance(job.get("output_path"), str) or not job["output_path"]
+                or job.get("media_type") != "video/mp4"
+                or type(generated_at) not in (int, float)
+                or not math.isfinite(float(generated_at)) or generated_at <= 0):
+            raise ValueError("Video worker completion lacks a final MP4 receipt")
+        for field in ("width", "height", "frames"):
+            value = job.get(field)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"Video worker completion lacks a positive {field}")
+        seconds = job.get("output_seconds")
+        if type(seconds) not in (int, float) or not math.isfinite(float(seconds)) or seconds <= 0:
+            raise ValueError("Video worker completion lacks a positive clip duration")
+
+
 def _validate_durable_worker_job(modality: str, item: dict, job: object, *,
                                  remote: bool = False) -> None:
     if modality == "image":
         _validate_image_worker_job(item, job, remote=remote)
     elif modality == "music":
         _validate_music_worker_job(item, job, remote=remote)
+    elif modality == "video":
+        _validate_video_worker_job(item, job, remote=remote)
 
 
 async def _recover_worker_job(client, b: dict, item: dict, studio: dict,

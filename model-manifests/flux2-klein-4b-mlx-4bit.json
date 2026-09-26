@@ -135,7 +135,7 @@
         "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/AITRADER/FLUX2-klein-4B-mlx-4bit/revision/7fd24828501390b67a92c8b66d2fc5a707d0ba1a",
-        "tree_api_url": "https://huggingface.co/api/models/AITRADER/FLUX2-klein-4B-mlx-4bit/tree/7fd24828501390b67a92c8b66d2fc5a707d0ba1a?recursive=true&expand=true"
+        "tree_api_url": "https://huggingface.co/api/models/AITRADER/FLUX2-klein-4B-mlx-4bit/tree/7fd24828501390b67a92c8b66d2fc5a707d0ba1a?recursive=true&expand=true&limit=100"
       }
     ]
   }

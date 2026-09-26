@@ -1,5 +1,95 @@
 # Changelog
 
+## 0.6.76 — 2026-09-26 · The Video lane exists
+
+**There was no video lane at all.** `components/` was chat, hub, image, music, subtitle and voice;
+the Hub's broker had mapped a `video` modality to `/api/generate/txt2video` and classified it
+`durable_async` since it was written, and the deadline floor was already 7,200 s — but nothing
+served it, so the modality was a route to a worker that did not exist. It exists now, and the parts
+that were already there are used rather than restated.
+
+### The worker — `components/video/`
+
+One model-agnostic registry, two engines, two memory tiers, and the two doors the broker already
+speaks:
+
+- **Text-to-video** (`POST /api/generate/txt2video`, JSON) and **image-to-video**
+  (`POST /api/generate/video2video`, multipart `file`) — the exact routes `broker.MODALITY` and the
+  broker's `img2video` reference path call. A job is **accepted before the result exists** and
+  returns its receipt immediately, which is what `RETRY_CLASS_DURABLE_ASYNC` requires: a five-minute
+  job must survive a Hub restart without being blindly replayed.
+- **The pack's own loader, before the pipeline is constructed.** `ltx_core_mlx.apply_quantization`
+  applies ONE bit width to this mixed 2–8-bit pack and dies on a shape error deep in
+  `quantized_matmul`; the pack ships the loader that knows, and the job receipt names it
+  (`pack_generate.py:_patch_pipeline_quantization`).
+- **Block streaming is never enabled.** It fails on this pack on two keys the streaming block does
+  not carry; the field exists with one allowed value so a future edit has to be deliberate.
+- **The artifact is verified, not assumed.** The MP4's own box structure is read: `ftyp`, a video
+  track with non-zero dimensions, a positive duration, and — for a pack whose measured runs carry
+  audio — an audio track. The bytes are hashed and served from the worker's own route.
+- **Memory is measured the way the pack measures it.** The receipt carries MLX's Metal high-water
+  mark, the process RSS, and **`ri_phys_footprint` sampled at 1 Hz** (`libproc`, the same number the
+  Lance card calls `ri_phys`); `mx.get_peak_memory()` alone under-reports the process.
+
+### The tier, which is the load-bearing part
+
+A model the machine cannot load must not be offered, and the Hub's total-memory floor is
+deliberately never in force (`memory_admission`'s own doctrine). So the **worker publishes the
+verdict per host**: below the model's qualified tier it publishes `memory_eligible: false`, which is
+what the gateway's `withhold_reason` already reads. The failure becomes a routing decision instead
+of a node-side load error.
+
+| Model | Task | Tier | Evidence |
+| --- | --- | --- | --- |
+| **LTX-2.3 22B MLX mixed 2–8 bit** (`baa-ai/LTX-2.3-22B-RAM-12GB-MLX` rev `d8a9d2f6081c`) | I2V + T2V, with audio | **24 GB** | measured here `[M]` |
+| **Lance 3B Video MLX bf16** (`mlx-community/Lance-3B-Video-bf16` rev `b70ba0a53c14`) | T2V | **16 GB** | vendor claim `[V]`; **runner not adopted** |
+
+The LTX measurement, on this 32 GB M2 Max: **704×448, 97 frames, 24 fps, 4.04 s of output with one
+video and one audio track, 304.0 s wall through the worker's own job path** (298.5 s standalone),
+peak MLX Metal 14,163,847,570 bytes, peak `ri_phys` footprint 15.71 GB sampled at 1 Hz (the
+standalone run's externally-measured process footprint was 16.38 GB). That is why the tier is 24 GB
+rather than the vendor's 16 GB: MLX had no memory pressure to trim on a 32 GB host, so 16.38 GB is a
+floor, not a worst case. Lance is the small tier's model; its manifest and 16 GB tier ship now, and
+the worker publishes its row with `execution_ready: false` naming the `lance-mlx` adoption step —
+an absent row would be invisible, and a row that claimed it runs would be a lie.
+
+### The runtime is its own tree, and it is pinned by content
+
+`ltx_pipelines_mlx` needs Python 3.11 while the base runtime is 3.12, so Video carries
+`runtimes/video`, built by `packaging/video-runtime/build.sh` from a pinned interpreter plus
+`requirements.lock.txt` and the `ltx-2-mlx` checkout at
+`3b2e77fd73af5f08961f4436ae979c0579d5deed`. `packaging/stage_voice.py` refuses to stage a tree whose
+digest is not `VIDEO_RUNTIME_SHA256`, the same rule the Image runtime learned the expensive way. The
+tree is made **read-only** after the build, because a plain interpreter run inside it would write
+`__pycache__` back and move the digest the stager pins — a used runtime must not become an
+unstageable one.
+
+### What else moved
+
+- **Manifests**: `ltx-2-3-22b-ram-12gb-mlx` (11 files, 19.12 GB, `requires_packages`
+  `gemma-3-12b-it-4bit`), the text encoder companion (13 files, 8.07 GB) and `lance-3b-video-bf16`
+  (10 files, 15.63 GB), all captured from their pinned revisions. The capture tool gained a
+  `&limit=100` on its tree URL — the Hub paginates at 50, so a large repository could silently lose
+  its weights — which is why every existing manifest's canonical bytes moved in the same pass.
+- **The companion is resolved by installed path**, so an offline node never reaches for the network,
+  and the receipt records which path the runner used.
+- **Hub registration**: `video` is a routed modality and a real worker (`vocabulary.py`),
+  `video-ltx`/`video-lance` are engine routes, both video doors are fleet-reachable, and the broker
+  validates a video completion's receipt (`output_url`, `media_type: video/mp4`, a positive frame
+  count and clip duration) the way it validates Image's and Music's. A finished video item now
+  carries its measured length, frame count and audio claim for the operator.
+- **The native app**: Video moved out of "Coming later" into Create. The page lists the lane's own
+  published options — aspect ratio, size class and duration are read from the model's `lane_contract`,
+  never a ladder in the app — renders the below-tier sentence like every other page, files real clip
+  rows in Jobs, and shows the measured clip length. Image-to-video stays Story Studio's surface, which
+  is the app that owns scene images.
+- The page switch lost its `default: unavailableWorkspace` fallback: with every `StudioPage` case
+  wired, the compiler now proves what the fallback only reported at runtime.
+
+**Evidence.** Hub gate **1347 passed, 11 skipped, 1038 subtests, exit 0**; `bash native/build.sh`
+green (boundary, API-contract and lifecycle checks); the worker-alone run's full receipt is
+`qualification/ltx-video-worker-results-20260926-210721/measurement.json`.
+
 ## 0.6.75 — 2026-09-26 · The installer can no longer leave a broken app, and the disk stops ratcheting
 
 **The install that filled the disk left `/Applications/Studio Hub.app` with no `Info.plist` and no

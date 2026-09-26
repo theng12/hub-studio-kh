@@ -38,19 +38,21 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertIn("generationSeconds: item?.runtimeS", mapping)
         self.assertIn("runningSeconds: item?.elapsedS", mapping)
 
-    # The five row styles, by their exact signatures. `jobRow(_:for:)` is deliberately not one of
+    # The row styles, by their exact signatures. `jobRow(_:for:)` is deliberately not one of
     # them: it is the dispatcher that routes a job to the style its function uses, so asserting a
-    # suffix inside it would be asserting that a `switch` renders text.
+    # suffix inside it would be asserting that a `switch` renders text. Video joined the list with
+    # its lane (2026-09-26) — the Jobs tab now draws clips like every other Studio's work.
     ROW_STYLES = (
         "private func imageJobRow(_ job: NativeJob) -> some View",
         "private func jobRow(_ job: NativeJob, compact: Bool) -> some View",
         "private func musicJobRow(_ job: NativeJob) -> some View",
         "private func subtitleJobRow(_ job: NativeJob) -> some View",
         "private func chatJobRow(_ job: NativeJob) -> some View",
+        "private func videoJobRow(_ job: NativeJob) -> some View",
     )
 
     def test_every_job_row_shows_it(self) -> None:
-        """One suffix, four row styles, both pages: the generator and Jobs cannot disagree."""
+        """One suffix, one style per Studio, both pages: the generator and Jobs cannot disagree."""
         self.assertEqual(
             VIEWS.count("job.generationSuffix"), len(self.ROW_STYLES),
             f"each of the {len(self.ROW_STYLES)} row styles must show the generation time once")
@@ -73,13 +75,15 @@ class GenerationTimeTests(unittest.TestCase):
                             ]
         dispatcher = dispatcher[:dispatcher.index("\n    private func", 10)]
         for style in ("imageJobRow(job)", "musicJobRow(job)", "subtitleJobRow(job)",
-                      "chatJobRow(job)"):
+                      "chatJobRow(job)", "videoJobRow(job)"):
             with self.subTest(style=style):
                 self.assertIn(style, dispatcher, f"the dispatcher no longer routes to {style}")
         self.assertIn("jobRow(job, compact:", dispatcher,
                       "the audio row is the compact style and must be routed to")
-        self.assertIn("EmptyView()", dispatcher,
-                      "a function with no batch history must say so explicitly")
+        # Every Studio files a batch history now, so there is no `EmptyView()` branch left to
+        # require — the dispatcher's own exhaustiveness (no `default:`) is the guarantee instead.
+        self.assertNotIn("default:", dispatcher,
+                         "the dispatcher must name every Studio, so a new one stops the build")
 
     def test_a_clip_length_is_never_mistaken_for_the_generation_time(self) -> None:
         """They are different numbers and both are useful: 4.6 s of audio, 52 s to make it."""

@@ -1,0 +1,148 @@
+{
+  "defaults": {
+    "aspect_ratio": "16:9",
+    "duration_seconds": 4,
+    "frame_rate": 24,
+    "mode": "image-to-video",
+    "parameters_source": "components/video/app/backend/generation.py",
+    "resolution": "512x288",
+    "seed": -1
+  },
+  "engine": "video-ltx",
+  "files": [
+    {
+      "path": "model/audio_vae.safetensors",
+      "sha256": "442119db8eaf976f83a105cc8c5f2c930e0f625062f9776b10adcdb7bc96c416",
+      "size": 106509048,
+      "source_path": "audio_vae.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/audio_vae.safetensors"
+      ]
+    },
+    {
+      "path": "model/connector.safetensors",
+      "sha256": "5885c2bd7af4e761b3257cf5b17bc1fdb2d187cea3ca520ea723b6a129b7029f",
+      "size": 6344495512,
+      "source_path": "connector.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/connector.safetensors"
+      ]
+    },
+    {
+      "path": "model/generate.py",
+      "sha256": "83e1ab7e2d60ba89b44d915f3fcde6ab7d14f2b6e2abe89cacb8a6a4c3119c68",
+      "size": 6554,
+      "source_path": "generate.py",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/generate.py"
+      ]
+    },
+    {
+      "path": "model/spatial_upscaler_x2_v1_1.safetensors",
+      "sha256": "755f69dcb8a3f9589045925eb4a2237e9969f9c026a016393bc395e65ebd5788",
+      "size": 995745061,
+      "source_path": "spatial_upscaler_x2_v1_1.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/spatial_upscaler_x2_v1_1.safetensors"
+      ]
+    },
+    {
+      "path": "model/spatial_upscaler_x2_v1_1_config.json",
+      "sha256": "c0646d97bf1bc3fa6e66ec7d17f16ef31b717e64bf86474b7dc3993b6c42346a",
+      "size": 275,
+      "source_path": "spatial_upscaler_x2_v1_1_config.json",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/spatial_upscaler_x2_v1_1_config.json"
+      ]
+    },
+    {
+      "path": "model/split_model.json",
+      "sha256": "1b320025cecd3ec95d82d636fbf58c43b675c67e75ce957f6158b2dc64dd2095",
+      "size": 626,
+      "source_path": "split_model.json",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/split_model.json"
+      ]
+    },
+    {
+      "path": "model/transformer-distilled.safetensors",
+      "sha256": "9bd333aa91e5ad2e994b22978029d737e4d659bbe7d3159f6a9ffd50393e8d96",
+      "size": 9965054480,
+      "source_path": "transformer-distilled.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/transformer-distilled.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae_decoder.safetensors",
+      "sha256": "f404026fe0b59418eaec4a3fcdc474125c798f0b787dc390f6eb4e79934d4160",
+      "size": 814349531,
+      "source_path": "vae_decoder.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/vae_decoder.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae_encoder.safetensors",
+      "sha256": "1512f5ef8387901db0baecb328690676e2667ddf2b63e28f8e6645188c1a8c06",
+      "size": 637885319,
+      "source_path": "vae_encoder.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/vae_encoder.safetensors"
+      ]
+    },
+    {
+      "path": "model/vocoder.safetensors",
+      "sha256": "410cee86c14f76956bf487d153211ef15050fe8bf51f86d47a1d27ca6e3ba287",
+      "size": 258313851,
+      "source_path": "vocoder.safetensors",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/vocoder.safetensors"
+      ]
+    },
+    {
+      "path": "model/webapp.py",
+      "sha256": "cc281fcc20abd345e65c8830b066b0f566b5e21fa230039cb332d852bd67153f",
+      "size": 34086,
+      "source_path": "webapp.py",
+      "urls": [
+        "https://huggingface.co/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/resolve/d8a9d2f6081c4136130983a0b612962418ddf203/webapp.py"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
+  "package_id": "ltx-2-3-22b-ram-12gb-mlx",
+  "qualification": {
+    "memory_evidence": "MEASURED on this Mac, 2026-09-26 [M], twice: the standalone qualification run (704x448, 97 frames, 24 fps, seed 42, 298.5 s wall, 4.04 s of output with audio, peak process footprint 16.38 GB, peak MLX Metal 13.19 GB) and the same configuration through the Video worker's own job path (304.0 s wall, peak MLX 14,163,847,570 bytes, peak ri_phys footprint 15.71 GB sampled at 1 Hz, artifact 1,784,058 bytes with one video and one audio track). The measurement is the reason the tier is 24 GB rather than the vendor's 16 GB: MLX had no memory pressure to trim on a 32 GB host, so 16.38 GB is a floor, not a worst case. 16 GB is not offered the model.",
+    "minimum_unified_memory_gb": 24,
+    "reason": "Qualified by two matching runs of one configuration (image-to-video, 704x448, 97 frames) on the owner's 32 GB M2 Max through the pack's own mixed-precision loader. What is NOT covered and is not claimed: no run on a 24 GB machine, and text-to-video has not been run on hardware here. The lane publishes the measured configuration's runtime and no other.",
+    "recommended_unified_memory_gb": 32,
+    "status": "qualified"
+  },
+  "requires_packages": [
+    "gemma-3-12b-it-4bit"
+  ],
+  "revision": "d8a9d2f6081c4136130983a0b612962418ddf203",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
+        "revision": "d8a9d2f6081c4136130983a0b612962418ddf203"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
+        "revision": "d8a9d2f6081c4136130983a0b612962418ddf203",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/revision/d8a9d2f6081c4136130983a0b612962418ddf203",
+        "tree_api_url": "https://huggingface.co/api/models/baa-ai/LTX-2.3-22B-RAM-12GB-MLX/tree/d8a9d2f6081c4136130983a0b612962418ddf203?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

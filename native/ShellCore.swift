@@ -23,8 +23,7 @@ enum StudioFunction: String, CaseIterable, Identifiable {
     /// independent per-modality lists to drift apart.
     var hasEngine: Bool {
         switch self {
-        case .audio, .transcription, .image, .music, .chat: return true
-        case .video: return false
+        case .audio, .transcription, .image, .music, .chat, .video: return true
         }
     }
     /// Whether the Hub files finished batches for this Studio, which is what the Jobs page and
@@ -32,25 +31,24 @@ enum StudioFunction: String, CaseIterable, Identifiable {
     ///
     /// Chat joined this list when the Hub began writing each Chat-page completion down as a
     /// finished one-item batch: a Chat answer is work the operator may want to find again, so it
-    /// is listed like every other Studio's. Video has no engine and produces nothing yet.
+    /// is listed like every other Studio's. **Video joined it on 2026-09-26** with a real local
+    /// lane: `broker.MODALITY` files a video batch (it did all along — the worker was the missing
+    /// half), so a finished clip is work the operator may want to find again too.
     var hasBatchHistory: Bool {
         switch self {
-        case .audio, .transcription, .image, .music, .chat: return true
-        case .video: return false
+        case .audio, .transcription, .image, .music, .chat, .video: return true
         }
     }
 
     /// Whether this Studio gets a tab on the Jobs page.
     ///
-    /// The owner asked for Video to be visible now - "add one for video as a placeholder now so we
-    /// don't forget about it" - rather than absent until the day it ships. A tab is not a claim
-    /// that work exists: selecting it says what video will be and lists nothing, which is why this
-    /// is not `hasBatchHistory`. Every Studio but Video answers with its batch history, so a new
-    /// Studio still arrives with a tab and with rows.
+    /// The owner asked for Video to be visible before it shipped - "add one for video as a
+    /// placeholder now so we don't forget about it" - and it kept the tab when the engine
+    /// arrived, because a Studio's Jobs tab is not a claim about which build you are running.
+    /// Every Studio answers with its batch history now, so a new Studio still arrives with both.
     var hasHistoryTab: Bool {
         switch self {
-        case .video: return true
-        case .audio, .transcription, .image, .music, .chat: return hasBatchHistory
+        case .audio, .transcription, .image, .music, .chat, .video: return hasBatchHistory
         }
     }
 }
@@ -65,9 +63,10 @@ enum StudioPage: String, CaseIterable, Identifiable {
     /// Owner-facing name. The raw value stays stable because it is also the StudioFunction
     /// lookup key and is persisted in saved state.
     var title: String { self == .transcription ? "Subtitle" : rawValue }
-    /// Sidebar sections, in the order the owner asked for. "Create" is where work is made, and
-    /// Video sits last and quieter because it has no engine yet. The raw values stay
-    /// stable, so moving a page between sections never invalidates saved state.
+    /// Sidebar sections, in the order the owner asked for. "Create" is where work is made; Video
+    /// joined it on 2026-09-26 with a real local lane, so "Coming later" is empty until the next
+    /// engine-less Studio arrives (an empty section is not drawn). The raw values stay stable, so
+    /// moving a page between sections never invalidates saved state.
     ///
     /// Membership is derived from `StudioFunction.allCases` rather than written out here: the
     /// four lists this replaces each had to be edited by hand for a new Studio, and anything
@@ -75,7 +74,8 @@ enum StudioPage: String, CaseIterable, Identifiable {
     /// `createOrder` is a *display order* only. A Studio it does not name still lands in a
     /// section: an engine-less one in "Coming later", an engine-backed one at the end of
     /// "Create", so a new case can never be invisible.
-    static let createOrder: [StudioFunction] = [.image, .audio, .transcription, .music, .chat]
+    static let createOrder: [StudioFunction] = [.image, .audio, .transcription, .music, .chat,
+                                                .video]
     static let create: [Self] = {
         let available = StudioFunction.allCases.filter { $0.hasEngine }
         let placed = createOrder.filter { available.contains($0) }

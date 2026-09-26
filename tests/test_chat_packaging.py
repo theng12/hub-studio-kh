@@ -45,17 +45,21 @@ class WorkerSpecTests(unittest.TestCase):
                    raw_manifests: dict[str, str] | None = None) -> Path:
         resources = root / "Resources"
         (resources / "model-manifests").mkdir(parents=True)
-        for component in ("image", "subtitle", "music", "chat"):
+        for component in ("image", "subtitle", "music", "chat", "video"):
             backend = resources / "components" / component / "app" / "backend"
             backend.mkdir(parents=True)
             (backend / "main.py").write_text(f"# {component} app\n")
         if not chat_source:
             (resources / "components" / "chat" / "app" / "backend" / "main.py").unlink()
         for worker in ("voice_worker.py", "hub_worker.py", "image_worker.py",
-                       "subtitle_worker.py", "music_worker.py", "chat_worker.py"):
+                       "subtitle_worker.py", "music_worker.py", "chat_worker.py",
+                       "video_worker.py"):
             (resources / worker).write_text(f"# {worker}\n")
         for runtime, binary in (("runtimes/voice/bin/python3", True),
-                                ("runtimes/image/bin/python3", image_runtime)):
+                                ("runtimes/image/bin/python3", image_runtime),
+                                # The Video worker carries its own Python 3.11 runtime; the
+                                # spec refuses a bundle without it, so the fixture needs one.
+                                ("runtimes/video/bin/python3", True)):
             path = resources / runtime
             path.parent.mkdir(parents=True, exist_ok=True)
             if binary:
@@ -65,6 +69,12 @@ class WorkerSpecTests(unittest.TestCase):
             path = resources / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}\n")
+        # The named manifest the Video spec pins itself to, beside the whole catalog the bundle
+        # ships. A build that stages the worker without it is refused by name.
+        (resources / "model-manifests" / "ltx-2-3-22b-ram-12gb-mlx.json").write_text(
+            json.dumps({"engine": "video-ltx", "package_id": "ltx-2-3-22b-ram-12gb-mlx",
+                        "model_id": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX", "revision": "b" * 40,
+                        "files": []}))
         for name in chat_manifests:
             (resources / "model-manifests" / name).write_text(json.dumps(
                 chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}")))
@@ -99,11 +109,11 @@ class WorkerSpecTests(unittest.TestCase):
     def test_an_unregistered_component_is_refused_by_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             resources = self._resources(Path(tmp))
-            components = self._components(video={"runtime_sha256": "a" * 64})
+            components = self._components(semantic={"runtime_sha256": "a" * 64})
             with self.assertRaises(ValueError) as caught:
                 self._specs({"components": components}, resources)
         message = str(caught.exception)
-        self.assertIn("'video'", message,
+        self.assertIn("'semantic'", message,
                       "the refusal must name the component it cannot spawn")
         self.assertIn("hub_worker.py", message,
                       "the refusal must name the file to update")

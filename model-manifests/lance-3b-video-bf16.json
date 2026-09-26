@@ -1,0 +1,136 @@
+{
+  "defaults": {
+    "aspect_ratio": "1:1",
+    "duration_seconds": 4,
+    "frame_rate": 24,
+    "mode": "text-to-video",
+    "parameters_source": "components/video/app/backend/generation.py",
+    "resolution": "448x448",
+    "seed": -1
+  },
+  "engine": "video-lance",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "41ee7faf09ce8b418755760a526fc60b0f5919b05a7ca5b606d6a9092c8a10e6",
+      "size": 1374,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/config.json"
+      ]
+    },
+    {
+      "path": "model/conversion_report.json",
+      "sha256": "5f2352378b9340370900c3c5e7b3bb0b43b86c174dc3f2199ae3ef9d33c6d393",
+      "size": 287,
+      "source_path": "conversion_report.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/conversion_report.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "533f191cc257b7de37a4fccd0a7a1706d75e1aa660f93efaa54e5a2a9f9aace9",
+      "size": 216,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/llm_config.json",
+      "sha256": "7ed3eed5be6924cc800e8a5e53fc405c1aab1aaf36bad65c33403b36c56827f5",
+      "size": 1373,
+      "source_path": "llm_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/llm_config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "2d9cacd1879c24e757e9dc6382942bb4faace0ec27a9d712a265f149c1278ace",
+      "size": 12874477622,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+      "size": 7031645,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "4abd3520120e266da84c0864fee064d1fb10806f02225911a47253dd38dc5f56",
+      "size": 5702,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vae.safetensors",
+      "sha256": "707e20bb83bdffff77774e04275d64b5ee8660f98390ce362538078d020b6807",
+      "size": 1409401642,
+      "source_path": "vae.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/vae.safetensors"
+      ]
+    },
+    {
+      "path": "model/vit.safetensors",
+      "sha256": "4abfe7f4b7a22d2119a11ff678f6dbc8ff310d6a10f4a0e019ce87ae3c1721ee",
+      "size": 1337407631,
+      "source_path": "vit.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/vit.safetensors"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size": 2776833,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Lance-3B-Video-bf16/resolve/b70ba0a53c14eef573570fe65b31e295bd8216af/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/Lance-3B-Video-bf16",
+  "package_id": "lance-3b-video-bf16",
+  "qualification": {
+    "memory_evidence": "Vendor claim [V], not measured here: memory_mode=relay fits 8-16 GB; lossless streaming VAE decode is flat in frame count at 256x49f 7.99 GB, 256x121f 8.05 GB, 512x61f 12.64 GB by ri_phys (OS-committed footprint). The card's worked example, 256x61f at ~8.7 GB, is larger than an 8 GB machine's whole RAM, so 8 GB is doubtful and not promised; 16 GB is the tier this manifest publishes.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "No local run exists. The runner is the lance-mlx source repo and is not adopted into this build yet, so the worker publishes the package with execution_ready false and names that adoption step.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/Lance-3B-Video-bf16",
+        "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/Lance-3B-Video-bf16",
+        "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Lance-3B-Video-bf16/revision/b70ba0a53c14eef573570fe65b31e295bd8216af",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Lance-3B-Video-bf16/tree/b70ba0a53c14eef573570fe65b31e295bd8216af?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

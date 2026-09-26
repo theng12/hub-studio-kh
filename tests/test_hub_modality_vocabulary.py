@@ -64,12 +64,17 @@ class WorkerDescriptorTests(unittest.TestCase):
     """B3 — which workers may register at all."""
 
     def test_a_worker_declares_its_own_modality_and_the_hub_validates_it(self) -> None:
-        """A descriptor for a modality the Hub does not route names the modality and the file."""
-        with _WorkersFile([_descriptor("video", "video")]):
+        """A descriptor for a modality the Hub does not route names the modality and the file.
+
+        `render` is the example because it is genuinely unrouted: it is a closed modality in the
+        broker's own table (the Hub's local ffmpeg step) and deliberately has no worker, while
+        `video` — this test's original example — is a real worker modality now.
+        """
+        with _WorkersFile([_descriptor("render", "render")]):
             with self.assertRaises(ValueError) as raised:
                 standalone_config.load_workers()
         message = str(raised.exception)
-        self.assertIn("'video'", message)
+        self.assertIn("'render'", message)
         self.assertIn("vocabulary.py", message)
         self.assertIn("WORKER_FOR_MODALITY", message)
 
@@ -554,10 +559,10 @@ class MemoryControlCoverageTests(unittest.TestCase):
         self.assertEqual(missing, [], "a routed modality is skipped by the memory-policy gate")
 
     def test_the_named_superset_is_documented(self) -> None:
-        """`render`/`video` are deliberate extras: neither is a worker modality in this app."""
+        """`render` is the deliberate extra; `video` is a routed worker modality now."""
         self.assertTrue({"render", "video"} <= set(memory_control.SUPPORTED_MODALITIES))
         self.assertNotIn("render", vocabulary.WORKER_FOR_MODALITY)
-        self.assertNotIn("video", vocabulary.WORKER_FOR_MODALITY)
+        self.assertEqual(vocabulary.WORKER_FOR_MODALITY.get("video"), "video")
 
 
 class EngineRouteTests(unittest.TestCase):

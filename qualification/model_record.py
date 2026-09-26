@@ -59,17 +59,20 @@ ENGINE_NAMES = {
     "image-mflux": "mflux (MLX)",
     "music-mlx": "MLX (audio)",
     "subtitle-mlx": "MLX (speech-to-text)",
+    "video-lance": "lance-mlx (MLX)",
+    "video-ltx": "ltx-2-mlx (MLX)",
     "voice-mlx": "MLX (speech)",
     "voice-vits": "VITS / ONNX",
 }
 
-MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music"]
+MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music", "video"]
 MODALITY_TITLES = {
     "chat": "Chat (LLM)",
     "voice": "Voice (TTS)",
     "subtitle": "Subtitle (speech-to-text)",
     "image": "Image",
     "music": "Music",
+    "video": "Video",
 }
 MODALITY_OF_ENGINE = {
     "chat-mlx": "chat",
@@ -78,6 +81,8 @@ MODALITY_OF_ENGINE = {
     "subtitle-mlx": "subtitle",
     "image-mflux": "image",
     "music-mlx": "music",
+    "video-ltx": "video",
+    "video-lance": "video",
 }
 
 
@@ -120,9 +125,14 @@ def label_map(manifests: list[dict[str, Any]], readings: dict[str, Any]) -> dict
             label = getattr(entry, "label", None)
             if repo and label:
                 repo_to_label[repo] = label
-    # Image publishes a dict keyed by repository; Music a list of entries.
+    # Image and Video publish dicts keyed by repository; Music a list of entries.
     image = importlib.import_module("components.image.app.backend.generation")
     for repo, entry in getattr(image, "MODELS").items():
+        label = getattr(entry, "label", None)
+        if label:
+            repo_to_label[repo] = label
+    video = importlib.import_module("components.video.app.backend.generation")
+    for repo, entry in getattr(video, "MODELS").items():
         label = getattr(entry, "label", None)
         if label:
             repo_to_label[repo] = label

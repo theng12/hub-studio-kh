@@ -96,7 +96,7 @@
         "revision": "a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-bf16/revision/a7fb80d9056983135a54ca3f71fcc5a637ccddf5",
-        "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-bf16/tree/a7fb80d9056983135a54ca3f71fcc5a637ccddf5?recursive=true&expand=true"
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-bf16/tree/a7fb80d9056983135a54ca3f71fcc5a637ccddf5?recursive=true&expand=true&limit=100"
       }
     ]
   }

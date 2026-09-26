@@ -455,9 +455,11 @@ class StagingTests(unittest.TestCase):
                 'components/voice/CHANGELOG.md': '# Upstream',
                 'research/voice-adoption.json': json.dumps({'commit': 'b' * 40, 'version': '2.7.2'}),
                 'packaging/voice_worker.py': '# worker',
-                # A studio adopted tomorrow, with its worker wrapper and no stager entry:
-                'components/video/app/backend/main.py': '# video source',
-                'packaging/video_worker.py': '# video worker',
+                # A studio adopted tomorrow, with its worker wrapper and no stager entry.
+                # `semantic` is deliberately a name nothing registers — `video` was this
+                # fixture's example until the Video Studio was adopted for real.
+                'components/semantic/app/backend/main.py': '# semantic source',
+                'packaging/semantic_worker.py': '# semantic worker',
             }
             for name, content in files.items():
                 path = repo / name
@@ -476,7 +478,7 @@ class StagingTests(unittest.TestCase):
                 with self.assertRaises(ValueError) as caught:
                     module.stage(runtime, artifact)
             message = str(caught.exception)
-            self.assertIn('video', message, 'the refusal must name the unregistered studio')
+            self.assertIn('semantic', message, 'the refusal must name the unregistered studio')
             self.assertIn('stage_voice.py', message, 'the refusal must name the file to update')
             self.assertIn('hub_worker.py', message,
                           'a new studio also needs a worker the Hub can spawn')

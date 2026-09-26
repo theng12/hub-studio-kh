@@ -8,8 +8,9 @@ to place that job, carry its answer and draw it in a row of its own.
 
 A tab is not a claim that work exists, so the two questions are separate and both are pinned here:
 whether a Studio appears in the tab bar (`hasHistoryTab`), and whether the Hub files batches for it
-(`hasBatchHistory`). Video answers yes to the first and no to the second, and its tab has to say
-exactly that - no rows, no controls, no date.
+(`hasBatchHistory`). Video answered yes-then-no for as long as it was a placeholder; since
+2026-09-26 the Hub files its clips and it answers yes to both, so the tab draws real rows and the
+placeholder branch is a guard for the next engine-less Studio.
 """
 import re
 import unittest
@@ -80,12 +81,14 @@ class JobsTabTests(unittest.TestCase):
             self.assertIn(studio, tabbed, f"{studio} was never asked whether it has a Jobs tab")
             self.assertTrue(tabbed[studio], f"{studio} must have a Jobs tab")
             self.assertIn(studio, rows, f"{studio} was never asked whether the Hub files its jobs")
-        # The whole point of the split: Video is listed and has nothing filed, so its tab can only
-        # ever be the placeholder - while every Studio with a real history keeps its rows.
-        self.assertTrue(tabbed["video"] and not rows["video"],
-                        "Video must have a tab without claiming a batch history")
-        for studio in ("audio", "transcription", "image", "music", "chat"):
+        # The split is what this test has always been about, and **Video crossed it on
+        # 2026-09-26**: the Hub had filed video batches all along (`broker.MODALITY` maps the
+        # modality), and the worker was the missing half. Now every Studio answers yes to both,
+        # so the placeholder branch is a guard for the next engine-less Studio rather than a
+        # description of Video.
+        for studio in ("audio", "transcription", "image", "music", "chat", "video"):
             self.assertTrue(rows[studio], f"{studio} files jobs, so it must have a batch history")
+        self.assertTrue(all(tabbed[studio] for studio in rows), "a row implies a tab")
 
     def test_every_function_with_a_history_lands_on_a_real_row(self) -> None:
         """The dispatcher is exhaustive, so a sixth Studio stops the build rather than the page."""
@@ -104,25 +107,35 @@ class JobsTabTests(unittest.TestCase):
                         self.assertIn("EmptyView()", branch,
                                       f"{studio} has no rows, so its branch must say so")
 
-    def test_the_video_tab_is_a_placeholder_with_nothing_in_it(self) -> None:
+    def test_the_video_tab_draws_real_clip_rows(self) -> None:
+        """The tab the owner asked for as a placeholder is a working history now.
+
+        What it must *not* be is a second placeholder: a Studio with a batch history and no row
+        style would draw an empty tab over real work, which is the failure this replaces.
+        """
+        row = body(VIEWS, "private func videoJobRow(_ job: NativeJob) -> some View")
+        self.assertIn("job.text", row, "the row must show the prompt that was sent")
+        self.assertIn("stateBadge(job.state)", row, "the row must carry the state badge")
+        self.assertIn("modelName(job.model)", row,
+                      "the row must name the model by its published label, quantization included")
+        self.assertIn("job.generationSuffix", row, "the row must show how long it took")
+        self.assertIn("job.durationSeconds", row,
+                      "a clip's own measured length is the fact the Hub records for video")
+        for offered in ('Button("Save…")', 'Button("Cancel")'):
+            self.assertIn(offered, row, f"a finished or running clip must offer {offered}")
+        # No audio or image affordance may leak into a video row.
+        for wrong in ('Button("Play")', 'Button("Preview")', "imageJobRow", "musicJobRow",
+                      "subtitleJobRow", "Open Transcript"):
+            self.assertNotIn(wrong, row, f"a clip is not another Studio's artifact: no {wrong}")
+        # ...and the placeholder branch still exists for the next engine-less Studio, driven by
+        # the tab rather than by a name written into the page.
         jobs = VIEWS[VIEWS.index("private var jobsWorkspace"):]
         jobs = jobs[:jobs.index("\n    private func")]
         placeholder = jobs[jobs.index("!studio.hasBatchHistory"):]
         placeholder = placeholder[:placeholder.index("\n                }")]
-        # Which Studio it is comes from the tab, never from a name written into the page.
         self.assertNotIn(".video", placeholder, "the placeholder must be driven by the tab's studio")
         self.assertIn("studio.hasBatchHistory", placeholder,
                       "the placeholder is for a Studio the Hub files nothing for")
-        self.assertIn("is not in this build yet", placeholder,
-                      "the tab must say the Studio is not here, not that it has no jobs")
-        # ...and it lists nothing: no rows, and no control that would do something.
-        self.assertNotIn("jobRow(", placeholder, "the Video tab must not draw a job row")
-        self.assertNotIn("Button(", placeholder, "the Video tab must offer no controls")
-        self.assertNotIn("ProgressView", placeholder)
-        # No promise of a date, and no claim that work exists.
-        for promise in ("coming soon", "Coming soon", "soon", "2026", "2027"):
-            self.assertNotIn(promise, placeholder,
-                             f"the placeholder must not promise {promise!r}")
 
     def test_an_empty_chat_tab_says_no_chat_jobs_yet(self) -> None:
         """The honest empty state, for a build running before the Hub records any."""

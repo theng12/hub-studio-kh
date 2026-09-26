@@ -121,6 +121,15 @@ final class FixtureProtocol: URLProtocol {
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     /// One frame of 16-bit mono 8 kHz PCM: the smallest thing that is still a WAV.
+    /// A minimal ISO base media file, for the Video lane's own artifact checks: bytes 4-8 are
+    /// `ftyp`, which is what the native reader verifies exactly as it verifies a PNG signature.
+    static let mp4: Data = {
+        var body = Data([0x00, 0x00, 0x00, 0x18])
+        body.append(Data("ftypmp42".utf8))
+        body.append(Data(repeating: 0, count: 64))
+        return body
+    }()
+
     static let wav: Data = {
         var body = Data()
         func le32(_ value: UInt32) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
@@ -352,7 +361,7 @@ final class FixtureProtocol: URLProtocol {
     /// not derive the answer from the app. It previously answered `/studio/subtitle/...`, which
     /// the real Hub refuses with 404 "unknown studio" - so every gate passed while the app's
     /// Transcribe button could not work, and only the owner clicking it found out.
-    private static let hubRoutedModalities: Set<String> = ["image", "voice", "transcription", "music", "chat"]
+    private static let hubRoutedModalities: Set<String> = ["image", "voice", "transcription", "music", "chat", "video"]
 
     override func startLoading() {
         let path = request.url?.path ?? ""
@@ -731,10 +740,10 @@ final class FixtureProtocol: URLProtocol {
                 // It is placed by its modality like every other batch, so the Chat tab lists real
                 // work rather than only an empty state.
                 ["id": "chat-job", "modality": "chat"],
-                // One modality that maps to a Studio with no batch history, and one this build has
-                // never heard of. Both must be named in the startup note: the old filter skipped
-                // anything not on its list before the loop, so neither was shown, counted or
-                // reported.
+                // A real local Video batch, filed under Video like every other Studio's work —
+                // and one modality this build has never heard of, which must be named in the
+                // startup note: the old filter skipped anything not on its list before the loop,
+                // so it was neither shown, counted nor reported.
                 ["id": "video-job", "modality": "video"],
                 ["id": "hologram-job", "modality": "hologram"],
             ]
@@ -805,6 +814,25 @@ final class FixtureProtocol: URLProtocol {
                 "items": [["index": 0, "state": "uncertain", "prompt": "Warm lo-fi beat", "artifact_url": "/api/hub/jobs/music-uncertain/items/0/artifact", "bytes": Self.wav.count, "sha256": uncertainSHA,
                            "params": Self.musicParams]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: pending))
+        case ("GET", "/api/hub/jobs/video-job"):
+            let sha = SHA256.hash(data: Self.mp4).map { String(format: "%02x", $0) }.joined()
+            // `duration_seconds` is the Hub's copy of the worker's own measured MP4 length; the
+            // row reads it through `HubJobItem.videoDurationS`.
+            let body: [String: Any] = ["id": "video-job", "modality": "video",
+                "model": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX", "created_at": 38,
+                "items": [["index": 0, "state": "done", "progress": 1.0,
+                           "prompt": "A slow push toward a quiet harbour",
+                           "artifact_url": "/api/hub/jobs/video-job/items/0/artifact",
+                           "bytes": Self.mp4.count, "sha256": sha,
+                           "media_type": "video/mp4", "duration_seconds": 4.04,
+                           "width": 704, "height": 448, "frames": 97, "runtime_s": 304.0,
+                           "params": ["aspect_ratio": "11:7", "resolution": "448p",
+                                      "duration_seconds": 4]]]]
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case ("GET", "/api/hub/jobs/video-job/items/0/artifact"):
+            result = (200, "video/mp4", Self.mp4)
+        case ("POST", "/api/hub/jobs/video-job/items/0/ack"):
+            result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/jobs/music-job"):
             let sha = SHA256.hash(data: Self.wav).map { String(format: "%02x", $0) }.joined()
             Self.lock.lock(); let uncertain = Self.uncertainMusic; Self.lock.unlock()
@@ -2869,17 +2897,16 @@ struct NativeAPITests {
                     "\(history.function.rawValue) rows must be real jobs")
         }
 
-        // B32: the Chat tab lists real Chat work, and Video's tab is honestly empty.
+        // B32: the Chat tab lists real Chat work, and the Video tab lists real clips.
         //
         // A Chat-page send is synchronous and used to leave no job behind at all, so a Chat tab
         // over `/api/hub/jobs` could only ever have been empty. The Hub now records each attempt as
         // a finished one-item batch; the app has to place it by its modality, carry the answer, and
-        // give the row the facts the other rows have. Video has no engine, so its tab must say so
-        // and list nothing - which is a different claim from "no jobs yet".
-        require(StudioFunction.chat.hasBatchHistory && StudioFunction.video.hasHistoryTab,
-                "Chat must have a batch history and Video must keep its placeholder tab")
-        require(StudioFunction.video.hasBatchHistory == false,
-                "Video has no jobs to file, so it must not claim a batch history")
+        // give the row the facts the other rows have. **Video followed on 2026-09-26**: the worker
+        // and the batch history exist, so the tab that used to be an honest placeholder now files
+        // clips like every other Studio.
+        require(StudioFunction.chat.hasBatchHistory && StudioFunction.video.hasBatchHistory,
+                "Chat and Video both file Hub batches, so both must claim a batch history")
         // `HistoryTab.allCases` is built from this same pair in the SwiftUI layer, so a Studio that
         // answers yes here has a tab there without this binary needing to know about tabs.
         require(StudioFunction.allCases.allSatisfy(\.hasHistoryTab),
@@ -2888,8 +2915,8 @@ struct NativeAPITests {
         require(store.startupNote?.contains("chat") != true,
                 "a Chat batch must be placed, not reported as a modality this build cannot place: "
                     + "\(store.startupNote ?? "nil")")
-        require(store.startupNote?.contains("video") == true,
-                "the fixture's video batch must still be reported by name, got: \(store.startupNote ?? "nil")")
+        require(store.startupNote?.contains("video") != true,
+                "the fixture's video batch is placed under Video, so it must not be reported as unplaceable, got: \(store.startupNote ?? "nil")")
         let chatJobs = store.jobs(for: .chat)
         require(chatJobs.count == 1 && chatJobs.first?.id == "chat-job",
                 "the Hub's Chat batch must be listed under Chat, got: \(chatJobs.map(\.id))")
@@ -2932,12 +2959,17 @@ struct NativeAPITests {
                 "the fixture's extra batch must be gone once the control is turned off")
         require(store.jobHistories.contains { $0.function == .chat && $0.jobs.count == 1 },
                 "the Chat tab must have a section with the Chat job in it")
-        require(store.jobs(for: .video).isEmpty,
-                "the Video tab must list nothing rather than another Studio's work")
+        let videoJobs = store.jobs(for: .video)
+        require(videoJobs.count == 1 && videoJobs.first?.id == "video-job",
+                "the Hub's Video batch must be listed under Video, got: \(videoJobs.map(\.id))")
+        require(videoJobs.first?.durationSeconds == 4.04,
+                "a finished clip must carry the length the worker measured, got: \(String(describing: videoJobs.first?.durationSeconds))")
+        require(store.audioJobs.allSatisfy { $0.id != "video-job" },
+                "a Video batch must not be filed under another Studio's history")
 
         // B28: "Use in …" must point the Studio that owns the model at it. It used to set the
         // Subtitle selection for every non-audio model.
-        for function in engineFunctions where function != .video {
+        for function in engineFunctions {
             guard let model = store.models.first(where: { $0.function == function && $0.supported }) else { continue }
             store.select(model)
             let selected = store.supportedModels(for: function).contains { $0.repo == model.repo }
@@ -3121,8 +3153,6 @@ struct NativeAPITests {
         // batch history must appear in the startup note.
         require(store.startupNote?.contains("hologram") == true,
                 "a modality with no Studio must be reported by name, got: \(store.startupNote ?? "nil")")
-        require(store.startupNote?.contains("video") == true,
-                "a Studio with no batch history must be reported by name, got: \(store.startupNote ?? "nil")")
         require(store.startupNote?.contains("native/StudioAPI.swift") == true,
                 "the report must name the file to update, got: \(store.startupNote ?? "nil")")
         require(store.audioJobs.allSatisfy { $0.id != "hologram-job" && $0.id != "video-job" },

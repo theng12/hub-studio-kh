@@ -56,6 +56,10 @@ may still run there, and one at or below may still not (see the peak-memory note
 | **Music** | | | | | | |
 | ACE-Step 1.5 Turbo (2B DiT) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Stable Audio 3 Medium (1.4B) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
+| **Video** | | | | | | |
+| Lance 3B Video MLX bf16 | lance-mlx (MLX) | 16 GB | no | yes | yes | yes |
+| gemma-3-12b-it-4bit *(supporting files)* | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
+| LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB) | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
 
 `yes` / `no` above is arithmetic on the published floor. It is not a measurement, and the
 section below is where measurements live.
@@ -69,6 +73,7 @@ section below is where measurements live.
 | Qwen3.5-9B 4-bit | uniform 4-bit MLX | 16 GB · Apple M4 | [M] completed a 256-token completion — speed 18.33–18.60, generation 13.97 / 13.76, load 12.48 s, peak MLX 5.23 GB, swap peak 0.0 MB, memory free at start 7.78 GB | `qualification/README-chat-tiers.md` |
 | Z-Image-Turbo 6B MLX 4-bit | 4-bit mflux pack | 32 GiB · Apple M2 Max | [M] 1280×720, 9 steps, seed 42 — completed in both configurations — generation, default 166, generation, low RAM 236, peak MLX, default 9.84, peak MLX, low RAM 6.26, peak footprint, default 17.7, peak footprint, low RAM 7.12, swaps 0 | `qualification/z-image-turbo-2026-09-24.md` |
 | FLUX.2 Klein 4B MLX 4-bit | 4-bit MLX | 32 GiB · Apple M2 Max | [M] measured beside Z-Image in the same configuration; no stored runtime of its own — peak MLX, default 12.9, low-RAM mode none — this model has no bounded configuration, weights on disk 4.62 GB | `qualification/z-image-turbo-2026-09-24.md` |
+| LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB) | mixed 2–8 bit MLX (per-tensor, the pack's own loader) | 32 GiB · Apple M2 Max | [M] one image-to-video generation, 704x448 at 97 frames/24 fps, with audio; run twice — standalone (298.5 s) and through the Video worker's own job path (304.0 s) — generation, default 304.0, peak MLX, default 13.19, peak footprint, default 16.38, weights on disk 17.81 GB, output seconds 4.04 s, resolution 704x448, frames 97, audio yes (one audio track verified in the produced MP4) | `qualification/ltx-video-worker-results-20260926-210721/measurement.json` |
 
 `[M]` on every row above: each is a run that left the record named in the last column.
 
@@ -95,12 +100,12 @@ than a curated one:
 
 ## What is NOT measured
 
-21 of 24 packages have no run behind them — their floor is
+23 of 27 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`ace-step-1-5-turbo`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`ace-step-1-5-turbo`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `lance-3b-video-bf16`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -131,4 +136,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 24 manifests, 5 recorded readings and 5 voice runtime rows.
+Generated from 27 manifests, 6 recorded readings and 5 voice runtime rows.

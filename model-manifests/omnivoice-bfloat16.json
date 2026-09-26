@@ -123,7 +123,7 @@
         "revision": "6119f7072580cc30c3cbdf496269216b03ad9742",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/revision/6119f7072580cc30c3cbdf496269216b03ad9742",
-        "tree_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/tree/6119f7072580cc30c3cbdf496269216b03ad9742?recursive=true&expand=true"
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/tree/6119f7072580cc30c3cbdf496269216b03ad9742?recursive=true&expand=true&limit=100"
       }
     ]
   }

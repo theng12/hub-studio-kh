@@ -143,6 +143,26 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # lower-case `model/mlx/` destination, which is the same file on macOS's
     # case-insensitive volume and is why the file-selection check compares case-insensitively.
     {"package_id": "stable-audio-3-medium", "model_id": "stabilityai/stable-audio-3-optimized", "revision": "da6edc54ddba10bfd79a077102ded687f80e882b", "engine": "music-mlx", "exclude": ("*.gitignore",)},
+    # ── Video: the LTX-2.3 22B mixed-precision pack and its text encoder ──
+    # The pack is the one that produced the first successful run on this Mac
+    # (qualification/ltx-video-results-20260926-32gb-first-success): 704x448, 97 frames,
+    # 4.04 s with audio, 298.5 s wall, peak process footprint 16.38 GB. Its weights are
+    # quantized per-tensor across 2/3/4/5/6/8 bits and the pack ships its own loader in
+    # `generate.py`; the manifest lists that file because the worker applies it before the
+    # pipeline is constructed. Sample images and the publisher's README are furniture.
+    {"package_id": "ltx-2-3-22b-ram-12gb-mlx", "model_id": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX", "revision": "d8a9d2f6081c4136130983a0b612962418ddf203", "engine": "video-ltx", "requires_packages": ["gemma-3-12b-it-4bit"], "exclude": ("samples/*", "*.png", "*.jpg", "*.jpeg", "__pycache__/*")},
+    # The text encoder is a real dependency, not a convenience: the pipeline loads it for every
+    # prompt and would otherwise fetch it over the network at generation time. It is declared
+    # `video-ltx` so the Video worker resolves its installed folder and passes the local path,
+    # and it is listed in the pack's `requires_packages` so the Hub marks it a dependency rather
+    # than offering it in a picker as if it were a video model.
+    {"package_id": "gemma-3-12b-it-4bit", "model_id": "mlx-community/gemma-3-12b-it-4bit", "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", "engine": "video-ltx"},
+    # ── Video: Lance 3B, the small tier's T2V model ──
+    # The manifest and the tier ship now; the runner (`github.com/xocialize/lance-mlx`, a source
+    # repo rather than a package) is not adopted into this build yet, so the worker publishes the
+    # row with `execution_ready: false` and the adoption step named. The publisher's sample
+    # comparisons are furniture.
+    {"package_id": "lance-3b-video-bf16", "model_id": "mlx-community/Lance-3B-Video-bf16", "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af", "engine": "video-lance", "exclude": ("samples/*",)},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -183,6 +203,29 @@ DETAILS: dict[str, dict[str, Any]] = {
     # ── Music: the ACE-Step 1.5 Turbo and Stable Audio 3 Medium engines ──
     "ace-step-1-5-turbo": {"defaults": {"dit_model": "acestep-v15-turbo", "lm_model": "acestep-5Hz-lm-0.6B", "inference_steps": 8, "guidance_scale": 1, "shift": 3, "audio_format": "wav", "sample_rate_hz": 48000, "channels": 2}, "memory": (8, 16, "Probe peak process-tree RSS 4.645 GiB; peak system used 14.552 GiB of 16 GiB.")},
     "stable-audio-3-medium": {"defaults": {"dit_model": "dit_medium", "decoder": "same-l", "inference_steps": 8, "guidance_scale": 1.0, "audio_format": "wav", "sample_rate_hz": 44100, "channels": 2, "max_duration_seconds": 380}, "memory": (8, 16, "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s.")},
+    # ── Video: the LTX-2.3 22B pack and the text encoder it loads ──
+    # MEASURED here [M] on the 32 GB M2 Max: 704x448, 97 frames, seed 42, 298.5 s wall,
+    # 4.04 s of output with audio, peak process footprint 16.38 GB (ri_phys by the pack's own
+    # runner), peak MLX Metal 13.19 GB, RSS 9.91 GB. The 16 GB tier is a vendor claim this
+    # measurement contradicts for the 22B model, so the floor is 24 GB and a 16 GB machine is
+    # not offered the model. `defaults` mirror the worker's registry entry, which is the
+    # artefact that states them.
+    # `qualified` in this catalog's vocabulary means "a run left a record", and two do: the
+    # standalone qualification run (298.5 s) and the same configuration driven through the
+    # worker's own job path (304.0 s, job 627c7fbc). `reason` states exactly what those runs do
+    # *not* cover — no 24 GB run, text-to-video unmeasured — so the status is not read as more
+    # than it is.
+    "ltx-2-3-22b-ram-12gb-mlx": {"defaults": {"mode": "image-to-video", "aspect_ratio": "16:9", "resolution": "512x288", "duration_seconds": 4, "frame_rate": 24, "seed": -1, "parameters_source": "components/video/app/backend/generation.py"}, "memory": (24, 32, "MEASURED on this Mac, 2026-09-26 [M], twice: the standalone qualification run (704x448, 97 frames, 24 fps, seed 42, 298.5 s wall, 4.04 s of output with audio, peak process footprint 16.38 GB, peak MLX Metal 13.19 GB) and the same configuration through the Video worker's own job path (304.0 s wall, peak MLX 14,163,847,570 bytes, peak ri_phys footprint 15.71 GB sampled at 1 Hz, artifact 1,784,058 bytes with one video and one audio track). The measurement is the reason the tier is 24 GB rather than the vendor's 16 GB: MLX had no memory pressure to trim on a 32 GB host, so 16.38 GB is a floor, not a worst case. 16 GB is not offered the model."), "qualification": {"status": "qualified", "reason": "Qualified by two matching runs of one configuration (image-to-video, 704x448, 97 frames) on the owner's 32 GB M2 Max through the pack's own mixed-precision loader. What is NOT covered and is not claimed: no run on a 24 GB machine, and text-to-video has not been run on hardware here. The lane publishes the measured configuration's runtime and no other."}},
+    # A companion: it has no picker row of its own (the Hub marks any package another package
+    # requires as a dependency) and no runtime of its own. The floor mirrors the model whose
+    # pipeline loads it, because a machine that cannot hold the 22B model cannot use the encoder
+    # either.
+    "gemma-3-12b-it-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (24, 32, "Companion of the LTX-2.3 22B pack: the pipeline loads this text encoder for every prompt, and its 5.0 GB of weights are inside that pack's measured 16.38 GB process footprint.")},
+    # [V] The model card's own figures, and they are the only evidence that exists: no local run,
+    # because neither the lance-mlx runner nor the weights are adopted here yet. The card groups
+    # 8-16 GB together while its own worked example (256x61f, ~8.7 GB by ri_phys) exceeds an
+    # 8 GB machine's whole RAM, so the published floor is the card's credible side.
+    "lance-3b-video-bf16": {"defaults": {"mode": "text-to-video", "aspect_ratio": "1:1", "resolution": "448x448", "duration_seconds": 4, "frame_rate": 24, "seed": -1, "parameters_source": "components/video/app/backend/generation.py"}, "memory": (16, 16, "Vendor claim [V], not measured here: memory_mode=relay fits 8-16 GB; lossless streaming VAE decode is flat in frame count at 256x49f 7.99 GB, 256x121f 8.05 GB, 512x61f 12.64 GB by ri_phys (OS-committed footprint). The card's worked example, 256x61f at ~8.7 GB, is larger than an 8 GB machine's whole RAM, so 8 GB is doubtful and not promised; 16 GB is the tier this manifest publishes."), "qualification": {"status": "unqualified", "reason": "No local run exists. The runner is the lance-mlx source repo and is not adopted into this build yet, so the worker publishes the package with execution_ready false and names that adoption step."}},
 }
 
 

@@ -288,6 +288,11 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     "subtitle-mlx": ("subtitle", "transcription"),
     "music-mlx": ("music", "music"),
     "chat-mlx": ("chat", "chat"),
+    # Video has two runners and therefore two engines, both served by the one Video worker:
+    # `video-ltx` is the 22B pack this build can run, `video-lance` names the lance-mlx source
+    # runner it cannot yet. A manifest for either is published with the worker's own verdict.
+    "video-ltx": ("video", "video"),
+    "video-lance": ("video", "video"),
 }
 
 _ENGINE_REGISTRATION_HINT = (

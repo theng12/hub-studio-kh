@@ -7,7 +7,7 @@ workflows remain their named later tasks. This document extends the existing Hub
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.
-- [Model catalog](../model-manifests/): 24 exact packages; no moving model revisions.
+- [Model catalog](../model-manifests/): 27 exact packages; no moving model revisions.
 - [Runtime input records](../research/st01-runtime-contracts.json): engine families,
   lock hashes, source provenance and limits of the import/audit evidence.
 - [Model package tests](../tests/test_model_packages.py): filesystem, download and receipt behavior.
@@ -24,7 +24,7 @@ Each package contains:
 | schema_version | 1; reject unknown versions |
 | package_id | Stable local catalog key, independent of its download host |
 | model_id / revision | Publisher model ID and full pinned Git revision |
-| engine | The engines the catalog ships: image-mflux, voice-mlx, voice-vits, subtitle-mlx, music-mlx, chat-mlx |
+| engine | The engines the catalog ships: image-mflux, voice-mlx, voice-vits, subtitle-mlx, music-mlx, chat-mlx, video-ltx, video-lance |
 | minimum_macos | Current qualification candidate; not physical model qualification |
 | files | Relative destination path, byte size, expected SHA-256 and HTTPS sources |
 | files.source_path | Optional primary-file alias for an original publisher folder without the model/ prefix |

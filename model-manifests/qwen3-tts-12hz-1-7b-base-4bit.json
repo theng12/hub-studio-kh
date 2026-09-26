@@ -144,7 +144,7 @@
         "revision": "37e955a1deb861c088ae5f3a67043185f3d1a60c",
         "role": "model",
         "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit/revision/37e955a1deb861c088ae5f3a67043185f3d1a60c",
-        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit/tree/37e955a1deb861c088ae5f3a67043185f3d1a60c?recursive=true&expand=true"
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit/tree/37e955a1deb861c088ae5f3a67043185f3d1a60c?recursive=true&expand=true&limit=100"
       }
     ]
   }

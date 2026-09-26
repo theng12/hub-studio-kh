@@ -720,20 +720,26 @@ class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
                                  f"{name} does not select the default")
                 self.assertEqual(module.MODES, voice.MODES)
 
-    def test_image_is_the_only_fixed_policy_and_keeps_its_single_mode(self) -> None:
-        """Image is deliberately correct as it stands: mflux exits after every job.
+    def test_the_two_fixed_policies_are_the_studios_that_cannot_keep_a_model(self) -> None:
+        """Image and Video are fixed for the same measured reason: the engine exits after each job.
 
-        The Hub renders a one-mode ("fixed") policy as a sentence rather than four buttons
-        that would do nothing, so nobody should "fix" Image by giving it modes - and nobody
-        should declare a second fixed Studio to dodge the control either.
+        Image: mflux is built inside the job and dropped when it ends. Video: the LTX pipeline is
+        constructed inside the job and dropped in its own `finally`, and it has to be — the pack's
+        measured process footprint is 16.38 GB, so a resident pipeline would hold half of a 32 GB
+        Mac between jobs.
+
+        The Hub renders a one-mode ("fixed") policy as a sentence rather than four buttons that
+        would do nothing, so nobody should "fix" either Studio by giving it modes — and the
+        *reason* is what qualifies a Studio for this list, not the convenience of skipping the
+        control.
         """
         modules = studio_policy_modules()
         voice = importlib.import_module("components.voice.app.backend.memory_policy")
         fixed = sorted(name for name, module in modules.items()
                        if getattr(module, "FIXED", False))
-        self.assertEqual(fixed, ["image"],
-                         "Image is the documented one-mode exception; every other Studio "
-                         "has a real residency choice")
+        self.assertEqual(fixed, ["image", "video"],
+                         "Image and Video are the documented one-mode exceptions; every other "
+                         "Studio has a real residency choice")
         image = modules["image"]
         self.assertEqual(set(image.MODES), {"immediate"})
         self.assertEqual(image.MODES["immediate"]["idle_seconds"],
@@ -749,6 +755,15 @@ class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
         self.assertEqual(row["loaded_models"], [])
         self.assertEqual(row["release_policy"],
                          "The model is released when each job finishes.")
+
+        video = modules["video"]
+        self.assertEqual(set(video.MODES), {"immediate"})
+        video_row = video.status(_NoJobs())
+        self.assertIs(video_row["fixed"], True)
+        self.assertEqual(video_row["mode"], "immediate")
+        self.assertEqual(video_row["idle_seconds"], 0)
+        self.assertEqual(video_row["release_policy"],
+                         "The pipeline is released when each job finishes.")
 
     def test_music_publishes_the_five_modes_and_the_shared_default(self) -> None:
         """The regression this contract exists to catch: Music had no policy at all."""

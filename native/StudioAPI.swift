@@ -2126,6 +2126,19 @@ final class NativeWorkspaceStore: ObservableObject {
     /// the banner every workspace shares.
     @Published var musicNote: String?
     @Published private(set) var submittingMusic = false
+    /// Per-Studio Video history and the last Video draft, mirroring Music. Same Hub queue,
+    /// filtered to `modality == "video"`.
+    @Published private(set) var videoJobs: [NativeJob] = []
+    @Published var videoPrompt = "" { didSet { scheduleSave() } }
+    @Published var videoModel = "" { didSet { scheduleSave() } }
+    /// The lane's own published choices. Empty until a model is selected; the form reads the
+    /// model's contract rather than a ladder written here, and sends only what it publishes.
+    @Published var videoAspectRatio = "" { didSet { scheduleSave() } }
+    @Published var videoResolution = "" { didSet { scheduleSave() } }
+    @Published var videoDurationSeconds = 0 { didSet { scheduleSave() } }
+    /// A Video-only note, shown beside the Video form.
+    @Published var videoNote: String?
+    @Published private(set) var submittingVideo = false
     var musicConfiguration: NativeMusicConfiguration? { musicConfigurations[musicModel] }
     /// Which Mac new work should run on, as the Hub's `routing` value: nil means the Hub picks,
     /// and `machine:<id>` pins one machine. Kept as the owner's standing choice so a pin set on
@@ -2794,6 +2807,7 @@ final class NativeWorkspaceStore: ObservableObject {
             var musics: [NativeJob] = []
             var subtitlesFromHub: [NativeJob] = []
             var chats: [NativeJob] = []
+            var videos: [NativeJob] = []
             var unreadable = 0
             // The batch's own `modality` decides where it goes, not a list here that skips
             // anything it has not heard of before the loop: a skipped batch was not shown, not
@@ -2802,9 +2816,10 @@ final class NativeWorkspaceStore: ObservableObject {
             var unplaceable: [String: Int] = [:]
             var finished: [String: NativeJob] = [:]
             for batch in (jobsValue?.batches ?? []) {
-                // A modality this build cannot place, or one that maps to a Studio with no batch
-                // history (Chat answers a prompt directly; Video has no engine), is named rather
-                // than skipped: the loop must not fetch a detail it has nowhere to show.
+                // A modality this build cannot place, or one that maps to a Studio with no
+                // batch history, is named rather than skipped: the loop must not fetch a detail
+                // it has nowhere to show. Every Studio ships a batch history now, so this is
+                // reached only by a modality this build has never heard of.
                 guard let function = Self.function(forModality: batch.modality),
                       function.hasBatchHistory else {
                     unplaceable[batch.modality, default: 0] += 1
@@ -2813,7 +2828,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 if let known = finishedJobCache[batch.id] {
                     finished[batch.id] = known
                     Self.file(known, for: function, images: &images, musics: &musics,
-                              history: &history, subtitles: &subtitlesFromHub, chats: &chats)
+                              history: &history, subtitles: &subtitlesFromHub, chats: &chats,
+                              videos: &videos)
                     continue
                 }
                 do {
@@ -2822,7 +2838,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     let job = Self.mapHubJob(detail)
                     if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
                     Self.file(job, for: function, images: &images, musics: &musics,
-                              history: &history, subtitles: &subtitlesFromHub, chats: &chats)
+                              history: &history, subtitles: &subtitlesFromHub, chats: &chats,
+                              videos: &videos)
                 } catch {
                     // A batch whose detail will not load is one row, not the whole page: the listing
                     // is a convenience over the Hub's history, and losing it should not read as the
@@ -2851,6 +2868,7 @@ final class NativeWorkspaceStore: ObservableObject {
             audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             musicJobs = musics.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            videoJobs = videos.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var subtitles: [NativeJob] = subtitlesFromHub
             for batch in (subtitleValue?.batches ?? []) where !subtitles.contains(where: { $0.id == batch.id }) {
                 let batchState = batch.status ?? "unknown"
@@ -3656,6 +3674,132 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the music job") } }
     }
 
+    /// Submit one Video job through the same durable Hub route Image, Music and Voice use.
+    ///
+    /// Text-to-video only, and deliberately so: the Hub's broker takes a reference image as
+    /// multipart on its own img2video door, and the surface that owns scene images is Story
+    /// Studio. What this page adds is the lane the owner asked for — a local model, its tier and
+    /// its own published options — not a second image picker beside Story's.
+    ///
+    /// The request carries only parameters the selected model's `lane_contract` publishes:
+    /// `aspect_ratio`, `resolution` and `duration_seconds`, each taken from the lane's own enum.
+    /// A model that publishes none of them still submits a prompt, because those are optional in
+    /// every video contract this build ships.
+    func generateVideo() async {
+        guard !submittingVideo, let requestConnection = connectionID else { return }
+        do {
+            let model = try usableModel(repo: videoModel, function: .video)
+            let prompt = videoPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prompt.isEmpty else { throw NativeAPIError.message("Describe the video you want.") }
+            guard prompt.count <= 4_000 else { throw NativeAPIError.message("The prompt exceeds the 4,000-character limit.") }
+            var params: [String: NativeJSONValue] = [:]
+            if !videoAspectRatio.isEmpty { params["aspect_ratio"] = .string(videoAspectRatio) }
+            if !videoResolution.isEmpty { params["resolution"] = .string(videoResolution) }
+            if videoDurationSeconds > 0 { params["duration"] = .integer(videoDurationSeconds) }
+            let body = HubVideoRequest(
+                modality: "video", model: model.repo,
+                clientRequestId: "native:\(UUID().uuidString)",
+                items: [HubVideoItem(prompt: prompt, params: params)],
+                routing: routingPin)
+            submittingVideo = true
+            defer { if connectionID == requestConnection { submittingVideo = false } }
+            let response: HubJobSubmit = try await sendHubJSON(["api", "hub", "jobs"], body: body)
+            guard connectionID == requestConnection else { return }
+            let detail: HubJobDetail = try await get(["api", "hub", "jobs", response.batchId])
+            guard connectionID == requestConnection else { return }
+            let job = Self.mapHubJob(detail)
+            videoJobs.removeAll { $0.id == job.id }; videoJobs.insert(job, at: 0)
+            videoNote = job.state == "uncertain"
+                ? "The Video result is uncertain. The Hub keeps the original attempt; reconcile it rather than resubmitting."
+                : nil
+            error = nil
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Generate video") }
+        }
+    }
+
+    func cancelVideo(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard videoJobs.contains(where: { $0.id == job.id }) else {
+                throw NativeAPIError.message("That video job is no longer in the current history.")
+            }
+            let _: HubCancelResponse = try await sendEmpty(["api", "hub", "jobs", job.id], method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            await refresh()
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the video job") }
+        }
+    }
+
+    /// Check only the original uncertain Video job; never submit a replacement.
+    func reconcileVideo(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            guard videoJobs.contains(where: { $0.id == job.id && $0.state == "uncertain" }) else {
+                throw NativeAPIError.message("Refresh the original uncertain Video job before checking its result.")
+            }
+            let result: HubReconciliation = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", "0", "reconcile"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            await refresh()
+            guard connectionID == requestConnection else { return }
+            videoNote = result.reconciled
+                ? nil
+                : "The original Video result is still uncertain. Its request remains protected; no new generation was submitted."
+        } catch {
+            if connectionID == requestConnection { self.error = Self.actionable(error, action: "Check the original Video result") }
+        }
+    }
+
+    /// Read a finished clip's bytes from the Hub, verifying them against its receipt first.
+    ///
+    /// The same order every other artifact takes: the stored receipt is checked before the fetch,
+    /// the fetched bytes are hashed against it after, and only then may anything be written. The
+    /// MP4 check is the video equivalent of the PNG signature: bytes 4–8 of an ISO base media
+    /// file are `ftyp`, and a body that is not one is not a clip.
+    func videoData(for job: NativeJob) async throws -> Data {
+        guard let requestConnection = connectionID else {
+            throw NativeAPIError.message("Start the local services before retrieving video.")
+        }
+        guard job.state == "done", videoJobs.contains(where: { $0.id == job.id }),
+              let bytes = job.bytes, bytes > 0, let sha = job.sha256,
+              sha.count == 64, sha.allSatisfy({ $0.isHexDigit }) else {
+            throw NativeAPIError.message("This clip has no verified completed result. Refresh its job before saving.")
+        }
+        let data = try await performData(
+            makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"]))
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The Hub connection changed before video retrieval completed.")
+        }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard Int64(data.count) == bytes, digest == sha.lowercased(),
+              data.count > 12, data[4..<8] == Data("ftyp".utf8) else {
+            throw NativeAPIError.message("Video verification failed. Refresh the job and retrieve its original result again.")
+        }
+        return data
+    }
+
+    /// Save a finished clip, verify it on disk, then acknowledge delivery.
+    func saveVideo(_ job: NativeJob, to destination: URL) async throws {
+        let requestConnection = connectionID
+        let data = try await videoData(for: job)
+        try data.write(to: destination, options: .atomic)
+        guard try Data(contentsOf: destination) == data else {
+            throw NativeAPIError.message("Saved video verification failed. Choose another destination and save again.")
+        }
+        guard connectionID == requestConnection else {
+            throw NativeAPIError.message("The video was saved and verified, but the local service connection changed before delivery was acknowledged. Save again to confirm delivery.")
+        }
+        do {
+            let receipt: HubAckReceipt = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", "0", "ack"], method: "POST")
+            if !receipt.ok { throw NativeAPIError.message("rejected") }
+        } catch {
+            throw NativeAPIError.message("The video was saved and verified, but its delivery was not acknowledged. Save again to confirm delivery.")
+        }
+    }
+
     /// Check only the original uncertain Music job; never submit a replacement.
     func reconcileMusic(_ job: NativeJob) async {
         guard let requestConnection = connectionID else { return }
@@ -3701,6 +3845,8 @@ final class NativeWorkspaceStore: ObservableObject {
     func discardImage(_ job: NativeJob) async { await discard(job, action: "Discard the image attempt") }
     func discardAudio(_ job: NativeJob) async { await discard(job, action: "Discard the audio attempt") }
     func discardMusic(_ job: NativeJob) async { await discard(job, action: "Discard the music attempt") }
+
+    func discardVideo(_ job: NativeJob) async { await discard(job, action: "Discard the video attempt") }
 
     /// Fetch one Music artifact and verify it against the Hub's own receipt.
     ///
@@ -6024,17 +6170,14 @@ final class NativeWorkspaceStore: ObservableObject {
     private static func file(_ job: NativeJob, for function: StudioFunction,
                              images: inout [NativeJob], musics: inout [NativeJob],
                              history: inout [NativeJob], subtitles: inout [NativeJob],
-                             chats: inout [NativeJob]) {
+                             chats: inout [NativeJob], videos: inout [NativeJob]) {
         switch function {
         case .image: images.append(job)
         case .music: musics.append(job)
         case .transcription: subtitles.append(job)
         case .audio: history.append(job)
         case .chat: chats.append(job)
-        case .video:
-            // Unreachable: `refresh` files only Studios that publish a batch history. Named here
-            // so adding a Studio case is a compile-time question, not a silent misfiling.
-            break
+        case .video: videos.append(job)
         }
     }
 
@@ -6305,7 +6448,7 @@ final class NativeWorkspaceStore: ObservableObject {
         case .music: return musicJobs
         case .transcription: return subtitleJobs
         case .chat: return chatJobs
-        case .video: return []
+        case .video: return videoJobs
         }
     }
 
@@ -6321,7 +6464,7 @@ final class NativeWorkspaceStore: ObservableObject {
         case .music: musicModel = model.repo
         case .transcription: transcriptionModel = model.repo
         case .chat: chatModel = model.repo
-        case .video: break   // No engine in this build, and no page to open.
+        case .video: videoModel = model.repo
         }
     }
 
@@ -6543,7 +6686,37 @@ final class NativeWorkspaceStore: ObservableObject {
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
                 minimumMemorySource: catalogTiers[item.repo]?.source)
         }
-        return audioModels + transcriptionModels + imageModels + chatModels
+        // A video model is whatever the catalogue publishes as one: the Hub's own modality
+        // annotation first, then the broker's capability tokens (`img2video` is the one its
+        // reference-image gate reads, so a model publishing it can be animated from a scene).
+        // The tier warning and the Hub's block verdict travel like every other Studio's.
+        let videoModels = catalog.filter { item in
+            if item.hubModality?.lowercased() == "video" { return true }
+            let tokens = Set(item.capabilities ?? [])
+            return !tokens.isDisjoint(with: ["img2video", "txt2video", "video"])
+        }.map { item in
+            let package = packages[item.repo]
+            let block = Self.blockReason(memoryWarning: item.memoryWarning,
+                                         memoryEligible: item.memoryEligible, package: package)
+            let cached = item.cache?.state == "cached"
+            let ready = item.runtimeReady == true && block == nil && cached
+            let note = ready
+                ? "Ready for local video generation."
+                : "Install the Video model and ensure the local Video worker is running."
+            return NativeModel(
+                id: "video:\(item.repo)", repo: item.repo, label: item.label,
+                family: item.family ?? "Video", function: .video, cached: cached,
+                supported: package != nil, supportNote: note, sizeGB: item.sizeGb,
+                capabilities: item.capabilities ?? [], languages: [], runtimeReady: ready,
+                supportsWordTimestamps: false, speakers: [], memoryWarning: item.memoryWarning,
+                blockReason: block, paused: package?.paused == true, pausedReason: package?.pausedReason,
+                pausedStudio: package?.pausedStudio,
+                laneContract: item.laneContract,
+                modelLimits: item.modelLimits,
+                minimumMemoryGB: catalogTiers[item.repo]?.value,
+                minimumMemorySource: catalogTiers[item.repo]?.source)
+        }
+        return audioModels + transcriptionModels + imageModels + chatModels + videoModels
             + Self.musicModels(catalog, packages: packages)
     }
 
@@ -6719,7 +6892,7 @@ final class NativeWorkspaceStore: ObservableObject {
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,
-            durationSeconds: item?.audioDurationS,
+            durationSeconds: item?.audioDurationS ?? item?.durationSeconds,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
             completionTokens: item?.usage?.completionTokens,
@@ -7689,6 +7862,12 @@ private struct HubJobItem: Decodable {
     /// How long the produced audio runs. The Hub records it when it adopts a finished voice
     /// job, and the app showed none of it - a generated clip had no stated length.
     let audioDurationS: Double?
+    /// How long the produced **video** clip runs, from the worker's own MP4 measurement. The Hub
+    /// copies `duration_seconds` onto a finished video item the same way it copies the Voice
+    /// worker's `audio_duration_s`; a video row read neither before this field existed. The name
+    /// is the wire key, not the producer: this decodes `duration_seconds`, which is why it is not
+    /// spelled `video_duration_s`.
+    let durationSeconds: Double?
     /// How long the generation itself took. `runtime_s` is written when an item finishes; a
     /// running job reports `elapsed_s` instead, so the operator sees a clock either way.
     ///
@@ -7783,6 +7962,26 @@ private struct HubMusicRequest: Codable {
         self.routing = routing
     }
 }
+private struct HubVideoRequest: Codable {
+    let modality: String
+    let model: String
+    let clientRequestId: String
+    let items: [HubVideoItem]
+    /// Overrides the Hub's automatic choice of Studio. Absent means automatic.
+    let routing: String?
+    init(modality: String, model: String, clientRequestId: String, items: [HubVideoItem],
+         routing: String?) {
+        self.modality = modality
+        self.model = model
+        self.clientRequestId = clientRequestId
+        self.items = items
+        self.routing = routing
+    }
+}
+/// One Video item. `params` is deliberately an open map of the lane's own published
+/// parameters — the form sends what the selected model's contract offers and nothing else, so a
+/// lane with no geometry control receives a prompt-only item rather than invented numbers.
+private struct HubVideoItem: Codable { let prompt: String; let params: [String: NativeJSONValue] }
 private struct HubMusicItem: Codable { let prompt: String; let params: NativeMusicSettings }
 private struct HubAckReceipt: Decodable { let ok: Bool }
 private struct HubAudioRequest: Codable {

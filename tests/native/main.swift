@@ -198,7 +198,7 @@ require(StudioFunction.allCases.count == 6,
         "a new Studio must land with its page, its symbol and this test updated")
 require(StudioPage.audio != StudioPage.transcription, "independent creation destinations")
 // The sidebar is grouped by what a page is for: work is created, libraries are maintained, the
-// fleet is connected, app pages are settings, and the engine-less Video studio waits at the end.
+// fleet is connected, and app pages are settings. "Coming later" is declared but empty now.
 require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet", "App", "Coming later"],
         "the sidebar sections are named and ordered as the owner asked")
 // Membership is derived from the Studio list, so a Studio added to the enum cannot be absent from
@@ -214,12 +214,13 @@ require(StudioFunction.allCases.filter { $0.hasEngine }.count == StudioPage.crea
         "every Studio with an engine must appear in Create exactly once")
 // The order inside Create is the owner's own (2026-09-15). A Studio this order does not name still
 // lands in a section — this asserts the display order, not membership.
-require(StudioPage.create == [.image, .audio, .transcription, .music, .chat],
-        "Create's order is the owner's, with any unplaced Studio appended")
+require(StudioPage.create == [.image, .audio, .transcription, .music, .chat, .video],
+        "Create's order is the owner's; Video joined it when the lane shipped")
 require(StudioPage.library == [.models, .voices, .jobs], "Library holds the things the operator maintains")
 require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
 require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")
-require(StudioPage.comingLater == [.video], "Video stays reachable but last")
+require(StudioPage.comingLater.isEmpty,
+        "every Studio has an engine now, so nothing is 'coming later'")
 // The notes are reachable from the App section, and the page must not pretend to be a workspace:
 // it creates nothing.
 require(StudioPage.whatsNew.function == nil, "What's New is a page, not a studio function")

@@ -110,6 +110,12 @@ class EveryPublishedWarningHasAPageTests(unittest.TestCase):
         "music": "Music",
         "subtitle": "Transcription",
         "voice": "Audio",
+        # Video publishes a warning too, and its page reads `selectedVideoModel` — and unlike the
+        # other five, its tier is a routing gate as well as advice: below it the worker publishes
+        # `memory_eligible: false`, which is what stops the gateway offering 22B weights to a
+        # machine that cannot load them. The sentence and the verdict are one fact, so the page
+        # renders the sentence and the Models screen shows the verdict.
+        "video": "Video",
     }
 
     def _publishing_workers(self) -> set[str]:
@@ -150,10 +156,10 @@ class EveryPublishedWarningHasAPageTests(unittest.TestCase):
         # warning could never have fired anyway, because `system_info._sysctl` called a bare
         # `sysctl` that is not on PATH, leaving every model's fit verdict "unknown" fleet-wide.
         self.assertEqual(sorted(self._publishing_workers()),
-                         ["chat", "image", "music", "subtitle", "voice"],
+                         ["chat", "image", "music", "subtitle", "video", "voice"],
                          "the set of workers publishing a below-tier warning has changed; if that "
                          "is deliberate, update STUDIO_ACCESSOR and this expectation together")
-        self.assertTrue({"Chat", "Image", "Music", "Transcription", "Audio"} <= set(
+        self.assertTrue({"Chat", "Image", "Music", "Transcription", "Video", "Audio"} <= set(
             re.findall(r"selected(\w+)Model\?\.memoryWarning", VIEWS)),
             "the render sites this invariant is measured against have been renamed or removed")
 

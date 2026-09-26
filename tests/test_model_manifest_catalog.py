@@ -248,9 +248,14 @@ class ModelManifestCatalogTests(unittest.TestCase):
 
     def test_manifest_contents_match_the_captured_inventory(self):
         expected_digests = {
-            # Updated only by a deliberate recapture of the exact pinned revisions.
+            # Updated only by a deliberate recapture of the exact pinned revisions. **All values
+            # were refreshed on 2026-09-26**: the capture tool gained `&limit=100` on its tree
+            # URL (Hub paginates at 50, so a large repo could silently lose weights), and that
+            # one field changed every manifest's canonical bytes.
+            #
+            # The three Video packages were captured in the same pass.
             "ace-step-1-5-turbo": "ee5bc058cac0906e048b75cc47c1b157e7f11f55e7d013cb6ab2f39803f1c929",
-            "flux2-klein-4b-mlx-4bit": "d49528a1b5da899519099f3312a7d1a60174c5f6c0858a6ac35daf16d1e0012d",
+            "flux2-klein-4b-mlx-4bit": "76dd3fda5d7e3fdd748d60dac4c68cfd0e4ca41ceca3a6c92da1fd293216b61b",
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
@@ -260,32 +265,32 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from
             # `unqualified` to `qualified` and `memory_evidence` records the runs and their
             # source. Nothing about the pinned revision or the file inventory changed.
-            "qwen3-5-9b-4bit": "d811e6cfd6604d99d2bdd79e41553e12935d6150099963973edb4806bd1c81e9",
-            "omnivoice-bfloat16": "a1bdd369266965067586274bc4d2f0e157425c508fe7036e0fcf56bf845b320a",
-            "qwen3-tts-12hz-0-6b-base-8bit": "23404870afb1a3ef651c496de9d0891f20c9f99488a92792bebcfd08ec54233e",
-            "qwen3-tts-12hz-1-7b-base-4bit": "f514eb0f48dda5f3173c08ac954e644e11802aa5525c821cdaff752a9ad722d7",
+            "qwen3-5-9b-4bit": "663c4d37a4eac49a44f832a1ad39598a9b6c3ec74b6943f112d368171e446503",
+            "omnivoice-bfloat16": "afe0f05af0f0b58ef7ce82d6a554d5b5326a2e31a698f0fe4df66bcd9852dee9",
+            "qwen3-tts-12hz-0-6b-base-8bit": "d5323130c0b0e5e114311b0dadd72ec55009edee57eb678f6372c2c55d377dd6",
+            "qwen3-tts-12hz-1-7b-base-4bit": "70e82cefde0cd14f9a1c3c0c88c00b0ddd5eac7ae515a5ae4104894f6a9ff948",
             # Recaptured: the 4-bit VoxCPM tier's published floor now records the owner's
             # 8 GB observation instead of the earlier inventory guidance.
-            "voxcpm2-4bit": "046da2b3f5e720c278eb15ccd6f5d5a70bd47a1bed434dd6e06350a0370ff64a",
-            "voxcpm2-8bit": "a5063ff38195bf0bb3ff3d0be72704e71a41e15b2f016477d8bde9c0eceac147",
-            "voxcpm2-bf16": "680d3a0b89a89853af24197f3a755e8789385c5ad38e5073830c5ec7604b228f",
-            "whisper-base": "2d693235ded62b3450ef7517d503ef9fbaf0c383588fa3ac520d729dcb422aa3",
-            "whisper-small": "17ecb436b5f484b6fd905decb8825f1f4c93fb52f187b5b54cd1c2901ed66bd0",
+            "voxcpm2-4bit": "5cdb1a9c15eaa4dda443230f943d02929f25d874d732843d802a66ffb2b5cfbd",
+            "voxcpm2-8bit": "e1b7cf2f09bc05cad9a731a4db961bb7b6a84348a05e20cab2185c347528d58d",
+            "voxcpm2-bf16": "7214ccf88643047ce0f9bdbe79906620b15c639e378408671e0b475dfb405467",
+            "whisper-base": "b616ff18632706cdd18dcbec769af8fb39cf661ff89b8b089ec34fdb29f4ec3e",
+            "whisper-small": "382e32aa8bbe7d35378289d06a8e2650ffdc6a8538f0b94940d386c91e21125e",
             # The three Whisper manifests now declare their own `subtitle` contract (and turbo the
             # catalog's single `"default": true`), which the Subtitle worker reads instead of
             # inventing multilingual/long-form capabilities. Their content changed, so their
             # digests did; the capture tool carries those blocks through `--write` verbatim.
-            "whisper-turbo": "1ce9fb4d4e15c003c76b170ca5f7b3545f914d80a85ef05fe57800b9a5509672",
+            "whisper-turbo": "037e95c87a891e090f2b21c3841d6dc283f3885327b989840c85977819b66692",
             # Adopted from the local Voice Studio cache rather than recaptured over the
             # network: the same pinned revisions, digests of the canonical manifests.
             # Recaptured 2026-09-24 with one companion spelling: `dependencies` was the first
             # field and `requires_packages` is the one every reader resolves, so the seven
             # manifests that still carried the legacy key were migrated and the key removed.
-            "chatterbox-4bit": "2998a8cfb0a343ccecad1d66dd5d378c76f3fbe6c86363b45fd9ad04cd371109",
+            "chatterbox-4bit": "7a1750449d4b8753f3e910796c31d4a05c128cddc66cab50c0ea8f15040e521a",
             "chatterbox-8bit": "6c787dfcd4b1b41220d2e4f251d909524bd92309b1dd1a1e476c4baf70fd421c",
-            "fish-audio-s2-pro-8bit": "de3a8f7f44541830b3d38a205797aea326dcb681b042be96783c641717726d6f",
-            "fish-audio-s2-pro-bf16": "9848ddd8f458ff1c604a85eb49f47e56f992ecf6158d3f28ea456b746fc70ca6",
-            "s3tokenizerv2": "e3ada13f437013b48efbba8f2caefb7f02ec914654174a8229a3afedd579ea1f",
+            "fish-audio-s2-pro-8bit": "668d3d442c914b521f12afa5152ef173654220c17ea14fa6bd763c7c6332f1ab",
+            "fish-audio-s2-pro-bf16": "7ab8a5665a93e6d824d22b359c8b28675048b460498fb58d96d9b6c9713f8234",
+            "s3tokenizerv2": "4835571cf6f0b69d5ac36acba402357cda9a7f18ddcc6a3eb4953264114422c9",
             # Stable Audio 3's MLX bundle, captured from the ungated optimized repo.
             "stable-audio-3-medium": "d847cf47d27aa11e398fbc4364b666e99f94a6b1fa22e1936b0314b1ccc2ac3e",
             # Khmer VITS families captured 2026-09-24 from the pinned revisions.
@@ -298,6 +303,19 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "pocket-tts-4bit": "a94980fb8095234549109fd28c8c6571d9e574af9afa3fdc5a0fba57a085a43c",
             "pocket-tts-tokenizer": "1cbf8f87957be8a66ccc26410eb5fbc1dcb710fd8fa966ba17d176e2d63b592a",
             "pocket-tts-preset-voices": "de5fe27a84dee4e939165ac8e97a0fa545134a5141e3a442454cde0d5d897851",
+            # ── Video: the LTX pack, its text encoder, and Lance ──
+            # Captured 2026-09-26. LTX's manifest is the first in this catalog whose status is
+            # `qualified` on the strength of a full generation driven through a *worker*, not a
+            # standalone runner, and its `memory_evidence` names both runs.
+            "ltx-2-3-22b-ram-12gb-mlx": "fd4ba808ea23c08331065caf628ab3a3e3eff7cf75a7e8c1655ebf12094889f1",
+            # A companion: 13 files / 8,068,018,787 bytes, the text encoder every LTX prompt
+            # loads. It has no runtime of its own and no picker row (the Hub marks it a
+            # dependency), which is why its floor mirrors the model it serves.
+            "gemma-3-12b-it-4bit": "7e286faf28c5cdd894187b261e92ff41aad0313547d9dc065596534047e98ff1",
+            # Lance 3B, the small tier's T2V model: 10 files / 15,631,104,325 bytes. The manifest
+            # and the tier ship now; the `lance-mlx` runner is not adopted into this build, so the
+            # worker publishes the row with `execution_ready: false` and names that step.
+            "lance-3b-video-bf16": "4aa7a0063ba43e3821f4d658b8b5aa0e0c4a35046c05634b69c4ef251b1679b0",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

@@ -2,6 +2,31 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.76 — 2026-09-26
+
+### Video is here
+
+There is a **Video** page in the Create section now, and it is a real Studio: pick the video model,
+describe the shot, choose from the sizes and durations that model itself publishes, and generate.
+The first model it runs is **LTX-2.3 22B** — the big one, for this Mac and the other 24/32 GB
+machines — and it makes a short clip **with its own soundtrack**.
+
+Image-to-video is the other half and it comes from the app that owns your scene images: **Story
+Studio** uploads the exact scene and asks this Hub to animate it. Both routes run the same lane on
+this Mac.
+
+- **The 22B model needs 24 GB and this build says so before it offers it.** On a 16 GB or 8 GB Mac
+  the model is simply not offered, instead of being offered and then failing to load. The measured
+  numbers behind that rule are in the changelog: a 4-second, 704×448 clip with audio took about five
+  minutes and peaked at a 16.4 GB process footprint on the 32 GB Mac.
+- **A smaller model is prepared but not switched on.** **Lance 3B** is the one meant for the 16 GB
+  machines. Its download and its memory tier are recorded, but the runner it needs is not part of
+  this build yet, so the app lists it honestly as not ready rather than pretending.
+- **A clip's length is measured, not guessed.** Each finished clip reports how long it actually runs,
+  and the file it produces is checked before it is offered for saving.
+- The **Jobs** page now has real video rows, and the sidebar no longer has a "Coming later" section —
+  every Studio has an engine.
+
 ## 0.6.75 — 2026-09-26
 
 ### Installing a new version can no longer half-install it

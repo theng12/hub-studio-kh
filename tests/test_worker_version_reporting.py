@@ -68,13 +68,14 @@ class NoWorkerInventsAVersionTests(unittest.TestCase):
             "components/app_version.py instead:\n  " + "\n  ".join(offenders))
 
     def test_every_worker_reads_the_release_rather_than_naming_a_version(self) -> None:
-        """Three workers, two readers, one rule: the value comes from the release manifest.
+        """Every worker, two readers, one rule: the value comes from the release manifest.
 
         Voice's `_read_app_version` came first, `components/app_version.py` is the shared reader
-        the Image and Music workers use, and the Subtitle worker reads the manifest path its
-        launcher was given (`STUDIOHUB_RELEASE_MANIFEST`) through `read_app_version`. All three
-        validate the same schema and refuse anything that is not a version triple, which is what
-        this asserts; converging them on one module is a follow-up, not a correctness gap.
+        the Image, Music, Chat and Video workers use, and the Subtitle worker reads the manifest
+        path its launcher was given (`STUDIOHUB_RELEASE_MANIFEST`) through `read_app_version`.
+        All of them validate the same schema and refuse anything that is not a version triple,
+        which is what this asserts; converging them on one module is a follow-up, not a
+        correctness gap.
         """
         mechanisms = {
             "voice": "_read_app_version",
@@ -82,6 +83,9 @@ class NoWorkerInventsAVersionTests(unittest.TestCase):
             "music": "app_version.version_fields()",
             "subtitle": "read_app_version(",
             "chat": "app_version.version_fields()",
+            # Video reads the staged release through the shared reader, so a staged worker
+            # reports the build it came from rather than a word.
+            "video": "app_version.version_fields()",
         }
         for main in worker_mains():
             name = main.parents[2].name

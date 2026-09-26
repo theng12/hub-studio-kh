@@ -436,7 +436,11 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 # Named here for the **GET** contract only. The POST and DELETE patterns below spell their
 # modalities out instead of reusing this regex, so widening it grants no write: the one chat
 # route that creates work is the single explicit POST entry further down.
-_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat)"
+#
+# `video` was added with the lane it names (2026-09-26). Same reasoning as chat: once a Video
+# worker exists, a controller shown the video catalog must be able to read its health, its
+# memory policy and its activity, or the failure is a 403 against a model the fleet advertises.
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -476,7 +480,11 @@ FLEET_ALLOWED = (
     # routes are deliberately absent: they are reachable over the same proxy, so a blanket
     # allowance for the studio surface would have handed a controller exactly the control this
     # scope exists to withhold.
-    ("POST", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
+    # `video` joined the work routes with its lane (2026-09-26): the Hub advertises a location's
+    # video models through `/api/hub/catalog`, so a controller that cannot POST the worker's own
+    # generate route would be offered work it is refused. Both video doors are under
+    # `/api/generate/`, which this pattern covers (`txt2video` and `video2video`).
+    ("POST", r"^/studio/(voice|subtitle|image|transcription|music|video)/api/generate/[A-Za-z0-9_./-]*$"),
     # Chat's work route, and the only one. A controller dispatches to a node exactly as this Hub
     # dispatches to its own workers, so the peer surface's spelling of the completion is the one
     # the fleet uses. The Hub's own `POST /api/hub/chat/completions` is deliberately NOT added
@@ -485,7 +493,7 @@ FLEET_ALLOWED = (
     # this project keeps paying for.
     ("POST", r"^/studio/chat/v1/chat/completions$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
-    ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music)/api/generate/[A-Za-z0-9_./-]*$"),
+    ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music|video)/api/generate/[A-Za-z0-9_./-]*$"),
     # Jobs: submit, watch, collect, acknowledge, reconcile, discard, cancel.
     ("POST", r"^/api/hub/jobs$"),
     ("GET", r"^/api/hub/jobs$"),
