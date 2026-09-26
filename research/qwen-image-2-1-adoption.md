@@ -4,6 +4,48 @@ Date: 2026-09-22 (quantized-Mac findings updated). Status: **research only — n
 adopted, not packaged, not qualified.** Sources are cited inline; third-party
 measurements are labelled as such.
 
+## Which pack was measured, and which was not — 2026-09-26 `[M]`
+
+The owner asked which version was tried, and the distinction decides how far the measurement
+travels. **One pack was run, and it is not the one this document's newest note points at.**
+
+| Pack | Revision | Layout / runner | Tried? |
+| --- | --- | --- | --- |
+| **`ddalcu/Qwen-Image-2.1-MLX-Serve-4bit`** | **`88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38`** (`refs/main`) | mlx-serve; text encoder **and** DiT affine 4-bit (group 64), `--preset 16gb` | **YES — measured below** |
+| `mlx-community/Qwen-Image-2.1-mflux-q4` | `746a58556820933a2df5c75887a2570f1ad200c0` | mflux layout, card names a **Rapid-MLX low-memory loader** | **No** |
+| `mlx-community/Qwen-Image-2.1-MLX-4bit` | `4db4e8c0c0e7` | diffusers, **no runner named** | No |
+| Rapid-MLX's own `qwen-image-2.1` alias | not resolved | mflux 0.20, **8-bit transformer + bf16 text encoder** | No |
+
+**So the 15 GB peak and the "not a 16 GB model" verdict belong to the mlx-serve 4-bit pack** —
+the one whose own card says *"10.7 GB, for 16 GB Macs"*. They do **not** transfer to
+`…-mflux-q4`, whose 4.68 / 5.14 GiB figures remain a card claim `[V]` with no fleet measurement
+behind them.
+
+### The 4.68 / 5.14 GiB claim has a problem, and it is Rapid-MLX's own published table
+
+The `…-mflux-q4` card says the pack "is intended for the reviewed low-memory loader in
+**Rapid-MLX**". Rapid-MLX is a real, released project (`raullenchai/Rapid-MLX`, Apache-2.0,
+`brew install rapid-mlx`), and its README publishes a per-alias image matrix. Its
+**`qwen-image-2.1`** row reads `[V, vendor docs 2026-09-26]`:
+
+| Alias | Modes | Download | Minimum unified memory | Default steps |
+| --- | --- | ---: | ---: | ---: |
+| `qwen-image-2.1` | Generate + edit | **30.9 GiB** | **32 GB** | 40 |
+| `flux2-klein-4b` | Generate + edit | 4.3 GiB | 12 GB | 4 |
+| `z-image-turbo` | Generate | 5.5 GiB | 16 GB | 8 |
+
+and the prose beside it says *"`qwen-image-2.1` uses mflux 0.20 with an **8-bit transformer and
+bf16 text encoder**"* `[V]`. That is the **encoder-quantized pack's whole point removed**: a bf16
+encoder is the 17.5 GB floor this document already identified as the reason mflux cannot reach a
+small Mac. Nobody's released alias claims 5.14 GiB.
+
+**What that means for the "is there a sub-32 GB Qwen-Image-2.1" question.** Two independent,
+released routes were checked and neither offers one: mlx-serve's 4-bit pack measured **15 GB**
+here, and Rapid-MLX's own alias declares **32 GB minimum with a bf16 encoder**. The
+4.68 / 5.14 GiB figures come from a pack card whose named loader is not what the loader's own
+product ships. Treat them as unverified until someone runs *that pack* on *that loader* and
+measures it — which is the only experiment that would settle it.
+
 ## Measured on this Mac — 2026-09-26 `[M]`
 
 The owner asked to try it. Both pieces were already on the machine: the pack at
