@@ -2,6 +2,39 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.75 — 2026-09-26
+
+### Installing a new version can no longer half-install it
+
+While installing the previous version, the Mac ran out of disk space part-way through copying the app.
+What was left behind looked installed but was not: the app had lost the two files that make it an app
+at all, and the automatic undo that should have put the previous version back instead put it *inside*
+the broken remains. The installer reported a failure, but nothing could tell you what state you were in.
+
+Three things changed:
+
+- The installer now **refuses to start if there is not enough room**, and it tells you how much it
+  needs. It checks before it quits the running app, so a full disk no longer interrupts you just to
+  report a problem.
+- **The undo can no longer make things worse.** It clears the incomplete copy properly (those runtime
+  files are deliberately read-only, which is what defeated the old delete), and it puts the previous
+  version back only once the way is clear. If it cannot, it stops and tells you exactly where your
+  previous version is, instead of claiming a success.
+- **It checks the whole app arrived**, by counting, rather than looking for one file that a partial
+  copy also has — which is why a half-copied app previously passed the check.
+
+### The disk stops filling up on its own
+
+Every version you install writes a full copy of the app into the build folder and a disk image beside
+it, and the old disk images were moved to `_trash/` — which is on the same disk, so nothing was ever
+actually reclaimed. That is what filled the Mac: the build folder alone was holding **100 GB**, 70 GB
+of it thirty-two complete copies of past versions, each one rebuildable from the source in a couple of
+minutes.
+
+There is now a step that keeps the version you are running, keeps the most recent one, and moves the
+rest to one of your SSDs — checking every file against its checksum first, so nothing is removed until
+a verified copy exists elsewhere. It does nothing at all if no drive has room.
+
 ## 0.6.74 — 2026-09-26
 
 ### Voice Studio tidies up only while it is actually running

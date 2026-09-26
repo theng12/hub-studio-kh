@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.75 — 2026-09-26 · The installer can no longer leave a broken app, and the disk stops ratcheting
+
+**The install that filled the disk left `/Applications/Studio Hub.app` with no `Info.plist` and no
+`MacOS`, and the rollback is what made it unrecoverable.** Measured: the copy stopped after ~1.4 GB of
+a 2.9 GB bundle, `rm -rf "$TARGET"` could not clear the wreckage — the image runtime's
+`runtimes/image/lib/tcl9` directories are `dr-xr-xr-x`, and unlinking an entry needs write permission
+on its *parent* — and the rollback's `mv "$OLD" "$TARGET"` then put the previous app **inside** the
+wreckage instead of over it, because the target still existed. `install_local.sh` exited 1 and every
+later check was looking at a directory that was not an app.
+
+Three changes, each proved to fire on that defect by `tests/test_install_local.py`:
+
+- **It refuses to start when the copy would fill the disk**, before anything is moved — and before the
+  app is quit, because being told there is no room is not a reason to interrupt the app someone is
+  using. The check is the stage's size plus half again against the free space it can see.
+- **The rollback cannot nest the previous app.** It `chmod -R u+w` first, then verifies the target is
+  actually gone before restoring, and if it is not, it stops and says where the previous app is rather
+  than reporting a success it cannot verify.
+- **Completeness is counted, not sampled.** The old guard checked one file — `runtimes/voice/bin/python3`
+  — which a copy that stopped inside `runtimes/` still satisfies, which is exactly how a bundle with no
+  `Info.plist` passed it. It now compares entry counts against the stage.
+
+`STUDIOHUB_INSTALL_TARGET` and `STUDIOHUB_INSTALL_DATA` exist so those two guards can be tested without
+touching `/Applications` or the operator's real readiness markers; production passes neither.
+
+**And the reason the disk filled: `.build/`, not `_trash/`.** Every release staged a ~2.9 GB bundle and
+built a ~1.3 GB DMG, and the previous DMG moved into `_trash/dist/` — on the same volume, so nothing was
+ever reclaimed. The owner cleared `_trash/` by hand and recovered 38 GB; the audit then measured
+**`.build/` at 100.9 GB, of which 32 staged bundles held 70.7 GB**. `packaging/prune-build-scratch.sh`
+is the step that stops it recurring: it keeps the stage of the release currently in `VERSION` (read
+from each stage's own `release-manifest.json`, never from a timestamp — `chmod` updates a directory's
+mtime, and a "newest by mtime" pass proposed moving the 0.6.74 stage), keeps the newest of the rest,
+moves the remainder to a kit drive, verifies each copy by sha256 manifest on both sides, and only then
+removes the local one. It refuses to act at all when no drive has room.
+
 ## 0.6.74 — 2026-09-26 · The Voice worker's loops start with the app, not with the import
 
 **Both of the Voice worker's background loops — idle model release and output retention — were
