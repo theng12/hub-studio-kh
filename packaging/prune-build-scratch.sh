@@ -21,7 +21,12 @@
 #   bash packaging/prune-build-scratch.sh --dry-run          # print the plan, change nothing
 #   bash packaging/prune-build-scratch.sh                    # pick a mounted kit drive automatically
 #   bash packaging/prune-build-scratch.sh --to /Volumes/KH-STUDIO-NOVA
-#   bash packaging/prune-build-scratch.sh --keep 2           # keep the newest two stages
+#   bash packaging/prune-build-scratch.sh --keep 2           # also keep the newest two of the rest
+#
+# **The default is "the latest one", which is the owner's rule.** The stage matching `VERSION` is
+# what the installed app and the DMG were built from; every other stage - including a second stage
+# of the *same* version, which is what a development re-stage leaves behind - is superseded, and the
+# DMG plus the drive archive are its durable copies.
 #   bash packaging/prune-build-scratch.sh --cap-trash-dmgs   # also thin `_trash/dist/` (off by default:
 #                                                            # `_trash/` is the owner's to sort out)
 #
@@ -33,7 +38,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/.build"
 TRASH_DIST="$REPO_ROOT/_trash/dist"
 STAGE_GLOB="${STAGE_GLOB:-StudioHub-*}"
-KEEP_STAGES=1
+KEEP_STAGES=0
 KEEP_DMGS=1
 CAP_TRASH_DMGS=0
 DEST_ROOT=""
@@ -68,6 +73,20 @@ stage_version() {
   sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1
 }
 version_key() { local digits; digits="$(printf '%s' "$1" | tr -cd '0-9')"; echo "$(( 10#${digits:-0} ))"; }
+stage_build() {
+  local plist="$1/Studio Hub.app/Contents/Info.plist"
+  [ -f "$plist" ] || plist="$1/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "$plist" 2>/dev/null || true
+}
+stage_is_dev() {
+  local manifest="$1/Studio Hub.app/Contents/Resources/release-manifest.json"
+  [ -f "$manifest" ] || manifest="$1/Contents/Resources/release-manifest.json"
+  grep -q '"development_build"[[:space:]]*:[[:space:]]*true' "$manifest" 2>/dev/null
+}
+# What the running app was installed from. Beats every version comparison: two stages can carry the
+# same version - a development re-stage does exactly that - and only the stamp says which one is
+# deployed.
+INSTALLED_STAMP="$(/usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "/Applications/Studio Hub.app/Contents/Info.plist" 2>/dev/null || true)"
 
 CURRENT_VERSION="$(cat "$REPO_ROOT/VERSION" 2>/dev/null | tr -d '[:space:]')"
 ranked="$(mktemp)"
@@ -79,16 +98,44 @@ done
 ranked_sorted="$(mktemp)"
 if ! LC_ALL=C sort -k1,1nr -k2,2r "$ranked" > "$ranked_sorted" 2>/dev/null; then cp "$ranked" "$ranked_sorted"; fi
 
+# **One stage is kept, and which one is decided by evidence, not by a name.**
+#   1. the stage whose build stamp is what `/Applications` has - it is what the DMG was built from;
+#   2. failing that, the newest stage of the release in `VERSION` that is not a development build;
+#   3. failing that, the newest stage of `VERSION`.
+# A development re-stage of the same version is superseded by definition, which is why "same
+# version" alone is not enough: 0.6.75 left both a `0675` (dev) and a `0675b` (the release).
 kept_for_release=()
 stages=()
+keep_path=""
 while IFS=$'\t' read -r _key _ver path; do
   [ -n "$path" ] || continue
-  # The stage of the release currently on disk is never pruned, whatever the ordering says.
-  if [ -n "$CURRENT_VERSION" ] && [ "$_ver" = "$CURRENT_VERSION" ]; then
-    kept_for_release+=("$path"); continue
+  if [ -z "$keep_path" ] && [ -n "$INSTALLED_STAMP" ] && [ "$(stage_build "$path")" = "$INSTALLED_STAMP" ]; then
+    keep_path="$path"; kept_for_release+=("$path"); continue
   fi
   stages+=("$path")
 done < "$ranked_sorted"
+
+if [ -z "$keep_path" ]; then
+  for want_dev in false true; do
+    while IFS=$'\t' read -r _key _ver path; do
+      [ -n "$path" ] || continue
+      [ "$_ver" = "$CURRENT_VERSION" ] || continue
+      if [ "$want_dev" = true ] || ! stage_is_dev "$path"; then
+        keep_path="$path"; break
+      fi
+    done < "$ranked_sorted"
+    [ -n "$keep_path" ] && break
+  done
+  if [ -n "$keep_path" ]; then
+    remaining=()
+    for candidate in "${stages[@]:-}"; do
+      [ -n "$candidate" ] || continue
+      [ "$candidate" = "$keep_path" ] || remaining+=("$candidate")
+    done
+    stages=("${remaining[@]:-}")
+    kept_for_release=("$keep_path")
+  fi
+fi
 rm -f "$ranked" "$ranked_sorted"
 
 dmg_candidates=()
@@ -109,7 +156,7 @@ for d in "${stages_to_move[@]:-}"; do [ -n "$d" ] && need_kb=$(( need_kb + $(siz
 for f in "${dmgs_to_move[@]:-}"; do [ -n "$f" ] && need_kb=$(( need_kb + $(size_kb "$f") )); done
 
 echo "stages on disk: ${#stages[@]} + ${#kept_for_release[@]} for the current release ($CURRENT_VERSION)"
-echo "  keeping  : the $CURRENT_VERSION stage(s) and the newest $KEEP_STAGES of the rest"
+echo "  keeping  : ${keep_path:-none} (stamp ${INSTALLED_STAMP:-unknown}) and the newest $KEEP_STAGES of the rest"
 echo "  moving   : $(count_of "${stages_to_move[@]:-}") stages"
 if [ "$CAP_TRASH_DMGS" -eq 1 ]; then
   echo "old DMGs in _trash/dist: ${#dmg_candidates[@]} | keeping the newest $KEEP_DMGS, moving $(count_of "${dmgs_to_move[@]:-}")"
@@ -121,8 +168,23 @@ echo "to move: $(( need_kb / 1048576 )) GB"
 if [ "$need_kb" -eq 0 ]; then echo "nothing to do."; exit 0; fi
 
 if [ -z "$DEST_ROOT" ]; then
-  # 10% headroom over what has to land, so a drive is never filled to the last byte.
+  # **Prefer the drive that already holds the most of this repo's archive**, so the history stays in
+  # one place. Size rather than mere presence: a stray partial copy on another drive must not win the
+  # choice, which is exactly what happened when two drives both had an `_build-archive/` directory.
+  best_kb=-1
   for candidate in /Volumes/KH-STUDIO-*; do
+    archive="$candidate/_build-archive/$(basename "$REPO_ROOT")"
+    [ -d "$archive" ] || continue
+    have_kb=$(du -sk "$archive" 2>/dev/null | cut -f1); have_kb=${have_kb:-0}
+    free_kb=$(df -Pk "$candidate" 2>/dev/null | awk 'NR == 2 {print $4}')
+    [ -n "$free_kb" ] || continue
+    [ "$free_kb" -gt $(( need_kb + need_kb / 10 )) ] || continue
+    if [ "$have_kb" -gt "$best_kb" ]; then best_kb="$have_kb"; DEST_ROOT="$candidate"; fi
+  done
+  # 10% headroom over what has to land, so a drive is never filled to the last byte. Only reached
+  # when the loop above found nothing - it used to run unconditionally and overwrite the choice.
+  for candidate in /Volumes/KH-STUDIO-*; do
+    [ -z "$DEST_ROOT" ] || break
     [ -d "$candidate" ] || continue
     free_kb=$(df -Pk "$candidate" 2>/dev/null | awk 'NR == 2 {print $4}')
     [ -n "$free_kb" ] || continue
@@ -148,9 +210,16 @@ move_verified() {  # <path> <destination directory>
   local src="$1" destdir="$2" name; name="$(basename "$src")"
   mkdir -p "$destdir"
   if [ ! -e "$destdir/$name" ]; then
-    # `ditto` for a directory, `cp` for a file; both keep the read-only runtime modes intact.
-    if [ -d "$src" ]; then ditto "$src" "$destdir/$name" 2>/dev/null || { echo "  COPY FAILED $name (left in place)"; return 1; }
-    else cp -p "$src" "$destdir/$name" 2>/dev/null || { echo "  COPY FAILED $name (left in place)"; return 1; }; fi
+    # **`ditto`'s exit code is advisory, and treating it as final was a real bug here.** It returns
+    # non-zero when it cannot preserve a *symlink's* mode — the image runtime ships `bin/python3`,
+    # `pkgconfig/python3.pc` and `share/man/man1/python3.1` as links — on a copy that is otherwise
+    # complete. The first real run of this script "failed" both stages for that reason and left them
+    # in place. The sha256 manifest check below is the test that decides; this only reports.
+    if [ -d "$src" ]; then
+      ditto "$src" "$destdir/$name" 2>/dev/null || echo "  note: ditto reported an attribute warning for $name; verifying anyway"
+    elif ! cp -p "$src" "$destdir/$name" 2>/dev/null; then
+      echo "  COPY FAILED $name (left in place)"; return 1
+    fi
   fi
   # A copy is not a copy until it is checked. Entry lists *and* content: `du` matched on a truncated
   # tree once, which is exactly the mistake this guards against.

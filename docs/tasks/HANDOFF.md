@@ -30,7 +30,16 @@ shipped, not a file still on disk.** `_trash/dist/` holds whatever history has n
 > (`_build-archive/studio-hub-kh/`), each verified by sha256 manifest on both sides before the local
 > copy was removed — and the check earned its keep twice: it caught a truncated copy from an
 > interrupted run, and it caught a "newest by mtime" stage-selection pass that proposed moving the
-> 0.6.74 stage this release was built from (`chmod` updates a directory's mtime). The step that keeps
+> 0.6.74 stage this release was built from (`chmod` updates a directory's mtime). **It is automatic now.** `make-dmg.sh` calls `packaging/prune-build-scratch.sh` at the end of
+> every release, so `.build/` keeps **exactly one stage** — the one whose `StudioHubBuild` stamp
+> matches what is installed, decided by evidence rather than by version, because a development
+> re-stage carries the same version as the release it re-stages (0.6.75 left both a `0675` and a
+> `0675b`). Everything older is moved to the drive that already holds the biggest archive, each
+> file verified by sha256 manifest on both sides first — never deleted. **`.build/` is not only
+> stages, and that distinction is the trap:** ~7.4 GB is pinned runtimes (`voice-runtime`,
+> `image-runtime-mflux020`, `st03-image-runtime-worker` — kept deliberately for the ST-03 receipt,
+> and not rebuildable from this repo), and ~21 GB is model/smoke-test scratch that no release
+> reads. The step that keeps
 > it that way is `packaging/prune-build-scratch.sh`: it keeps the stage named in `VERSION`, keeps the
 > newest of the rest, moves the remainder to a drive, and does nothing when no drive has room.
 > **Disk: 462 MB free before → 101 GB after.**
