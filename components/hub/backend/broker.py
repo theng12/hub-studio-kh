@@ -40,6 +40,7 @@ from .peers import studio_request
 from .monitor import is_cached
 from .registry import DATA_DIR, base_url, machine_enabled, studio_enabled
 from .resources import host_stats
+from . import stall
 from . import memory_admission
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
@@ -1527,6 +1528,22 @@ def item_errors(b: dict) -> list[dict]:
     return rows
 
 
+def _batch_stalled_seconds(active: bool, activity_at: list, now: float) -> float | None:
+    """Seconds this batch has been silent while active, or ``None`` when it has not been.
+
+    Reuses `stall.STALL_AFTER_S` rather than inventing a second threshold: one number decides
+    how long silence has to last before it means something, whether the clock being read is a
+    worker's report receipt or a batch's own progress.
+    """
+    if not active:
+        return None
+    stamps = [v for v in activity_at if isinstance(v, (int, float)) and v > 0]
+    if not stamps:
+        return None
+    silent_for = now - max(stamps)
+    return round(silent_for, 1) if silent_for > stall.STALL_AFTER_S else None
+
+
 def batch_summary(b: dict) -> dict:
     items = b["items"]
     states = [i["state"] for i in items]
@@ -1595,6 +1612,12 @@ def batch_summary(b: dict) -> dict:
         "created_at": b["created_at"], "finished_at": b.get("finished_at"),
         "cancelled": b["cancelled"],
         "routing": b.get("routing", "pool"),
+        # How long this batch has been silent while still active — the operator's version of
+        # the question `stall.py` answers for a worker's report receipt. Here it is the batch's
+        # OWN progress clock (`last_progress_at` and friends), because that is what the Jobs page
+        # shows and what "has anything moved?" means to the person watching it.
+        # **Visible, never destructive**: nothing is cancelled on the strength of this.
+        "stalled_seconds": _batch_stalled_seconds(active, activity_at, now),
         # Same rule as the transcription summary: a note explains a job that is waiting, and a
         # finished job is not waiting for anything.
         "governor_note": (b.get("governor_note")

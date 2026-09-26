@@ -661,6 +661,10 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
             "origin": (current or latest or {}).get("origin", "unknown"),
             "origin_device": (current or latest or {}).get("origin_device"),
             "progress": (current or {}).get("progress"),
+            # A worker that has gone quiet while holding this job. **Visible, never
+            # destructive** — the Hub does not kill a merely-slow job, so this is what the
+            # operator decides on. `stall.py` is the one place that decides what silence means.
+            "stalled_seconds": (current or {}).get("stalled_seconds"),
             "last_activity_at": ((current or latest or {}).get("updated_at")
                                  or (current or latest or {}).get("finished_at")
                                  or (current or latest or {}).get("observed_at")),
