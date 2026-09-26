@@ -2515,6 +2515,18 @@ async def reconcile_music_item(batch_id: str, item_index: int,
     return await _reconcile_async_item(batch_id, item_index, "music", client)
 
 
+async def reconcile_video_item(batch_id: str, item_index: int,
+                               client: httpx.AsyncClient | None = None) -> dict:
+    """Read and adopt only the original accepted Video job after Hub recovery.
+
+    The reconciler itself is modality-agnostic (`_reconcile_async_item`); what was missing was
+    this entry and the route branch that reaches it. Without them a video item fell through to
+    the **Image** reconciler, which answered `unknown Image batch` for a video batch — measured
+    on 2026-09-26, on the first uncertain video item this Hub ever held.
+    """
+    return await _reconcile_async_item(batch_id, item_index, "video", client)
+
+
 async def reconcile_voice_item(batch_id: str, item_index: int,
                                client: httpx.AsyncClient | None = None) -> dict:
     """Read and adopt only the original accepted Voice job after Hub recovery."""

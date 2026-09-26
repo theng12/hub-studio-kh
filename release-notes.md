@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.79 — 2026-09-26
+
+### A video job could make the whole clip and then throw it away
+
+The video model hands its finished frames and sound to a small helper program, `ffmpeg`, to write
+the MP4 file. This app already includes that helper, but the video worker was not being told where
+it was — so the clip was generated in full and then the job failed at the last step. The worker now
+looks where the app keeps `ffmpeg`, and if it ever cannot find it the app says so *before* offering
+the model, instead of after a five-minute generation.
+
+### A cancelled video job could not be checked
+
+If a video job's outcome was uncertain, pressing the check button answered with a message about
+images and could not settle it; the job held its machine until it was discarded. Video has its own
+check now.
+
 ## 0.6.78 — 2026-09-26
 
 ### Video jobs could sit waiting for memory that never came free

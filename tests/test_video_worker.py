@@ -211,6 +211,36 @@ class EngineRowTests(unittest.TestCase):
                               "a pack that is not mixed-precision must be left alone")
 
 
+class MuxerTests(unittest.TestCase):
+    """The pack muxes with ffmpeg, so a worker that cannot see one is not ready."""
+
+    def test_a_missing_muxer_is_reported_rather_than_discovered_at_the_last_step(self) -> None:
+        from unittest import mock
+
+        with mock.patch("shutil.which", return_value=None):
+            problem = generation.muxer_problem()
+        self.assertIsNotNone(problem)
+        self.assertIn("ffmpeg", problem)
+        with mock.patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
+            self.assertIsNone(generation.muxer_problem())
+
+    def test_the_packaged_worker_puts_the_bundled_ffmpeg_on_path(self) -> None:
+        """The app ships ffmpeg in the Voice runtime; the Video worker must be able to see it.
+
+        Measured 2026-09-26: a worker whose PATH was only its own runtime and `/usr/bin`
+        generated the whole clip and then failed with the pack's own *"ffmpeg not found on PATH"*.
+        """
+        source = (ROOT / "packaging" / "video_worker.py").read_text()
+        self.assertIn("'PATH': ':'.join([", source,
+                      "the worker builds its own PATH; the bundled muxer can no longer be added")
+        self.assertIn("str(RESOURCES / 'runtimes' / 'voice' / 'bin')", source,
+                      "the bundled ffmpeg lives in the Voice runtime's bin and must be on PATH")
+        self.assertIn("str(runtime / 'bin')", source,
+                      "the worker's own runtime stays first on PATH")
+        self.assertIn("ffmpeg", source.lower(),
+                      "the reason must be recorded beside the line, or the next reader removes it")
+
+
 class ArtifactCheckTests(unittest.TestCase):
     """A file existing is not a clip: the boxes are read before anything is called done."""
 

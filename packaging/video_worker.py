@@ -96,7 +96,21 @@ def main() -> None:
         # must find the companion in this cache rather than the operator's home.
         'HF_HOME': str(video_data / 'cache'),
         'XDG_CACHE_HOME': str(video_data / 'cache'),
-        'PATH': str(runtime / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
+        # **The voice runtime's `bin` is on PATH on purpose: that is where this app ships ffmpeg.**
+        # The LTX pack muxes the decoded video and audio into the MP4 with an `ffmpeg` subprocess
+        # (`ltx_pipelines_mlx.utils.media_io`, `find_ffmpeg()` → `shutil.which`), so a worker whose
+        # PATH held only its own runtime and `/usr/bin` generated the whole clip and then failed at
+        # the last step with *"ffmpeg not found on PATH. Install it with: brew install ffmpeg"* —
+        # measured 2026-09-26, on the first through-the-chain run. The bundle already carries
+        # `ffmpeg` and `ffprobe` (21.7 MB each, in the Voice runtime, which every Hub build has);
+        # duplicating them into the video runtime would add 43 MB and a second licence copy for no
+        # reason. A Hub bundle without a Voice runtime is not a bundle (`hub_worker.main` refuses
+        # one), so this path always exists in a staged app.
+        'PATH': ':'.join([
+            str(runtime / 'bin'),
+            str(RESOURCES / 'runtimes' / 'voice' / 'bin'),
+            '/usr/bin', '/bin', '/usr/sbin', '/sbin',
+        ]),
     })
     # Only when the owner asked for it — see the Image worker's note; forcing this on made
     # switching Offline mode off change nothing.

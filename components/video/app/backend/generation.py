@@ -289,6 +289,25 @@ PACKAGE_ID = LTX_23.package_id
 DEFAULTS = dict(LTX_23.defaults)
 
 
+def muxer_problem() -> str | None:
+    """Why this worker cannot mux an MP4, or None when it can.
+
+    The LTX pipeline writes the finished clip with an `ffmpeg` subprocess — it decodes the video
+    and audio latents itself, then hands raw frames and samples to ffmpeg. `shutil.which` is
+    exactly what the pipeline's own `find_ffmpeg()` does, so asking the same question here lets
+    the catalog say *why* a model is unready instead of publishing a row that generates a whole
+    clip and then fails at the last step (which is what happened on 2026-09-26, on the first
+    through-the-chain run: the pack's own message was *"ffmpeg not found on PATH. Install it with:
+    brew install ffmpeg"*).
+    """
+    import shutil
+
+    if shutil.which('ffmpeg') is None:
+        return ("ffmpeg is not on this worker's PATH, and the LTX pack muxes its MP4 with it; "
+                "the app ships one in the Voice runtime and the packaged worker adds it to PATH")
+    return None
+
+
 def host_memory_bytes() -> int:
     """This Mac's physical memory, or 0 when it cannot be read."""
     try:

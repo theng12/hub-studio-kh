@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.79 — 2026-09-26 · The last step of a video job was missing its muxer
+
+**The pack generated the whole clip and then failed at the mux.** The LTX pipeline decodes the video
+and audio latents itself and hands the raw frames and samples to **`ffmpeg`** (`utils/media_io.py`,
+`find_ffmpeg()` → `shutil.which`). The packaged Video worker's PATH was its own runtime plus
+`/usr/bin`, and the app's `ffmpeg` lives in the **Voice** runtime's `bin` — so the worker generated a
+complete clip and then died with the pack's own message:
+
+```
+ffmpeg not found on PATH. Install it with: brew install ffmpeg
+```
+
+Measured 2026-09-26, on the first through-the-chain run. `packaging/video_worker.py` now puts
+`runtimes/voice/bin` on the Video worker's PATH, after its own runtime. Nothing is duplicated: every
+Hub build already carries `ffmpeg` and `ffprobe` there (21.7 MB each, the same pair the Voice,
+Music and Render lanes use), and a Hub bundle without a Voice runtime is refused at startup. The
+alternative — copying them into `runtimes/video` — would add 43 MB and a second licence copy.
+
+**And the catalog says so when it is missing.** `generation.muxer_problem()` asks the same question
+the pipeline asks, and a worker that cannot see `ffmpeg` publishes `ready: false` with that sentence
+instead of advertising a model that will fail at the last step.
+
+### Video items can be reconciled
+
+An uncertain **video** item had no reconciler: the route fell through to the Image one and answered
+`unknown Image batch` — measured on the first uncertain video item this Hub ever held (a cancelled
+job whose machine slot stayed pinned until it was discarded). `broker.reconcile_video_item` is the
+modest missing entry; the reconciler itself is modality-agnostic and already validated video
+receipts. The route's silent Image fallback is gone with it: a modality with no reconciler is named
+rather than described as Image.
+
+**Evidence.** `tests/test_video_worker.py` 24 passed / 19 subtests; full Hub gate green.
+
 ## 0.6.78 — 2026-09-26 · The video lane's free-memory floor deadlocked it
 
 **Found by the first real chain job, not by a unit test.** The gateway submitted one

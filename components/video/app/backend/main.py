@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import memory_policy
 from .generation import (CANVAS_CLASSES, MODELS, MODEL_ID, GenerationManager,
                          lane_contract, lane_parameters, final_matches, host_memory_bytes,
-                         memory_eligible, missing_runtime_model_reason)
+                         memory_eligible, missing_runtime_model_reason, muxer_problem)
 
 from components import app_version, model_defaults
 
@@ -87,9 +87,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         files = manager.preflight(model.repo)
         host = _host_facts()
         tier_ok = memory_eligible(model, host.get('unified_memory_bytes') or 0)
+        muxer = muxer_problem() if model.runnable else None
         ready = (files['state'] == 'files_verified' and host['eligible'] and tier_ok
-                 and model.runnable)
+                 and model.runnable and muxer is None)
         return {'ready': ready, 'files': files, 'host': host, 'tier_eligible': tier_ok,
+                'muxer_problem': muxer,
                 'runtime_identity': {'id': manager.runtime_sha256, 'compatible': True}}
 
     def readiness() -> dict:
@@ -130,7 +132,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                  for name, (width, height) in sorted(canvases.items())]
         reason = None if state['ready'] else (
             model.unavailable_reason if not model.runnable
-            else files.get('reason')
+            else state.get('muxer_problem')
+            or files.get('reason')
             or (None if state['tier_eligible'] else
                 f'below the {model.qualified_minimum_memory_gb:g} GB tier this model is '
                 f'qualified at')

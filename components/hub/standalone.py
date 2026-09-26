@@ -1845,6 +1845,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 return await broker.reconcile_music_item(
                     batch_id, item_index, client=monitor._client
                 )
+            if batch is not None and batch.get("modality") == "video":
+                return await broker.reconcile_video_item(
+                    batch_id, item_index, client=monitor._client
+                )
+            # No silent fallback to Image: a modality with no reconciler must be named. The
+            # fallback is how a video batch answered `unknown Image batch`.
+            if batch is not None and batch.get("modality") != "image":
+                raise ValueError(
+                    f"reconciliation is not available for a "
+                    f"{batch.get('modality') or 'unknown'} batch"
+                )
             return await broker.reconcile_image_item(
                 batch_id, item_index, client=monitor._client
             )
