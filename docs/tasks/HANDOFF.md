@@ -5,12 +5,15 @@
 
 Last updated: **0.6.72** (each limit's provenance is a token, not a sentence — HUB-20, 2026-09-26).
 
-> **0.6.72 is committed and pushed; its DMG and the drives are not yet done.** `model_limits.*` now
-> carries **`source_kind`** beside its sentence, so the gateway can relay *whose* number a limit is
-> instead of guessing `provider` for every stated value — which is how Story Studio came to be told
-> that Qwen3.5-9B's **16,384** output ceiling was a number the model stated, when it is this Hub's
-> `FALLBACK_MAX_OUTPUT_TOKENS`. GatewayKH's half shipped as **0.2.48**. Verified: `pytest tests/`
-> green, and the cross-repo half is pinned on their side by `tests/test_hub_limit_provenance.py`.
+> **0.6.72 is released, installed and has its DMG. The four drives are NOT refreshed, deliberately**
+> — see the 0.6.71 note below for why a kit refresh is a whole-kit action, not the tail of a code
+> release. `dffee03` on both branches; DMG `dist/StudioHub-0.6.72-dffee03.dmg` (1.2 GB); installed and
+> answering `{"version":"0.6.72","build":"dffee03"}`. `model_limits.*` now carries **`source_kind`**
+> beside its sentence, so the gateway relays *whose* number a limit is instead of guessing `provider`
+> for every stated value. GatewayKH's half is **0.2.48**, and **the chain is verified closed on the
+> live wire**: `max_output_tokens: 16384` now arrives with `max_output_tokens_source: worker_default`,
+> where it previously said `provider` while the sentence beside it said the opposite. Previous bundle
+> preserved at `_trash/app/Studio Hub.app-0.6.71`, previous DMG at `_trash/dist/` — nothing `rm`d.
 >
 > **0.6.71 is released, installed and has its DMG. The four drives are NOT refreshed, deliberately.**
 > `971d12c` on both `implementation/voice-runtime` and `main`; DMG `dist/StudioHub-0.6.71-971d12c.dmg`
