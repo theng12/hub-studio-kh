@@ -3,7 +3,32 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: 0.6.66 (the tab was filtering the models that could reach the tab, 2026-09-25).
+Last updated: **0.6.70** (the deadline became per-generator, the stall detector, Z-Image qualified on
+8 GB, 2026-09-26).
+
+> **0.6.70 is released, installed, on all four drives and pushed** — `7eb09ac`, DMG
+> `dist/StudioHub-0.6.70-30ecef1.dmg` (1.2 GB, 60436 files), every drive `RESULT: PASS`, 1336 tests
+> green. Three things a reader of this file needs to know about it:
+>
+> **1. The Hub's job deadline is per generator now, and the number in a lane contract is not one
+> number.** `standalone.deadline_floor_seconds(modality)` feeds **both** the published
+> `deadline_seconds` and the proxy's enforced timeout, so what a scheduler reads is what the Hub
+> holds the job to. Video **7200**, chat **1800**, voice **1800**, image/transcription/music **900**.
+> **GatewayKH must refresh discovery**; their cached row read `4096` / `900` until this release, and
+> anything of theirs that caches a single deadline is now wrong.
+>
+> **2. A stall is visible, and it is not a timeout.** `components/hub/backend/stall.py` marks a job
+> whose worker has gone quiet as `stalled_seconds` on every job row. It fires only for active states,
+> never for an unstarted or terminal one, never for a studio with no receipt, and **it never kills
+> the job**. This is what makes a 30-minute ceiling safe rather than merely long.
+> **App-side loose end: nothing in the native app consumes `stalled_seconds` yet**, so the operator
+> sees it in the API and not on screen.
+>
+> **3. Z-Image-Turbo 6B MLX 4-bit is qualified on 8 GB** — the owner's M1 Mac mini run. The floor
+> moved 16 -> 8 through `capture_model_manifests.py`, its producer, and the copy step moved it from
+> `CARRY_BELOW_TIER` (now empty, and kept) to `PROVEN_SMALLER`. **The engine default also completed
+> on that Mac and that is not licence to drop the low-RAM rule** — 8.72 GB footprint on an 8.0 GB
+> machine, by paging 3443 MB. `Z_IMAGE_LOW_RAM_BELOW_BYTES` stays at 24 GB.
 
 **Three open items closed on 2026-09-26, and each guard was proved to fail on the defect it was written for.** *SH-4*: FLUX.2 Klein 4B MLX 4-bit published `79.34 s` for a scene it described exactly, and **the number was in no file in this repository**. The stored run of that scene is **105.943 s** (`qualification/st03-image-real-inference.md`, job `af4913b2`, 2026-09-15) — and the host was wrong too: the row claimed a 32 GiB M2 Max, the record says **Apple M4, 16 GiB**, which is a measurement on the tier the fleet runs. `packaged_inference` said `pending` while that completed run sat in the tree. *SH-8*: `max_output_duration_s` was enforced by the worker and published by no family, so no contract offered a bound that was being applied; the `qwen3-tts` family declares it now, and it is the only family that honours it. *SH-18*: Voice's "lane decides" exception is the only one in the fleet (Image, Music, Subtitle and Chat all fill an omitted field unconditionally) and now has four tests on its boundary.
 
