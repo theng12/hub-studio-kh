@@ -5,6 +5,11 @@
 
 Last updated: **0.6.74** (the Voice worker's loops start with the app, 2026-09-26).
 
+**A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
+`dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
+shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
+`_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
+
 > **0.6.74 — the Voice worker's background loops started on `import`, not on startup.** Both the
 > idle-release ticker and the output-retention loop ran in *any* process that imported
 > `backend.main`, a test run included. That made `test_memory_policy.py` fail intermittently

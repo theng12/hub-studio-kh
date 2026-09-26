@@ -132,12 +132,15 @@ keys ship; a reader that wants to know how to *ask for work* reads `lane_contrac
   guarantee publishes this field rather than a note, because a consumer can match a field and
   cannot match prose.
 
-**`deadline_seconds` is not in the worker's contract.** The 900 s Gateway Studio named is the
-**Hub's** own peer-proxy request timeout (`standalone.PEER_PROXY_TIMEOUT_S`, used as `httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0)`)
-— one constant for every lane, owned by the party that enforces it. A worker that restated it would
-be a fifth copy of a Hub number, which is the duplication this whole document exists to remove. The
-Hub adds `deadline_seconds` when it echoes the contract, so the number a gateway reads is the number
-the Hub will actually hold it to.
+**`deadline_seconds` is not in the worker's contract.** It is the **Hub's** own peer-proxy request
+timeout, resolved **per lane** by `standalone.deadline_floor_seconds(modality)` from
+`MODALITY_DEADLINE_FLOOR_S` (`components/hub/standalone.py`) — chat **1,800 s**, voice **1,800 s**,
+video **7,200 s**, and everything else the `PEER_PROXY_TIMEOUT_FLOOR_S` fallback of **900 s** — owned
+by the party that enforces it. It was one flat constant (`PEER_PROXY_TIMEOUT_S = 900.0`) until Studio
+Hub 0.6.70, which is why a single number is now wrong for half the lanes. A worker that restated it
+would be a fifth copy of a Hub number, which is the duplication this whole document exists to remove.
+The Hub adds `deadline_seconds` when it echoes the contract, so the number a gateway reads is the
+number the Hub will actually hold it to.
 
 ### Per-lane values
 
