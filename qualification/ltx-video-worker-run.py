@@ -17,6 +17,11 @@ Run it from the repository root with the Video runtime:
     .build/video-runtime/bin/python3 qualification/ltx-video-worker-run.py \
         --models-dir "$HOME/StudioHubModels" --image qualification/scene.png
 
+It also runs on a Mac that has no checkout at all, which is what `RUN-LTX-VIDEO-WORKER.command`
+uses to measure a fleet node from the SSD: it then takes `components/` and `model-manifests/`
+from the installed app's `Contents/Resources` (or from `STUDIOHUB_HUB_ROOT`), and the runtime
+from the app's `runtimes/video` — the same runtime the worker itself is launched with.
+
 Every number it writes is either measured here or absent. The receipt names the exact command.
 """
 from __future__ import annotations
@@ -28,7 +33,30 @@ from pathlib import Path
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+
+def hub_root() -> Path:
+    """The folder holding `components/` and `model-manifests/`.
+
+    A checkout has them beside this file's parent. A Mac with only the app has the same two
+    folders inside the bundle, and that is not a fallback for convenience — it is what makes the
+    lane's own measurement runnable on a node that has the app and nothing else.
+    """
+    candidates = [
+        os.environ.get('STUDIOHUB_HUB_ROOT', ''),
+        str(Path(__file__).resolve().parents[1]),
+        '/Applications/Studio Hub.app/Contents/Resources',
+    ]
+    marker = Path('components') / 'video' / 'app' / 'backend' / 'main.py'
+    for candidate in candidates:
+        if candidate and (Path(candidate) / marker).is_file():
+            return Path(candidate)
+    raise SystemExit(
+        "cannot find Studio Hub's components/ and model-manifests/ on this Mac.\n"
+        "Looked in: " + ', '.join(c for c in candidates if c) + "\n"
+        "Install Studio Hub, or set STUDIOHUB_HUB_ROOT to a checkout or a Resources folder.")
+
+
+ROOT = hub_root()
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'components' / 'video' / 'app' / 'backend'))
 
@@ -81,7 +109,16 @@ def main(argv: list[str]) -> int:
 
     stamp = time.strftime('%Y%m%d-%H%M%S')
     results = (args.results or ROOT / 'qualification' / f'ltx-video-worker-results-{stamp}')
-    results.mkdir(parents=True, exist_ok=False)
+    # An existing folder is allowed when it holds nothing but this run's log: the double-clickable
+    # wrapper creates the folder first so it can tee the console output into it, and refusing that
+    # would make the wrapper fail before the run started. A folder with a previous receipt in it is
+    # still refused — overwriting one would destroy the only record of a run that cost 20 minutes.
+    results.mkdir(parents=True, exist_ok=True)
+    stray = [entry.name for entry in results.iterdir() if entry.name != 'run.log']
+    if stray:
+        raise SystemExit(
+            f"{results} already holds {', '.join(sorted(stray)[:4])} — refusing to overwrite a "
+            f"previous run's receipt. Give this run its own --results folder.")
     data = (args.data_dir or results / 'state').expanduser().resolve()
     data.mkdir(parents=True, exist_ok=True)
     library = args.models_dir.expanduser().resolve()

@@ -1710,6 +1710,9 @@ struct StudioContent: View {
                                 Picker("Aspect ratio", selection: $workspace.videoAspectRatio) {
                                     ForEach(videoOptions("aspect_ratio"), id: \.self) { Text($0).tag($0) }
                                 }.labelsHidden().frame(maxWidth: 220)
+                                .onChange(of: workspace.videoAspectRatio) { _, _ in
+                                    snapVideoControlsToPublishedCanvases()
+                                }
                             }
                         }
                         if !videoOptions("resolution").isEmpty {
@@ -1777,21 +1780,86 @@ struct StudioContent: View {
         // opens or the model changes. The request itself omits a field the operator never chose,
         // so this only decides what the controls show.
         .task(id: workspace.videoModel) {
-            if let value = videoDefault("aspect_ratio"), workspace.videoAspectRatio.isEmpty {
-                workspace.videoAspectRatio = value
-            }
-            if let value = videoDefault("resolution"), workspace.videoResolution.isEmpty {
-                workspace.videoResolution = value
-            }
-            if workspace.videoDurationSeconds == 0, let seconds = videoDefaultSeconds() {
-                workspace.videoDurationSeconds = seconds
-            }
+            snapVideoControlsToPublishedCanvases()
         }
     }
 
+    /// The canvases this lane publishes, if it publishes them as pairs.
+    private var videoCanvases: [NativeLaneCanvas] {
+        selectedVideoModel?.laneContract?.canvases ?? []
+    }
+
     /// The options one lane parameter publishes, in the lane's own order.
+    ///
+    /// **A ratio and a size class are only offered together where a canvas carries both.** The
+    /// two parameters are independent enums, and a video lane's pairs are a strict subset of
+    /// their cross product (the LTX lane's `7:4` is its `256p` canvas; its `448p` class is `11:7`
+    /// or `1:1`), so a picker built from the enums alone offered this app's own worker requests it
+    /// refuses. Where the lane states no canvases the enums are still the whole statement.
     private func videoOptions(_ name: String) -> [String] {
-        selectedVideoModel?.laneContract?.parameters.first { $0.name == name }?.options ?? []
+        let stated = videoCanvases
+        if !stated.isEmpty {
+            switch name {
+            case "aspect_ratio":
+                var seen: [String] = []
+                for canvas in stated where !seen.contains(canvas.aspectRatio) {
+                    seen.append(canvas.aspectRatio)
+                }
+                return seen
+            case "resolution":
+                let forRatio = stated.filter { $0.aspectRatio == workspace.videoAspectRatio }
+                let pool = forRatio.isEmpty ? stated : forRatio
+                var seen: [String] = []
+                for canvas in pool where !seen.contains(canvas.resolution) {
+                    seen.append(canvas.resolution)
+                }
+                return seen
+            default:
+                break
+            }
+        }
+        return selectedVideoModel?.laneContract?.parameters.first { $0.name == name }?.options ?? []
+    }
+
+    /// The canvas the current ratio and class name, when the lane publishes canvases.
+    private var selectedVideoCanvas: NativeLaneCanvas? {
+        videoCanvases.first {
+            $0.aspectRatio == workspace.videoAspectRatio && $0.resolution == workspace.videoResolution
+        }
+    }
+
+    /// Put the controls on a canvas the lane publishes: its default where the lane has one, the
+    /// first published canvas otherwise, and the selected canvas's own durations.
+    ///
+    /// A control left on a pair no canvas carries is the defect this exists to prevent — the
+    /// worker refuses it, and the operator sees a refusal for a choice this page offered.
+    private func snapVideoControlsToPublishedCanvases() {
+        if let value = videoDefault("aspect_ratio"), workspace.videoAspectRatio.isEmpty {
+            workspace.videoAspectRatio = value
+        }
+        if let value = videoDefault("resolution"), workspace.videoResolution.isEmpty {
+            workspace.videoResolution = value
+        }
+        let canvases = videoCanvases
+        if !canvases.isEmpty {
+            if !videoOptions("aspect_ratio").contains(workspace.videoAspectRatio) {
+                workspace.videoAspectRatio = canvases.first?.aspectRatio ?? ""
+            }
+            if !videoOptions("resolution").contains(workspace.videoResolution) {
+                workspace.videoResolution = videoOptions("resolution").first ?? ""
+            }
+        }
+        if workspace.videoDurationSeconds == 0, let seconds = videoDefaultSeconds() {
+            workspace.videoDurationSeconds = seconds
+        }
+        let durations = videoDurationChoices
+        if !durations.isEmpty && !durations.contains(workspace.videoDurationSeconds) {
+            // The worker's own default first, so a class that cannot take it lands on a duration
+            // the lane does state rather than on an arbitrary one.
+            let preferred = videoDefaultSeconds()
+            workspace.videoDurationSeconds = durations.contains(preferred ?? -1)
+                ? (preferred ?? durations[0]) : durations[0]
+        }
     }
 
     private func videoDefault(_ name: String) -> String? {
@@ -1809,7 +1877,12 @@ struct StudioContent: View {
     }
 
     private var videoDurationChoices: [Int] {
-        (selectedVideoModel?.laneContract?.parameters
+        // The chosen canvas's own durations where it publishes them: a big canvas at the longer
+        // duration is the pair the worker's token ceiling refuses, so it is not offered here.
+        if let canvas = selectedVideoCanvas, !canvas.durations.isEmpty {
+            return canvas.durations.sorted()
+        }
+        return (selectedVideoModel?.laneContract?.parameters
             .first { $0.name == "duration_seconds" }?.options ?? []).compactMap(Int.init)
     }
 

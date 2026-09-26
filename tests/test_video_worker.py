@@ -16,6 +16,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,30 +78,62 @@ class RequestValidationTests(unittest.TestCase):
         body.update(overrides)
         return generation.validate_request(body)
 
-    def test_defaults_resolve_to_a_published_canvas_and_duration(self) -> None:
+    def test_defaults_resolve_to_the_measured_canvas(self) -> None:
         params = self._request(mode="text-to-video")
-        self.assertEqual((params["width"], params["height"]), (512, 288))
-        self.assertEqual(params["aspect_ratio"], "16:9")
-        self.assertEqual(params["resolution"], "288p")
+        self.assertEqual((params["width"], params["height"]), (704, 448))
+        self.assertEqual(params["aspect_ratio"], "11:7")
+        self.assertEqual(params["resolution"], "448p")
         self.assertEqual(params["duration_seconds"], 4)
         self.assertEqual(params["frames"], 97)
         self.assertEqual(params["frame_rate"], 24)
 
     def test_every_published_canvas_pair_is_accepted(self) -> None:
-        for resolution, canvases in generation.CANVAS_CLASSES.items():
-            for ratio, canvas in canvases.items():
-                with self.subTest(ratio=ratio, resolution=resolution):
-                    params = self._request(mode="text-to-video", aspect_ratio=ratio,
-                                           resolution=resolution)
-                    self.assertEqual((params["width"], params["height"]), canvas)
+        for canvas in generation.canvases():
+            for seconds in canvas["durations"]:
+                with self.subTest(canvas=canvas, seconds=seconds):
+                    params = self._request(mode="text-to-video",
+                                           aspect_ratio=canvas["aspect_ratio"],
+                                           resolution=canvas["resolution"],
+                                           duration_seconds=seconds)
+                    self.assertEqual((params["width"], params["height"]),
+                                     (canvas["width"], canvas["height"]))
 
-    def test_a_canvas_the_lane_does_not_publish_is_refused_by_name(self) -> None:
+    def test_every_published_canvas_is_one_the_pack_will_not_resize(self) -> None:
+        """The two-stage pipeline floors each side to 64 px, so a canvas off that grid is a
+        different shape than the one advertised.
+
+        Measured 2026-09-27: the published 288p 16:9 canvas (512x288) came back as 512x256 — 2:1 —
+        while the job's acceptance still said 512x288, so the lane's DEFAULT request was a canvas
+        the lane does not produce. The guard is an import-time check, and this pins that it exists
+        and that it fires.
+        """
+        for resolution, canvases in generation.CANVAS_CLASSES.items():
+            for ratio, (width, height) in canvases.items():
+                with self.subTest(ratio=ratio, resolution=resolution):
+                    self.assertEqual(width % generation.TWO_STAGE_GRID, 0)
+                    self.assertEqual(height % generation.TWO_STAGE_GRID, 0)
+        with self.assertRaises(ValueError) as raised:
+            with unittest.mock.patch.dict(generation.CANVAS_CLASSES,
+                                          {"288p": {"16:9": (512, 288)}}):
+                generation._assert_canvases_are_snap_stable()
+        message = str(raised.exception)
+        self.assertIn("512x288", message, "the off-grid canvas must be named")
+        self.assertIn("512x256", message, "and the size the pack would substitute for it")
+
+    def test_a_ratio_the_lane_does_not_publish_is_refused_by_name(self) -> None:
         with self.assertRaises(ValueError) as raised:
             self._request(mode="text-to-video", aspect_ratio="16:9", resolution="448p")
         message = str(raised.exception)
-        self.assertIn("448p", message, "the refused class must be named")
-        self.assertIn("16:9", message, "the ratio it is not published for must be named")
-        self.assertIn("288p", message, "and the classes that ratio does offer must be listed")
+        self.assertIn("16:9", message, "the refused ratio must be named")
+        self.assertIn("11:7", message, "and the ratios that are published must be listed")
+
+    def test_a_pair_the_lane_does_not_publish_is_refused_by_name(self) -> None:
+        # 7:4 exists, and 448p exists, and their PAIR does not: 448x256 is the 256p canvas.
+        with self.assertRaises(ValueError) as raised:
+            self._request(mode="text-to-video", aspect_ratio="7:4", resolution="448p")
+        message = str(raised.exception)
+        self.assertIn("7:4", message)
+        self.assertIn("256p", message, "the class that ratio does offer must be listed")
 
     def test_every_published_configuration_stays_under_the_pack_s_quality_cliff(self) -> None:
         """The cliff is a published ceiling, and the vocabulary is chosen to stay under it.
@@ -153,6 +186,40 @@ class RequestValidationTests(unittest.TestCase):
 
 
 class LaneContractTests(unittest.TestCase):
+    def test_the_published_canvases_are_exactly_the_accepted_ones(self) -> None:
+        """The invariant the first consumer broke: published pairs == accepted pairs.
+
+        A contract that lists `aspect_ratio` and `resolution` as two enums says every pair of them
+        exists, and this lane's do not: `7:4` is the 256p canvas and `448p` carries `11:7` and
+        `1:1`. A scheduler reading only the enums offered `448p` with a ratio that class does not
+        have, and the lane refused work its own contract implied. So the contract now publishes
+        `canvases`, and this test walks the whole cross product: every published combination is
+        accepted, and every unpublished one is refused by name.
+        """
+        contract = generation.lane_contract(generation.LTX_23)
+        published = {(canvas["resolution"], canvas["aspect_ratio"], seconds)
+                     for canvas in contract["canvases"]
+                     for seconds in canvas["durations"]}
+        self.assertTrue(published, "the lane must publish at least one canvas")
+
+        for resolution in generation.resolutions():
+            for ratio in generation.aspect_ratios():
+                for seconds in generation.DURATIONS_SECONDS:
+                    request = {"repo": generation.MODEL_ID, "mode": "text-to-video",
+                               "prompt": "a quiet harbour at dawn",
+                               "aspect_ratio": ratio, "resolution": resolution,
+                               "duration_seconds": seconds}
+                    if (resolution, ratio, seconds) in published:
+                        with self.subTest(published=(resolution, ratio, seconds)):
+                            params = generation.validate_request(dict(request))
+                            self.assertEqual(params["resolution"], resolution)
+                            self.assertEqual(params["aspect_ratio"], ratio)
+                            self.assertEqual(params["duration_seconds"], seconds)
+                    else:
+                        with self.subTest(refused=(resolution, ratio, seconds)):
+                            with self.assertRaises(ValueError):
+                                generation.validate_request(dict(request))
+
     def test_the_contract_publishes_the_lane_and_not_the_hub_s_deadline(self) -> None:
         contract = generation.lane_contract(generation.LTX_23)
         self.assertEqual(contract["schema"], "studiohub.lane-contract.v1")

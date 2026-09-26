@@ -71,6 +71,63 @@ FRAME_GRID = 8
 CANVAS_GRID = 32
 DEFAULT_FRAME_RATE = 24
 
+# **The grid a published canvas has to sit on, and the reason the table below has odd ratios.**
+# The LTX pack's two-stage pipeline floors each output dimension to a multiple of 64 before it
+# generates (``snap_output_dimensions(height, width, two_stage=True)`` in the pinned runtime's
+# ``ltx_core_mlx/components/patchifiers.py``): stage 1 runs at half resolution and is upscaled 2x,
+# so the *full* dimension must be a multiple of 64 for the half-res grid to be a multiple of 32.
+# The floor is silent inside the pack and it changes the artifact, not just the arithmetic:
+# measured here 2026-09-27, a request for the published 288p 16:9 canvas came back as 512x256 —
+# 2:1, not 16:9 — while the job's own acceptance still said 512x288. The runtime is pinned by
+# content (``stage_voice.VIDEO_RUNTIME_SHA256``), so restating its rule here cannot drift out from
+# under this table, and `_assert_canvases_are_snap_stable` refuses to import a table that is not a
+# fixed point of it.
+TWO_STAGE_GRID = 64
+
+# Canvases the lane publishes, keyed by an orientation-free size class and then by aspect ratio.
+# Every side is a multiple of TWO_STAGE_GRID and every published (aspect_ratio, resolution) pair
+# below is one the validator accepts, so the two fields a caller chooses independently cannot
+# disagree by construction. '11:7' 704x448 is the configuration measured on this Mac (97 frames,
+# 298.5 s) and is the model's default; the others are exact-ratio canvases inside the pack's stated
+# production envelope.
+#
+# **There is no 16:9 pair, and that is a measurement rather than an omission.** Both sides must be
+# multiples of 64, so the smallest exact 16:9 canvas the two-stage pipeline can produce is
+# 1024x576 — far outside the published envelope — and every smaller "16:9" is a 2:1 or 3:2 clip
+# wearing the wrong label. The classes name the *short* side, so 256p is 448x256 or 256x448 and the
+# ratio beside it is the ratio that canvas actually has.
+CANVAS_CLASSES: dict[str, dict[str, tuple[int, int]]] = {
+    '256p': {'7:4': (448, 256), '4:7': (256, 448)},
+    '448p': {'1:1': (448, 448), '11:7': (704, 448)},
+}
+
+
+def _assert_canvases_are_snap_stable() -> None:
+    """Refuse to import a canvas the pack would silently resize.
+
+    A table entry off the two-stage grid is not a smaller picture or a bigger one — it is a
+    *different aspect ratio* than the one advertised, which is how Story Studio's widescreen
+    request received a 2:1 clip. Failing at import names the entry and the rule, instead of
+    publishing it and discovering it in an artifact.
+    """
+    for klass, canvases in CANVAS_CLASSES.items():
+        for ratio, (width, height) in canvases.items():
+            if width % TWO_STAGE_GRID or height % TWO_STAGE_GRID:
+                raise ValueError(
+                    f'canvas {klass} {ratio} {width}x{height} is not a multiple of '
+                    f'{TWO_STAGE_GRID} on both sides, so the LTX two-stage pipeline would snap it '
+                    f'to {width - width % TWO_STAGE_GRID}x{height - height % TWO_STAGE_GRID} and '
+                    f'the artifact would not be {ratio}. Publish the snapped canvas, or a canvas '
+                    f'that is already on the grid.')
+
+
+_assert_canvases_are_snap_stable()
+
+# Durations the lane answers, in whole seconds at the published frame rate. 49 and 97 frames are
+# 8k+1 at 24 fps; 97 frames at 704x448 is the measured configuration.
+DURATIONS_SECONDS = (2, 4)
+MAX_PROMPT_CHARACTERS = 4000
+
 # The pack's own quality ceiling, in the units it states it in. LTX's card says production runs
 # through 768x768x25f and that at n_lat >= ~30k (768x768x49f) the VAE produces mesh artifacts
 # and is unusable. The latent token count is (width/32) * (height/32) * frames; the worker
@@ -78,19 +135,34 @@ DEFAULT_FRAME_RATE = 24
 # discovering it in the decode.
 MAX_LATENT_TOKENS = 30_000
 
-# Canvases the lane publishes, keyed by an orientation-free size class and then by aspect ratio.
-# Every side is a multiple of 32 and every published (aspect_ratio, resolution) pair below is one
-# the validator accepts, so the two fields a caller chooses independently cannot disagree by
-# construction. '11:7' 704x448 is the configuration measured on this Mac (97 frames, 298.5 s);
-# the others are exact-ratio canvases inside the pack's stated production envelope.
-CANVAS_CLASSES: dict[str, dict[str, tuple[int, int]]] = {
-    '288p': {'16:9': (512, 288), '9:16': (288, 512)},
-    '448p': {'1:1': (448, 448), '11:7': (704, 448)},
-}
 # Durations the lane answers, in whole seconds at the published frame rate. 49 and 97 frames are
 # 8k+1 at 24 fps; 97 frames at 704x448 is the measured configuration.
 DURATIONS_SECONDS = (2, 4)
 MAX_PROMPT_CHARACTERS = 4000
+
+
+def canvas_durations(width: int, height: int) -> list[int]:
+    """The published durations this canvas accepts, from the same guard the validator enforces.
+
+    Per canvas rather than one list for all of them, because the two are not the same statement:
+    the pack's latent-token ceiling makes a big canvas expensive at the longer duration, and a
+    contract that offers that pair is offering work the lane refuses. Both the contract and
+    :func:`validate_request` read this function, so the published pairs and the accepted pairs are
+    the same set by construction.
+    """
+    return [seconds for seconds in DURATIONS_SECONDS
+            if latent_tokens(width, height, frames_for(seconds, DEFAULT_FRAME_RATE))
+            < MAX_LATENT_TOKENS]
+
+
+def canvases() -> list[dict]:
+    """Every canvas this lane publishes: the pair, its exact size, and the durations it accepts."""
+    return [
+        {'resolution': klass, 'aspect_ratio': ratio, 'width': width, 'height': height,
+         'durations': canvas_durations(width, height)}
+        for klass, entries in sorted(CANVAS_CLASSES.items())
+        for ratio, (width, height) in sorted(entries.items())
+    ]
 
 
 def aspect_ratios() -> list[str]:
@@ -173,8 +245,12 @@ LTX_23 = VideoModel(
     family='ltx-2-3',
     engine=LTX_ENGINE,
     tasks=('image-to-video', 'text-to-video'),
-    defaults={'mode': 'image-to-video', 'aspect_ratio': '16:9',
-              'resolution': '288p', 'duration_seconds': 4,
+    # The default canvas is the measured one (704x448, 97 frames, 298.5 s). It used to be
+    # `16:9` at `288p`, which the pack floors to 512x256 — so the lane's *default* request was a
+    # canvas the lane does not produce, and every caller that omitted both fields received a 2:1
+    # clip while the acceptance said 512x288.
+    defaults={'mode': 'image-to-video', 'aspect_ratio': '11:7',
+              'resolution': '448p', 'duration_seconds': 4,
               'frame_rate': DEFAULT_FRAME_RATE, 'seed': -1},
     limits={'max_prompt': MAX_PROMPT_CHARACTERS, 'min_frames': 9, 'max_frames': 97,
             'min_frame_rate': 24, 'max_frame_rate': 24,
@@ -541,8 +617,11 @@ def lane_parameters(model: VideoModel) -> list[dict]:
                  'lane does not publish is refused'},
         {'name': 'resolution', 'type': 'string', 'required': False,
          'enum': resolutions(), 'default': model.defaults['resolution'],
-         'note': ('an orientation-free size class: 288p is 512x288 or 288x512 and 448p is '
-                  '448x448 or 704x448, decided by the aspect ratio')},
+         'note': ("an orientation-free size class naming the canvas's short side. Which aspect "
+                  "ratios it carries, the exact width and height, and the durations that canvas "
+                  "accepts are in `canvases` — the pack's two-stage pipeline floors each side to "
+                  "a multiple of 64, so not every ratio exists at every class and a pair outside "
+                  "`canvases` is refused")},
         {'name': 'duration_seconds', 'type': 'integer', 'required': False,
          'enum': list(DURATIONS_SECONDS), 'default': model.defaults['duration_seconds']},
         {'name': 'frame_rate', 'type': 'number', 'required': False,
@@ -684,16 +763,21 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     if duration not in DURATIONS_SECONDS:
         raise ValueError(f'Duration must be one of {list(DURATIONS_SECONDS)} seconds, '
                          f'not {duration}')
+    # The canvas's own durations, not the lane's whole list: a big canvas at the longer duration is
+    # the pair the token ceiling refuses, and `canvases` publishes exactly this set.
+    allowed = canvas_durations(width, height)
+    if duration not in allowed:
+        frames_at = frames_for(duration, frame_rate)
+        raise ValueError(
+            f'{width}x{height} is not published at {duration}s '
+            f'({latent_tokens(width, height, frames_at)} latent tokens, at or above the '
+            f'{MAX_LATENT_TOKENS}-token point where this pack produces mesh artifacts); this '
+            f'canvas takes ' + ', '.join(f'{seconds}s' for seconds in allowed) +
+            ' or a smaller canvas')
     frames = frames_for(duration, frame_rate)
     if not model.limits['min_frames'] <= frames <= model.limits['max_frames']:
         raise ValueError(f'This lane generates {model.limits["min_frames"]}–'
                          f'{model.limits["max_frames"]} frames')
-    tokens = latent_tokens(width, height, frames)
-    if tokens >= MAX_LATENT_TOKENS:
-        raise ValueError(
-            f'{width}x{height} at {frames} frames is {tokens} latent tokens, at or above the '
-            f'{MAX_LATENT_TOKENS}-token point where this pack produces mesh artifacts; choose '
-            f'a smaller canvas or a shorter duration')
 
     seed = raw.get('seed', defaults['seed'])
     if seed is None:
@@ -738,6 +822,13 @@ def lane_contract(model: VideoModel, data_dir=None) -> dict:
         'operation': 'video.generation',
         'modes': list(model.tasks),
         'parameters': parameters,
+        # The (aspect_ratio, resolution) pairs that exist, with their exact sizes and the durations
+        # each one accepts. Published because the two parameter enums above cannot express the
+        # pairing: a scheduler reading only them would offer `448p` with the ratio that only exists
+        # at `256p`, which is a request this lane refuses. Measured on the first consumer to try it
+        # (Story Studio, whose widescreen request is 16:9) — the cross product of two enums is not
+        # a set of canvases.
+        'canvases': canvases(),
         'artifact': {'modality': 'video', 'media_type': 'video/mp4', 'extension': 'mp4',
                      'per_item': 1},
         'states': {

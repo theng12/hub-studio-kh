@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.81 — 2026-09-27
+
+### A video was not the shape the app said it was
+
+The video model works on a grid: both sides of the picture have to be a multiple of 64 pixels, and
+the app was offering a size that is not on it. The model quietly rounded the picture down — a clip
+asked for as 16:9 came back as 2:1 — while the job still reported the size that was asked for. The
+sizes the app offers are now the sizes the model actually produces, and the app's own screens only
+offer a shape and a size that go together, so a request it cannot honour is never presented as a
+choice.
+
+### The video test can run from the SSD
+
+The Technical folder on the drives now carries a video command: double-click it on any Mac and it
+measures one video generation through the app's real worker — how long it took, how much memory it
+truly used, and the finished clip's real length and tracks. On a Mac below the model's published
+memory tier it reports the refusal, which is that Mac's honest answer rather than a failure. The
+same folder's second command measures the older standalone path for comparison, and the README
+beside them says which to run and what to send back.
+
 ## 0.6.80 — 2026-09-26
 
 ### The video tool the app shipped could not write video

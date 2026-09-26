@@ -3,13 +3,70 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.79** (the Video lane exists, and the first real chain run found two defects in it, 2026-09-26).
+Last updated: **0.6.81** (the lane published a canvas its own pack resizes, and the video hardware test can run from the SSD, 2026-09-27).
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
 shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
 `_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
 
+> **0.6.81 — the lane's canvases are pairs now, and the pack was resizing the old ones.**
+> `CANVAS_CLASSES` was `288p: {16:9: 512x288, 9:16: 288x512}` and `448p: {1:1, 11:7}`, and the LTX
+> pack floors each output side to a multiple of **64** on its two-stage path
+> (`snap_output_dimensions(height, width, two_stage=True)`, pinned runtime
+> `ltx_core_mlx/components/patchifiers.py`). `512x288` is off that grid, so the lane's published
+> 16:9 canvas came back **512x256 — 2:1 — while the job's acceptance still said 512x288**, and the
+> model's own default canvas was that pair. Measured on the first run of the new SSD harness, which
+> is the run that found it:
+>
+> ```
+> two-stage half-res snaps dims to multiples of 64; output will be 512x256 (requested 512x288)
+> ```
+>
+> The table is now `256p: {7:4: 448x256, 4:7: 256x448}` and `448p: {1:1: 448x448, 11:7: 704x448}`,
+> every pair a fixed point of the snap, the default is the measured `11:7` at `448p`, and
+> `_assert_canvases_are_snap_stable()` refuses to import a table off the grid by naming the entry
+> and the size the pack would substitute. **There is no 16:9 entry on purpose:** with both sides
+> multiples of 64 the smallest exact 16:9 the two-stage path can produce is `1024x576`, and every
+> smaller "16:9" is a 2:1 or 3:2 clip wearing the wrong label.
+>
+> `lane_contract` gained **`canvases`** — every `(aspect_ratio, resolution)` pair with its exact
+> pixels and the durations that canvas accepts, from the same `canvas_durations()` the validator
+> enforces. The two parameter enums were never a set of canvases: the gateway built its variants as
+> their cross product and published `aspect_ratios` from the union, so Story Studio's picker offered
+> `448p + 16:9`, which the lane refuses, and its widescreen request at `288p` was answered with a
+> 2:1 clip. The gateway now builds variants from `canvases` (each carrying its own ratio), Story
+> sends the ratio of the row it priced, the native Video page snaps its controls onto a published
+> pair, and `tests/test_video_worker.py` walks the whole cross product asserting published ==
+> accepted.
+>
+> **Also 0.6.81: the hardware step can run from the SSD.** `qualification/RUN-LTX-VIDEO-WORKER.command`
+> drives the shipped worker using the app's own `components/` and `runtimes/video` (no checkout),
+> prints the machine, the published tier and the expected verdict before the run — on a 16 GB Mac a
+> refusal is that test passing — and writes `measurement.json`. `ltx-video-worker-run.py` resolves
+> its hub root `STUDIOHUB_HUB_ROOT` → checkout → `/Applications/Studio Hub.app/Contents/Resources`,
+> and its results guard permits the wrapper's own log folder while still refusing to overwrite a
+> receipt. `sixteen-gb-ltx-video-run.sh` picks the first runtime that can import `mlx.core` +
+> `ltx_pipelines_mlx` and now knows the app's runtime exists — it used to tell a Mac with the app
+> that the runtime was missing. `qualification/README-video-hardware-test.md` says which command
+> answers which question and what to send back; both commands were copied to each SSD's
+> `Technical/` folder. Wrapper run end to end on the 32 GB M2 Max with the bundle's runtime:
+> 512x256, 49 frames, 2.0417 s, 1 video + 1 audio track, 103.7 s, peak MLX 9,977,828,986 B, peak
+> footprint 15,386,290,304 B. **Gate 1376 passed / 11 skipped / 1081 subtests; native build green.**
+>
+> **0.6.80 — the app's ffmpeg had no H.264 encoder, so a finished clip could not be written.**
+> 0.6.79 put the Voice runtime's `bin` on the worker's PATH; that ffmpeg is built for audio, its
+> encoder list has `mpeg4` and no H.264, and it answers `-h encoder=libx264` with exit 0 and
+> *"Codec 'libx264' is not recognized"* — so the real failure was
+> `ffmpeg encode_single_frame failed: … Unrecognized option 'preset'`. `packaging/video-runtime/
+> build.sh` now fetches the same pinned **ffmpeg 8.1** Story Studio ships (osxexperts.net arm64,
+> sha256 `ebb82529562b71…`) plus its ffprobe, verifies both on every build, and refuses a runtime
+> whose ffmpeg cannot answer for `libx264`. `generation.muxer_problem()` asks the same question at
+> catalog time and publishes `ready: false` with the sentence, cached, instead of advertising a
+> model that generates for five minutes and then fails at the last step. (This release was shipped
+> without a handoff update; the paragraph is written here so the record is not two releases deep in
+> one file.)
+>
 > **0.6.76…0.6.79 — the Video lane, and what the first real chain run found in it.**
 > There was no video lane: `components/` was chat, hub, image, music, subtitle and voice, while the
 > broker had mapped a `video` modality to `/api/generate/txt2video` and classified it `durable_async`

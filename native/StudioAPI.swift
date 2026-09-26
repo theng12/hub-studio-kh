@@ -514,11 +514,33 @@ struct NativeLaneContract: Decodable, Equatable {
     let modality: String
     let operation: String?
     let parameters: [NativeLaneParameter]
+    /// The `(aspect_ratio, resolution)` pairs that exist, where the lane publishes them.
+    ///
+    /// A video lane's two parameter enums are not a set of canvases: the LTX lane's `7:4` is its
+    /// `256p` canvas and its `448p` class carries `11:7` and `1:1`, so offering every ratio beside
+    /// every class offers requests the lane refuses. `nil` means the lane states none (every other
+    /// modality), and the parameter enums are then the only statement there is.
+    let canvases: [NativeLaneCanvas]?
     /// Chat publishes the model's own limits here, each with the artefact that states it.
     let modelLimits: [String: NativeModelLimit]?
     let artifact: NativeLaneArtifact?
     /// The Hub adds its own proxy timeout when it echoes a contract on a package row.
     let deadlineSeconds: Double?
+}
+
+/// One video canvas the lane publishes: a ratio, the size class it belongs to, the exact pixels,
+/// and the durations that canvas accepts. Published as a set of pairs rather than two lists.
+struct NativeLaneCanvas: Decodable, Equatable {
+    let aspectRatio: String
+    let resolution: String
+    let width: Int
+    let height: Int
+    let durations: [Int]
+
+    enum CodingKeys: String, CodingKey {
+        case aspectRatio = "aspect_ratio"
+        case resolution, width, height, durations
+    }
 }
 
 /// One row of the size table an Image model publishes: the aspect ratio, the pixels it means, and

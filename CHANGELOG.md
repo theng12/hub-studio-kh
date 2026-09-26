@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.6.81 — 2026-09-27 · The lane published a canvas its own pack resizes
+
+**Measuring the lane from the SSD found this, and it is the sharpest defect in the video work so
+far: the lane's *default* request was a canvas the lane does not produce.** The LTX pack's
+two-stage pipeline floors each output dimension to a multiple of 64 before it generates
+(`snap_output_dimensions(height, width, two_stage=True)` in the pinned runtime's
+`ltx_core_mlx/components/patchifiers.py`: stage 1 runs at half resolution and is upscaled 2x).
+`512x288` is not on that grid, so the published `288p` `16:9` canvas came back as **`512x256` —
+2:1, not 16:9** — while the job's own acceptance still said `512x288`. Measured in the first run
+of the new worker harness:
+
+```
+two-stage half-res snaps dims to multiples of 64; output will be 512x256 (requested 512x288)
+```
+
+`CANVAS_CLASSES` is now a table of **pairs on the pack's grid** — `256p` (`7:4` 448x256, `4:7`
+256x448) and `448p` (`1:1` 448x448, `11:7` 704x448, the measured configuration) — and the model's
+default is the canvas it qualified (`11:7` at `448p`), not a ratio the pack would resize. There is
+no `16:9` entry and that is arithmetic rather than an omission: with both sides multiples of 64,
+the smallest exact 16:9 canvas the two-stage path can produce is `1024x576`. `_assert_canvases_
+are_snap_stable()` refuses to import a table off that grid, naming the entry and the size the pack
+would substitute.
+
+**The two parameter enums were never a set of canvases, and a consumer built the cross product.**
+`lane_contract` now publishes `canvases`: every `(aspect_ratio, resolution)` pair, its exact pixels
+and the durations that canvas accepts (from the same `canvas_durations()` the validator enforces,
+so published and accepted cannot drift). The validator refuses a pair the table does not carry by
+name. `tests/test_video_worker.py` walks the whole cross product and asserts every published
+combination is accepted and every unpublished one refused — the invariant whose absence let this
+ship.
+
+**Why it mattered to a consumer, measured rather than reasoned:** Story Studio submitted `16:9`
+with whatever resolution the picker offered. At `448p` the lane refused it (`448p is not published
+for 16:9; that aspect ratio offers: 288p`), and at `288p` it accepted it and returned a 2:1 clip.
+The gateway built its video variants as the cross product of the two enums and published
+`aspect_ratios` from the union, so the picker offered pairs that do not exist. Both are fixed in
+their own repositories in the same change set: the gateway builds variants from `canvases` with
+each variant carrying its own ratio, and Story Studio sends the ratio of the row it priced.
+
+**Also in this release — the video hardware test can run from the SSD, on a Mac that has only the
+app.** The fleet's hardware step is the owner's, and the SSD kit carried chat and Z-Image commands
+and no video one. `qualification/RUN-LTX-VIDEO-WORKER.command` drives the shipped worker (the
+app's own `components/` and `runtimes/video`, no checkout), prints the machine, the tier the
+manifest publishes and the expected verdict *before* the run — on a 16 GB Mac a refusal is that
+test passing — and writes `measurement.json`. `ltx-video-worker-run.py` resolves its hub root from
+`STUDIOHUB_HUB_ROOT`, then a checkout, then `/Applications/Studio Hub.app/Contents/Resources`, and
+its results-folder guard now permits the folder the wrapper creates for the console log while
+still refusing to overwrite a previous receipt (its first run found exactly that:
+`FileExistsError` before the run started). `sixteen-gb-ltx-video-run.sh` picks the first runtime
+candidate that can actually import `mlx.core` + `ltx_pipelines_mlx`; it used to take the first path
+that exists and did not know about the app's runtime, so a node with the app installed was told
+"the LTX runtime is not on this Mac" while one sat inside the bundle.
+
+**Evidence.** The wrapper ran end to end on this 32 GB M2 Max with the app bundle's components and
+runtime: 16:9 288p 2 s request, job `71865db1877c4e7dbd8918c9e8c9ff64`, `done`, 512x256 at 49
+frames, 2.0417 s, 1 video + 1 audio track, 103.7 s wall, peak MLX 9,977,828,986 bytes, peak
+footprint 15,386,290,304 bytes. The native Video page reads the same `canvases` list and snaps its
+controls onto a published pair. Gate **1376 passed / 11 skipped / 1081 subtests**, `bash
+native/build.sh` green.
+
 ## 0.6.80 — 2026-09-26 · The app's ffmpeg has no H.264 encoder
 
 **The mux fix in 0.6.79 found the second half of the same problem.** With the Voice runtime's `bin`

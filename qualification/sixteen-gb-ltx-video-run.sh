@@ -38,19 +38,39 @@ echo "swap now: $("$SYSCTL" -n vm.swapusage 2>/dev/null || echo unknown)"
 echo
 
 # ---- the runtime
+#
+# **A candidate counts only if it can import the pack's own modules.** The list used to be
+# "first path that exists", so a Mac whose runtime was the app's (`runtimes/video`, which the
+# packaged worker itself runs on) was told the runtime "is not on this Mac" while one sat inside
+# the bundle — and a half-built environment that exists but cannot import `ltx_pipelines_mlx`
+# was chosen over a working one later in the list.
 RUNTIME=""
+RUNTIME_REJECTED=""
 for cand in \
     "${STUDIOHUB_LTX_RUNTIME:-}" \
     "$HERE/ltx-runtime/env/bin/python" \
+    "$HERE/video-runtime/bin/python3" \
+    "/Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3" \
     "$HERE/../.build/ltx-2-mlx/env/bin/python" \
+    "$HERE/../.build/video-runtime/bin/python3" \
     "$HOME/StudioHubModels/ltx-runtime/env/bin/python"
 do
-    [ -n "$cand" ] && [ -x "$cand" ] && { RUNTIME="$cand"; break; }
+    [ -n "$cand" ] || continue
+    [ -x "$cand" ] || continue
+    if "$cand" -c 'import mlx.core, ltx_pipelines_mlx' 2>/dev/null; then
+        RUNTIME="$cand"
+        break
+    fi
+    [ -n "$RUNTIME_REJECTED" ] || RUNTIME_REJECTED="$cand exists but cannot import mlx + ltx_pipelines_mlx"
 done
 if [ -z "$RUNTIME" ]; then
     echo "The LTX runtime is not on this Mac, so there is nothing to measure with."
+    [ -n "$RUNTIME_REJECTED" ] && echo "  ($RUNTIME_REJECTED)"
     echo
-    echo "It is a separate Python 3.11 environment (the Image runtime is 3.12 and cannot host it)."
+    echo "The Studio Hub app ships it: /Applications/Studio Hub.app/Contents/Resources/runtimes/video"
+    echo "is the same Python 3.11 environment the packaged video worker runs on, so a Mac with the"
+    echo "app installed already has everything this script needs. Otherwise it is a separate"
+    echo "Python 3.11 environment (the Image runtime is 3.12 and cannot host it)."
     echo "Build it once with:"
     echo "  git clone https://github.com/dgrauet/ltx-2-mlx && cd ltx-2-mlx"
     echo "  git checkout 3b2e77fd73af5f08961f4436ae979c0579d5deed"
