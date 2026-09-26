@@ -668,6 +668,42 @@ changed 0444→0644 stopped the Music worker and therefore the whole Hub from st
 
 **Opened by 0.6.63 — none of these blocks the release; each is recorded where it was found.**
 
+**STATUS OF THIS LIST, corrected 2026-09-26 — read this before the entries below.** The list is an
+accumulation from 0.6.63 and **most of it has since closed**, so the entries are kept as the record
+of what was found rather than as a statement of what is open. Closed since, each with its own row in
+`docs/cross-project-open-items.md`:
+
+- **Voice's below-tier warning** — closed (SH-3, 0.6.69). All three links built, and the reason it
+  could never have fired was found underneath them.
+- **FLUX.2 Klein 4B MLX 4-bit's `79.34 s`** — closed (SH-4, 0.6.69). The number was in no file in
+  this repository; the stored run is **105.943 s**, and the host was wrong too.
+- **The model-exposure approval surface** — closed (SH-5 / HUB-12, 0.6.69). Zero callers, nothing
+  gated by it, and the gateway verified from its own side that it does not need one.
+- **Chat's memory tier** — closed (SH-6, 0.6.69). Measured on three 16 GB Macs; 8 GB excluded by the
+  owner's decision and the harness refuses it immediately.
+- **The 8 GB Z-Image-Turbo run** — closed (SH-7, 2026-09-26). The owner ran it: **the tier PASSES**
+  with low-RAM mandatory, floor moved 16 → 8, and the entry moved to `PROVEN_SMALLER`.
+- **ST-13's re-stage** — closed by the 0.6.59 refresh, and the prune has nothing left to do.
+
+### What is actually open, as of 0.6.70
+
+1. **The app half of stall visibility.** `stalled_seconds` is on the job rows and on the fleet
+   machine rows (Hub, `03ea173`), but the native app reads **neither** the fleet activity route nor
+   those fields — it reads `/api/hub/jobs`. So a stalled job is visible to a scheduler and not to the
+   operator. Needs `HubJobSummary`/`HubJobDetail` → `NativeJob` → a render, then a native build.
+2. **The video lane.** Nothing about it is shipped: no worker, no manifest, no `lane_contract`. The
+   LTX runtime works (`.build/ltx-2-mlx`, 12 pipelines) and `qualification/RUN-16GB-LTX-VIDEO.command`
+   is built but **has never been run end to end**. 0.6.70 already publishes a **7,200 s** video
+   deadline and a `DURABLE_ASYNC` retry class for it — correct, and unbacked until the worker exists.
+   **`DURABLE_ASYNC` is a requirement on that worker**: it must acknowledge the job before the result
+   exists.
+3. **Chat's packaged page has still never been typed into by a human**, and streaming end-to-end
+   through the Hub remains unexercised. That is an acceptance question, not a measurement.
+4. **Nothing in the product refuses on memory tier** — a decision, not a measurement, and it matches
+   the image precedent of warning rather than refusing.
+
+---
+
 - **Voice publishes no below-tier warning, and there are two missing links, not one.** Its catalog
   row publishes `min_unified_memory_gb` (a real qualification tier) but no `memory_warning`
   sentence; the Audio `NativeModel(…)` in `combineModels` passes no `memoryWarning`; and the Audio
