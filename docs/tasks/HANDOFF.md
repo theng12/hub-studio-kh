@@ -5,12 +5,23 @@
 
 Last updated: **0.6.71** (the app half of stall visibility — silence reaches the operator, 2026-09-26).
 
-> **0.6.71 is committed and pushed; not yet staged to a DMG or the drives.** `stalled_seconds` now
-> reaches the Jobs row. **1338 tests green** (1344 collected, 11 skipped, 1000 subtests) and
-> `bash native/build.sh` passed its boundary, API contract and lifecycle checks. The guard is
-> `tests/test_stall_visibility.py`, proved to fail on the defect. **`implementation/voice-runtime` and
-> `main` both carry it.**
-
+> **0.6.71 is released, installed and has its DMG. The four drives are NOT refreshed, deliberately.**
+> `971d12c` on both `implementation/voice-runtime` and `main`; DMG `dist/StudioHub-0.6.71-971d12c.dmg`
+> (1.2 GB, 60436 files); installed to `/Applications` and the Hub is answering
+> `{"version":"0.6.71","build":"971d12c"}`; the gateway sees the local location reachable at 0.6.71.
+> **1338 tests green** (1344 collected, 11 skipped, 1000 subtests) and `bash native/build.sh` passed
+> its boundary, API contract and lifecycle checks. The guard is `tests/test_stall_visibility.py`,
+> proved to fail on the defect. The previous installed bundle is kept at
+> `_trash/app/Studio Hub.app-0.6.70` and the previous DMG at `_trash/dist/` — **nothing was `rm`d.**
+>
+> **Why the drives were left alone.** A kit refresh is a whole-kit action: each drive carries all
+> three apps plus **two** README indexes that both name every app's version, and OWNER-6 in
+> GatewayKH's tracker is the row where exactly that drifted — both indexes on all four drives read
+> `0.6.63` while the bundle beside them was `0.6.70`. Refreshing only the Hub would move one app's
+> bundle and leave both indexes, and possibly the other two apps, describing the old set. Do it as a
+> deliberate full-kit refresh with `prepare-kit.sh` per drive and `verify-kit.sh` after each, not as
+> the tail of a code release.
+>
 > **0.6.70 is released, installed, on all four drives and pushed** — `7eb09ac`, DMG
 > `dist/StudioHub-0.6.70-30ecef1.dmg` (1.2 GB, 60436 files), every drive `RESULT: PASS`, 1336 tests
 > green. Three things a reader of this file needs to know about it:
