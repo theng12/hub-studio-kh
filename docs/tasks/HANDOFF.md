@@ -3,8 +3,13 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.70** (the deadline became per-generator, the stall detector, Z-Image qualified on
-8 GB, 2026-09-26).
+Last updated: **0.6.71** (the app half of stall visibility — silence reaches the operator, 2026-09-26).
+
+> **0.6.71 is committed and pushed; not yet staged to a DMG or the drives.** `stalled_seconds` now
+> reaches the Jobs row. **1338 tests green** (1344 collected, 11 skipped, 1000 subtests) and
+> `bash native/build.sh` passed its boundary, API contract and lifecycle checks. The guard is
+> `tests/test_stall_visibility.py`, proved to fail on the defect. **`implementation/voice-runtime` and
+> `main` both carry it.**
 
 > **0.6.70 is released, installed, on all four drives and pushed** — `7eb09ac`, DMG
 > `dist/StudioHub-0.6.70-30ecef1.dmg` (1.2 GB, 60436 files), every drive `RESULT: PASS`, 1336 tests
@@ -685,12 +690,15 @@ of what was found rather than as a statement of what is open. Closed since, each
   with low-RAM mandatory, floor moved 16 → 8, and the entry moved to `PROVEN_SMALLER`.
 - **ST-13's re-stage** — closed by the 0.6.59 refresh, and the prune has nothing left to do.
 
-### What is actually open, as of 0.6.70
+### What is actually open, as of 0.6.71
 
-1. **The app half of stall visibility.** `stalled_seconds` is on the job rows and on the fleet
-   machine rows (Hub, `03ea173`), but the native app reads **neither** the fleet activity route nor
-   those fields — it reads `/api/hub/jobs`. So a stalled job is visible to a scheduler and not to the
-   operator. Needs `HubJobSummary`/`HubJobDetail` → `NativeJob` → a render, then a native build.
+1. ~~**The app half of stall visibility.**~~ **CLOSED 2026-09-26 (0.6.71).** The Hub published
+   `stalled_seconds` on the job rows and the fleet machine rows (`03ea173`) and the app read none of
+   it: `HubJobSummary` decoded two fields, `id` and `modality`. All three links are built now —
+   `HubJobSummary`/`HubJobDetail` → `NativeJob.stalledSeconds` → the Jobs row draws *"No progress for
+   4 min 12 s — still held, not cancelled"* — and `tests/test_stall_visibility.py` pins all three
+   together, because any one alone looks like it works. **Advisory only**, per `stall.py`'s own rule
+   that a stall is surfaced and never acted on destructively.
 2. **The video lane.** Nothing about it is shipped: no worker, no manifest, no `lane_contract`. The
    LTX runtime works (`.build/ltx-2-mlx`, 12 pipelines) and `qualification/RUN-16GB-LTX-VIDEO.command`
    is built but **has never been run end to end**. 0.6.70 already publishes a **7,200 s** video

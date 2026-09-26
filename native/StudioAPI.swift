@@ -1509,6 +1509,15 @@ struct NativeJob: Identifiable, Equatable {
     var statedGenerationSeconds: Double? = nil
     /// The studio's own label for the phase it is in ("DiT sampling"), when it reports one.
     var progressStage: String? = nil
+    /// How long this batch has been silent **while still active**, from the Hub's own progress
+    /// clock. Nil is "the Hub stated none", which is what every queued and every finished job
+    /// reports — silence only means something while a job is in flight.
+    ///
+    /// **Visible, never destructive.** `stall.py` is explicit that a stall is not a timeout and must
+    /// never kill a job: a merely-quiet job is one a long deadline exists to protect. This exists so
+    /// the operator can see what the API already published; nothing is cancelled on the strength of
+    /// it.
+    var stalledSeconds: Double? = nil
     /// What a Chat completion answered. Empty for every other Studio, whose result is a file.
     ///
     /// A Chat answer is text and nothing else: the Hub records it as the item's `text` rather than
@@ -6716,6 +6725,10 @@ final class NativeWorkspaceStore: ObservableObject {
             completionTokens: item?.usage?.completionTokens,
             statedGenerationSeconds: item?.generationS,
             progressStage: item?.progressStage,
+            // Taken from the DETAIL, not from the summary the loop is iterating: both are
+            // `broker.batch_summary`, so they are the same number, and reading it here keeps one
+            // source for the row rather than threading a second value through the mapping.
+            stalledSeconds: wire.stalledSeconds,
             answer: item?.text ?? "",
             itemIndex: item?.index ?? 0)
     }
@@ -7637,11 +7650,20 @@ private struct HubChatCompletion: Decodable {
     var completionTokens: Int? { usage?.completionTokens }
     var statedGenerationSeconds: Double? { studioHub?.elapsedSeconds }
 }
-private struct HubJobSummary: Decodable { let id: String; let modality: String }
+private struct HubJobSummary: Decodable {
+    let id: String
+    let modality: String
+    /// The Hub's own "nothing has moved" clock for this batch. Published on the summary and on the
+    /// detail (both come from `broker.batch_summary`), and read by neither until now.
+    let stalledSeconds: Double?
+}
 private struct HubJobDetail: Decodable {
     let id: String
     let model: String
     let createdAt: Double?
+    /// The same field the summary carries: `/api/hub/jobs/{id}` is `_summary(batch)`, so the detail
+    /// is the summary plus `items`.
+    let stalledSeconds: Double?
     let items: [HubJobItem]
 }
 private struct HubJobItem: Decodable {

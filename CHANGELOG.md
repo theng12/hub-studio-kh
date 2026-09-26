@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.71 — 2026-09-26 · Silence became visible to the operator too
+
+**A stall the Hub could see, nobody watching the app could.** 0.6.70 made a quiet worker *visible* —
+`stall.py` notices silence in about two minutes whatever the deadline is, which is the whole reason a
+30-minute ceiling is safe rather than merely long — and the Hub has published `stalled_seconds` on
+every job row and every fleet machine row since. **The app read none of it.** `HubJobSummary` decoded
+two fields, `id` and `modality`, so the number arrived on the wire and was dropped on the floor: a
+scheduler could see a stalled job and the person watching the Jobs page could not. That is the SH-3
+shape exactly — *a two-ended invariant does not see a hole in the middle* — where both ends are true
+and the sentence cannot travel between them.
+
+**All three links are built, and one test pins all three**, because any one of them alone looks like it
+works. The **producer**: `broker.batch_summary` states it, and *both* job routes serve it —
+`/api/hub/jobs` lists summaries and `/api/hub/jobs/{id}` is `_summary(batch)`, that same function plus
+`items`. The **wire**: `HubJobSummary`, `HubJobDetail` and `NativeJob` name `stalledSeconds`, so
+`convertFromSnakeCase` actually maps it, and `mapHubJob` passes it through. The **screen**: the Jobs
+row draws *"No progress for 4 min 12 s — still held, not cancelled"* under the progress bar.
+
+**It is advice, and the wording is pinned to the rule.** `stall.py` is explicit — *"What it must never
+do is kill the job."* A merely-quiet job is one a long deadline exists to protect, so the row says
+what is happening and promises nothing about the job ending.
+`tests/test_stall_visibility.py` fails if the sentence stops saying the job is still held, and fails
+if `stall.py`'s own contract is reworded out from under it.
+
+**Verified:** `pytest tests/` **1344 passed, 11 skipped, 1000 subtests, exit 0** (was 1336/998 — this
+file's 8 tests and 2 subtests), and `bash native/build.sh` green with the boundary, API contract and
+lifecycle checks all passing. **The guard was proved to fail on the defect:** restoring the original
+two-field `HubJobSummary` fails it with *"the Hub publishes it and the app drops it, which is the
+defect this file exists for"*.
+
 ## 0.6.70 — 2026-09-26 · One deadline became four, and silence became visible
 
 **The Hub's job deadline is no longer one number.** It was a single flat 900 s on every lane. The

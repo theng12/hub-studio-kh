@@ -409,13 +409,17 @@ struct StudioContent: View {
                         .tint(stateColor(job.state))
                     Text(Self.runningLabel(job))
                         .font(.caption).foregroundStyle(.secondary)
+                    stallNote(job)
                 }
             } else {
-                HStack(spacing: 8) {
-                    ProgressView().progressViewStyle(.linear).frame(width: 140)
-                    Text(job.progressStage.map { "Running — \($0)" }
-                         ?? "Running — progress is not reported by this model")
-                        .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        ProgressView().progressViewStyle(.linear).frame(width: 140)
+                        Text(job.progressStage.map { "Running — \($0)" }
+                             ?? "Running — progress is not reported by this model")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    stallNote(job)
                 }
             }
         case "uncertain":
@@ -435,6 +439,26 @@ struct StudioContent: View {
             Text("Cancelled").font(.caption).foregroundStyle(.secondary)
         default:
             EmptyView()
+        }
+    }
+
+    /// The Hub's own "nothing has moved" signal, shown and deliberately not acted on.
+    ///
+    /// `stalled_seconds` is the batch's progress clock — how long it has been silent while still
+    /// active — and the Hub has published it on every job row since 0.6.70. The app read neither it
+    /// nor the fleet signal, so a job that had gone quiet looked exactly like one that was working:
+    /// a scheduler could see the stall and the operator could not. `stall.py` is the detector and
+    /// says in its own docstring why this is **not** a timeout.
+    ///
+    /// **Advisory only, and worded so.** A merely-quiet job is one a long deadline exists to
+    /// protect, so this says what is happening and promises nothing about the job ending — the same
+    /// rule the Hub's own comment carries: visible, never destructive.
+    @ViewBuilder private func stallNote(_ job: NativeJob) -> some View {
+        if let stalled = job.stalledSeconds, stalled > 0 {
+            Label("No progress for \(NativeJob.clock(stalled)) — still held, not cancelled",
+                  systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
