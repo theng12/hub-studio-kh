@@ -1,0 +1,64 @@
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] ...
+Mac: Apple M2 Max Mac14,13 — 32 GB unified, macOS 27.0
+swap at start: total = 2048.00M  used = 1221.25M  free = 826.75M  (encrypted)
+
+pipeline: DistilledPipeline  low_memory=True  low_ram_streaming=True
+canvas: 704x480  frames: 97 @ 24.0fps  (4.0s)
+image-to-video: yes
+
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 2257.71it/s]
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] done in 6.0s
+[Encoding prompt] ...
+[Encoding prompt] done in 15.9s
+[Loading transformer (transformer-distilled.safetensors)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading transformer (transformer-distilled.safetensors)] done in 0.1s
+Traceback (most recent call last):
+  File "/build/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 230, in main
+    pipe.generate_and_save(**call_kwargs)
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
+    video_latent, audio_latent = self.generate_two_stage(**gen_kwargs)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 278, in generate_two_stage
+    stage1, num_frames, height, width = self._stage1(
+                                        ^^^^^^^^^^^^^
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 382, in _stage1
+    self.load()
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 160, in load
+    self.dit = self._load_transformer_with_optional_streaming(transformer_path)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/_base.py", line 452, in _load_transformer_with_optional_streaming
+    return _impl(transformer_path, low_ram_streaming=self.low_ram_streaming)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/utils/_orchestration.py", line 113, in load_transformer
+    weights = load_split_safetensors(transformer_path, prefix="transformer.")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/utils/weights.py", line 28, in load_split_safetensors
+    raw = mx.load(str(path))
+          ^^^^^^^^^^^^^^^^^^
+RuntimeError: [load_safetensors] Tensor 'transformer.adaln_single.emb.timestep_embedder.linear1.bias' invalid data offsets (8706572288, 8706580480) exceeding the size of the file. Perhaps an incomplete download or corrupt file?
+
+FAILED after 22.9s — RuntimeError: [load_safetensors] Tensor 'transformer.adaln_single.emb.timestep_embedder.linear1.bias' invalid data offsets (8706572288, 8706580480) exceeding the size of the file. Perhaps an incomplete download or corrupt file?
+peak MLX Metal allocation: 14.22 GB (Metal only — this is NOT the process footprint)
+swap at end: total = 3072.00M  used = 2321.62M  free = 750.38M  (encrypted)
+record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-164041/measurement.json
+       23.32 real         2.26 user         8.38 sys
+          4883431424  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              908803  page reclaims
+                 675  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  22  messages sent
+                  57  messages received
+                   0  signals received
+                4400  voluntary context switches
+              186408  involuntary context switches
+         53399712410  instructions retired
+         30714750821  cycles elapsed
+         15685757752  peak memory footprint

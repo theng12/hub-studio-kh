@@ -41,6 +41,71 @@ from pathlib import Path
 SYSCTL = ("/usr/sbin/sysctl", "/usr/bin/sysctl")
 
 
+def apply_pack_quantization(model_dir: Path) -> str | None:
+    """Apply the model pack's own mixed-precision loader, when it ships one.
+
+    **Why this is needed at all.** `ltx_core_mlx.apply_quantization` detects ONE bit width and
+    applies it to every layer. A pack whose weights are quantized per-tensor — `baa-ai`'s
+    LTX-2.3 22B RAM-12GB is, 1,415 of 1,760 layers across 2/3/4/5/6/8 bits — cannot load under
+    that rule, and fails with a shape error rather than a missing-file one:
+
+        ValueError: [quantized_matmul] The shapes of the weight and scales are incompatible
+        based on bits and group_size. w.shape() == (4096,640) and scales.shape() == (4096,64)
+        with group_size=64 and bits=8
+
+    (4096×640 packed against 64 scale groups is a **5-bit** layer; the run before it failed at
+    8 bits because `split_model.json` declares the flat `quantization_bits: 8`.)
+
+    **The pack publishes neither the scheme nor the per-layer widths** — `split_model.json` says
+    only `quantized: true, quantization_bits: 8`, and the safetensors `__metadata__` is empty. So
+    this cannot be derived from a manifest; but the pack *does* ship the loader that knows, in its
+    own `generate.py`, and it infers each layer's bits from its packed shape:
+
+        bits = round(weight.shape[-1] * 32 / (scales.shape[-1] * group_size))
+
+    Importing the producer's own code is the right way round — reimplementing that inference here
+    would be a second copy, free to disagree with the one that produced the weights.
+
+    Nothing happens for a pack that is not mixed-precision: a `split_model.json` without
+    `quantized: true`, or any pack with no such script, is left entirely alone. Returns the
+    provenance string when a patch was applied so the record says which loader ran.
+    """
+    script = model_dir / "generate.py"
+    manifest_path = model_dir / "split_model.json"
+    if not script.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+    except (OSError, ValueError):
+        manifest = {}
+    if not isinstance(manifest, dict) or not manifest.get("quantized"):
+        return None
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_studiohub_pack_generate", script)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 — a pack script we cannot read is not fatal
+        print(f"note: the pack ships generate.py but it would not import ({exc}); "
+              f"falling back to the runtime's own loader")
+        return None
+    patch = getattr(module, "_patch_pipeline_quantization", None)
+    if not callable(patch):
+        return None
+    try:
+        patch()
+    except Exception as exc:  # noqa: BLE001
+        print(f"note: the pack's quantization patch refused to apply ({exc})")
+        return None
+    print(f"loader: the pack's own mixed-precision quantizer "
+          f"({(manifest_path.name)} says quantized: true)")
+    return "pack_generate.py:_patch_pipeline_quantization"
+
+
 def _sysctl(name: str) -> str | None:
     """One sysctl reading via an absolute path. Never the bare name — see the module docstring."""
     for exe in SYSCTL:
@@ -226,6 +291,12 @@ def main(argv: list[str]) -> int:
     started = time.time()
     status, failure = "ok", None
     try:
+        # **Before the pipeline is constructed, not after.** `nn.quantize` is applied as the
+        # modules are created, so a patch that arrives once `pipe` exists has nothing left to
+        # patch — and the failure it prevents is a shape error deep in `quantized_matmul`, not a
+        # clear "you forgot the loader".
+        loader = apply_pack_quantization(model_dir)
+        record["runtime"]["quantization_loader"] = loader or "runtime default"
         pipe = pipeline_cls(**ctor_kwargs)
         pipe.generate_and_save(**call_kwargs)
     except Exception as exc:

@@ -1,0 +1,39 @@
+warning: no transformer config (embedded_config.json / config.json) found in /Volumes/KH-STUDIO-NOVA/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] ...
+Mac: Apple M2 Max Mac14,13 — 32 GB unified, macOS 27.0
+swap at start: total = 4096.00M  used = 3529.56M  free = 566.44M  (encrypted)
+
+pipeline: DistilledPipeline  low_memory=True  low_ram_streaming=False
+canvas: 704x480  frames: 97 @ 24.0fps  (4.0s)
+image-to-video: yes
+
+loader: the pack's own mixed-precision quantizer (split_model.json says quantized: true)
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 4075.18it/s]
+warning: no transformer config (embedded_config.json / config.json) found in /Volumes/KH-STUDIO-NOVA/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] done in 4.8s
+[Encoding prompt] ...
+[Encoding prompt] done in 20.0s
+[Loading transformer (transformer-distilled.safetensors)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /Volumes/KH-STUDIO-NOVA/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+  Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
+[Loading transformer (transformer-distilled.safetensors)] done in 14.3s
+two-stage half-res snaps dims to multiples of 64; output will be 704x448 (requested 704x480). Use --single-stage for exact dims.
+[estimate] denoising: 8 steps x 1 passes over 1001 video + 101 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/8 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 27 s remaining (12.4 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/8 [00:12<?, ?it/s]Denoising:  12%|█▎        | 1/8 [00:12<01:26, 12.36s/it]                                                        [estimate] denoising: ~1 min 18 s remaining (13.0 s/forward) (refined)
+Denoising:  12%|█▎        | 1/8 [00:25<01:26, 12.36s/it]Denoising:  25%|██▌       | 2/8 [00:25<01:16, 12.75s/it]Denoising:  38%|███▊      | 3/8 [00:38<01:04, 12.80s/it]Denoising:  50%|█████     | 4/8 [00:50<00:51, 12.75s/it]Denoising:  62%|██████▎   | 5/8 [01:03<00:37, 12.61s/it]Denoising:  75%|███████▌  | 6/8 [01:15<00:24, 12.42s/it]Denoising:  88%|████████▊ | 7/8 [01:27<00:12, 12.29s/it]Denoising: 100%|██████████| 8/8 [01:39<00:00, 12.28s/it]Denoising: 100%|██████████| 8/8 [01:39<00:00, 12.45s/it]
+[estimate] denoising: 3 steps x 1 passes over 4004 video + 101 audio tokens = 3 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/3 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 32 s remaining (45.9 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/3 [00:45<?, ?it/s]Denoising:  33%|███▎      | 1/3 [00:45<01:31, 45.90s/it]                                                        [estimate] denoising: ~46 s remaining (46.1 s/forward) (refined)
+Denoising:  33%|███▎      | 1/3 [01:31<01:31, 45.90s/it]Denoising:  67%|██████▋   | 2/3 [01:31<00:45, 46.00s/it]Denoising: 100%|██████████| 3/3 [02:18<00:00, 46.21s/it]Denoising: 100%|██████████| 3/3 [02:18<00:00, 46.14s/it]
+[Loading decoders (VAE + audio + vocoder)] ...
+[Loading decoders (VAE + audio + vocoder)] done in 0.1s
+[Decoding video + audio + muxing] ...
+[vae-decode tiling] frames=64/16 est. 15.0 GB budget=16.0 GB
+[vae-decode tiling] peak Metal memory 13.19 GB
+[Decoding video + audio + muxing] done in 20.6s
+
+DONE in 303.1s — /tmp/ltx-run/nostream-164557/generated.mp4 (1.8 MB)
+peak MLX Metal allocation: 13.19 GB (Metal only — this is NOT the process footprint)
+swap at end: total = 4096.00M  used = 3574.62M  free = 521.38M  (encrypted)
+record: /tmp/ltx-run/nostream-164557/measurement.json
