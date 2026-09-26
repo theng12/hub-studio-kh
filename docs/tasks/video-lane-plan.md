@@ -5,11 +5,14 @@ gate before distribution, alongside "all known bugs fixed".
 
 ## The owner's decisions, recorded
 
-1. **Ship video to the 24/32 GB machines now; chase 16 GB afterwards.** The lane is built with a
-   per-model **memory tier**, so the gateway offers video only to locations whose machines fit. A
-   16 GB pass is an open qualification, not a blocker.
-2. **The 16 GB question is settled on real hardware**, on one of his 16 GB Macs — not by inference
-   from the 32 GB measurement.
+1. **VIDEO-1 is revised: image-to-video is no longer required — text-to-video is accepted.** That is
+   what makes the small tier reachable, because the only 8 GB-class video model is T2V-only. This
+   supersedes the earlier "I2V is a hard requirement" answer.
+2. **Two models, two tiers.** Lance 3B (T2V) for the small machines; LTX-2.3 22B (I2V + T2V, with
+   audio) for the 24/32 GB ones. The lane is built with a per-model **memory tier** so the gateway
+   offers each model only where it fits — the tier is the load-bearing part, not a nicety.
+3. **Both tiers are tested on real hardware**: an 8 GB Mac and a 16 GB Mac, not by inference from
+   the 32 GB measurement.
 
 ## Why this is a build, not a finish
 
@@ -25,7 +28,33 @@ publishes **9 cloud video rows and 0 local** (`/v1/videos/models`, measured 2026
   measured LTX run (44:38 for q8 HQ on an M2 Pro 32 GB). The scheduler already expects a lane that
   does not exist.
 
-## The model, and what it costs
+## Model A — Lance 3B Video (the small tier)
+
+`mlx-community/Lance-3B-Video-bf16`, Apache-2.0, **alpha**. Port of ByteDance's `Lance_3B_Video`
+video specialist. Everything below is the **model card's own measurement** `[V]` — none of it has
+been reproduced here yet.
+
+| | |
+| --- | --- |
+| Weights | `model.safetensors` 12.87 GB + `vit` 1.34 GB + `vae` 1.41 GB ≈ **15.6 GB** |
+| Task | **T2V only** (video_edit and x2t_video are "implemented, not validated") |
+| Runner | the **`lance-mlx` source repo** (`github.com/xocialize/lance-mlx`), not a package |
+| Small-Mac path | `memory_mode=relay` (auto below ~18 GiB) — sheds the understanding tower after prefill and frees the generation tower before VAE decode, so peak ≈ the heaviest single phase. **Frame-MD5-verified byte-identical to the resident `parallel` mode** |
+| Lossless decode | streaming VAE decode is **flat in frame count**: 256²×49f **7.99 GB**, 256²×121f **8.05 GB**, 512²×61f **12.64 GB** |
+| Quality ceiling | production through **768²×25f**; **painterly by design, not photorealistic**; at n_lat ≥ ~30k (768²×49f) the VAE produces mesh artifacts and it is unusable |
+| Speed | M5 Max 128 GB: 256²×16f ~33 s, 512²×16f ~60 s, 768²×13f ~145 s — **measured on a machine far above this fleet; do not transfer** |
+
+**The caveat to settle before believing the 8 GB half.** The card's envelope table says *"8–16 GB,
+relay"*, and its worked example is *"256²×61f in ~8.7 GB"*. On a literal 8 GB Mac that peak is
+**larger than the machine's whole RAM**, and the smaller 7.99 GB configuration leaves nothing for
+macOS. Its figures come from `ri_phys` — true OS-committed footprint, *"supersedes the older
+`mx.get_peak_memory()` quotes which under-report ~2×"* — which is the same discipline this project
+insists on, and it is why 8.7 GB should be read as 8.7 GB rather than as marketing.
+
+**So the honest read is: Lance is credible on 16 GB, doubtful on 8 GB.** That is precisely why both
+machines get a real test, and it is the first thing the test should answer.
+
+## Model B — LTX-2.3 22B (the large tier)
 
 | | |
 | --- | --- |
@@ -53,7 +82,7 @@ publishes **9 cloud video rows and 0 local** (`/v1/videos/models`, measured 2026
 | # | File | What |
 | --- | --- | --- |
 | 1 | `components/video/app/backend/{__init__,main,generation,memory_policy}.py` | The worker: `/api/health`, a generate route, the pack loader, per-job release |
-| 2 | `model-manifests/ltx-2-3-22b-ram-12gb-mlx.json` | Exact revision, files, sha256, **`memory_tier`**, the measured peaks above |
+| 2 | `model-manifests/ltx-2-3-22b-ram-12gb-mlx.json` + `lance-3b-video-bf16.json` | Exact revision, files, sha256, **`memory_tier`** (Lance small, LTX large), the measured peaks |
 | 3 | `packaging/hub_worker.py` | `_video_spec` + the worker map entry |
 | 4 | `packaging/stage_voice.py` | Stage the component; add a `smoke_imports` entry |
 | 5 | `components/hub/standalone.py` | Register worker → `video` modality (the deadline floor is already there) |
@@ -73,15 +102,20 @@ as the existing per-model capacity weighting.
    whole path the owner will use.
 3. **Tier gating** — assert the gateway does **not** offer video to an 8/16 GB location, and does to
    a 24/32 GB one.
-4. **The 16 GB test the owner approved** — on one of his 16 GB Macs. Candidates that were reachable
-   on 2026-09-26: `studio-mac-1201-m2-16-256-hub` (M2, 16 GB), `studio-mac-1204-m1-16-512-hub`
-   (M1, 16 GB). This needs either shell access to that Mac or the lane dispatching a real job to it —
-   which is what step 2 makes possible.
+4. **The hardware tests the owner approved — both tiers.** One **8 GB** Mac and one **16 GB** Mac:
+   * 16 GB → LTX (I2V + T2V) and Lance (T2V): does the vendor claim hold?
+   * 8 GB → Lance only, at 256² first: **does it actually fit, or does it swap?** This is the single
+     most valuable number in the whole plan, because ~35 of the owner's ~50 machines are 8 GB.
+   Candidates reachable on 2026-09-26: `studio-mac-1201-m2-16-256-hub` (M2, 16 GB),
+   `studio-mac-1204-m1-16-512-hub` (M1, 16 GB). Needs either shell access to those Macs or the lane
+   dispatching a real job to them — which is what step 2 makes possible.
 
 ## What this does not do
 
-- It does not make video work on 8 GB machines: **no released I2V model fits 8 GB** (Lance 3B is the
-  only 8 GB option and it is T2V-only, and I2V is the owner's hard requirement).
+- It does not promise 8 GB. Lance's own envelope groups 8–16 GB together while its measured peaks
+  (7.99–8.7 GB) exceed an 8 GB machine's RAM — the test decides, not the table.
+- It does not promise photorealism on the small tier: Lance is **painterly by design**, and its
+  production envelope ends at 768²×25f.
 - It does not settle 16 GB — that is step 4, on hardware.
 - It does not touch the drives' reserved empty `video-models/` shelf; a kit refresh is a whole-kit
   action, as the handoff records.
