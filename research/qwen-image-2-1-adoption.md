@@ -41,6 +41,48 @@ bump this pack names is **already in place**; what is still missing is the **Rap
 loader** (a separate runtime path, not stock mflux), and then a physical 8/16 GB qualification. Do
 not read the 5.14 GiB figure as an 8 GB pass.
 
+### The two "4-bit" packs are not the same thing
+
+The owner asked whether
+[`mlx-community/Qwen-Image-2.1-MLX-4bit`](https://huggingface.co/mlx-community/Qwen-Image-2.1-MLX-4bit)
+(`4db4e8c0c0e7`, 2026-09-20, 10.50 GB [M, HF API]) and the `…-mflux-q4` pack above are the same or
+different. Same **base model** (`Qwen/Qwen-Image-2.1`), same 4-bit idea; different **layout**,
+different **documented runner**, and different **encoder precision**:
+
+| | `…-MLX-4bit` | `…-mflux-q4` |
+| --- | --- | --- |
+| Layout | diffusers (`model_index.json`, `scheduler/`, per-component configs) — upstream-shaped | mflux (`text_encoder/0.safetensors`, sharded) |
+| `library_name` | `mlx` | `mflux` |
+| Text encoder on disk | 5.13 GB | 4.26 GB |
+| Runner named on card | **none** | Rapid-MLX low-memory loader |
+| Memory measured on card | **none** | 4.68 / 5.14 GiB |
+| Conversion toolchain stated | no | **mflux 0.20.0 + MLX 0.32.2** |
+
+The `…-MLX-4bit` card is six lines long [M, card] — no runner, no steps, no memory, no conversion
+revision. A pack with **no named loader and no numbers cannot be qualified**; "diffusers layout" is
+fidelity to the reference structure, not evidence of better images. The `mflux-q4` card instead
+states it was converted from upstream `790c92633540` **with mflux 0.20.0 and MLX 0.32.2** [M, card]
+— the exact pair Studio Hub already pins [M, shipped bundle] — and names its loader.
+
+**Why neither loads in stock mflux, in mflux's own words.** The upstream port
+(`src/mflux/models/qwen21/README.md`) states: *"The text encoder is kept in bf16 like the 1.x port;
+quantization applies to the transformer and VAE"*, and *"Peak memory is ~46 GB (the Qwen3-VL text
+encoder, ~17.5 GB bf16, is never quantized and stays resident)"* [M, mflux repo]. It also lists
+`-q 8`, which quantizes the transformer and VAE only. So on the shipped engine the **floor is the
+encoder**: no 8/16/24 GB tier can run 2.1 through stock mflux at all, and `-q 8` (≈30.7 GB peak,
+third-party) is marginal even on the single 32 GB M2 Max. Both community 4-bit packs exist precisely
+because they quantize what mflux refuses to — the very change mflux's maintainers declined to make,
+which is where any quality risk lives.
+
+**Unmeasured:** which 4-bit conversion makes better images. The DiT is ≈4.00 GB in both, so the
+delta is mostly the encoder, and no comparison has been published. Do not claim one is better.
+
+**Answer to the owner:** not the same, but not two models either — one is a pack with a named runner
+and numbers (`mflux-q4`, the only actionable one), the other is a layout conversion with no runner
+(`MLX-4bit`). "Feels more original" is not a quality signal here: on layout the *diffusers* pack is
+the upstream-shaped one; on provenance the *mflux* pack is the better-documented one, because it
+names its conversion toolchain, its source revision and its loader.
+
 ## 1. Verdict for the current fleet (8 / 16 / 24 / 32 GB Apple Silicon)
 
 | Mac unified memory | Any macOS Qwen-Image-2.1 configuration? | Best evidence |
