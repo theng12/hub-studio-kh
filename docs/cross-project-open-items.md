@@ -86,12 +86,49 @@ model, a different runtime, and its own measurement.
 **Needing a machine, not code: nothing, for the first time.** SH-6's 16 GB tier is measured and its
 8 GB tier is a documented exclusion.
 
-## Open — Studio Hub is waiting on
+## Nothing is owed TO Studio Hub — this section is now empty
 
-| # | Item | Owed by | What we need |
+**Both rows that stood here were answered by GatewayKH on 2026-09-25, and the answers were never
+copied back.** The section stayed up for a day showing Studio Hub as waiting on work that was
+already done — the exact failure rule 4 exists to prevent, arriving from the other direction.
+
+| # | Item | Closed | Answer |
 |---|---|---|---|
-| SH-10 | **`_handoffs/2026-09-25-gateway-chat-lane-shipped.md` has never been read by Studio Hub.** Only its one-line summary reached us. If it asks Studio Hub for anything beyond the 401 (which is GatewayKH's to fix by re-joining that node), that ask is currently invisible to us. | GatewayKH | The document, or a line confirming the summary is the whole of it |
-| SH-12 | **Whether GatewayKH wants `--fleet-mode` wired into its install flow.** The flag exists and persists (listen automatic + start at login + start services at login); it deliberately does not touch sleep. | GatewayKH | A yes/no, and whether sleep belongs in scope |
+| SH-10 | The chat-lane handoff document had never been read by Studio Hub | 2026-09-25 | **The one-line summary was the whole of it.** Its single standing ask was the exposure notification, which became HUB-12, and HUB-12 is closed. Nothing else in it asked us for anything. |
+| SH-12 | Whether GatewayKH wants `--fleet-mode` wired into its install flow | 2026-09-25 | **Yes.** The kit's install step runs `open -a "Studio Hub" --args --fleet-mode` — the one call that makes a freshly-provisioned Mac reachable after a reboot with nobody opening the app. **Sleep stays out of scope**: holding a Mac awake is a power decision, so where a site wants always-reachable nodes the kit sets `pmset` as its own visible step. |
+
+## Owed BY Studio Hub — the inbound rows, in one place
+
+**These are the rows GatewayKH's master tracker numbers `HUB-n`.** They are listed here because
+**ten of them previously appeared in no file in this repository** — the entire inbound debt list was
+invisible to the repo that owes it, and only HUB-18 was reachable at all. GatewayKH wrote out the
+four it had noticed and asked us to say in one line whether our tracker deliberately held only our
+own rows; this section is that line, and the answer is that it did not, and now it does not.
+
+The master tracker is still theirs (rule 6). This is the half we own, with our own status.
+
+| # | What is owed | Status |
+|---|---|---|
+| **HUB-20** | Publish the limit's **source as a stable token**, not as a sentence. `_published_max_output_tokens` returns `entry.get("source")`, and the wire carries free prose (`"worker default: the checkpoint ships no generation_config.json"`) where Story Studio needs to *branch* on a value. **Highest of the inbound rows** — Story Studio prints the number without being able to label it. | Open |
+| **HUB-21** | Publish `max_structured_items_per_request` on the chat lane. Today `lane_contract.structured_output` carries `formats`, `enforcement`, `grammar_constrained`, `repair_attempts` and `note` — not this field. It is in **no installed bundle and no gateway.** | Open, **no longer blocking** — see below |
+| **HUB-22** | State what an omitted parameter means, and on which Mac. `_resolved_parameters` resolves each default through `model_defaults.resolved(data_dir, model_id, …)` **per Mac**, and publishes the in-force value as `default`. Story Studio wants a `defaults_scope`. | Open (a statement) |
+| **HUB-18** | A completion cut off at the worker default still reports `finish_reason: "stop"`, so a truncated answer is indistinguishable from a finished one. Measured from GatewayKH's own job store: **4 of 13 `Qwen3.5-9B-4bit` jobs stopped at exactly 4,096 completion tokens and all 13 reported `stop`.** | Open |
+| **HUB-8** | Validate `lane_contract` **on publish**. Absent is safe (callers fall back); **malformed is worse because it looks authoritative.** Omit what cannot be validated. | Open |
+| **HUB-9** | `model_limits` on non-chat lanes where a model states a maximum (music, video). GatewayKH would publish it instead of its own cap. | Open |
+| **HUB-10** | State per-lane `uncertain_is_terminal` semantics **in prose**. The flag exists; their poll loop holds `uncertain` unconditionally until the lanes are named, so they cannot act on it without a hardcoded list. | Open |
+| **HUB-13** | Make a **held release clearable**, and re-word the banner announcing it. `POST /api/hub/release` stores one; no route or control clears it. A held 1.28 GB `0.6.50` DMG made Connections read *"Older release available — this Mac is on a newer version"* while the app ran 0.6.63. | Open |
+| **HUB-14** | Install a pushed release **without a click**, once the Mac is safely drained. The *push* half needs nobody; the *install* half is a button on Connections, on every Mac, for ~50 Macs. | Open |
+| **HUB-15** | Get a held release **onto the nodes**. `peers.release_reconciler` is a module global nothing ever assigns, and a node's `GET /api/hub/release` reads its **own local files**, so a node shows nothing and `wake_peer` is dead code. | Open |
+| **HUB-16** | A **manual listen tick silently drops every address not ticked**, and nothing on the page says so. `pinListenHosts` ends automatic mode; a controller's tailnet address was lost this way, and the gateway dials the address the location was added with (all five are stored as `100.x`). | Open |
+| **HUB-17** | Placement ordered work by **modality instead of the model's own floor**, so an 8 GB-floor TTS model took a 32 GB Mac. | **Closed 2026-09-26** — `_placement_key` is now one factory for every lane. GatewayKH's master tracker still shows this open; their row is the stale one. |
+
+**HUB-21's status changed on 2026-09-26, and the change is on Story Studio's side, not ours.**
+GatewayKH's row says the consequence lands in Story Studio — their scene-plan generator *throws*
+when the field is absent (their STORY-10). **That half is now fixed and shipped** (Story Studio
+`38b87ae3`, v1.4.225, installed): an unpublished item limit no longer refuses the pack, bounded
+instead by the model's published output tokens. So publishing this field is now an **improvement**
+— it would let a lane state a real bound — rather than the thing unblocking a customer. It should
+not be scheduled as urgent on our side.
 
 ## SH-19 in detail — the verification record, kept because it is how the defect was found
 
