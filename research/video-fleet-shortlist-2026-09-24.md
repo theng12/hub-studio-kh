@@ -428,6 +428,27 @@ have it smoothed over.**
 3. **Does 8 GB matter for video at all**, given nothing measured does I2V there and the 8 GB Macs are
    already carrying image, voice and subtitle work?
 
+### ANSWERED by the owner, 2026-09-26 — and the answers settle the tension below
+
+1. **Image-to-video IS a hard requirement.** → **Lance 3B is out on capability** (T2V only), exactly
+   as this file predicted, and the measured 8 GB path it offered goes with it.
+2. **Yes — a 2–3 bit mixed quant is acceptable** to reach the 16 GB machines. → **The baa-ai pack is
+   viable and is the gating artefact**, which the five-machine decision above had already made it.
+3. **8 GB is out of scope for video.** Not answered in those words, but it follows from (1): with I2V
+   required and no 8 GB candidate offering it, there is nothing to chase at that tier. Those Macs
+   keep carrying image, voice and subtitle work.
+
+**And so the tension recorded below is resolved — in favour of the owner's instruction, not this
+file's recommendation.** The recommendation was **Wan2.2 TI2V-5B q8**: the safest first model, whose
+publisher documents I2V for the exact package, and whose quant carries no gamble. **It reaches
+24/32 GB, so it does not answer "chase five machines" and never did.** With I2V required *and* the
+2–3 bit trade accepted *and* the 16 GB tier in scope, the baa-ai pack is the only candidate standing —
+which is why it was the one downloaded, and why the measurement is the thing that decides.
+
+**The one model to test first is therefore `baa-ai/LTX-2.3-22B-RAM-12GB-MLX`**, per the owner's
+instruction to test one rather than survey several. Its ~14 GB memory claim is still **unverified by
+anyone but its author**; settling that is what `qualification/RUN-16GB-LTX-VIDEO.command` exists for.
+
 **Cheap next steps that need no download:** read `generate.py` in the baa-ai pack already on disk to
 settle whether it does I2V; test the PyPI install route for `ltx-pipelines-mlx`; and fix the
 `TextToVideoPipeline` import against the pinned runtime.
