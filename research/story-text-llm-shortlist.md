@@ -47,7 +47,7 @@ thumbnail-prompt and metadata call sites still require real JSON.
 | **8 GB** (M1, M2) | **Gemma 4 E2B** — text+image+audio, 128K, ~1.5–3 GB depending on quant. Small, so scripts are outline-and-draft grade. | **Qwen3.5-4B** (4.7B, 256K, text+image) for stronger instruction-following; **1-bit Bonsai-8B** only if you accept a forked MLX. |
 | **16 GB** (M1, M2, M4) | **Qwen3.5-9B** (OptiQ 4-bit, 6.6 GB) — the fleet workhorse for outline + chapter-by-chapter script + prompts + metadata. Text-only. | **Gemma 4 E2B/E4B** for the vision call; **Qwen3 14B Q4** if 9B prose feels thin. |
 | **24 GB** (M4) | **Gemma 4 26B-A4B** (~15 GB 4-bit, 4B active, 256K) — best fit-per-GB MoE at this tier. | **Qwen3.8-27B** 4-bit (16.05 GB, best open ≈30B prose signal) or **Muse Glimmer 30B** 4-bit (19.41 GB, strongest instruction-follower) — tighter. See §10. |
-| **32 GB** (M1 Max) | **Qwen3.6-35B-A3B 4-bit MLX** (~20.4 GB, 3B active, 262K, **multimodal**) — the 2026 Mac default; covers prose, JSON *and* the vision call in one model. | **Qwen3.8-27B** 4/6-bit (16.05/22.78 GB) or **Muse Glimmer 30B** 4-bit (19.41 GB) — the newer mid-size alternatives in §10. |
+| **32 GB** (M2 Max) | **Qwen3.6-35B-A3B 4-bit MLX** (~20.4 GB, 3B active, 262K, **multimodal**) — the 2026 Mac default; covers prose, JSON *and* the vision call in one model. | **Qwen3.8-27B** 4/6-bit (16.05/22.78 GB) or **Muse Glimmer 30B** 4-bit (19.41 GB) — the newer mid-size alternatives in §10. |
 
 Rule of thumb used throughout: keep weights to **≤60–70% of unified memory**, then budget
 the rest for macOS, the app, the KV cache and context. On 8 GB that leaves ~5–6 GB; on
@@ -161,7 +161,7 @@ converted with `mlx-vlm`, so the same model can serve the reference-thumbnail vi
 Context is 262K per the model's own family material; quality at that depth is not
 independently verified.
 
-**Verdict:** the 32 GB M1 Max should run **Qwen3.6-35B-A3B 4-bit** as the single model for
+**Verdict:** the 32 GB M2 Max should run **Qwen3.6-35B-A3B 4-bit** as the single model for
 the entire pipeline. It is the only pick here that is strong at prose, strict JSON and
 vision at once, and it is fast enough for interactive use. Keep context to 32–64K with a
 quantized KV cache unless the workload proves it needs more. §10 adds **Qwen3.8-27B**
@@ -286,7 +286,7 @@ machine whose text pick is text-only.
 1. **16 GB M4 (the packaged-app dev machine):** `mlx-community/Qwen3.5-9B-4bit` —
    the everyday writer; **serve it as GGUF** for the strict-JSON call sites and keep the
    MLX build for prose / the two-pass planner.
-2. **32 GB M1 Max:** `mlx-community/Qwen3.6-35B-A3B-4bit` — the do-everything model,
+2. **32 GB M2 Max:** `mlx-community/Qwen3.6-35B-A3B-4bit` — the do-everything model,
    vision included; use `mlx-vlm`'s server for the multimodal JSON call.
 3. **8 GB M1/M2:** `AtomicChat/gemma-4-E2B-it-MLX-8bit` (or 4-bit) — drafting only.
 4. **24 GB M4:** **Gemma 4 26B-A4B** QAT 4-bit (measured 34.8 → 10.1 tok/s at 1K → 32K
@@ -395,7 +395,7 @@ leaderboard both benchmark the "Qwen3.6/3.8-27B" class).
 - **Gemma 4 31B 4-bit (18.41 GB) and Qwen3-32B 4-bit (18.43 GB) do not leave enough room for
   context on 24 GB** (KV 5.37 / 8.59 GB @32K `[inference]`).
 
-### 32 GB tier (M1 Max)
+### 32 GB tier (M2 Max)
 
 | # | Model — base + example quant | Params / arch | Weights 4/6/8-bit GB | Est. peak @32 GB `[inference]` | Ctx → practical | Vision |
 |---|---|---|---|---|---|---|

@@ -18,10 +18,10 @@ engine (mlx-serve).
 ## Machine fit (owner fleet)
 
 Canonical fleet: 2× 8 GB (M1, M2), 3× 16 GB (M1, M2, M4), 1× 24 GB (M4),
-1× 32 GB (M1 Max) — see [`research/owner-hardware.md`](owner-hardware.md). Evidence
+1× 32 GB (M2 Max Mac Studio) — see [`research/owner-hardware.md`](owner-hardware.md). Evidence
 class in brackets: **[M]** measured, **[V]** vendor claim, **[I]** inference.
 
-| Model | Footprint | 8 GB (M1/M2) | 16 GB (M1/M2/M4) | 24 GB (M4) | 32 GB (M1 Max) |
+| Model | Footprint | 8 GB (M1/M2) | 16 GB (M1/M2/M4) | 24 GB (M4) | 32 GB (M2 Max) |
 | --- | --- | --- | --- | --- | --- |
 | Z-Image-Turbo | 5.91 GB pack, 8–9 steps | No **[I]** — below the card's 16 GB floor | **Yes** **[V]** | Yes | Yes |
 | Ideogram 4 | q4 = 14 GB disk, **22.0 GB peak** | No | **No** | Tight | Yes **[M]** (22.0 GB peak, M5 Pro/64 GB) |
