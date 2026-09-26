@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.74 — 2026-09-26 · The Voice worker's loops start with the app, not with the import
+
+**Both of the Voice worker's background loops — idle model release and output retention — were
+started by `import backend.main`.** Every process that imported that module got them, a test run
+included, and two real things followed. Neither was a test-only problem.
+
+- **The idle-release ticker reached into a test's own fakes.** `test_memory_policy.py::test_memory_api_frontend_and_process_title`
+  failed with `last_release_details.released is False`. It had been recorded as flake — *"it is a
+  timeout, not a failure"* — and it was not a timeout. The 5-second ticker released the managers the
+  test had just injected, through the test's own settings file, so the test's own
+  `POST /api/memory/release` then reported *correctly* that nothing was loaded. **Measured directly,
+  with the test doing nothing at all:** `gen.releases` 0 → 1 after seven seconds, and the same POST
+  then answered `released: False`. Every assertion in that file that counts releases was racing the
+  ticker, which is why the gate was green most of the time and red sometimes.
+- **The retention loop enforced the operator's policy against the real output directory**, 60 seconds
+  after import and hourly after that. A test session could delete real generated audio in
+  `~/Library/Application Support/StudioHub Standalone/voice/output`. The packaged worker is protected
+  from its own loop by `STUDIOHUB_OUTPUT_POLICY_OWNER=hub`, which `voice_worker.py` sets — a test run
+  is not, and that variable is not what a reader would check.
+
+**Both loops are now registered on the app's `startup`.** This is the pattern the sibling Music and
+Subtitle workers already use, whose comment says it outright: *"The packaged worker calls this once; a
+test that builds a second app gets its own clock instead of the first one's."* Voice was the outlier.
+
+**Production still starts them, and that was checked rather than assumed.** `voice_worker.run_server`
+builds `uvicorn.Config(app, …)` with no `lifespan` argument, so uvicorn's `auto` mode runs startup
+handlers, and the installed worker's own log carries `Application startup complete.` — a line only the
+lifespan path writes. `main.py` already registered `_reconcile_auto_update_scheduler` there.
+
+**`tests/test_background_loops_start_with_the_app.py` pins both halves**, because "starts on import"
+and "starts at all" are different failures: a fresh interpreter must import the module and find
+neither thread, and the startup handler must be registered and wired to the worker's real managers and
+output directory. It asserts the wiring without starting the real threads — starting them would leave
+a live ticker running for the rest of the suite and make `test_memory_policy.py` racy again, which is
+the defect the file exists to prevent.
+
 ## 0.6.73 — 2026-09-26 · Chat gets its margin back, and the video runner stops wasting runs
 
 **Chat was the only one of the five workspace pages without an outer margin.** The owner, looking at

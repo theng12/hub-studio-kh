@@ -216,8 +216,26 @@ async def fleet_job_safe_headers(request: Request, call_next):
     return response
 
 
-storage_policy.start_background(gen_manager, OUTPUT_DIR)
-memory_policy.start_background(gen_manager, stt_manager, _GEN_LOCK)
+def _start_background_loops() -> None:
+    """Start the idle-release and retention loops when the worker actually serves.
+
+    Both loops used to start when this module was *imported*, so every process that imported
+    it got them — a test run included. Two real consequences followed. The idle-release
+    ticker released whichever managers a test had just injected, so
+    `test_memory_policy.py::test_memory_api_frontend_and_process_title` failed intermittently
+    with `last_release_details.released is False` (the test's own POST then found nothing
+    loaded, because the ticker had already unloaded it). And the retention loop enforces the
+    operator's policy against the real `OUTPUT_DIR` 60 seconds after import, so a test session
+    could delete real generated audio.
+
+    The sibling Music and Subtitle workers already bind their loops when the app is built, with
+    the same reasoning recorded there. An import is not a lifecycle; startup is.
+    """
+    storage_policy.start_background(gen_manager, OUTPUT_DIR)
+    memory_policy.start_background(gen_manager, stt_manager, _GEN_LOCK)
+
+
+app.router.add_event_handler("startup", _start_background_loops)
 
 
 # ───────────── request models ─────────────

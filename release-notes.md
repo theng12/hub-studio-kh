@@ -2,6 +2,29 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.74 — 2026-09-26
+
+### Voice Studio tidies up only while it is actually running
+
+Voice Studio frees a model that has gone idle, and clears out old generated audio according to your
+retention setting. Both of those chores had a flaw with the same cause: they started the moment the
+Voice program was *loaded*, rather than the moment it started *running*.
+
+Two things that caused, both now fixed:
+
+- A test run could start those chores too. The idle timer would unload a model that a test had just
+  pretended to load, which made a test fail occasionally for no visible reason — it was reported more
+  than once as a slow test, and it was never slowness.
+- The cleanup timer reads your real output folder, so a test run could have deleted real generated
+  audio once it was older than your retention setting. Your actual Voice Studio was never at risk —
+  it is told not to run its own cleanup, because the Hub does that — but a test was not.
+
+Neither chore starts until Voice Studio is genuinely serving, which is how the Music and Subtitle
+parts of the Hub have always done it.
+
+Nothing about your settings, your voices or your generated files changes, and idle unloading and
+cleanup behave exactly as before while the app is running.
+
 ## 0.6.73 — 2026-09-26
 
 ### The Chat page gets its margin back
