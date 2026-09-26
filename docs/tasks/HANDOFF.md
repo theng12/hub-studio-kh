@@ -35,7 +35,7 @@ shipped, not a file still on disk.** `_trash/dist/` holds whatever history has n
 > newest of the rest, moves the remainder to a drive, and does nothing when no drive has room.
 > **Disk: 462 MB free before → 101 GB after.**
 >
-> **`8bd8495`…`b860e6f`; DMG `dist/StudioHub-0.6.75-b860e6f.dmg`; installed to `/Applications` and
+> **`8bd8495`…`1e9e7e6`; DMG `dist/StudioHub-0.6.75-5e6ba36.dmg`; installed to `/Applications` and
 > verified; the previous DMG moved to `_trash/dist/` — nothing `rm`d.**
 >
 > **0.6.74 — the Voice worker's background loops started on `import`, not on startup.** Both the
