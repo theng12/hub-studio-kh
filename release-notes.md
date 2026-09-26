@@ -2,6 +2,33 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.71 — 2026-09-26
+
+### A job that has gone quiet now says so on the page
+
+When a model stops reporting in the middle of a job, the Hub has been able to see it since 0.6.70 —
+it notices silence in about two minutes, however long that job's ceiling is. That is the whole reason
+a thirty-minute deadline is safe: the deadline can be generous about honest work while the silence
+check stays impatient.
+
+**But you could not see it.** A job that had stopped reporting looked exactly like one that was
+working, because the app was not reading the number the Hub was already publishing.
+
+Now the Jobs row says it, right under the progress bar:
+
+> **No progress for 4 min 12 s — still held, not cancelled**
+
+Two things worth knowing about that sentence.
+
+- **It never cancels anything.** A quiet job is very often just a slow one — a long render, a model
+  still loading. The Hub's rule is that a stall is *shown* and never acted on, so a job that has gone
+  quiet keeps running and nothing is thrown away on the strength of this.
+- **It tells you whether to keep waiting or to go and look.** Two minutes of silence on a long video
+  is ordinary; twenty is not. Now you can tell the difference without watching a bar that has not
+  moved.
+
+Everything else in this release is the same Hub as 0.6.70.
+
 ## 0.6.70 — 2026-09-26
 
 ### Long jobs stop being cut off, and a stuck one stops being invisible
