@@ -27,6 +27,17 @@
   sort out: never delete or tidy anything *inside* it. The one thing that is not a
   file is a Git branch or remote ref — record its name and SHA in a note under
   `_trash/` before deleting it, and never rewrite published history.
+- **Every change is merged, committed, pushed, and built into a DMG — and the previous DMG moves
+  to `_trash/dist/` automatically.** The owner's rule, 2026-09-26: **the whole cycle every time**,
+  not only for something you would call a release. Write the `CHANGELOG.md` **and** `release-notes.md`
+  entries (the loop says both, every time), bump `VERSION` **after** them, stage, install, build the
+  DMG, push `implementation/voice-runtime`, then `git branch -f main HEAD` and push `main`.
+  **A change is not finished while any of those is missing.**
+  `.build/make-dmg.sh` moves the previous DMG aside itself, so `dist/` holds exactly the build you
+  just made and `_trash/dist/` holds the history.
+  ⚠ **`make-dmg.sh` is not tracked by Git** — `.build/` is gitignored, so the DMG step exists only on
+  this Mac. A fresh checkout has no DMG step at all and depends on this paragraph, which is why the
+  sequence is written out here rather than left to the script.
 - **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and
   keep it current: the version and build, anything newly learned, anything newly
   forbidden, and what is still open. A stale handoff is worse than none, because it is
