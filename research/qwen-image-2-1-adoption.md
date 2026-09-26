@@ -35,10 +35,11 @@ still required** [V].
 
 **The blocker is the loader, not the size.** The card says the pack "is intended for the reviewed
 low-memory loader in **Rapid-MLX**", and that **stock mflux 0.20.0 skips text-encoder quantization
-and cannot load this pack without that loader change** [V]. Studio Hub's `image-mflux` engine is
-pinned to mflux 0.17.5, so adopting this means an engine bump **plus** Rapid-MLX's loader (a
-second runtime path), and then a physical 8/16 GB qualification. Do not read the 5.14 GiB figure
-as an 8 GB pass.
+and cannot load this pack without that loader change** [V]. Studio Hub's Image runtime already
+pins **mflux 0.20.0 + MLX 0.32.2** [M — verified in the shipped bundle, 2026-09-26], so the engine
+bump this pack names is **already in place**; what is still missing is the **Rapid-MLX low-memory
+loader** (a separate runtime path, not stock mflux), and then a physical 8/16 GB qualification. Do
+not read the 5.14 GiB figure as an 8 GB pass.
 
 ## 1. Verdict for the current fleet (8 / 16 / 24 / 32 GB Apple Silicon)
 
