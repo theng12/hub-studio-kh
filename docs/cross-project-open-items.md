@@ -39,9 +39,13 @@ exist to make a row cheap to *disprove*.
    do not compare. This is a general trap, not theirs: any two endpoints that return a list will
    differ at index 0 for reasons that have nothing to do with either endpoint.
 
-## Open — GatewayKH is waiting on Studio Hub
+## Answered and shipped in 0.6.70 — GatewayKH's asks, both closed on release
 
-| # | Item | Owed by | What they need |
+**Neither is waiting on anything from us.** SH-19 and SH-20 are answered, in the build, installed, on
+all four drives and pushed. The only remaining action is **theirs**: refresh discovery so the cached
+`deadline_seconds: 900` is replaced by the per-generator numbers. That is not an open item here.
+
+| # | Item | Owed by | Answer |
 |---|---|---|---|
 | SH-20 | **The voice lane's deadline, which their HUB-19 table left at 900 s.** Their note says it outright: *"my last ask — the voice lane stays at 900 s in their new table, and voice is the lane that actually failed us (a ~17-minute narration part killed at 900 s)."* This is not HUB-18/19/20/21/22; it is a row of its own, and the answer is either "raise voice" or "voice stays, and Story Studio lives with the loud failure." | Studio Hub | **Answered: raised to 1,800 s.** See below. |
 
@@ -89,14 +93,18 @@ model, a different runtime, and its own measurement.
 | SH-10 | **`_handoffs/2026-09-25-gateway-chat-lane-shipped.md` has never been read by Studio Hub.** Only its one-line summary reached us. If it asks Studio Hub for anything beyond the 401 (which is GatewayKH's to fix by re-joining that node), that ask is currently invisible to us. | GatewayKH | The document, or a line confirming the summary is the whole of it |
 | SH-12 | **Whether GatewayKH wants `--fleet-mode` wired into its install flow.** The flag exists and persists (listen automatic + start at login + start services at login); it deliberately does not touch sleep. | GatewayKH | A yes/no, and whether sleep belongs in scope |
 
-## Open — GatewayKH is waiting on Studio Hub
+## SH-19 in detail — the verification record, kept because it is how the defect was found
 
-| # | Item | Owed by | What they need |
+| # | Item | Owed by | Answer |
 |---|---|---|---|
 | SH-19 | **The Hub's peer-proxy deadline is 900 s, and that wall kills every video job.** GatewayKH raised this on 2026-09-26 and asked Studio Hub to raise it, since the Hub is the only party that applies it. | Studio Hub | A raised `PEER_PROXY_TIMEOUT_S`; they then refresh discovery and both sides move together |
 
-**Verified here independently, not accepted on their word.** `components/hub/standalone.py:41` is
-`PEER_PROXY_TIMEOUT_S = 900.0`, and it is both **enforced** and **published**: line 2144 passes it as
+**SHIPPED in 0.6.70 (`7eb09ac`)** — installed, on all four drives `RESULT: PASS`, pushed. The
+constant below no longer exists: it was replaced by per-generator floors derived from one function.
+The description that follows is kept because it is how the defect was found and verified.
+
+**Verified here independently, not accepted on their word, at the time it was raised.**
+`components/hub/standalone.py:41` **was** `PEER_PROXY_TIMEOUT_S = 900.0`, both **enforced** and **published**: line 2144 passes it as
 `timeout=httpx.Timeout(PEER_PROXY_TIMEOUT_S, connect=5.0)` on the proxied job request, and line 333
 spreads it into every lane contract as `deadline_seconds`. So the deadline a scheduler reads is
 exactly the deadline the Hub holds the job to — their reading of our code is correct, and their
