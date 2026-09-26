@@ -3,8 +3,49 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.73** (Chat's outer margin, and two video-runner defects, 2026-09-26).
+Last updated: **0.6.74** (the Voice worker's loops start with the app, 2026-09-26).
 
+> **0.6.74 — the Voice worker's background loops started on `import`, not on startup.** Both the
+> idle-release ticker and the output-retention loop ran in *any* process that imported
+> `backend.main`, a test run included. That made `test_memory_policy.py` fail intermittently
+> (`last_release_details.released is False`, previously recorded as a 300 s timeout — it was never a
+> timeout: the 5-second ticker unloaded the managers the test had just injected, through the test's
+> own settings file), and it let a test session enforce the operator's retention policy against the
+> **real** `OUTPUT_DIR`. Both are now on the app's `startup` handler, the pattern Music and Subtitle
+> already use; production still starts them (uvicorn runs startup handlers — the installed worker
+> logs `Application startup complete.`). `tests/test_background_loops_start_with_the_app.py` pins
+> both halves. **`b2021fc`…`cf717df` on both branches; DMG NOT built — see the disk note below.**
+> Installed to `/Applications` as build **`b2021fc`**, `development_build: false`, and verified
+> **byte-for-byte identical to the stage** (60,436 files, `shasum` diff empty). Gate: **1345 passed,
+> 11 skipped, 1005 subtests**, exit 0; the Voice suite inside it **769 passed, 19 skipped**.
+>
+> **The internal disk is full, and it is the reason the audio lane is down.** `df` reports
+> **462 MB free of 460 GB** (100% capacity). The Hub's own device policy
+> (`device_settings.json`: `max_bytes` 50 GB, `retention_days` 30, **`minimum_free_bytes` 1 GB**) then
+> refuses every submission whose studio has a managed output root —
+> `409 OUTPUT_STORAGE_BLOCKED: managed output storage has insufficient free space`. The message names
+> a quota but the failing term is the **free-space floor**, which is why `used_bytes` (60 MB) is
+> nowhere near `max_bytes`. **The safeguard is correct; the disk is the problem.** Measured while
+> full: image **succeeded** (85 s, 1024×1024 PNG through the whole chain), chat **succeeded** (20 s),
+> TTS **refused**. The DMG step is blocked by arithmetic — a 0.6.73 DMG is 1.3 GB and there is
+> 462 MB — so no DMG was attempted rather than starting a build that would consume the last free
+> space. **Reclaiming it needs an external drive: moving anything to `_trash/` cannot free the
+> internal volume, because `_trash/` is on it.** Biggest local consumers, measured: `.build/`
+> **100.9 GB** (`.build/StudioHub-06xx` staged bundles, ~2.9 GB each, superseded),
+> `_trash/` **26.3 GB** (`dmg-scratch` 11.6, `app` 9.8, `dist` 4.9), `~/.cache` 29.7 GB,
+> `~/StudioHubModels` 52.7 GB. All four kit drives are mounted (ATLAS included).
+>
+> **The install step lost a bundle and it was recoverable, but the script has two real holes.**
+> `packaging/install_local.sh` moved the old app to `/Applications/.studiohub-old-<pid>`, copied the
+> new one, and the copy stopped part-way through `Contents/Resources` — leaving an app with **no
+> `Info.plist` and no `MacOS`** while `/Applications/Studio Hub.app` still existed. Recovered by
+> moving the wreckage to `_trash/app/Studio Hub.app-0.6.74-partial-install-20260926` and installing
+> with `ditto` (which reports `Permission denied` on the image runtime's **symlinks** — harmless, the
+> links are present and the totals match). Two holes worth fixing: the guard checks one file
+> (`runtimes/voice/bin/python3`), which a partial copy can still satisfy, and `rm -rf "$OLD"` cannot
+> delete the **read-only** `runtimes/image/lib/tcl9` tree (`dr-xr-xr-x`), so a 1.3 GB
+> `.studiohub-old-*` is left in `/Applications` every time.
+>
 > **0.6.73 — the Chat page had no outer margin, and the video runner wasted two runs before it
 > worked.** Chat was the only one of the five workspace pages without `.padding(28)`, so its form
 > column met the window's edges while the picker below it sat correctly inset;
