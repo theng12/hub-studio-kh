@@ -621,7 +621,8 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     if duration is None:
         duration = defaults['duration_seconds']
     if duration not in DURATIONS_SECONDS:
-        raise ValueError(f'Duration must be one of {list(DURATIONS_SECONDS)} seconds')
+        raise ValueError(f'Duration must be one of {list(DURATIONS_SECONDS)} seconds, '
+                         f'not {duration}')
     frames = frames_for(duration, frame_rate)
     if not model.limits['min_frames'] <= frames <= model.limits['max_frames']:
         raise ValueError(f'This lane generates {model.limits["min_frames"]}–'
@@ -1091,10 +1092,26 @@ class GenerationManager:
         return model_packages.preflight(manifest, self.library, catalog=self.manifests)
 
     def packages_without_a_runtime_model(self) -> list[dict]:
-        """Every Video manifest this build read that no registered model serves."""
+        """Every Video manifest this build read that no registered model serves.
+
+        **A companion is not a model and gets no catalog row.** The text encoder is a
+        `video-ltx` manifest because the runner loads it, but nobody chooses it and it has no
+        tier of its own; publishing it as a model produced a row the gateway withheld with
+        "this Mac does not have the memory" — a true sentence about a question nobody asked.
+        The Hub separately marks such a package a dependency, but the cleanest place to not
+        offer it is where the rows are built.
+        """
+        from components import model_packages
+
         served = {model.package_id for model in MODELS.values()}
+        companions: set[str] = set()
+        for manifest in self.manifests.values():
+            try:
+                companions.update(model_packages.required_packages(manifest))
+            except ValueError:  # an unusable manifest is already reported by its own row
+                continue
         return [manifest for package_id, manifest in sorted(self.manifests.items())
-                if package_id not in served]
+                if package_id not in served and package_id not in companions]
 
     def get(self, job_id: str) -> dict | None:
         with self.lock:

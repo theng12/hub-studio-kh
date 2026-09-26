@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.77 — 2026-09-26
+
+### A support file no longer looks like a model
+
+The video model needs a second file — its text encoder — and the app was listing that encoder as if
+it were a video model you could pick. It has no clip to make and no memory figure of its own, so it
+showed as unavailable for a reason that did not apply. It is now treated as what it is: a file the
+video model loads, not a model in the list.
+
 ## 0.6.76 — 2026-09-26
 
 ### Video is here

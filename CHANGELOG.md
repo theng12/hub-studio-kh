@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.77 — 2026-09-26 · The text encoder is a dependency, not a video model
+
+**Found on the installed 0.6.76 Hub, in the live catalog.** The Video worker published a catalog row
+for *every* `video-ltx` manifest it read, and the LTX pack's text encoder
+(`gemma-3-12b-it-4bit`) is one — so the encoder appeared as a pickable video model on this Mac with
+`memory_eligible: false`, and the gateway withheld it with *"this Mac does not have the memory the Hub
+says this model needs"*: a true sentence answering a question nobody asked. The Hub's own package row
+already marks it `type: dependency`; the row was coming from the worker.
+
+`GenerationManager.packages_without_a_runtime_model` now excludes any package another manifest
+`requires`, through the one shared reader (`model_packages.required_packages`), so a companion gets no
+model row at all — the same shape the Voice catalog has always had, where a tokenizer is not a model.
+`tests/test_video_worker.py` pins both halves: a required companion is not published, and a manifest
+nothing requires still is.
+
+**One message improved in the same change.** `validate_request` refused an unpublished duration with
+*"Duration must be one of [2, 4] seconds"* — naming the accepted set but not the value that was
+refused. It names both now, which is the rule every other refusal in this lane already followed.
+
+**Evidence.** `tests/test_video_worker.py` 21 passed / 19 subtests; full Hub gate green.
+
 ## 0.6.76 — 2026-09-26 · The Video lane exists
 
 **There was no video lane at all.** `components/` was chat, hub, image, music, subtitle and voice;
