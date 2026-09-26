@@ -160,10 +160,12 @@ class ChatEngine:
             self.context_window_tokens = int(context_window_tokens)
             self.context_window_source = (
                 "the model manifest's qualification.context_window_tokens")
+            self.context_window_source_kind = "curated"
         elif isinstance(published_context, int) and published_context > 0:
             self.context_window_tokens = published_context
             # Say which file and key the number came from, so a reader never has to guess and
             # never inherits it as a fact without provenance.
+            self.context_window_source_kind = "model"
             if config.get("max_position_embeddings") == published_context:
                 self.context_window_source = "model/config.json max_position_embeddings"
             elif config.get("context_length") == published_context:
@@ -175,6 +177,7 @@ class ChatEngine:
                 self.context_window_source = "model/config.json text_config.context_length"
         else:
             self.context_window_tokens = None
+            self.context_window_source_kind = "unknown"
             self.context_window_source = (
                 "nothing states a context window: model/config.json has no "
                 "max_position_embeddings or context_length")
@@ -182,8 +185,10 @@ class ChatEngine:
         if max_output_tokens is not None:
             self.max_output_tokens = int(max_output_tokens)
             self.max_output_tokens_source = "the model manifest's max_output_tokens"
+            self.max_output_tokens_source_kind = "curated"
         elif isinstance(published_output, int) and published_output > 0:
             self.max_output_tokens = published_output
+            self.max_output_tokens_source_kind = "model"
             self.max_output_tokens_source = (
                 "model/generation_config.json max_new_tokens"
                 if generation.get("max_new_tokens") == published_output
@@ -194,6 +199,7 @@ class ChatEngine:
             # exact state of the checkpoint, because "no generation_config.json" and "a
             # generation_config.json with no token bound" are different facts.
             self.max_output_tokens = FALLBACK_MAX_OUTPUT_TOKENS
+            self.max_output_tokens_source_kind = "worker_default"
             self.max_output_tokens_source = (
                 "worker default: the checkpoint ships no generation_config.json"
                 if not generation_path.is_file() else
@@ -253,15 +259,32 @@ class ChatEngine:
         ``value`` is ``None`` when nothing states the limit, and ``source`` is then the reason -
         never a curated substitute. A reader labels its own fallback rather than inheriting this
         worker's number as the model's fact.
+
+        **``source_kind`` is the machine-readable half of the same decision** (HUB-20). ``source``
+        is a sentence and a sentence is not something a consumer can branch on — and the consumer
+        here is two hops away, with a gateway in between that must relay rather than interpret.
+        Without a token the gateway had to guess, and it guessed ``provider`` for every stated
+        value: the live row publishes ``max_output_tokens: 16384`` with
+        ``source_kind: worker_default`` here, and the gateway was describing that as a number the
+        *model* stated. That is the claim this field exists to stop.
+
+        The vocabulary is the consumer's, because it is the one doing the labelling:
+        ``model`` (the checkpoint's own file states it) · ``curated`` (this Hub's packaged
+        metadata, not the checkpoint's word) · ``worker_default`` (this worker's fallback) ·
+        ``unknown`` (nothing states it, and ``value`` is ``None``). ``source`` is still published
+        beside it — a sentence is what a person reads, and the pair is one decision made here
+        rather than two that can disagree.
         """
         return {
             "context_window_tokens": {
                 "value": self.context_window_tokens,
                 "source": self.context_window_source,
+                "source_kind": self.context_window_source_kind,
             },
             "max_output_tokens": {
                 "value": self.max_output_tokens,
                 "source": self.max_output_tokens_source,
+                "source_kind": self.max_output_tokens_source_kind,
             },
         }
 

@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.72 — 2026-09-26
+
+### The app can now say *whose* number a limit is
+
+Every model publishes an output limit, and the question that matters is where it came from: the
+model's own files, or somebody's sensible fallback. This Hub has always written the answer down in a
+sentence — *"worker default: the checkpoint ships no generation_config.json"* — but a sentence is for
+a person to read, and the piece of software that shows it to you cannot act on one.
+
+So the gateway in between had to decide for itself, and it decided wrong: it described **Qwen3.5-9B's
+16,384-token ceiling as a number the model stated**, when 16,384 is this Hub's own fallback for a
+checkpoint that declares nothing. If you had seen that number labelled as the model's own, it would
+have been this.
+
+Each limit now says what kind of number it is in a form software can read, so the gateway passes it
+along untouched and what reaches the screen is the truth: the checkpoint said it, this Hub packaged
+it, or this Hub fell back to it.
+
+Everything else in this release is the same Hub as 0.6.71.
+
 ## 0.6.71 — 2026-09-26
 
 ### A job that has gone quiet now says so on the page

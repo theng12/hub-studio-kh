@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.72 — 2026-09-26 · The limit's provenance is a token, not a sentence
+
+**`model_limits` said where each number came from in a sentence, and a sentence is not something a
+consumer can branch on** — especially this consumer, which is two hops away with a gateway in
+between that must *relay* rather than interpret. Without a token the gateway had to answer for
+itself, and it answered `provider` for every stated value. The live row read:
+
+```
+max_output_tokens: 16384
+max_output_tokens_source:        "provider"
+max_output_tokens_source_detail: "worker default: the checkpoint ships no generation_config.json"
+```
+
+**The two fields contradicted each other, and the machine-readable one was wrong.** 16,384 is this
+Hub's own `FALLBACK_MAX_OUTPUT_TOKENS` — the number a checkpoint that states nothing is given — and
+Story Studio reads the token. Their row says what it cost: *"16,384 currently renders as if the model
+stated it."*
+
+**Each limit now carries `source_kind` beside its sentence**, and both are set in the same branch, so
+they are one decision and cannot drift apart: `model` (the checkpoint's own file states it) ·
+`curated` (this Hub's packaged metadata, not the checkpoint's word) · `worker_default` (this worker's
+fallback) · `unknown` (nothing states it, and `value` is `null`). The vocabulary is the consumer's,
+because the consumer is the one doing the labelling.
+
+The sentence stays. A token is what a program branches on; the sentence is what a person reads, and
+losing either is a different defect from the one this fixes.
+
+**GatewayKH relays the token** rather than matching a word in the sentence — which is what they asked
+for, and three of our defects came from matching a name where a fact could have been published. Their
+half shipped as **0.2.48**.
+
+**Verified:** the cross-repo half is pinned on their side by `tests/test_hub_limit_provenance.py`
+(9 tests, proved to fail 9 of 9 on the defect); here, `tests/test_chat_worker.py` now pins
+`source_kind` on both the checkpoint-stated and the worker-default case — the second being the number
+that used to leave this Hub mislabelled.
+
 ## 0.6.71 — 2026-09-26 · Silence became visible to the operator too
 
 **A stall the Hub could see, nobody watching the app could.** 0.6.70 made a quiet worker *visible* —

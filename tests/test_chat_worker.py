@@ -1331,10 +1331,17 @@ class ChatLaneContractTests(unittest.TestCase):
         self.assertEqual(catalog["model_limits"]["context_window_tokens"], {
             "value": 262144,
             "source": "model/config.json text_config.max_position_embeddings",
+            # The machine-readable half of the same decision (HUB-20): the checkpoint's own file
+            # states it, so this is the model's figure.
+            "source_kind": "model",
         })
         self.assertEqual(catalog["model_limits"]["max_output_tokens"], {
             "value": FALLBACK_MAX_OUTPUT_TOKENS,
             "source": "worker default: the checkpoint ships no generation_config.json",
+            # **This is the number that used to arrive at Story Studio labelled as the model's
+            # own.** The gateway relayed it as `provider` for want of a token; now the sheet
+            # says what it is.
+            "source_kind": "worker_default",
         })
 
     def test_a_second_model_cannot_be_published_under_the_first_models_name(self) -> None:
@@ -1371,6 +1378,7 @@ class ChatLaneContractTests(unittest.TestCase):
         self.assertEqual(limits["max_output_tokens"], {
             "value": 8192,
             "source": "model/generation_config.json max_new_tokens",
+            "source_kind": "model",
         })
 
     def test_a_context_window_nothing_states_is_null_with_the_reason(self) -> None:

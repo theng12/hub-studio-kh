@@ -3,8 +3,15 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.71** (the app half of stall visibility — silence reaches the operator, 2026-09-26).
+Last updated: **0.6.72** (each limit's provenance is a token, not a sentence — HUB-20, 2026-09-26).
 
+> **0.6.72 is committed and pushed; its DMG and the drives are not yet done.** `model_limits.*` now
+> carries **`source_kind`** beside its sentence, so the gateway can relay *whose* number a limit is
+> instead of guessing `provider` for every stated value — which is how Story Studio came to be told
+> that Qwen3.5-9B's **16,384** output ceiling was a number the model stated, when it is this Hub's
+> `FALLBACK_MAX_OUTPUT_TOKENS`. GatewayKH's half shipped as **0.2.48**. Verified: `pytest tests/`
+> green, and the cross-repo half is pinned on their side by `tests/test_hub_limit_provenance.py`.
+>
 > **0.6.71 is released, installed and has its DMG. The four drives are NOT refreshed, deliberately.**
 > `971d12c` on both `implementation/voice-runtime` and `main`; DMG `dist/StudioHub-0.6.71-971d12c.dmg`
 > (1.2 GB, 60436 files); installed to `/Applications` and the Hub is answering
