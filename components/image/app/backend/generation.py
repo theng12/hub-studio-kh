@@ -55,6 +55,15 @@ IMAGE_ENGINE = 'image-mflux'
 
 SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
+    # 1024x576 is *exactly* 16:9 as well, so it cannot reuse the '16:9' key: the native app
+    # builds one row per entry with `id = aspectRatio`, and two rows sharing an id is a
+    # duplicate identity in a `ForEach`. The key therefore names the size, not the ratio.
+    # **Why it exists:** 1280x720 is not a valid canvas for the video lane (720 is not a
+    # multiple of 32), so a still destined to be animated had to be cropped or resized
+    # between the two lanes. This is the same 16:9 frame at a video-valid size, offered as
+    # an ADDITION, not a replacement -- the default stays 1280x720, because most image jobs
+    # are standalone stills that never touch video.
+    '16:9 small': (1024, 576),
     '4:3': (1152, 864), '3:4': (864, 1152), '3:2': (1200, 800),
     '2:3': (800, 1200), '5:4': (1120, 896), '4:5': (896, 1120),
     '21:9': (1680, 720), '2:1': (1408, 704), '1:2': (704, 1408),

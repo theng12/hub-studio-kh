@@ -510,8 +510,12 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(z_image['max_prompt_characters'], 4000)
         # Both entries carry the geometry the picker needs, and both are dispatchable here.
         for entry in entries:
-            self.assertEqual(len(entry['image_sizes']), 12)
-            self.assertEqual(len(entry['sizes']), 12)
+            # The lane's OWN preset table, not a literal. It asserted 12, which meant offering
+            # one more qualified canvas -- a producer-side change that every consumer is
+            # supposed to pick up with no code edit -- failed a test for doing the right thing.
+            from components.image.app.backend.generation import SIZE_PRESETS
+            self.assertEqual(len(entry['image_sizes']), len(SIZE_PRESETS))
+            self.assertEqual(len(entry['sizes']), len(SIZE_PRESETS))
             self.assertTrue(entry['execution_ready'], entry['readiness'])
             self.assertEqual(entry['cache']['state'], 'cached')
         # Z-Image's qualification publishes what is measured and what is not.
