@@ -289,23 +289,53 @@ PACKAGE_ID = LTX_23.package_id
 DEFAULTS = dict(LTX_23.defaults)
 
 
+_MUXER_STATE: list = []  # [] = not checked yet; [None] = fine; [reason] = refused
+
+
 def muxer_problem() -> str | None:
     """Why this worker cannot mux an MP4, or None when it can.
 
     The LTX pipeline writes the finished clip with an `ffmpeg` subprocess — it decodes the video
-    and audio latents itself, then hands raw frames and samples to ffmpeg. `shutil.which` is
-    exactly what the pipeline's own `find_ffmpeg()` does, so asking the same question here lets
-    the catalog say *why* a model is unready instead of publishing a row that generates a whole
-    clip and then fails at the last step (which is what happened on 2026-09-26, on the first
-    through-the-chain run: the pack's own message was *"ffmpeg not found on PATH. Install it with:
-    brew install ffmpeg"*).
-    """
-    import shutil
+    and audio latents itself, then hands raw frames and samples to it. Two separate failures were
+    measured on 2026-09-26, and this check is written for both:
 
-    if shutil.which('ffmpeg') is None:
-        return ("ffmpeg is not on this worker's PATH, and the LTX pack muxes its MP4 with it; "
-                "the app ships one in the Voice runtime and the packaged worker adds it to PATH")
-    return None
+    1. **No ffmpeg on PATH at all.** The first through-the-chain run generated the whole clip and
+       then died with the pack's own *"ffmpeg not found on PATH. Install it with: brew install
+       ffmpeg"*, because the packaged worker's PATH held only its own runtime and `/usr/bin`.
+    2. **An ffmpeg with no H.264 encoder.** The app's other ffmpeg (the Voice runtime's, built from
+       source with a minimal configuration) answers `-h encoder=libx264` with *"Codec 'libx264'
+       is not recognized by FFmpeg"* **while exiting 0** — so "there is an ffmpeg" is not the
+       question the pack needs answered. It names `libx264` explicitly, and the output is what
+       says whether the build has it.
+
+    Asking here lets the catalog say *why* a model is unready instead of advertising one that
+    generates for five minutes and then fails at the last step. The answer is cached: a catalog
+    request must not fork a subprocess per model per read.
+    """
+    if _MUXER_STATE:
+        return _MUXER_STATE[0]
+    import shutil
+    import subprocess
+
+    problem = None
+    ffmpeg = shutil.which('ffmpeg')
+    if ffmpeg is None:
+        problem = ("ffmpeg is not on this worker's PATH, and the LTX pack muxes its MP4 with it; "
+                   "the app ships one in the Voice runtime and the packaged worker adds it to PATH")
+    else:
+        try:
+            probe = subprocess.run([ffmpeg, '-hide_banner', '-h', 'encoder=libx264'],
+                                   capture_output=True, text=True, timeout=15)
+            output = (probe.stdout or '') + (probe.stderr or '')
+            if 'Encoder libx264' not in output:
+                problem = (f'the ffmpeg on this worker\'s PATH ({ffmpeg}) has no libx264 encoder; '
+                           f'the LTX pack muxes its MP4 with libx264 by name. Rebuild the video '
+                           f'runtime (packaging/video-runtime/build.sh) so its pinned ffmpeg '
+                           f'ships in runtimes/video/bin.')
+        except (OSError, subprocess.SubprocessError) as exc:
+            problem = f'the ffmpeg on PATH could not be checked for libx264: {exc}'
+    _MUXER_STATE.append(problem)
+    return problem
 
 
 def host_memory_bytes() -> int:

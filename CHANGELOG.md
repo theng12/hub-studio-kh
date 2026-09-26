@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.80 — 2026-09-26 · The app's ffmpeg has no H.264 encoder
+
+**The mux fix in 0.6.79 found the second half of the same problem.** With the Voice runtime's `bin`
+on PATH the worker reached ffmpeg and failed inside it:
+
+```
+ffmpeg encode_single_frame failed: ... Unrecognized option 'preset'.
+```
+
+The Voice runtime's ffmpeg is built from source with a minimal configuration — its encoder list has
+`mpeg4` and no H.264 at all. Worse, it **answers `-h encoder=libx264` with exit 0** and the sentence
+*"Codec 'libx264' is not recognized by FFmpeg"*, so "there is an ffmpeg" is not the question the
+pack needs answered: it names `libx264`, and the output is what says whether the build has it.
+
+`packaging/video-runtime/build.sh` now fetches the **same pinned ffmpeg 8.1** Story Studio already
+ships for Final Video Assembly (`osxexperts.net`, arm64, sha256
+`ebb82529562b71…` — Story's own `bundled/ffmpeg/MANIFEST.json` records the same URL and hash) plus
+its matching ffprobe, verifies both hashes on every build, and **refuses to build a runtime whose
+ffmpeg cannot answer for `libx264`**. The binaries land in `runtimes/video/bin`, which is first on
+the worker's PATH; the Voice runtime stays behind it for everything else.
+
+`generation.muxer_problem()` now asks the same question at catalog time — no ffmpeg, or an ffmpeg
+without `libx264` — and publishes `ready: false` with the sentence instead of advertising a model
+that generates for five minutes and then fails at the last step. The answer is cached, because a
+catalog read must not fork a subprocess per model.
+
+**Evidence.** The runtime's own ffmpeg round-trips `encode_single_frame`/`decode_single_frame`
+(704×448 RGB in, a 1,803-byte H.264 frame out, decoded back to the same shape), `muxer_problem()`
+returns None with it on PATH, and `tests/test_video_worker.py` covers all three states — absent,
+present without `libx264`, and video-capable. Gate **1373 passed / 11 skipped / 1057 subtests**.
+
 ## 0.6.79 — 2026-09-26 · The last step of a video job was missing its muxer
 
 **The pack generated the whole clip and then failed at the mux.** The LTX pipeline decodes the video

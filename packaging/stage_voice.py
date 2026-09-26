@@ -60,7 +60,14 @@ MUSIC_OVERLAY_PACKAGES = {
 # runtime's pin exists for: a version string would not distinguish a tree that can load the pack
 # from one that cannot — the pack's mixed 2-8 bit loader lives in the pack, but the pipeline and
 # MLX must be the ones the measurement ran — so the content digest is the identity.
-VIDEO_RUNTIME_SHA256 = 'a45d5319d7bb59ea7ce0361dbac4a74ce9ad5985f2a9079d6186600b6b4daa54'
+#
+# **The tree carries the muxer too, and that is why the pin moved on 2026-09-26.** The LTX pack
+# shells out to `ffmpeg -c:v libx264` for its MP4, and the app's other ffmpeg (the Voice runtime's,
+# built minimal) has no H.264 encoder at all while still answering `-h encoder=libx264` with exit
+# 0. `packaging/video-runtime/build.sh` now fetches the same pinned ffmpeg 8.1 (osxexperts.net,
+# arm64) that Story Studio ships, verifies its sha256, and refuses to build a runtime that cannot
+# answer for `libx264`.
+VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db513cc2ad7'
 
 
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:

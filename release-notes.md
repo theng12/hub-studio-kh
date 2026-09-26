@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.80 — 2026-09-26
+
+### The video tool the app shipped could not write video
+
+The video model finishes its clip and hands the frames and sound to `ffmpeg`. The copy of `ffmpeg`
+this app carried was built for audio only — it has no H.264 encoder, which is the format a video
+file needs — so the clip was made and then could not be written. The video worker now carries its
+own pinned `ffmpeg` (the same one Story Studio uses for its final assembly), and if it ever cannot
+find a capable one the app says so before offering the model rather than after a five-minute
+generation.
+
 ## 0.6.79 — 2026-09-26
 
 ### A video job could make the whole clip and then throw it away

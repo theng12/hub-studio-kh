@@ -29,6 +29,22 @@ LTX_REPO="https://github.com/dgrauet/ltx-2-mlx"
 REQUIREMENTS="$SCRIPT_DIR/requirements.lock.txt"
 REQUIREMENTS_SHA256="3aa94a0f1694cc229a339e114e82444373f44d05900029e526eb8a22596432b0"
 
+# **A video-capable ffmpeg, pinned to the build Story Studio already trusts.**
+# The LTX pack muxes its MP4 by shelling out to `ffmpeg -c:v libx264` — and the app's other
+# ffmpeg (the Voice runtime's, built from source with a minimal configuration) has **no H.264
+# encoder at all**: `ffmpeg -h encoder=libx264` in it answers *"Codec 'libx264' is not recognized
+# by FFmpeg"* while still exiting 0. Measured 2026-09-26: the first through-the-chain run generated
+# the whole clip and died in `encode_single_frame` with `Unrecognized option 'preset'`.
+#
+# The pin is the arm64 half of Story Studio's own `bundled/ffmpeg/MANIFEST.json` (ffmpeg 8.1,
+# osxexperts.net), the same URL and the same sha256, so the two apps agree about the tool and one
+# recorded hash covers both. The static binary is copied into this runtime's `bin`, which is first
+# on the worker's PATH — the Voice runtime stays on PATH behind it for everything else.
+FFMPEG_URL="https://www.osxexperts.net/ffmpeg81arm.zip"
+FFMPEG_ZIP_SHA256="ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad"
+FFPROBE_URL="https://www.osxexperts.net/ffprobe81arm.zip"
+FFPROBE_ZIP_SHA256="a6640a77d38a6f0527c5b597e599cb36a3427a6931444ed80bc62542421950a1"
+
 OUTPUT_ARGUMENT="${1:-$BUILD_ROOT/video-runtime}"
 mkdir -p "$BUILD_ROOT"
 if [[ "$OUTPUT_ARGUMENT" = /* ]]; then
@@ -40,7 +56,7 @@ case "$OUTPUT_DIR" in
   "$PROJECT_ROOT"/*) ;;
   *) echo "Output must stay inside $PROJECT_ROOT" >&2; exit 1 ;;
 esac
-for command in uv shasum; do
+for command in uv shasum unzip curl; do
   command -v "$command" >/dev/null || { echo "Missing build command: $command" >&2; exit 1; }
 done
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
@@ -94,6 +110,38 @@ uv pip install --break-system-packages --python "$PYTHON" --no-editable --no-bui
 # Matched by name: macOS `find -path` did not match these (pattern semantics), which would have
 # left the paths in silently.
 find "$OUTPUT_DIR/lib" -name direct_url.json -delete
+
+# The muxer, from the pinned archive. Downloaded once into `.build/downloads` and hash-checked on
+# every build, the same discipline the Image runtime applies to its CPython archive.
+DOWNLOADS="$BUILD_ROOT/downloads"
+mkdir -p "$DOWNLOADS"
+fetch_pinned() {
+  local url="$1" sha="$2" archive="$3" binary="$4"
+  if [[ ! -f "$archive" ]]; then
+    echo "fetching $binary ($url)"
+    curl -fsSL --retry 3 -o "$archive.part" "$url"
+    mv "$archive.part" "$archive"
+  fi
+  printf '%s  %s\n' "$sha" "$archive" | shasum -a 256 -c - >/dev/null
+  unzip -o -q "$archive" "$binary" -d "$OUTPUT_DIR/bin"
+  chmod u+w,go-w "$OUTPUT_DIR/bin/$binary"
+  chmod a+x "$OUTPUT_DIR/bin/$binary"
+  # curl does not set the quarantine attribute, but a build run after a browser download would,
+  # and a quarantined binary is refused by Gatekeeper at generation time.
+  xattr -d com.apple.quarantine "$OUTPUT_DIR/bin/$binary" 2>/dev/null || true
+  printf '%s  %s\n' "$(shasum -a 256 "$OUTPUT_DIR/bin/$binary" | cut -d' ' -f1)" "bin/$binary"
+}
+{
+  fetch_pinned "$FFMPEG_URL" "$FFMPEG_ZIP_SHA256" "$DOWNLOADS/ffmpeg-8.1-arm.zip" ffmpeg
+  fetch_pinned "$FFPROBE_URL" "$FFPROBE_ZIP_SHA256" "$DOWNLOADS/ffprobe-8.1-arm.zip" ffprobe
+} > "$OUTPUT_DIR/bin/ffmpeg.sha256"
+# The pack asks for `libx264` *by name*, and this build must be able to answer. The check is the
+# same one `generation.muxer_problem()` makes at run time: `-h encoder=` exits 0 even when the
+# codec is absent, so the output is what is read.
+if ! "$OUTPUT_DIR/bin/ffmpeg" -hide_banner -h encoder=libx264 2>&1 | grep -q 'Encoder libx264'; then
+  echo "the pinned ffmpeg has no libx264 encoder; the LTX pack cannot mux with it" >&2
+  exit 1
+fi
 
 # Bytecode compiled from the operator's paths is not portable and was never part of the
 # qualified tree; the CPython archive ships some, so remove it all and re-check the imports.

@@ -214,15 +214,38 @@ class EngineRowTests(unittest.TestCase):
 class MuxerTests(unittest.TestCase):
     """The pack muxes with ffmpeg, so a worker that cannot see one is not ready."""
 
-    def test_a_missing_muxer_is_reported_rather_than_discovered_at_the_last_step(self) -> None:
+    def _probe(self, *, which, output):
         from unittest import mock
 
-        with mock.patch("shutil.which", return_value=None):
-            problem = generation.muxer_problem()
+        generation._MUXER_STATE.clear()
+        try:
+            with mock.patch("shutil.which", return_value=which), \
+                 mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(stdout=output, stderr="")
+                return generation.muxer_problem()
+        finally:
+            generation._MUXER_STATE.clear()
+
+    def test_a_missing_muxer_is_reported_rather_than_discovered_at_the_last_step(self) -> None:
+        problem = self._probe(which=None, output="")
         self.assertIsNotNone(problem)
         self.assertIn("ffmpeg", problem)
-        with mock.patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
-            self.assertIsNone(generation.muxer_problem())
+
+    def test_an_ffmpeg_without_libx264_is_not_good_enough(self) -> None:
+        """The exact defect the first through-the-chain run hit: ffmpeg present, no H.264.
+
+        The Voice runtime's build answers `-h encoder=libx264` with *"Codec 'libx264' is not
+        recognized by FFmpeg"* and exits 0, so the presence of a binary is not the question.
+        """
+        problem = self._probe(which="/usr/bin/ffmpeg",
+                              output="Codec 'libx264' is not recognized by FFmpeg.\n")
+        self.assertIsNotNone(problem)
+        self.assertIn("libx264", problem)
+
+    def test_a_video_capable_ffmpeg_passes(self) -> None:
+        self.assertIsNone(self._probe(
+            which="/Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/ffmpeg",
+            output="Encoder libx264 [libx264 H.264 / AVC / MPEG-4 AVC]:"))
 
     def test_the_packaged_worker_puts_the_bundled_ffmpeg_on_path(self) -> None:
         """The app ships ffmpeg in the Voice runtime; the Video worker must be able to see it.
