@@ -120,7 +120,8 @@ class AudioLayoutTests(unittest.TestCase):
         columns were drawn by hand, so it was the one that could drift.
         """
         for name, body in (("audio", audioWorkspace()), ("subtitle", subtitleWorkspace()),
-                           ("image", imageWorkspace()), ("chat", chatWorkspace())):
+                           ("image", imageWorkspace()), ("music", musicWorkspace()),
+                           ("chat", chatWorkspace())):
             self.assertIn("HSplitView", body, f"{name} must use the two-column split")
             self.assertIn("minWidth: 350, idealWidth: 390, maxWidth: 440", body,
                           f"{name}'s form column must use the house width")
@@ -130,6 +131,27 @@ class AudioLayoutTests(unittest.TestCase):
                           f"{name}'s result column must start at the top")
             self.assertNotIn("minWidth: 245", body,
                              f"{name} still carries the 245 pt column that clipped its controls")
+
+    def test_every_workspace_page_has_the_outer_margin(self) -> None:
+        """`.padding(28)` on the split view — the margin that is not the column's own.
+
+        **Chat was the only one of the five without it**, and it is invisible to every assertion
+        above: the form column still had the house width, the result column still filled, and
+        everything the earlier test checks was true while the owner was looking at a message editor
+        flush against the window's top and left edges.
+
+        The distinction the earlier test could not make: the form column has its own
+        `.padding(.trailing, 20)`, which insets the content *inside* the column. Nothing in the body
+        insets the column from the **window**, which is what this is and why the two are not
+        interchangeable. `musicWorkspace` was not in the loop above either, so it is here.
+        """
+        for name, body in (("audio", audioWorkspace()), ("subtitle", subtitleWorkspace()),
+                           ("image", imageWorkspace()), ("music", musicWorkspace()),
+                           ("chat", chatWorkspace())):
+            with self.subTest(page=name):
+                self.assertIn(".padding(28)", body,
+                              f"{name} has no outer margin: its columns meet the window's top and "
+                              f"left edges while every other workspace page has 28 pt")
 
     def test_the_result_column_holds_the_result(self) -> None:
         """The history/preview belongs to the result side, and the form to the form side."""

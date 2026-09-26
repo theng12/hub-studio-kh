@@ -2,6 +2,46 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.73 — 2026-09-26
+
+### The Chat page gets its margin back
+
+The box you type into sat flush against the top and left of the window, while everything below it —
+the model picker, the buttons — was properly inset. Chat was the only one of the five Studio pages
+without that outer margin; Image, Audio, Subtitle and Music all had it.
+
+That is fixed, and the test that should have caught it now does: it checks the margin on all five
+pages. Every other check in that test passed while this was wrong, which is why nobody noticed.
+
+### The video runner stops wasting runs
+
+Two things went wrong while testing video generation, and both cost a full attempt before anyone
+could see why.
+
+- It picked up **a half-finished copy of the model** sitting on the internal disk instead of the
+  complete one on the drive. The error it produced said the model might be corrupt, which sent us
+  looking in the wrong place. It now prefers the complete copy, and says so up front if the only copy
+  it can find is unfinished.
+- It turned on a memory-saving mode that **this particular model does not support**. The mode fails
+  immediately rather than saving anything. It is off by default now — the model's own configuration
+  is the one that works.
+
+### What the video test actually measured
+
+One 4-second clip with sound, on this 32 GB Mac:
+
+| | |
+|---|---|
+| Time | **5 minutes** |
+| Picture | 704×448, 4 seconds, with audio |
+| Peak memory | **16.4 GB** |
+| Swap used | 3.9 GB |
+
+**Worth knowing plainly: 16.4 GB on a 32 GB machine is more than a 16 GB Mac has in total.** That
+does not prove it cannot run there — this was measured on the big machine, where nothing was forcing
+it to economise — but the "fits in 16 GB" claim is not supported yet, and the next test that matters
+is on one of the 16 GB Macs rather than another one here.
+
 ## 0.6.72 — 2026-09-26
 
 ### The app can now say *whose* number a limit is

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.73 — 2026-09-26 · Chat gets its margin back, and the video runner stops wasting runs
+
+**Chat was the only one of the five workspace pages without an outer margin.** The owner, looking at
+it beside the others: *"the place to enter the text and stuff doesn't have a proper margin."* Exactly
+so — Image, Audio, Subtitle and Music each wrap their split view in `.padding(28)`; Chat never did, so
+its form column met the window's top and left edges while the model picker below it sat correctly
+inset. The form column's own `.padding(.trailing, 20)` cannot supply it: that insets the content
+*inside* the column, not the column from the window. **`test_audio_layout.py` now pins the outer
+margin on all five pages, and it is the assertion that was missing** — every other check in that test
+passed while this was wrong.
+
+**Two defects in the LTX video runner, both of which cost a run each.**
+
+- **It preferred a partial copy of the model over a complete one.** `~/StudioHubModels` came before
+  the drives in the search order, so it picked a **10 GB unfinished rsync** over the complete
+  **17.81 GiB** copy on NOVA. The failure reads as a corrupt model — `[load_safetensors] … invalid
+  data offsets … Perhaps an incomplete download or corrupt file?` — when the truth is that the copy
+  is unfinished. The drives now come first, and a copy under 90% of the package's known size says so
+  **before** the run rather than 23 seconds into it.
+- **Block streaming is now opt-in, because it does not work with this pack.** The research had called
+  `low_ram_streaming` *"the cheapest route to a real 16 GB lane"*, so the runner passed it always. On
+  the baa-ai pack it fails before generating: `ValueError: Received 2 parameters not in model:
+  video_to_audio_attn.to_gate_logits.{biases,scales}` — the streaming block does not carry those keys
+  and the pack never enables streaming itself. **That hope is now measured rather than assumed.**
+
+**And the measurement itself, which is what the owner asked for** — one image-to-video generation on
+this 32 GB M2 Max, through the runner, so the process footprint is captured as well as MLX's own
+counter:
+
+| | |
+|---|---|
+| Wall | **298.5 s** for 704×448, 97 frames (4.0 s of video, with audio) |
+| Peak MLX Metal | **13.19 GB** |
+| Peak process footprint | **16.38 GB** |
+| Maximum resident set | **9.91 GB** |
+| Swap at end | 3,852 MB of 5,120 MB |
+
+**The 16 GB claim is not supported by this, and the honest reading is that it is in trouble.** A
+16.38 GB peak on a 32 GB machine — where MLX has no pressure to trim — is more than a 16 GB Mac has
+in total, before macOS takes its share. That is one run on one machine and it does not *prove* the
+16 GB tier fails; it does mean the pack's "12 GB / 16 GB" reach is unproven and the margin is
+negative, and that the next run that matters is on the 16 GB hardware rather than another one here.
+
 ## 0.6.72 — 2026-09-26 · The limit's provenance is a token, not a sentence
 
 **`model_limits` said where each number came from in a sentence, and a sentence is not something a

@@ -3,8 +3,19 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.72** (each limit's provenance is a token, not a sentence — HUB-20, 2026-09-26).
+Last updated: **0.6.73** (Chat's outer margin, and two video-runner defects, 2026-09-26).
 
+> **0.6.73 — the Chat page had no outer margin, and the video runner wasted two runs before it
+> worked.** Chat was the only one of the five workspace pages without `.padding(28)`, so its form
+> column met the window's edges while the picker below it sat correctly inset;
+> `test_audio_layout.py` now pins that margin on all five **and it is the assertion that was
+> missing** — every other check in that test passed while this was wrong. The runner preferred a
+> 10 GB partial copy of the model over the complete 17.81 GiB one on the drive (the failure reads as
+> a corrupt model, which is the wrong place to look), and passed `--low-ram-streaming`
+> unconditionally to a pack that cannot take it. **The first successful LTX run is recorded in the
+> changelog with its full footprint — 298.5 s, peak MLX 13.19 GB, peak process 16.38 GB on this
+> 32 GB M2 Max — and the 16 GB claim is not supported by it.** Nothing is refreshed on the drives.
+>
 > **0.6.72 is released, installed and has its DMG. The four drives are NOT refreshed, deliberately**
 > — see the 0.6.71 note below for why a kit refresh is a whole-kit action, not the tail of a code
 > release. `dffee03` on both branches; DMG `dist/StudioHub-0.6.72-dffee03.dmg` (1.2 GB); installed and

@@ -67,12 +67,20 @@ echo "runtime:  $RUNTIME"
 echo "          $("$RUNTIME" -c 'import mlx.core as mx; print("mlx", mx.__version__)' 2>/dev/null || echo 'mlx NOT importable')"
 
 # ---- the model
+#
+# **The drive comes before `~/StudioHubModels`, and that order is the fix for a wasted run.**
+# It used to be the other way round, so this script picked a **10 GB partial** copy on the root
+# volume over the complete **17.81 GiB** one on NOVA — the two differ because an old rsync was
+# interrupted — and the failure that produced was
+#   `[load_safetensors] … invalid data offsets … Perhaps an incomplete download or corrupt file?`
+# which reads as "the model is corrupt" when the truth is "this copy is unfinished". A complete
+# copy on a mounted drive is worth more than a nearer partial one.
 MODEL_DIR=""
 for cand in \
     "${STUDIOHUB_LTX_MODEL:-}" \
     "$HERE/ltx-2.3-22b-ram-12gb-mlx" \
-    "$HOME/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx" \
-    /Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx
+    /Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx \
+    "$HOME/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx"
 do
     [ -n "$cand" ] && [ -d "$cand" ] && { MODEL_DIR="$cand"; break; }
 done
@@ -88,6 +96,19 @@ fi
 SIZE=$(du -sh "$MODEL_DIR" 2>/dev/null | cut -f1)
 echo "model:    $MODEL_DIR ($SIZE)"
 
+# A partial copy fails late and confusingly, so say so here instead. `du -sk` of the complete
+# package on NOVA is 18,674,324 KiB; anything under 90% of that is a copy that did not finish.
+MODEL_KB=$(du -sk "$MODEL_DIR" 2>/dev/null | cut -f1)
+COMPLETE_KB=18674324
+if [ -n "$MODEL_KB" ] && [ "$MODEL_KB" -lt $((COMPLETE_KB * 90 / 100)) ]; then
+    echo
+    echo "WARNING: this copy is $SIZE against the package's 17.81 GiB, so it looks unfinished."
+    echo "         A partial copy does not fail as a missing file — it fails deep inside"
+    echo "         load_safetensors as a shape error, which reads as a corrupt model."
+    echo "         The complete copy is on the KH-STUDIO drives at model-library/video-models/."
+    echo
+fi
+
 # ---- a source scene for image-to-video (a requirement: the owner works scene-first)
 IMG=""
 for cand in "${STUDIOHUB_LTX_IMAGE:-}" "$HERE/scene.png" "$HERE/../scene.png"; do
@@ -102,7 +123,20 @@ fi
 echo
 
 # ---- run it, capturing the process footprint that MLX's own counter does NOT include
+#
+# **Block streaming is opt-in (`LTX_LOW_RAM_STREAMING=1`), and it does not work with this pack.**
+# It was passed unconditionally — the research had called it "the cheapest route to a real 16 GB
+# lane", so it was worth trying — and on the baa-ai pack it fails before generating anything:
+#   `ValueError: Received 2 parameters not in model: video_to_audio_attn.to_gate_logits.{biases,scales}`
+# The streaming block does not carry those two keys, and the pack never enables streaming itself,
+# so the pack's own configuration is the one that runs. That hope is now measured rather than
+# assumed; leave the flag off unless a pack is known to take it.
 echo "starting. this can take a long time on a 16 GB Mac; the log is kept either way."
+if [ -n "${LTX_LOW_RAM_STREAMING:-}" ]; then
+    echo "streaming: on (LTX_LOW_RAM_STREAMING) — this pack is known to fail with it"
+else
+    echo "streaming: off — the pack's own configuration is the one that runs"
+fi
 echo
 /usr/bin/time -l "$RUNTIME" "$HERE/ltx-video-measure.py" \
     --model-dir "$MODEL_DIR" \
@@ -113,7 +147,7 @@ echo
     --num-frames "${LTX_FRAMES:-97}" \
     --width "${LTX_WIDTH:-704}" \
     --height "${LTX_HEIGHT:-480}" \
-    --low-ram-streaming \
+    ${LTX_LOW_RAM_STREAMING:+--low-ram-streaming} \
     2>&1 | tee "$OUT/run.log"
 
 echo

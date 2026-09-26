@@ -1088,6 +1088,12 @@ struct StudioContent: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        // **The outer margin every other workspace page has.** Chat was the only one of the five
+        // without it, so its form column sat flush against the top and left edges while Image,
+        // Audio, Subtitle and Music each had 28 pt: the owner saw an editor with no margin beside
+        // a model picker that had one. The form column's own `.padding(.trailing, 20)` cannot
+        // supply it — that insets the *content inside* the column, not the column from the window.
+        .padding(28)
         // Nothing on the Chat page is seeded from a saved default yet — this page has no
         // temperature or top-p control — but the Studio's published surface is read here so the
         // Models tab editor for this model is ready when it is opened.
