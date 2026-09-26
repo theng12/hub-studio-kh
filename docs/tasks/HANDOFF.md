@@ -14,7 +14,9 @@ Last updated: **0.6.74** (the Voice worker's loops start with the app, 2026-09-2
 > **real** `OUTPUT_DIR`. Both are now on the app's `startup` handler, the pattern Music and Subtitle
 > already use; production still starts them (uvicorn runs startup handlers — the installed worker
 > logs `Application startup complete.`). `tests/test_background_loops_start_with_the_app.py` pins
-> both halves. **`b2021fc`…`cf717df` on both branches; DMG NOT built — see the disk note below.**
+> both halves. **`8bd8495`…`a554254` on both branches; DMG
+> `dist/StudioHub-0.6.74-b2021fc.dmg` (1.3 GB, 60,436 files, `hdiutil verify` VALID); the previous DMG
+> moved to `_trash/dist/` — nothing `rm`d.**
 > Installed to `/Applications` as build **`b2021fc`**, `development_build: false`, and verified
 > **byte-for-byte identical to the stage** (60,436 files, `shasum` diff empty). Gate: **1345 passed,
 > 11 skipped, 1005 subtests**, exit 0; the Voice suite inside it **769 passed, 19 skipped**.
@@ -30,7 +32,18 @@ Last updated: **0.6.74** (the Voice worker's loops start with the app, 2026-09-2
 > TTS **refused**. The DMG step is blocked by arithmetic — a 0.6.73 DMG is 1.3 GB and there is
 > 462 MB — so no DMG was attempted rather than starting a build that would consume the last free
 > space. **Reclaiming it needs an external drive: moving anything to `_trash/` cannot free the
-> internal volume, because `_trash/` is on it.** Biggest local consumers, measured: `.build/`
+> internal volume, because `_trash/` is on it.**
+>
+> **RESOLVED the same day, by the owner, who found the actual ratchet.** He emptied `_trash/` by hand
+> and reclaimed **38 GB** (462 MB → **39 GB free**). The audio lane came straight back — a real TTS
+> artifact, 3.28 s of 24 kHz speech, 12 s wall — and the 0.6.74 DMG then built and verified.
+> **The lesson is bigger than one cleanup: every release moved a DMG and a bundle into `_trash/` and
+> nothing ever left it, so the disk only ratcheted one way.** `_trash/` is empty now, but **`.build/` is
+> the same ratchet and was never curated: 100.9 GB, of which 32 staged app bundles
+> (`StudioHub-0647` … `StudioHub-check`) hold 70.7 GB** — each rebuildable from git in about two
+> minutes, while the DMG is the durable artifact. That is the next ~70 GB, and it is a decision rather
+> than a cleanup: `.build/` is gitignored scratch, so the never-`rm` rule protects the wrong thing
+> there. Biggest local consumers, measured: `.build/`
 > **100.9 GB** (`.build/StudioHub-06xx` staged bundles, ~2.9 GB each, superseded),
 > `_trash/` **26.3 GB** (`dmg-scratch` 11.6, `app` 9.8, `dist` 4.9), `~/.cache` 29.7 GB,
 > `~/StudioHubModels` 52.7 GB. All four kit drives are mounted (ATLAS included).
