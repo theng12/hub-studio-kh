@@ -3,13 +3,49 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.75** (the installer cannot leave a broken app, and the disk stops ratcheting, 2026-09-26).
+Last updated: **0.6.79** (the Video lane exists, and the first real chain run found two defects in it, 2026-09-26).
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
 shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
 `_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
 
+> **0.6.76…0.6.79 — the Video lane, and what the first real chain run found in it.**
+> There was no video lane: `components/` was chat, hub, image, music, subtitle and voice, while the
+> broker had mapped a `video` modality to `/api/generate/txt2video` and classified it `durable_async`
+> since it was written. `components/video/` now serves both of the broker's doors — text-to-video
+> (JSON) and image-to-video (multipart `file`) — accepts before the result exists, applies the
+> pack's own mixed-precision loader before the pipeline is built, verifies the produced MP4's own
+> boxes (ftyp, a video track, a positive duration, and the audio track this pack's runs carry), and
+> releases the pipeline after every job. **The memory tier is the load-bearing part:** below a
+> model's qualified tier the worker publishes `memory_eligible: false`, which is what stops the
+> gateway offering 22B weights to a machine that cannot load them. LTX-2.3 22B (mixed 2–8 bit) is
+> qualified at **24 GB** by two matching runs of 704×448×97 with audio (298.5 s standalone, 304.0 s
+> through the worker, peak MLX 14,163,847,570 bytes, peak `ri_phys` footprint 16.38 GB); Lance 3B
+> is the **16 GB** tier's T2V model, its manifest and tier ship, and its row says the `lance-mlx`
+> runner is not adopted yet rather than claiming it runs.
+>
+> **Two defects the first through-the-chain run found, both fixed in the next release:**
+> `0.6.78` — the free-memory floor was copied from the measured footprint (16.5 GB) and the Hub
+> answered `waiting for memory: needs ~16.5GB, ~14.2GB free`, deadlocking the lane on a healthy
+> 32 GB Mac; a footprint is not a free-memory requirement, and the floor is now 8 GB. `0.6.79` —
+> the LTX pack muxes its MP4 with an `ffmpeg` subprocess and the worker's PATH could not see the
+> app's bundled ffmpeg, so it generated the whole clip and failed at the last step; the Voice
+> runtime's `bin` is on the worker's PATH now, and `muxer_problem()` publishes a readiness reason
+> when it is absent. The same release added `reconcile_video_item`, which an uncertain video item
+> had been missing (the route fell through to the Image reconciler and answered `unknown Image
+> batch`, pinning the machine until discard).
+>
+> The Video worker runs on its own **Python 3.11** tree (`runtimes/video`), built by
+> `packaging/video-runtime/build.sh` from a pinned interpreter plus `requirements.lock.txt` and the
+> `ltx-2-mlx` checkout at `3b2e77fd73af5f08961f4436ae979c0579d5deed`, pinned by content in
+> `stage_voice.py` (`VIDEO_RUNTIME_SHA256`) and made read-only after the build so a stray import
+> cannot move the digest. Manifests: LTX (11 files, 19.12 GB), its text encoder companion (13 files,
+> 8.07 GB) and Lance (10 files, 15.63 GB); the capture tool gained `&limit=100` on its tree URL,
+> which refreshed every existing manifest's canonical bytes in the same pass. The native app moved
+> Video from "Coming later" into Create with a real page, Jobs rows and the lane's own published
+> options. **Gate: 1371 passed / 11 skipped / 1057 subtests, exit 0; `bash native/build.sh` green.**
+>
 > **0.6.75 — the installer can no longer leave a half-installed app, and the disk has a keeper.**
 > The install that filled the disk left `/Applications/Studio Hub.app` with **no `Info.plist` and no
 > `MacOS`**, and the rollback is what made it unrecoverable: `rm -rf "$TARGET"` could not clear the
