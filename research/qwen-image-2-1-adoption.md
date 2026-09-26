@@ -4,6 +4,46 @@ Date: 2026-09-22 (quantized-Mac findings updated). Status: **research only — n
 adopted, not packaged, not qualified.** Sources are cited inline; third-party
 measurements are labelled as such.
 
+## Measured on this Mac — 2026-09-26 `[M]`
+
+The owner asked to try it. Both pieces were already on the machine: the pack at
+`~/.mlx-serve/models/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit` (10,673,921,337 bytes on disk `[M, HF
+API]`) and `mlx-serve 26.9.5` with `mlx 0.32.2` at `~/.local/mlx-serve/`. Served on loopback only
+(`serve --host 127.0.0.1 --port 11234`), on the **32 GB M2 Max**, with Studio Hub's five workers,
+the gateway, Story Studio and the agent harness all running.
+
+**The pack README's "Not released yet … load only on the branch `feat/qwen-image-2.1`" is stale.**
+`mlx-serve list` reports the pack as `TYPE image, 9.9 GB`, and 26.9.5 generated from it. The §3
+finding that PR #477 shipped in v26.9.5 is the correct one; treat the card's notice as out of date,
+which is what §3 already said to do.
+
+| Run | Wall | Peak process footprint | Server's own accounting |
+| --- | ---: | ---: | --- |
+| 512×512, 8 steps | **50 s** | RSS peak 8.96 GB | — |
+| 1024×1024, 8 steps | — | **15 GB** (`footprint` `phys_footprint_peak`) | `bytes_resident` **13.94 GB** |
+| 1024×1024, 20 steps | **460 s** | **15 GB** | 13.94 GB |
+
+Quality is strong at 20 steps: photorealistic, correct hands, real depth of field. Samples kept at
+`/tmp/voiceaudit/qwen-quality.png` (1024², 20 steps) and `qwen-512-decoded.png` (512², 8 steps).
+
+**The pre-flight refuses to load this model on a normal desktop, and it is right to.** First
+attempt: `[preflight] media peak ~13.94 GB (staged residency), available 13.49 GB` →
+*"needs ~16.7 GB free (13.9 GB for the model plus headroom for warmup buffers) but only 13.5 GB is
+available"*. macOS reported **0.1 GB free with 14.3 GB inactive** — the reclaimable-cache case
+`--skip-mem-preflight` exists for, and the run then succeeded with no crash.
+
+**So "10.7 GB, for 16 GB Macs" does not survive measurement on this machine.** The card's 9.55 GB
+"peak memory" is not the figure that decides a fit: the model's **residency is 13.94 GB** by the
+server's own count, the **observed peak process footprint is 15 GB**, and the loader wants ~16.7 GB
+free before it will start. A 16 GB Mac has ~15.5 GB usable, so this is **not a 16 GB model** on this
+evidence, and it is nowhere near the 8 GB tier that FLUX.2 Klein 4B MLX 4-bit and Z-Image-Turbo
+MLX 4-bit run on. §1's verdict stands and is now measured rather than inferred.
+
+**What it would take to adopt it is unchanged by the measurement**: a second runtime (Zig, its own
+server, packs and build pipeline) inside a single-model Image worker, per §5. The measurement adds
+one more thing to that list — **an idle-cache/reload decision**, because at 15 GB peak the encoder
+and DiT cannot both stay resident next to anything else on a small Mac.
+
 ## Update 2026-09-26 — a native mflux q4 pack quantizes the encoder
 
 A new pack,
