@@ -113,7 +113,27 @@ Last updated: **0.6.86** (YuE2 joins the Music lane with a measured tier, 2026-0
 > entry exposed its `video-lance` reason still saying the runner "is not adopted into this build
 > yet", false since 0.6.82, and it now carries the tree and the two measured runs instead.
 >
-> **Gate 1400 passed / 11 skipped / 1137 subtests; native green.**
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1401 tests, OK (11 skipped), 573 s, exit 0;
+> `native/build.sh` green.** Two notes worth keeping. First, **that is the gate** — the same command
+> the project has always used (`docs/implementation-plan.md`), and running `pytest` with an explicit
+> list of test files is *not* equivalent: it collects `tests/hub_regression/cases/*` in-process,
+> where they have no `reset`/`fixture_monitor` fixtures, because the gate runs them in an isolated
+> child interpreter through `tests/hub_regression/test_regression.py`. Doing that produced 44 bogus
+> "fixture not found" errors and an hour of chasing them. Second, **the stager refuses to ship a file
+> Git does not track**: `stage_voice.py` failed with *"imports components/music/app/backend/yue2,
+> which is not in the bundle"* until the new files were `git add`ed, because staging ships
+> `git ls-files`, not the working tree. That guard is why an untracked module cannot reach a DMG.
+>
+> **Released 2026-09-27.** `dist/StudioHub-0.6.86-3a08e02.dmg` — **1,938,565,858 bytes**, sha256
+> `bc461a1e66c5f0effe864278961e628184c119c572dea785a3bcfa6091583ec1`. Installed and live:
+> `hub-ready.json` → `{"version": "0.6.86"}`, six runtimes in the bundle (`image`, `music`,
+> `music-yue2`, `video`, `video-lance`, `voice`), and the route the pickers read —
+> `/api/hub/model-packages` — answers **30 rows** (28 before) with `yue2-3b-mlx` on engine
+> `music-yue2` publishing `mode`, `lyrics` and `precision` in its `lane_contract` and no default for
+> `lyrics`, plus its `yue2-vae` companion. `implementation/voice-runtime` and `main` are both
+> `3a08e02`. Model state is `not_installed`: the weights are in the owner's `~/StudioHubModels/
+> yue2-3b-mlx/`, not in the app's library, so the lane publishes the model without claiming it is
+> runnable from where it sits today.
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
