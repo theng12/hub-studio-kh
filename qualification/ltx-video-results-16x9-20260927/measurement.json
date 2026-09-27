@@ -1,0 +1,72 @@
+{
+  "schema": "studiohub.video-measurement.v1",
+  "started_at": "2026-09-27T11:43:36+0700",
+  "machine": {
+    "chip": "Apple M2 Max",
+    "model": "Mac14,13",
+    "unified_memory_gb": 32,
+    "macos": "27.0",
+    "python": "3.11.16",
+    "swap": "total = 5120.00M  used = 4023.81M  free = 1096.19M  (encrypted)"
+  },
+  "request": {
+    "model_dir": "/build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model",
+    "gemma_model": "mlx-community/gemma-3-12b-it-4bit",
+    "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
+    "image": "qualification/scene.png",
+    "require_image_to_video": true,
+    "output": "/tmp/ltx-169.mp4",
+    "height": 576,
+    "width": 1024,
+    "num_frames": 49,
+    "frame_rate": 24.0,
+    "seed": 42,
+    "pipeline": "DistilledPipeline",
+    "low_memory": true,
+    "low_ram_streaming": false,
+    "effective_call": {
+      "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
+      "output_path": "/tmp/ltx-169.mp4",
+      "height": 576,
+      "width": 1024,
+      "num_frames": 49,
+      "frame_rate": 24.0,
+      "seed": 42,
+      "image": "qualification/scene.png"
+    }
+  },
+  "runtime": {
+    "ltx_pipelines_mlx": "unversioned",
+    "mlx": "0.32.2",
+    "pipelines_available": [
+      "BasePipeline",
+      "DFRPipeline",
+      "DistilledPipeline",
+      "HDRICLoraPipeline",
+      "ICLoraPipeline",
+      "KeyframeInterpolationPipeline",
+      "LipDubPipeline",
+      "RetakePipeline",
+      "TI2VidOneStagePipeline",
+      "TI2VidTwoStagesHQPipeline",
+      "TI2VidTwoStagesPipeline"
+    ],
+    "constructor_kwargs": {
+      "gemma_model_id": "mlx-community/gemma-3-12b-it-4bit",
+      "low_memory": true,
+      "low_ram_streaming": false
+    },
+    "quantization_loader": "pack_generate.py:_patch_pipeline_quantization"
+  },
+  "result": {
+    "status": "ok",
+    "failure": null,
+    "wall_seconds": 351.628,
+    "peak_metal_bytes": 10045998804,
+    "peak_metal_gb": 9.36,
+    "output": "/tmp/ltx-169.mp4",
+    "output_bytes": 1403485,
+    "swap_at_end": "total = 5120.00M  used = 4463.69M  free = 656.31M  (encrypted)"
+  },
+  "finished_at": "2026-09-27T11:49:29+0700"
+}

@@ -156,7 +156,7 @@ so a gateway can join the contract to the operation namespace without a table of
 | `transcription` | `audio.transcription` | `POST /api/transcribe` | `application/json` | 1 | yes |
 | `chat` | `chat.completion` | `POST /v1/chat/completions` | `application/json` | 1 per pack | no — a pack has no artifact to discard |
 | `render` *(local only)* | `video.render` | `POST /api/generate/render` | `video/mp4` | 1 | yes |
-| `video` *(not shipped)* | `video.generation` | `POST /api/generate/txt2video` | `video/mp4` | 1 | yes |
+| `video` | `video.generation` | `POST /api/generate/txt2video` | `video/mp4` | 1 | yes |
 
 The dispatch routes are `broker.MODALITY`'s own strings; `transcription` and `chat` are absent from
 that table on purpose, because they have their own job modules (`transcription_jobs.py`,
@@ -169,10 +169,21 @@ Two notes a gateway must not skip:
 
 - **`render` is local-only** (`monitor.LOCAL_ONLY_MODALITIES = {"render"}`). It is in the table
   because it exists, not because a remote scheduler may place it.
-- **`video.generation` is a forward declaration.** No video worker ships, so this row must not be
-  published until one does — a contract for a lane with no worker is the guess this document exists
-  to remove. Gateway's video ask (durations, resolutions, fps, expected runtime) has the same shape
-  as the `image` row and lands with that worker.
+- **`video.generation` ships as of 0.6.76** (`components/video/`), and its row was corrected here in
+  0.6.83: it was written as a forward declaration while no video worker existed, and the worker has
+  since arrived. The lane publishes two things the other lanes do not, both for the same reason —
+  a video request is a *pair* of choices, not two independent ones:
+  - **`canvases`**: every `(aspect_ratio, resolution)` pair that exists, with its exact pixels and
+    the durations that pair accepts. The two parameter enums cannot express the pairing, and the
+    first consumer to read them as a cross product (Story Studio) offered `448p + 16:9`, which the
+    lane refuses. `published_canvases()` and `validate_request()` read the same function.
+  - **`audio`**: a boolean, published **only by a model that has any**
+    (`VideoModel.generates_audio`). LTX denoises picture and sound together, so unticking it does
+    **not** shorten the run — it skips the audio decode and writes an MP4 with no track. The
+    parameter's own `note` says so, because a checkbox that looks like a saving it is not is the
+    kind of thing a scheduler would otherwise plan around. Lance's text-to-video is silent and
+    publishes no such parameter, and the artifact gate requires a track only when `audio` was left
+    on (it also refuses a track that appears when silence was asked for).
 - **Correction, 2026-09-26: the Hub already has an image-to-video path, and it is the one that
   matters.** This bullet said *"there is no image-to-video operation"*. The code says otherwise and
   the code wins. `broker._video_multipart_fields` is documented *"Flatten an image-to-video request

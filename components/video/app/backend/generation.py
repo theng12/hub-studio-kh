@@ -101,6 +101,14 @@ TWO_STAGE_GRID = 64
 LTX_CANVASES: dict[str, dict[str, tuple[int, int]]] = {
     '256p': {'7:4': (448, 256), '4:7': (256, 448)},
     '448p': {'1:1': (448, 448), '11:7': (704, 448)},
+    # **A true 16:9 canvas, measured 2026-09-27.** 1024x576 is the smallest exact 16:9 the
+    # two-stage grid can produce (both sides multiples of 64), and it is the shape an episode is
+    # actually cut in — the 11:7 canvas above is the qualified one but it is 1.57:1, not 1.78:1.
+    # It is published at 2 s only, and not by hand: `canvas_durations` computes the durations from
+    # the same token ceiling the validator enforces, and 1024x576 at 4 s is 55,872 tokens — past
+    # the 30,000 cliff where this pack produces mesh artifacts. The measurement: 49 frames,
+    # 351.6 s, peak MLX Metal 9.36 GB, clean frames (qualification/ltx-video-results-16x9-20260927).
+    '576p': {'16:9': (1024, 576)},
 }
 
 # **Lance's canvases are its own, and that is the point of the table being per model.**
@@ -324,6 +332,16 @@ LTX_23 = VideoModel(
             'rss_gb': 9.91, 'audio': True,
             'source': ('qualification/ltx-video-results-20260926-32gb-first-success/'
                        'measurement.json and run.log'),
+        }, {
+            # The true-16:9 canvas. Measured because the 576p pair is published and a canvas
+            # nobody ran is a canvas whose runtime is a guess; the 4 s configuration of this
+            # canvas is not offered (latent ceiling), so 2 s is the whole of what was measured.
+            'task': 'image-to-video', 'width': 1024, 'height': 576, 'frames': 49,
+            'frame_rate': 24.0, 'seed': 42, 'wall_seconds': 351.628,
+            'output_seconds': 2.04, 'output_bytes': 1403485,
+            'peak_mlx_metal_gb': 9.36, 'audio': True,
+            'source': ('qualification/ltx-video-results-16x9-20260927/'
+                       'measurement.json and run.log'),
         }],
         'memory_evidence': (
             'The 22B pack runs on this 32 GB M2 Max (peak process footprint 16.38 GB). The 16 GB '
@@ -355,6 +373,10 @@ LTX_23 = VideoModel(
             'scene': '704x448, 97 frames, seed 42',
             'source': ('qualification/ltx-video-results-20260926-32gb-first-success/'
                        'measurement.json'),
+        }, {
+            'seconds': 351.628, 'task': 'image-to-video', 'frames': 49, 'frame_rate': 24.0,
+            'scene': '1024x576, 49 frames, seed 42',
+            'source': ('qualification/ltx-video-results-16x9-20260927/measurement.json'),
         }],
         'measured_on': '32 GiB M2 Max (Mac14,13), mlx 0.32.2, pack mixed 2–8 bit',
         'evidence': 'measured',
@@ -742,6 +764,16 @@ def lane_parameters(model: VideoModel) -> list[dict]:
          # and its card's envelope are 12. Publishing one number here made the Lance default
          # request fail its own validator — caught by the first worker-alone run.
          'enum': [model.frame_rate], 'default': model.frame_rate},
+        # **Sound, where the model has any.** LTX denoises picture and audio jointly, so this
+        # does not change the diffusion time — but `generate_audio = False` is the pack's own
+        # switch (`--no-audio`, issue #126): it never loads the audio decode block and muxes an
+        # MP4 with no audio track. A model with no audio at all (Lance) publishes no such
+        # parameter, because offering a control the lane ignores is a lie with a schema.
+        *([{'name': 'audio', 'type': 'boolean', 'required': False, 'default': True,
+            'note': ('the model generates picture and sound together, so this does not change '
+                     'generation time; unticking it skips the audio decode and writes a silent '
+                     'MP4. The track can be added back in an editor.')}]
+          if model.generates_audio else []),
         {'name': 'seed', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
          'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
@@ -877,7 +909,16 @@ def validate_request(raw: dict, data_dir=None) -> dict:
             raise ValueError(f'duration {duration}s and {frames} frames disagree')
         duration = mapped
     if duration is None:
-        duration = defaults['duration_seconds']
+        # **The canvas decides when the model's default does not fit it.** A caller who names a
+        # canvas and no length should get that canvas, not a refusal because the model's own
+        # default (4 s here) is one the canvas does not publish — measured 2026-09-27: asking for
+        # 16:9 at 576p with no duration came back "1024x576 is not published at 4s", which is a
+        # true sentence about a request nobody made. The canvas's longest published duration is
+        # the honest fallback: it is what the caller's chosen canvas can actually carry.
+        allowed_defaults = canvas_durations(model, width, height)
+        duration = (defaults['duration_seconds']
+                    if defaults['duration_seconds'] in allowed_defaults
+                    else (allowed_defaults[-1] if allowed_defaults else defaults['duration_seconds']))
     if duration not in DURATIONS_SECONDS:
         raise ValueError(f'Duration must be one of {list(DURATIONS_SECONDS)} seconds, '
                          f'not {duration}')
@@ -897,6 +938,12 @@ def validate_request(raw: dict, data_dir=None) -> dict:
         raise ValueError(f'This lane generates {model.limits["min_frames"]}–'
                          f'{model.limits["max_frames"]} frames')
 
+    # Sound: what the caller asked for. Absent means the model's default (on) — a field nobody
+    # sent must not read as "off".
+    audio = raw.get('audio')
+    audio = True if audio is None else (audio is True or str(audio).strip().lower()
+                                        in ('1', 'true', 'yes', 'on'))
+
     seed = raw.get('seed', defaults['seed'])
     if seed is None:
         seed = -1
@@ -908,7 +955,7 @@ def validate_request(raw: dict, data_dir=None) -> dict:
         'repo': model.repo, 'model_revision': model.revision, 'prompt': prompt.strip(),
         'mode': mode, 'aspect_ratio': str(ratio), 'resolution': resolution,
         'width': width, 'height': height, 'duration_seconds': duration,
-        'frames': frames, 'frame_rate': frame_rate, 'seed': seed,
+        'frames': frames, 'frame_rate': frame_rate, 'seed': seed, 'audio': audio,
     }
     if has_image:
         params['image_path'] = str(raw.get('image_path') or raw.get('image'))
@@ -1225,6 +1272,13 @@ def run_ltx(model: VideoModel, manager, folder: Path, params: dict, output: Path
     if gemma_folder is not None and 'gemma_model_id' in constructor:
         ctor_kwargs['gemma_model_id'] = str(gemma_folder)
     pipeline = pipeline_cls(**ctor_kwargs)
+    # The pack's own switch, set exactly the way its CLI does after construction
+    # (`cli.py`: `pipe.generate_audio = not args.no_audio`). With it off the audio decode block
+    # is never loaded and the mux writes a silent MP4 — the joint denoise is unchanged, so this
+    # buys the decode, not the diffusion.
+    wants_audio = bool(params.get('audio', True))
+    if not wants_audio:
+        setattr(pipeline, 'generate_audio', False)
     progress('generating', 0.15)
     try:
         call = inspect.signature(pipeline_cls.generate_and_save).parameters
@@ -1760,11 +1814,18 @@ class GenerationManager:
                     raise RuntimeError('the runner wrote an MP4 with no decodable video track')
                 if not facts.get('duration_seconds'):
                     raise RuntimeError('the runner wrote an MP4 with no duration')
-                if model.engine == LTX_ENGINE and not facts.get('audio_tracks'):
+                if (model.engine == LTX_ENGINE and params.get('audio', True)
+                        and not facts.get('audio_tracks')):
                     # The pack's own runs carry audio ("4.0 s with audio"); a silent file would
                     # mean the audio half of the pipeline changed, not that we should shrug.
+                    # Only when the request asked for sound: a caller who unticked the box gets a
+                    # silent MP4 on purpose, and that is checked *for* it below.
                     raise RuntimeError(
                         'the LTX pack produced no audio track; the measured configuration has one')
+                if (model.engine == LTX_ENGINE and not params.get('audio', True)
+                        and facts.get('audio_tracks')):
+                    raise RuntimeError(
+                        'the request asked for no audio but the file carries a track')
                 content_size = staged.stat().st_size
                 if content_size <= 0:
                     raise RuntimeError('the runner wrote an empty MP4')

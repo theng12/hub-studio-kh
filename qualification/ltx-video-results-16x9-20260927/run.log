@@ -1,0 +1,38 @@
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] ...
+Mac: Apple M2 Max Mac14,13 — 32 GB unified, macOS 27.0
+swap at start: total = 5120.00M  used = 4023.81M  free = 1096.19M  (encrypted)
+
+pipeline: DistilledPipeline  low_memory=True  low_ram_streaming=False
+canvas: 1024x576  frames: 49 @ 24.0fps  (2.0s)
+image-to-video: yes
+
+loader: the pack's own mixed-precision quantizer (split_model.json says quantized: true)
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 3684.93it/s]
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] done in 4.3s
+[Encoding prompt] ...
+[Encoding prompt] done in 13.6s
+[Loading transformer (transformer-distilled.safetensors)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+  Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
+[Loading transformer (transformer-distilled.safetensors)] done in 3.5s
+[estimate] denoising: 8 steps x 1 passes over 1008 video + 51 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/8 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 53 s remaining (16.1 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/8 [00:16<?, ?it/s]Denoising:  12%|█▎        | 1/8 [00:16<01:53, 16.14s/it]                                                        [estimate] denoising: ~1 min 39 s remaining (16.6 s/forward) (refined)
+Denoising:  12%|█▎        | 1/8 [00:32<01:53, 16.14s/it]Denoising:  25%|██▌       | 2/8 [00:32<01:38, 16.38s/it]Denoising:  38%|███▊      | 3/8 [00:48<01:21, 16.30s/it]Denoising:  50%|█████     | 4/8 [01:05<01:05, 16.31s/it]Denoising:  62%|██████▎   | 5/8 [01:19<00:47, 15.70s/it]Denoising:  75%|███████▌  | 6/8 [01:33<00:30, 15.05s/it]Denoising:  88%|████████▊ | 7/8 [01:49<00:15, 15.26s/it]Denoising: 100%|██████████| 8/8 [02:03<00:00, 14.94s/it]Denoising: 100%|██████████| 8/8 [02:03<00:00, 15.45s/it]
+[estimate] denoising: 3 steps x 1 passes over 4032 video + 51 audio tokens = 3 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/3 [00:00<?, ?it/s]                                                [estimate] denoising: ~2 min 3 s remaining (61.7 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/3 [01:01<?, ?it/s]Denoising:  33%|███▎      | 1/3 [01:01<02:03, 61.75s/it]                                                        [estimate] denoising: ~56 s remaining (56.1 s/forward) (refined)
+Denoising:  33%|███▎      | 1/3 [01:57<02:03, 61.75s/it]Denoising:  67%|██████▋   | 2/3 [01:57<00:58, 58.44s/it]Denoising: 100%|██████████| 3/3 [02:55<00:00, 57.99s/it]Denoising: 100%|██████████| 3/3 [02:55<00:00, 58.44s/it]
+[Loading decoders (VAE + audio + vocoder)] ...
+[Loading decoders (VAE + audio + vocoder)] done in 0.3s
+[Decoding video + audio + muxing] ...
+[vae-decode tiling] frames=40/8 px=768/64 est. 10.7 GB budget=16.0 GB
+[vae-decode tiling] peak Metal memory 9.36 GB
+[Decoding video + audio + muxing] done in 25.1s
+
+DONE in 351.6s — /tmp/ltx-169.mp4 (1.4 MB)
+peak MLX Metal allocation: 9.36 GB (Metal only — this is NOT the process footprint)
+swap at end: total = 5120.00M  used = 4463.69M  free = 656.31M  (encrypted)
+record: /tmp/ltx-169-results.json

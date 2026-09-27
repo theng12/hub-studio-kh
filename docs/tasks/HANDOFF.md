@@ -3,13 +3,58 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.82** (the Lance engine is adopted and has run through the lane's own routes, 2026-09-27).
+Last updated: **0.6.83** (silent video on request, and a canvas that is really 16:9, 2026-09-27).
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
 shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
 `_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
 
+> **0.6.83 — sound is a choice, and 16:9 is finally 16:9.**
+>
+> **The audio switch.** `lane_parameters` appends `{'name': 'audio', 'type': 'boolean',
+> 'default': True}` **only when `model.generates_audio`** — LTX shows it, Lance publishes nothing
+> because its t2v is silent. `validate_request` resolves it (absent ⇒ `True`; accepts `1`/`0`/
+> `'true'`/`'false'`) into `params['audio']`; `run_ltx` sets the pipeline **attribute**
+> `generate_audio = False` (the pack's decode/mux honors it, and the pack's own CLI does exactly
+> this). The artifact gate follows the request: a track is required only when `audio` was left on,
+> and **a track that appears when silence was asked for is refused**.
+>
+> **The sentence that must not be lost:** the model denoises picture and sound **together**, so
+> unticking `audio` **does not shorten the run** — it skips the audio decode block and writes an MP4
+> with no audio track. The parameter's `note` publishes that, in the contract, not just in the UI.
+> A checkbox that implies a saving it does not make is worse than no checkbox.
+>
+> **A true-16:9 canvas: `576p` `16:9` = 1024×576, duration `[2]` only.** Measured on this Mac
+> `[M]`: 49 frames, 24 fps, seed 42, **351.6 s**, **9.36 GB peak MLX Metal**, 1,403,485 B, clean —
+> receipt `qualification/ltx-video-results-16x9-20260927/` (`measurement.json` + `run.log` +
+> `generated.mp4`). Both LTX `measured_runs` and `measured_runtime.measured` now carry it, so the
+> contract answers "what does 1024×576 cost" with a measurement instead of silence. 4 s at this
+> canvas is 55,872 latent tokens, past the 30,000 cliff, so the canvas publishes 2 s and the
+> validator refuses 4 s by name.
+>
+> **Lance at 16:9 was tried and is not offered.** 512×288 is on Lance's 16-px grid and renders
+> (25 frames, **11.0 GB** peak, **784 s**), but **the subject degrades badly at that width** — see
+> the contact sheet in the owner's `~/Desktop/Video samples/` — and the card only validates square
+> configurations. The manifest's `reason` records the attempt and the refusal, so the next person
+> does not repeat it. The clip is kept at
+> `qualification/lance-video-results-16x9-20260927.mp4` as the evidence for that sentence.
+>
+> **A request nobody made used to be refused.** Naming a canvas without a duration fell back to
+> LTX's default 4 s even where that canvas has no 4-second configuration, so `576p 16:9` (the
+> default the picker now shows for it) produced `1024x576 … not published at 4s` from the lane's own
+> validator. The duration default is canvas-aware now: the model default if that canvas accepts it,
+> else the canvas's longest published duration.
+>
+> **Doc drift fixed in the same change:** `docs/lane-execution-contract.md` still called
+> `video.generation` "a forward declaration — no video worker ships", two releases after one did;
+> it now documents the shipped lane and both of its video-specific fields (`canvases`, `audio`).
+> `model-manifests/` was re-captured for both video packages (LTX `af066411…`, Lance `e8633b91…`).
+>
+> **What is NOT done:** Story Studio does not yet send or display the `audio` option — its video
+> request and video screen are the next change, in its own cycle. The 16 GB hardware run is still
+> the owner's.
+>
 > **0.6.82 — the second engine runs, and the lane stops being LTX-shaped.**
 > `lance-mlx` declares `requires-python >= 3.12` and `ltx_pipelines_mlx` needs 3.11, so
 > "model-agnostic lane" turned out to mean **two pinned runtimes and an interpreter per engine**.

@@ -123,11 +123,24 @@ class RequestValidationTests(unittest.TestCase):
         self.assertIn("512x256", message, "and the size the pack would substitute for it")
 
     def test_a_ratio_the_lane_does_not_publish_is_refused_by_name(self) -> None:
+        # Two refusals, and the second is the one this test is named for.
+        #
+        # `16:9` used to be the example of an unpublished ratio. It now exists — at 576p, measured
+        # 2026-09-27 — so the pair `16:9 @ 448p` is the interesting refusal: the ratio is real and
+        # the class is real, and the pair is not. The sentence must name the class that ratio does
+        # offer, or a caller has no way to fix the request.
         with self.assertRaises(ValueError) as raised:
             self._request(mode="text-to-video", aspect_ratio="16:9", resolution="448p")
         message = str(raised.exception)
         self.assertIn("16:9", message, "the refused ratio must be named")
-        self.assertIn("11:7", message, "and the ratios that are published must be listed")
+        self.assertIn("576p", message, "and the class that ratio does offer must be listed")
+
+        # And a ratio that is not published at all names the ratios that are.
+        with self.assertRaises(ValueError) as raised:
+            self._request(mode="text-to-video", aspect_ratio="9:16")
+        message = str(raised.exception)
+        self.assertIn("9:16", message)
+        self.assertIn("16:9", message, "the published ratios must be listed")
 
     def test_a_pair_the_lane_does_not_publish_is_refused_by_name(self) -> None:
         # 7:4 exists, and 448p exists, and their PAIR does not: 448x256 is the 256p canvas.
@@ -147,7 +160,9 @@ class RequestValidationTests(unittest.TestCase):
         """
         for resolution, canvases in generation.LTX_CANVASES.items():
             for ratio, (width, height) in canvases.items():
-                for seconds in generation.DURATIONS_SECONDS:
+                # The canvas's own published durations, not the lane's whole list: a canvas may
+                # take fewer (576p takes 2 s only, because 4 s crosses this very cliff).
+                for seconds in generation.canvas_durations(generation.LTX_23, width, height):
                     with self.subTest(ratio=ratio, resolution=resolution, seconds=seconds):
                         frames = generation.frames_for(seconds, generation.DEFAULT_FRAME_RATE,
                                                    generation.LTX_23.frame_grid)
@@ -179,6 +194,56 @@ class RequestValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as raised:
             self._request(mode="text-to-video", frames=100)
         self.assertIn("not a published duration", str(raised.exception))
+
+    def test_sound_is_offered_only_by_a_model_that_has_any(self) -> None:
+        """The audio switch, and the rule that keeps it honest.
+
+        LTX denoises picture and sound together and its pack has a real switch for the decode
+        (`generate_audio`, the CLI's `--no-audio`), so the lane publishes `audio`. Lance's t2v is
+        silent, so publishing the same control there would offer a knob the lane ignores — which
+        is the defect this repo calls "a lie with a schema".
+        """
+        ltx = {p["name"]: p for p in generation.lane_parameters(generation.LTX_23)}
+        lance = {p["name"]: p for p in generation.lane_parameters(generation.LANCE_3B)}
+        self.assertIn("audio", ltx)
+        self.assertIs(ltx["audio"]["default"], True)
+        self.assertIs(ltx["audio"]["type"], "boolean")
+        self.assertNotIn("audio", lance)
+
+    def test_the_audio_switch_defaults_on_and_resolves_both_ways(self) -> None:
+        """Absent is not "off": a field nobody sent must read as the model's default."""
+        default = self._request(mode="text-to-video")
+        self.assertIs(default["audio"], True)
+        for asked, expected in ((False, False), (True, True), ("false", False), ("true", True),
+                                (0, False), (1, True)):
+            with self.subTest(asked=asked):
+                params = self._request(mode="text-to-video", audio=asked)
+                self.assertIs(params["audio"], expected)
+
+    def test_the_contract_publishes_the_switch_and_its_honest_note(self) -> None:
+        contract = generation.lane_contract(generation.LTX_23)
+        entry = next(p for p in contract["parameters"] if p["name"] == "audio")
+        self.assertIs(entry["default"], True)
+        note = entry["note"].lower()
+        # The note has to say what it does NOT do, because a caller would otherwise assume a
+        # shorter generation: the joint denoise is untouched.
+        self.assertIn("does not change", note)
+        self.assertIn("silent", note)
+        self.assertNotIn("audio", [p["name"]
+                                   for p in generation.lane_contract(generation.LANCE_3B)["parameters"]])
+
+    def test_a_silent_request_is_not_refused_for_having_no_audio(self) -> None:
+        """The artifact gate follows the request rather than the pack.
+
+        The LTX gate requires an audio track because the measured configuration has one; that
+        check must not fire for a caller who asked for silence, and the mirror check must fire
+        when a silent request comes back with a track.
+        """
+        source = Path(generation.__file__).read_text()
+        self.assertIn("params.get('audio', True)\n                        and not "
+                      "facts.get('audio_tracks')", source)
+        self.assertIn("not params.get('audio', True)\n                        and "
+                      "facts.get('audio_tracks')", source)
 
     def test_a_parameter_the_runner_discards_is_refused_not_dropped(self) -> None:
         for refused in ("negative_prompt", "guidance", "steps"):
@@ -240,8 +305,10 @@ class LaneContractTests(unittest.TestCase):
 
     def test_the_parameters_are_the_validator_s_bounds(self) -> None:
         names = [p["name"] for p in generation.lane_contract(generation.LTX_23)["parameters"]]
+        # `audio` sits before `seed` for a model that has sound, and is absent for one that does
+        # not — the list is the validator's vocabulary, so it is asserted as published.
         self.assertEqual(names, ["prompt", "mode", "aspect_ratio", "resolution",
-                                 "duration_seconds", "frame_rate", "seed"])
+                                 "duration_seconds", "frame_rate", "audio", "seed"])
         # A parameter the distilled pipeline cannot read is not offered, and vice versa.
         for absent in ("negative_prompt", "guidance", "steps", "width", "height"):
             self.assertNotIn(absent, names)

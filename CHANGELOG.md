@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.83 — 2026-09-27 · Sound becomes a choice, and 16:9 becomes real
+
+**Ask for a video without sound.** LTX denoises picture and sound *together*, so the audio it makes
+is not a separate pass you can pay for or skip — but it does not have to be written. The lane now
+publishes an `audio` parameter, and the switch is offered **only by a model that has any**
+(`model.generates_audio`): LTX shows it, Lance's text-to-video is silent and shows nothing. It
+defaults on, and unticking it sets the pipeline's `generate_audio` attribute to `False`, which skips
+the audio decode and writes an MP4 with no audio track.
+
+**The honest note, because it is the whole point of the switch:** a silent run **is not a faster
+run**. The joint denoise is unchanged; only the decode and the track are skipped. The contract says
+so in as many words rather than letting the checkbox imply a saving it does not make. The artifact
+gate matches the request: a track is required only when `audio` was left on, and a track that
+appears when silence was asked for is refused.
+
+**A real 16:9 canvas, at a size that is actually 16:9.** The published LTX canvases were 7:4
+(448×256) and 11:7 (704×448) — near-widescreen, not widescreen. The smallest canvas on LTX's 64-px
+snap grid that is *exactly* 16:9 is **1024×576**, now published with a duration of **2 seconds**.
+Measured on this Mac: 49 frames, **9.36 GB** peak Metal, 351.6 s, clean output — receipt in
+`qualification/ltx-video-results-16x9-20260927/`.
+
+**Lance was tried at 16:9 and does not hold up.** 512×288 sits on Lance's own grid and renders
+(25 frames, **11.0 GB**, 784 s), but the subject degrades badly at that width, and the card only
+validates square configurations. So **no non-square Lance canvas is published**; the failure is
+recorded rather than shipped as an option.
+
+**Two smaller corrections.** Naming a canvas without a duration used to hand back LTX's default 4
+seconds even where that canvas has no 4-second configuration — a request the lane's own validator
+would refuse; the default is canvas-aware now. And the 16:9 receipts were moved out of `/tmp` into
+`qualification/`, where evidence is supposed to live.
+
 ## 0.6.82 — 2026-09-27 · Lance runs, and the lane stops being LTX-shaped
 
 **The second engine is adopted, and it needed a second interpreter.** `lance-mlx` declares

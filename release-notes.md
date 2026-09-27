@@ -2,6 +2,29 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.83 — 2026-09-27
+
+### You can ask for a video with no sound
+
+The video screen now has an **audio** switch, on by default. Untick it and the clip is written with
+no sound at all. The switch only appears for models that make sound — the smaller model's
+text-to-video is silent, so it does not offer a choice it cannot honour.
+
+**One thing to know before you rely on it: a silent video is not a quicker video.** The model
+denoises picture and sound in the same pass, so unticking audio does not make generation shorter —
+it skips the audio decode and leaves the track out of the file. The lane's own description says so,
+so nobody has to guess.
+
+### A true widescreen size
+
+Until now the two widescreen sizes were 448×256 and 704×448 — close to 16:9, not 16:9. There is now
+a real one: **1024×576**, exact 16:9, two seconds, measured here at about 9.4 GB of memory and six
+minutes for a clip. It comes out clean.
+
+The smaller model was also tried at 16:9 (512×288). It runs, but the picture falls apart at that
+width, so it is not offered — that model stays square.
+
+## 0.6.82 — 2026-09-27
 ## 0.6.82 — 2026-09-27
 
 ### The second video model can run now

@@ -307,7 +307,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Captured 2026-09-26. LTX's manifest is the first in this catalog whose status is
             # `qualified` on the strength of a full generation driven through a *worker*, not a
             # standalone runner, and its `memory_evidence` names both runs.
-            "ltx-2-3-22b-ram-12gb-mlx": "fd4ba808ea23c08331065caf628ab3a3e3eff7cf75a7e8c1655ebf12094889f1",
+            # Refreshed 2026-09-27 (0.6.83) with the true-16:9 measurement: a third run at
+            # 1024x576, 49 frames, 351.6 s, 9.36 GB peak MLX Metal, recorded in the manifest's
+            # `memory_evidence` and `reason`.
+            "ltx-2-3-22b-ram-12gb-mlx": "af06641190e9e9512772a470ab7c671a440d421fbed5a7f027164f01a046717e",
             # A companion: 13 files / 8,068,018,787 bytes, the text encoder every LTX prompt
             # loads. It has no runtime of its own and no picker row (the Hub marks it a
             # dependency), which is why its floor mirrors the model it serves.
@@ -317,9 +320,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # worker publishes the row with `execution_ready: false` and names that step.
             # Refreshed 2026-09-27 with the runner adoption: the defaults are the model's own
             # (256p square at 12 fps), the qualification carries two measured runs, and the
-            # Qwen2.5-VL processor is declared as a requirement.
+            # Qwen2.5-VL processor is declared as a requirement. Refreshed again the same day
+            # (0.6.83) to record the non-square canvas that was tried and is *not* offered:
+            # 512x288 rendered at 11.0 GB and 784 s, and the subject degraded.
             "lance-3b-video-bf16":
-                "5099ce562e5de1ac082a0e5e3f7188ebec1349b23d99744475c3eb5bd22f342d",
+                "e8633b91f51bccda1f3a7387cf456cb9b55d6e6c336d807a6663d73ee72e35fe",
             # Added 2026-09-27 with the Lance runner adoption: the Qwen2.5-VL processor the
             # pipeline loads by repo id. The weights pack ships only the tokenizer, so this is a
             # *required* companion — without it the runner reaches for huggingface.co at load.
