@@ -115,8 +115,8 @@ def _url(value):
 # that mapping disagreed, `chat-mlx` reached a manifest with no worker: `/api/hub/model-packages`
 # raised `KeyError` and returned 500, the native refresh read that as "Hub unreachable", and every
 # model picker on every Mac went blank.
-ENGINES = ('image-mflux', 'voice-mlx', 'voice-vits', 'subtitle-mlx', 'music-mlx', 'chat-mlx',
-           'video-ltx', 'video-lance')
+ENGINES = ('image-mflux', 'voice-mlx', 'voice-vits', 'subtitle-mlx', 'music-mlx', 'music-yue2',
+           'chat-mlx', 'video-ltx', 'video-lance')
 ENGINE_HELP = ("add it to _ENGINE_ROUTE in components/hub/standalone.py and to the engine "
                "allowlist in components/model_packages.py")
 

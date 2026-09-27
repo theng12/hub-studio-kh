@@ -73,6 +73,10 @@ VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db5
 # the two engines cannot share an interpreter: lance-mlx declares `requires-python >= 3.12`
 # while LTX's pipeline needs 3.11.
 LANCE_RUNTIME_SHA256 = '48dd2bd2d34ea9561cc66a02461505220889651983bd6b7e3430d14b5d31ff40'
+# The Music lane's second engine. YuE2 needs its own interpreter because `mlx-Yue` pins
+# `mlx==0.32.2` while the Music overlay carries `mlx==0.31.2`; the worker spawns the bridge with
+# this tree, resolved as the sibling of its own.
+YUE2_RUNTIME_SHA256 = '75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4'
 
 
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
@@ -397,6 +401,33 @@ def _stage_video(context: dict) -> dict | None:
     # resolves `runtimes/video-lance` as the sibling of its own tree (`generation.
     # lance_runtime_python`). Staged only when the build passes one, so an LTX-only proof build
     # still works; the pin is checked the same way.
+    # The Music lane's second engine, staged the same way and for the same reason: a different
+    # interpreter, selected per model by the engine its manifest declares.
+    yue2_note = None
+    if context.get('yue2_runtime') is not None:
+        yue2_found = tree_digest(context['yue2_runtime'])
+        yue2_reason = context.get('unqualified_yue2_runtime')
+        if yue2_found != YUE2_RUNTIME_SHA256 and not yue2_reason:
+            raise SystemExit(
+                'The YuE2 runtime is not the one this release was qualified against.\n'
+                f'  required: {YUE2_RUNTIME_SHA256}\n'
+                f'  handed:   {yue2_found}\n'
+                f'            {context["yue2_runtime"]}\n'
+                '  rebuild it with: bash packaging/yue2-runtime/build.sh\n'
+                '            Python 3.12 + mlx-Yue 9253ed133343406947bde7b67d43c7a63fb39d99 + '
+                'MLX 0.32.2,\n'
+                '  pass --yue2-runtime .build/yue2-runtime, or update this pin with the '
+                'qualification that moved it.')
+        shutil.copytree(context['yue2_runtime'], resources / 'runtimes/music-yue2', symlinks=True)
+        # The bridge runs *inside* that runtime, so it is staged beside it rather than inside the
+        # worker's own tree: `generation.yue2_runtime_python()` finds the interpreter, and the
+        # bridge is spawned from the worker's component directory.
+        bridge_source = ROOT / 'components' / 'music' / 'app' / 'backend' / 'yue2_runner.py'
+        if bridge_source.is_file():
+            shutil.copyfile(bridge_source, resources / 'yue2_runner.py')
+        yue2_note = {'yue2_runtime_sha256': yue2_found,
+                     'yue2_runtime_qualified': yue2_found == YUE2_RUNTIME_SHA256}
+
     lance_note = None
     if context.get('lance_runtime') is not None:
         lance_found = tree_digest(context['lance_runtime'])
@@ -426,6 +457,7 @@ def _stage_video(context: dict) -> dict | None:
     return {
         **matched,
         **({k: v for k, v in (lance_note or {}).items()}),
+        **({k: v for k, v in (yue2_note or {}).items()}),
         'runtime': 'video',
         'runtime_sha256': tree_digest(resources / 'runtimes/video'),
         'source_sha256': tree_digest(video_source),
@@ -549,6 +581,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           unqualified_image_runtime: str | None = None,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
           lance_runtime: Path | None = None, unqualified_lance_runtime: str | None = None,
+          yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
@@ -562,6 +595,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         video_runtime = video_runtime.expanduser().resolve()
     if lance_runtime is not None:
         lance_runtime = lance_runtime.expanduser().resolve()
+    if yue2_runtime is not None:
+        yue2_runtime = yue2_runtime.expanduser().resolve()
         validate_runtime(video_runtime)
         include_hub = True
     if (music_runtime is None) != (music_engine is None):
@@ -645,6 +680,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'video_runtime': video_runtime,
         'unqualified_video_runtime': unqualified_video_runtime,
         'lance_runtime': lance_runtime,
+        'yue2_runtime': yue2_runtime,
+        'unqualified_yue2_runtime': unqualified_yue2_runtime,
         'unqualified_lance_runtime': unqualified_lance_runtime,
         'music_engine': music_engine, 'provenance': provenance,
         'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
@@ -752,6 +789,10 @@ if __name__ == '__main__':
                         help='Include the pinned Python 3.12 Lance runtime and bridge')
     parser.add_argument('--unqualified-lance-runtime', metavar='REASON',
                         help='Stage a non-qualified Lance runtime anyway, recording this reason')
+    parser.add_argument('--yue2-runtime', type=Path,
+                        help='Include the pinned Python 3.12 YuE2 runtime and bridge')
+    parser.add_argument('--unqualified-yue2-runtime', metavar='REASON',
+                        help='Stage a non-qualified YuE2 runtime anyway, recording this reason')
     parser.add_argument('--unqualified-video-runtime', metavar='REASON',
                         help='Stage a non-qualified Video runtime anyway, recording this reason')
     parser.add_argument('--music-runtime', type=Path,
@@ -764,5 +805,7 @@ if __name__ == '__main__':
                 include_hub=args.hub, image_runtime=args.image_runtime,
                 unqualified_image_runtime=args.unqualified_image_runtime,
                 video_runtime=args.video_runtime, lance_runtime=args.lance_runtime,
+        yue2_runtime=args.yue2_runtime,
+        unqualified_yue2_runtime=args.unqualified_yue2_runtime,
                 unqualified_video_runtime=args.unqualified_video_runtime,
                 music_runtime=args.music_runtime, music_engine=args.music_engine))

@@ -1,0 +1,226 @@
+{
+  "status": "complete",
+  "identity": "487e35def329cc044fd20bf4cb001db4fe0ae75db1ddf4120ce9c14c86420a8d",
+  "truncated": {
+    "abc": false,
+    "semantic": true
+  },
+  "sample_rate": 48000,
+  "audio_seconds": 119.99866666666667,
+  "weights": {
+    "mot": {
+      "conversion": {
+        "ar_extraction": "yue2.fast.ar_keys",
+        "generator_dtype": "bfloat16",
+        "nar_partition": "all source tensors not selected by ar_keys",
+        "positional_buffer_dtype": "bfloat16",
+        "quantization": {
+          "embedding_dtype": "bfloat16",
+          "group_size": 64,
+          "linear_only": true,
+          "mode": "affine",
+          "modules": "mlx.nn.Linear"
+        },
+        "versions": {
+          "mlx": "0.32.2",
+          "mlx_lm": "0.31.3",
+          "safetensors": "0.7.0"
+        }
+      },
+      "files": {
+        "LICENSE": {
+          "bytes": 20309,
+          "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0"
+        },
+        "THIRD_PARTY_NOTICES.md": {
+          "bytes": 793,
+          "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3"
+        },
+        "ar-8bit.safetensors": {
+          "bytes": 2656158264,
+          "sha256": "7b7d7796d348e6f2abce0a28e116557f41e16c00c0e03ee47f540e3f3c3e1e45"
+        },
+        "ar-bf16.safetensors": {
+          "bytes": 4331951136,
+          "sha256": "67275a875e7c717a4ea63c4e7f6a8b5ea2704d04768049f87a6b9e5ecfe16dca"
+        },
+        "config.json": {
+          "bytes": 959,
+          "sha256": "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329"
+        },
+        "licenses/SnakeBeta-NVIDIA-MIT.txt": {
+          "bytes": 1076,
+          "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc"
+        },
+        "licenses/stable-audio-tools-MIT.txt": {
+          "bytes": 1069,
+          "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101"
+        },
+        "nar-bf16.safetensors": {
+          "bytes": 2929490456,
+          "sha256": "e6dbc167e15241447708068ed5efc612aba1934878d04278583ec54d5dc10869"
+        },
+        "qwen.tiktoken": {
+          "bytes": 2561218,
+          "sha256": "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"
+        }
+      },
+      "format": "lyra-yue2-mlx",
+      "precisions": {
+        "8bit": {
+          "ar": "ar-8bit.safetensors",
+          "bits": 8,
+          "embedding_dtype": "bfloat16",
+          "group_size": 64,
+          "linear_only": true,
+          "mode": "affine"
+        },
+        "bf16": {
+          "ar": "ar-bf16.safetensors",
+          "dtype": "bfloat16",
+          "nar": "nar-bf16.safetensors"
+        }
+      },
+      "schema": 1,
+      "source": {
+        "identity": {
+          "files": {
+            "LICENSE": {
+              "bytes": 20309,
+              "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0"
+            },
+            "THIRD_PARTY_NOTICES.md": {
+              "bytes": 793,
+              "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3"
+            },
+            "config.json": {
+              "bytes": 959,
+              "sha256": "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329"
+            },
+            "licenses/SnakeBeta-NVIDIA-MIT.txt": {
+              "bytes": 1076,
+              "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc"
+            },
+            "licenses/stable-audio-tools-MIT.txt": {
+              "bytes": 1069,
+              "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101"
+            },
+            "model.safetensors": {
+              "bytes": 7261441640,
+              "sha256": "1d55c42c1a9875c34f5d736e15078449992b044e807ce2a138e6cf289a1e59e9"
+            },
+            "qwen.tiktoken": {
+              "bytes": 2561218,
+              "sha256": "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"
+            },
+            "weights_manifest.json": {
+              "bytes": 179,
+              "sha256": "2296f82c29dcb11aeefde07e216403a32fc86c8f6da2ec15a70102abfd936a93"
+            }
+          }
+        },
+        "repository": "m-a-p/YuE2-3B",
+        "revision": "1a96eca688d6ae5d7f0feb88573fec89920fcd19",
+        "revision_proof": "verified-pinned-content"
+      },
+      "upstream": {
+        "commit": "92a73cc7652fcc1f937855e4b765e0a0edd7ff2e",
+        "repository": "https://github.com/multimodal-art-projection/YuE"
+      }
+    },
+    "vae": {
+      "files": {
+        "model.safetensors": {
+          "sha256": "807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346",
+          "bytes": 530512720
+        }
+      },
+      "config_sha256": "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970",
+      "source": {
+        "repository": "m-a-p/YuE2-Vae",
+        "revision": "95535e72a97bc0f09b8ada125d26b4009428c0e8",
+        "revision_proof": "verified-pinned-content"
+      }
+    }
+  },
+  "timing": {
+    "abc": {},
+    "semantic": {
+      "seconds": 145.71514162502717,
+      "prefill_seconds": 0.20347225002478808,
+      "ttft_seconds": 0.2105074169812724,
+      "output_tokens": 3000,
+      "content_tokens": 3000,
+      "output_tps": 20.588114361649414,
+      "prefix_tokens": 203,
+      "cfg_branches": 2,
+      "execution": "eager",
+      "attention": "sdpa",
+      "backend": "mlx"
+    },
+    "nar_seconds": 268.4934859999921,
+    "vae_seconds": 8.435498082952108,
+    "load": {
+      "resolve_conversion_integrity_seconds": 5.3842742089764215,
+      "ar_load_events_seconds": [
+        0.1363721250090748
+      ],
+      "ar_load_seconds": 0.1363721250090748,
+      "conditioning_load_events_seconds": [
+        1.1940031250123866
+      ],
+      "conditioning_load_seconds": 1.1940031250123866,
+      "nar_load_events_seconds": [
+        1.0905445420066826
+      ],
+      "nar_load_seconds": 1.0905445420066826,
+      "vae_load_events_seconds": [
+        0.42501662502763793
+      ],
+      "vae_load_seconds": 0.42501662502763793
+    },
+    "e2e_seconds": 422.82480879098875
+  },
+  "artifacts": {
+    "abc_tokens.npy": {
+      "sha256": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
+      "bytes": 128
+    },
+    "audio.flac": {
+      "sha256": "325b14b6a3c51d917b989afeee03815e3d8bfad6b2f1b19c48f738995252d3e1",
+      "bytes": 20069862
+    },
+    "config.json": {
+      "sha256": "0b3215c54f65abed08cf3b2cc43a522c585e6c2e9b8320e924e63ccba2fd91e2",
+      "bytes": 1911
+    },
+    "latent.npy": {
+      "sha256": "1ffffa73b0617f477b325a96779d597b0e5283f4ed01ce49fb17b735015e098c",
+      "bytes": 768128
+    },
+    "noise.npy": {
+      "sha256": "6a8a30d44c6da7a80b429fa0afe45bafab9aa2865f9e81d6557825ae163eed5e",
+      "bytes": 768128
+    },
+    "plan.json": {
+      "sha256": "f5bf7fc1e7cb7b523a0ba6e795df7ab85464f32fc8eb1e7a2371f63d0dbe7a8c",
+      "bytes": 2990
+    },
+    "plan_manifest.json": {
+      "sha256": "8906bcd531926f1df56c26b5d6518947f4e777fed3d634d3ca3dd406fcca4dfd",
+      "bytes": 258
+    },
+    "prefix.npy": {
+      "sha256": "8203fad976cd7e533cbab7246f41c40016bda8293ea9406d729dbcebb7d3554d",
+      "bytes": 940
+    },
+    "request.json": {
+      "sha256": "c59b7afd53252feb8dd2250a9da726cb9877ca945af395fe4945744191a95e33",
+      "bytes": 893
+    },
+    "semantic.npy": {
+      "sha256": "d1d98df0eb4f2a9bd5f75278adac91c591af5d84e0ec59f1a51f2cc69c8c7c9c",
+      "bytes": 12128
+    }
+  }
+}

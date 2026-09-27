@@ -1,0 +1,103 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "music-yue2",
+  "files": [
+    {
+      "path": "model/THIRD_PARTY_NOTICES.md",
+      "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+      "size": 793,
+      "source_path": "THIRD_PARTY_NOTICES.md",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/THIRD_PARTY_NOTICES.md"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970",
+      "size": 1378,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/config.json"
+      ]
+    },
+    {
+      "path": "model/licenses/SnakeBeta-NVIDIA-MIT.txt",
+      "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+      "size": 1076,
+      "source_path": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/licenses/SnakeBeta-NVIDIA-MIT.txt"
+      ]
+    },
+    {
+      "path": "model/licenses/stable-audio-tools-MIT.txt",
+      "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+      "size": 1069,
+      "source_path": "licenses/stable-audio-tools-MIT.txt",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/licenses/stable-audio-tools-MIT.txt"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346",
+      "size": 530512720,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/modeling_vae.py",
+      "sha256": "b6578ff461e6be9fd079ca5ddf12893940f3b3338ff3435fceae89c466486f5a",
+      "size": 25265,
+      "source_path": "modeling_vae.py",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/modeling_vae.py"
+      ]
+    },
+    {
+      "path": "model/weights_manifest.json",
+      "sha256": "017d64a4d288217a43fcac3866a0e1d55f796fa891d4dfb6de0bd170ab750026",
+      "size": 178,
+      "source_path": "weights_manifest.json",
+      "urls": [
+        "https://huggingface.co/m-a-p/YuE2-Vae/resolve/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a/weights_manifest.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "m-a-p/YuE2-Vae",
+  "package_id": "yue2-vae",
+  "qualification": {
+    "memory_evidence": "Companion decoder of the YuE2 generator, and not a model: 0.51 GB of FP32 weights with no text tower. MEASURED inside the generator's own runs \u2014 it is loaded beside the generator, so it is part of every peak recorded there (10.79 GB at 600 tokens, 11.81 GB through the runner bridge, 11.93 GB at 3000 tokens).",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Required companion of yue2-3b-mlx: the port loads it as `--vae` and the generator pack ships without it. Captured at the revision the three measured runs used, and its single weight file is verified against the `weights_manifest.json` the repository publishes.",
+    "recommended_unified_memory_gb": 24,
+    "status": "qualified"
+  },
+  "revision": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "m-a-p/YuE2-Vae",
+        "revision": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "m-a-p/YuE2-Vae",
+        "revision": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/m-a-p/YuE2-Vae/revision/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+        "tree_api_url": "https://huggingface.co/api/models/m-a-p/YuE2-Vae/tree/9a94e1d0ea9f8087e98f77fa88df4a4068104d2a?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

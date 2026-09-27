@@ -1,0 +1,8 @@
+{
+  "id": "kh-short-8bit",
+  "style": "Warm acoustic ballad, soft piano, brushed drums, intimate male vocal, 70 BPM",
+  "lyrics": "[Verse]\nMorning light across the harbour wall\nEvery boat is sleeping through the squall\n[Chorus]\nStay with me until the water stills\nStay with me across the quiet hills\n",
+  "seed": 2026,
+  "cot": "off",
+  "semantic_sampling": { "max_tokens": 600, "min_tokens": 300, "top_k": 80 }
+}

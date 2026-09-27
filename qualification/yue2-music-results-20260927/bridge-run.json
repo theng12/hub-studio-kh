@@ -1,0 +1,67 @@
+{
+  "schema": "studiohub.music-runtime-run.v1",
+  "engine": "music-yue2",
+  "started_at": "2026-09-27T18:40:00+0700",
+  "machine": {
+    "chip": "Apple M2 Max",
+    "model": "Mac14,13",
+    "unified_memory_gb": 32,
+    "macos": "27.0"
+  },
+  "runtime": {
+    "port": "vanch007/mlx-Yue",
+    "commit": "9253ed133343406947bde7b67d43c7a63fb39d99",
+    "runtime_sha256": "75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4",
+    "mlx": "0.32.2",
+    "python": "3.12.14"
+  },
+  "request": {
+    "precision": "8bit",
+    "mode": "off",
+    "seed": 2026,
+    "min_tokens": 300,
+    "max_tokens": 900,
+    "memory_budget_gib": 26
+  },
+  "result": {
+    "status": "ok",
+    "seconds": 35.998666666666665,
+    "sample_rate": 48000,
+    "channels": 2,
+    "bytes": 5571890,
+    "load_seconds": 6.836,
+    "generate_seconds": 96.335,
+    "peak_footprint_bytes": 11811160064,
+    "peak_rss_bytes": 6227804160,
+    "footprint_method": "sampled /usr/bin/footprint phys_footprint_peak at 2 Hz in the runner process"
+  },
+  "runs": [
+    {
+      "label": "24 s clip, 600 tokens",
+      "audio_seconds": 23.9987,
+      "wall_seconds": 67.7,
+      "peak_footprint_bytes": 10793966216,
+      "monitor_lifetime_peak_bytes": 10793966216
+    },
+    {
+      "label": "36 s clip through the bridge, 900 tokens",
+      "audio_seconds": 36.0,
+      "wall_seconds": 103.2,
+      "peak_footprint_bytes": 11811160064
+    },
+    {
+      "label": "120 s song, 3000 tokens",
+      "audio_seconds": 119.9987,
+      "wall_seconds": 429.8,
+      "peak_footprint_bytes": 11930000000,
+      "monitor_lifetime_peak_bytes": 11930000000
+    }
+  ],
+  "verdict": {
+    "minimum_unified_memory_gb": 16,
+    "recommended_unified_memory_gb": 24,
+    "eight_gb": "impossible \u2014 the peak is 10.8-11.9 GB whatever the length, because the weights (2.66 GB 8-bit AR + 2.93 GB NAR + 0.51 GB VAE) dominate and no smaller configuration exists in this port: the AR is the only quantizable part.",
+    "sixteen_gb": "runs, with the measured floor of 11.93 GB on a 32 GB host under no pressure. The port's own guard defaults to a 16 GiB process budget and fails closed on swap growth, which is the same arithmetic.",
+    "twenty_four_gb": "comfortable."
+  }
+}

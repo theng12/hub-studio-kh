@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - psutil ships with the engine venv
 
 from components import model_defaults
 
-from . import catalog, cache as cache_module, engine_child, stable_audio
+from . import catalog, yue2, cache as cache_module, engine_child, stable_audio
 
 
 # The worker's default model and the engine it keeps resident.  Every value is read
@@ -164,6 +164,93 @@ def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
     }
 
 
+def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
+                   tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
+                   data_dir=None) -> dict:
+    """YuE2 parameters, bounded by this model's own limits.
+
+    Three things are this engine's alone and are therefore validated here rather than shared:
+
+    * **`mode`** is the port's `cot` — how much planning the song gets. `off` generates straight
+      from style and lyrics, `melody` plans a lead sheet, `full` plans a scored arrangement. This
+      lane names it `mode` because that is the vocabulary every other music lane here uses.
+    * **The duration is a token budget.** The AR stage emits one codec frame per token, so the
+      port's own `max_tokens` is what decides how long the song is — measured at ~25 tokens per
+      second of 48 kHz audio (3000 tokens → 120.0 s). The caller states seconds, because that is
+      what a person knows; this converts, and the receipt is
+      `qualification/yue2-music-results-20260927/`.
+    * **`lyrics` are required.** The engine sings: an empty lyric sheet is an instrumental request
+      sent to a model that has no instrumental switch, and the port's own context tokens for that
+      do not exist. Refusing by name beats rendering a wordless vocal.
+
+    ``tier_cap_seconds`` is accepted for the shared signature and ignored: this engine publishes no
+    hardware tier table, so its single-pass cap is its own.
+    """
+    defaults = defaults_in_force(model, data_dir)
+    revision = raw.get("model_revision")
+    if revision is not None and revision != model.revision:
+        raise ValueError(f"Only the pinned {model.label} revision is available")
+    prompt = raw.get("prompt")
+    if (not isinstance(prompt, str) or not prompt.strip()
+            or len(prompt) > PROMPT_MAX_CHARACTERS):
+        raise ValueError(f"Prompt must contain 1-{PROMPT_MAX_CHARACTERS} characters")
+    lyrics = raw.get("lyrics", "")
+    if not isinstance(lyrics, str) or not lyrics.strip():
+        raise ValueError(
+            "YuE2 sings from lyrics: send a lyric sheet with [Verse] and [Chorus] markers. It has "
+            "no instrumental switch — use Stable Audio 3 or ACE-Step with instrumental on for a "
+            "piece without a vocal.")
+    if len(lyrics) > LYRICS_MAX_CHARACTERS:
+        raise ValueError(f"Lyrics must contain at most {LYRICS_MAX_CHARACTERS} characters")
+    mode = raw.get("mode", raw.get("cot", defaults["mode"]))
+    if mode not in ("off", "melody", "full"):
+        raise ValueError("mode must be off, melody or full")
+    duration = raw.get("duration_seconds",
+                       raw.get("duration", defaults["duration_seconds"]))
+    duration = _finite_number(duration, name="duration",
+                              low=float(_limit(model, "min_duration_seconds")),
+                              high=float(_limit(model, "max_duration_seconds")))
+    steps = raw.get("steps", raw.get("inference_steps", defaults.get("steps")
+                                     or model.inference_steps))
+    if (type(steps) is not int or not _limit(model, "min_steps")
+            <= steps <= _limit(model, "max_steps")):
+        raise ValueError(
+            f"Steps must be an integer between {_limit(model, 'min_steps')} and "
+            f"{_limit(model, 'max_steps')}")
+    guidance = _finite_number(
+        raw.get("guidance_scale", raw.get("cfg", defaults.get("guidance_scale")
+                                          or model.guidance_scale)),
+        name="guidance_scale", low=float(_limit(model, "min_guidance")),
+        high=float(_limit(model, "max_guidance")))
+    precision = raw.get("precision", defaults.get("precision", "8bit"))
+    if precision not in ("bf16", "8bit", "4bit"):
+        raise ValueError("precision must be bf16, 8bit or 4bit")
+    seed = raw.get("seed", defaults["seed"])
+    if seed is None:
+        seed = -1
+    if (type(seed) is not int
+            or not _limit(model, "min_seed") <= seed <= _limit(model, "max_seed")):
+        raise ValueError("Seed must be -1 or a non-negative integer")
+    # The port stops at its own end token, so a request can come back shorter than asked and never
+    # longer — said here because the caller's seconds are a budget, not a promise.
+    max_tokens = max(1, min(int(round(duration * catalog.YUE2_TOKENS_PER_SECOND)), 24576))
+    return {
+        "repo": model.repo,
+        "model_revision": model.revision,
+        "prompt": prompt.strip(), "duration_seconds": duration, "steps": steps,
+        "guidance_scale": guidance, "seed": seed,
+        "mode": mode, "lyrics": lyrics, "precision": precision,
+        "max_tokens": max_tokens,
+        "min_tokens": max(1, min(max_tokens, int(round(duration * 0.5 * catalog.YUE2_TOKENS_PER_SECOND)))),
+        # YuE2 always renders its own stereo 48 kHz output; the shared job shape carries the two
+        # fields the ACE-Step path uses for its vocal controls, and both are meaningless here.
+        "instrumental": False, "vocal_language": "unknown",
+        "dit_model": "", "lm_model": "",
+        "tier_cap_seconds": int(_limit(model, "single_pass_max_seconds")),
+        "exceeds_single_pass": False,
+    }
+
+
 def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
                        tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
                        data_dir=None) -> dict:
@@ -246,11 +333,62 @@ def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
     }
 
 
+def yue2_runtime_python() -> Path:
+    """The interpreter that runs the YuE2 bridge: the engine's own pinned runtime.
+
+    Resolution order, and why it is not a guess:
+
+    1. ``STUDIOHUB_YUE2_RUNTIME`` — the operator's override, for a development checkout.
+    2. ``runtimes/music-yue2`` beside **this worker's own runtime**, which is how the app stages
+       it: the Hub puts sibling runtimes next to the one it launches the worker with.
+    3. ``runtimes/music-yue2`` beside this file's component tree, for a source checkout.
+    4. ``.build/yue2-runtime`` — the same tree before staging, which is what a development
+       checkout has.
+
+    A path that does not exist is returned rather than raised on: the bridge's own failure message
+    names what is missing, and it is more specific than anything this resolver could say.
+    """
+    import os
+    from pathlib import Path as _Path
+    import sys as _sys
+
+    override = os.environ.get("STUDIOHUB_YUE2_RUNTIME")
+    candidates = []
+    if override:
+        candidates.append(_Path(override) / "bin" / "python3")
+    # The worker's runtime is `.../runtimes/music/bin/python3` (or the Voice runtime when the
+    # Music overlay is layered on it), so its *parent* is where the sibling runtimes live.
+    candidates.append(_Path(_sys.executable).resolve().parents[1] / "music-yue2" / "bin" / "python3")
+    candidates.append(_Path(__file__).resolve().parents[4] / "runtimes" / "music-yue2" / "bin" / "python3")
+    # A development checkout keeps its built runtimes in `.build/`, which is where
+    # `packaging/yue2-runtime/build.sh` writes one; the staged name is what the app uses.
+    candidates.append(_Path(__file__).resolve().parents[4] / ".build" / "yue2-runtime" / "bin" / "python3")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[-1]
+
+
+def _companion_root(companion: dict, package_id: str):
+    """Where an installed companion package lives, from the preflight's own record."""
+    from pathlib import Path as _Path
+
+    entry = companion.get(package_id) if isinstance(companion, dict) else None
+    if isinstance(entry, str) and entry:
+        return _Path(entry)
+    if isinstance(entry, dict):
+        root = entry.get("checkpoints_root") or entry.get("root")
+        if isinstance(root, str) and root:
+            return _Path(root)
+    return None
+
+
 # runtime -> request validator.  A model whose runtime is missing here is refused by
 # name in validate_request instead of being validated as ACE-Step.
 _VALIDATORS = {
     catalog.RUNTIME_ACE_STEP: _validate_ace_step,
     catalog.RUNTIME_STABLE_AUDIO: _validate_stable_audio,
+    catalog.RUNTIME_YUE2: _validate_yue2,
 }
 
 LANE_CONTRACT_SCHEMA = "studiohub.lane-contract.v1"
@@ -285,6 +423,21 @@ _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
     # `instrumental=True` and `lyrics="[Instrumental]"` whatever is sent, so offering those
     # parameters would be offering controls the lane discards.
     catalog.RUNTIME_STABLE_AUDIO: (),
+    catalog.RUNTIME_YUE2: (
+        # Every one of these is read by `_validate_yue2` and passed to the port, so the contract
+        # offers exactly what the engine honours.
+        {"name": "mode", "type": "string", "required": False,
+         "enum": ["off", "melody", "full"],
+         "note": "off generates from style and lyrics; melody plans a lead sheet first; full "
+                 "plans a scored arrangement. The three measured runs used off."},
+        {"name": "lyrics", "type": "string", "required": True,
+         "max_characters": LYRICS_MAX_CHARACTERS,
+         "note": "this engine sings; there is no instrumental switch"},
+        {"name": "precision", "type": "string", "required": False,
+         "enum": ["8bit", "bf16", "4bit"],
+         "note": "8bit is the measured configuration; 4bit needs a conversion this package does "
+                 "not ship"},
+    ),
 }
 
 
@@ -386,7 +539,16 @@ def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
          "default": _default(model, "seed"), "note": "-1 draws a random seed"},
     ]
     for extra in _CONTRACT_EXTRAS.get(model.runtime, ()):
-        parameters.append({**extra, "default": _default(model, extra["name"])})
+        entry = dict(extra)
+        if entry.get("required"):
+            # **A required parameter is per-request content, so it has no default.** YuE2's lyrics
+            # are the case: the engine sings, an empty sheet is refused by name, and publishing a
+            # default for it would offer the operator a value the lane never accepts as a choice.
+            # The video lane already states this rule for its own `prompt`.
+            entry.pop("default", None)
+        else:
+            entry["default"] = _default(model, extra["name"])
+        parameters.append(entry)
     return parameters
 
 
@@ -1020,6 +1182,7 @@ class GenerationManager:
         runners = {
             catalog.RUNTIME_ACE_STEP: self._run,
             catalog.RUNTIME_STABLE_AUDIO: self._run_sa3,
+            catalog.RUNTIME_YUE2: self._run_yue2,
         }
         try:
             return runners[model.runtime]
@@ -1479,6 +1642,125 @@ class GenerationManager:
                 self._finish_failure(job, {"state": "cancelled"})
             except _JobFailed as failure:
                 self._finish_failure(job, failure.outcome)
+            except Exception as exc:  # noqa: BLE001 - report the engine's own text
+                final.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                self._finish_failure(job, {
+                    "state": "error", "error": f"{type(exc).__name__}: {exc}"})
+            finally:
+                self.cancel_events.pop(job_id, None)
+
+    def _run_yue2(self, job_id: str) -> None:
+        """Render one YuE2 song in the engine's own runtime, through the app's runner bridge.
+
+        **A separate interpreter, not an import.** `mlx-Yue` pins `mlx==0.32.2` and this worker's
+        runtime carries `mlx==0.31.2`, so the bridge is spawned with
+        `runtimes/music-yue2/bin/python3` and read one JSON object per line — the same shape the
+        Video lane uses for `lance_runner.py`.
+
+        The peak that matters is the bridge's, not this process's: the worker samples its own
+        footprint, and for this engine the memory is in the child. The bridge samples itself and
+        its number is what the job records, with the method named.
+        """
+        final = self.outputs / f"{job_id}.flac"
+        sidecar = self.outputs / f"{job_id}.json"
+        with self.inference_lock:
+            job = None
+            try:
+                with self.lock:
+                    event = self.cancel_events.get(job_id)
+                    job = self.jobs.get(job_id)
+                    if job is None:
+                        return
+                    if event is not None and event.is_set():
+                        job.update(state="cancelled", finished_at=time.time())
+                        self._persist()
+                        return
+                    job.update(state="running", progress=0.05, started_at=time.time())
+                    self._persist()
+                params = job["params"]
+                model = catalog.require_model(params["repo"])
+                seed = params["seed"]
+                if seed == -1:
+                    # The port requires a non-negative seed, so the lane's -1 is drawn here and
+                    # recorded on the job — the same contract the other two engines follow.
+                    seed = random.randint(0, 2 ** 63 - 1)
+                with self.lock:
+                    job["resolved_seed"] = seed
+                    job["runner"] = "mlx-yue"
+                    self._persist()
+                files = self.preflight(model.repo)
+                if files["state"] != "cached":
+                    raise _JobFailed({
+                        "state": "error",
+                        "error": ("MODEL_FILES_UNAVAILABLE: "
+                                  + str(files.get("reason") or files["state"])),
+                        "error_code": "MODEL_FILES_UNAVAILABLE"})
+                # The decoder is a companion package: the port loads it by path, and a run without
+                # it fails at load rather than making quiet audio. Resolve it the same way the
+                # generator's own folder was resolved.
+                companion = files.get("requires") or {}
+                vae_root = _companion_root(companion, catalog.YUE2_VAE_REPO) \
+                    or _companion_root(companion, "yue2-vae")
+                interpreter = yue2_runtime_python()
+                facts = yue2.generate(
+                    model_dir=Path(files["checkpoints_root"]),
+                    vae_dir=vae_root,
+                    output=final,
+                    prompt=params["prompt"], lyrics=params["lyrics"], mode=params["mode"],
+                    precision=params["precision"],
+                    duration_seconds=params["duration_seconds"],
+                    max_tokens=params["max_tokens"], min_tokens=params["min_tokens"],
+                    steps=params["steps"], guidance_scale=params["guidance_scale"],
+                    seed=seed, interpreter=interpreter,
+                    cancel_event=self.cancel_events.get(job_id),
+                    on_progress=lambda ratio, label: self._progress(job_id, ratio, label))
+                with self.lock:
+                    now = time.time()
+                    _atomic_json(sidecar, {
+                        "schema": "studiohub.music-artifact", "schema_version": 1,
+                        "job_id": job_id, "created_at": job["created_at"],
+                        "generated_at": now,
+                        "request": {
+                            "repo": params["repo"], "prompt": params["prompt"],
+                            "mode": params["mode"], "precision": params["precision"],
+                            "duration_seconds": params["duration_seconds"],
+                            "max_tokens": params["max_tokens"], "steps": params["steps"],
+                            "seed": seed, "guidance_scale": params["guidance_scale"]},
+                        "artifact": {key: facts[key] for key in (
+                            "bytes", "sha256", "audio_duration_s", "sample_rate_hz",
+                            "channels", "frames")},
+                        "runner": {"engine": "mlx-yue", "python": str(interpreter),
+                                   "load_seconds": facts["load_seconds"],
+                                   "generate_seconds": facts["generate_seconds"]},
+                    })
+                    job.update(
+                        state="done", progress=1.0, finished_at=now, generated_at=now,
+                        duration_seconds=now - job["started_at"],
+                        engine_seconds=facts["generate_seconds"],
+                        output_path=str(final),
+                        output_url=f"/api/generate/jobs/{job_id}/audio",
+                        sidecar_path=str(sidecar), sha256=facts["sha256"],
+                        bytes=facts["bytes"], media_type=MEDIA_TYPE,
+                        sample_rate_hz=facts["sample_rate_hz"],
+                        channels=facts["channels"],
+                        audio_duration_s=facts["audio_duration_s"],
+                        frames=facts["frames"],
+                        # The bridge measured itself; the worker's own sampler would report this
+                        # process, where the memory is not.
+                        peak_footprint_bytes=facts["peak_footprint_bytes"],
+                        peak_rss_bytes=facts["peak_rss_bytes"],
+                        footprint_method=facts["footprint_method"])
+                    self._persist()
+            except yue2.Yue2Cancelled:
+                final.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                self._finish_failure(job, {"state": "cancelled"})
+            except _JobFailed as failure:
+                _finish = failure.outcome
+                final.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                self._finish_failure(job, _finish)
             except Exception as exc:  # noqa: BLE001 - report the engine's own text
                 final.unlink(missing_ok=True)
                 sidecar.unlink(missing_ok=True)

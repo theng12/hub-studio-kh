@@ -74,11 +74,25 @@ class TheContractCoversEveryModelTests(unittest.TestCase):
                 self.assertEqual(parameters["guidance_scale"]["maximum"],
                                  model.limits["max_guidance"])
                 self.assertEqual(parameters["seed"]["maximum"], model.limits["max_seed"])
-                # And the runtime-specific half is the runtime's own table.
-                extras = {item["name"] for item in generation._CONTRACT_EXTRAS[model.runtime]}
+                # And the runtime-specific half is the runtime's own table — both directions.
+                #
+                # This used to intersect the published names with a hard-coded
+                # `{"shift", "instrumental", "lyrics", "vocal_language"}` and compare that to the
+                # table. The list was the defect: a fourth engine (YuE2) publishes `mode` and
+                # `precision` instead, and the assertion failed on the *new* engine's honest
+                # parameters while still passing if a declared extra were silently dropped. The
+                # invariant is the pair of set comparisons, and it holds for any engine.
+                declared = {item["name"] for item in generation._CONTRACT_EXTRAS[model.runtime]}
+                published = {item["name"] for item in contract["parameters"]}
+                self.assertTrue(
+                    declared <= published,
+                    f"{model.runtime} declares {sorted(declared - published)} but publishes none "
+                    "of them; a parameter the lane reads must be offered")
+                shared = {"prompt", "duration_seconds", "steps", "guidance_scale", "seed"}
                 self.assertEqual(
-                    {name for name in parameters if name in
-                     {"shift", "instrumental", "lyrics", "vocal_language"}}, extras)
+                    published - shared, declared,
+                    f"{model.runtime} publishes {sorted((published - shared) - declared)} that its "
+                    "own table does not declare")
 
     def test_a_lane_that_discards_a_control_does_not_offer_it(self) -> None:
         """Stable Audio 3 forces instrumental output; offering the controls would be a lie."""

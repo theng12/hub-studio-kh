@@ -287,6 +287,10 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     "voice-vits": ("voice", "voice"),
     "subtitle-mlx": ("subtitle", "transcription"),
     "music-mlx": ("music", "music"),
+    # The Music lane's second engine. YuE2 runs in its own pinned runtime because the port pins
+    # `mlx==0.32.2` while the Music overlay carries `mlx==0.31.2`; the worker picks the
+    # interpreter from the manifest's engine, exactly as the Video lane does for its two.
+    "music-yue2": ("music", "music"),
     "chat-mlx": ("chat", "chat"),
     # Video has two runners and therefore two engines, both served by the one Video worker:
     # `video-ltx` is the 22B pack this build can run, `video-lance` names the lance-mlx source

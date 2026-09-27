@@ -1,5 +1,17 @@
 # Music Studio: adopting a local generator into Studio Hub
 
+> **Update, 2026-09-27 — YuE2 is no longer a rejection; it is the lane's third engine.** This
+> document was written 2026-09-20 as a survey, and its last table was read as current long after it
+> stopped being so. `vanch007/mlx-Yue` — an MLX port of YuE2 — is adopted at
+> `9253ed133343406947bde7b67d43c7a63fb39d99`, built into its own pinned Python 3.12 tree
+> (`packaging/yue2-runtime`, `mlx==0.32.2`) and staged as `runtimes/music-yue2` beside the four
+> earlier runtimes. **The 24 GB/CUDA line below described the original PyTorch release, which is not
+> what ships.** What ships is measured: **10.79 GB / 11.81 GB / 11.93 GB** peak for 24 s / 36 s / 120 s
+> of audio by sampled `footprint phys_footprint_peak` in the process doing the work, so **8 GB cannot
+> run it, 16 GB is the minimum and 24 GB is comfortable** — receipts in
+> `qualification/yue2-music-results-20260927/`, the tier and its reasoning in
+> `model-manifests/yue2-3b-mlx.json`, the release in `CHANGELOG.md` 0.6.86.
+
 > Contract update, 2026-09-21: the first package is
 > `ace-step-1-5-turbo` (`music-mlx`). Its verified installer folder owns a
 > single `model/` checkpoint root containing only the Turbo DiT, VAE, text
@@ -105,8 +117,10 @@ call:
 
 1. **Does the MLX backend work at 16 GB?** The project's own macOS instructions say yes and list a
    12–16 GB tier; an independent 16 GB M4 report says MLX "fights PyTorch for memory and crashes" at
-   that size. Prototype in progress; the result decides whether the fleet's 8/16 GB Macs get MLX or
-   the MPS/PyTorch fallback.
+   that size. **Answered for the shipped package:** ACE-Step 1.5 Turbo's probe peaked at 4.645 GiB
+   of process-tree RSS with 14.552 GiB of 16 GiB system memory in use, so it runs on a 16 GB Mac and
+   is declared 8 GB / recommended 16 GB — `model-manifests/ace-step-1-5-turbo.json`, status
+   *unqualified*, which is why the tier stays a declaration rather than a measurement.
 2. **Wall-clock for six minutes.** One third-party measurement puts a 70 s instrumental at ~300 s on a
    16 GB M4 with the 2B turbo tier, scaling linearly — i.e. roughly 26 minutes for six minutes of
    music. That would make the 24/32 GB Macs the practical music machines and this Mac a testbed. Must
@@ -129,7 +143,7 @@ call:
 
 | model | reason |
 |---|---|
-| YuE2 | weights are CC BY-NC 4.0 despite the Apache-2.0 tag; needs 24 GB VRAM + CUDA/FlashAttention |
+| YuE2 — the original CUDA/torch release | weights are CC BY-NC 4.0 despite the Apache-2.0 tag; needs 24 GB VRAM + CUDA/FlashAttention. **Superseded 2026-09-27: the MLX port is adopted — see the update at the top.** |
 | YuE v1 | Apache-2.0 and genuinely 5-minute, but lyrics-first, 8B total, no MLX or MPS port |
 | DiffRhythm 2 | Apache-2.0 and small, but its README leaves "song extension" **and "instrumental music generation"** unchecked |
 | DiffRhythm v1 | 4 m 45 s maximum, local deployment still a TODO |

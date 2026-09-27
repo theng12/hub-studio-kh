@@ -328,6 +328,15 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # *required* companion — without it the runner reaches for huggingface.co at load.
             "lance-3b-processor-qwen2-5-vl":
                 "e944388a11a2b017cd74c59aa44b542b9026e4580255df1b18c651e9b14dc6b2",
+            # ── Music: YuE2, the lane's second engine, and its decoder companion ──
+            # Captured 2026-09-27 from `vanch007/mlx-Yue2-3B` (9 files / 9,920,168,755 bytes) and
+            # `m-a-p/YuE2-Vae` (7 files / 530,542,479 bytes). Both carry a MEASURED tier from three
+            # runs on this 32 GB Mac: 10.79 GB / 11.81 GB / 11.93 GB peak by sampled `footprint`.
+            # The generator's capture deliberately includes `ar-bf16.safetensors`, the 4.33 GB file
+            # the 8-bit AR was quantized from, because the port's `verify_conversion` refuses a tree
+            # without it.
+            "yue2-3b-mlx": "2d95b7c5abedf486af4c75214433183e0ae39aa7944ee615a94a85bc4dc4a154",
+            "yue2-vae": "5e417f807f7366adade9abd297cc36ebf294bf19cd7242bcaaee26631b9a6cac",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

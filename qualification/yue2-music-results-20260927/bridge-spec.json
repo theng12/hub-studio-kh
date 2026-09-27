@@ -1,0 +1,14 @@
+{
+  "model_dir": "/tmp/yue2-measure/converted",
+  "vae_dir": "/build/StudioHubModels/yue2-3b-mlx/vae",
+  "output": "/tmp/yue2-measure/bridge-out/song.flac",
+  "precision": "8bit",
+  "style": "Warm acoustic ballad, soft piano, brushed drums, intimate male vocal, 70 BPM",
+  "lyrics": "[Verse]\nMorning light across the harbour wall\nEvery boat is sleeping through the squall\n[Chorus]\nStay with me until the water stills\nStay with me across the quiet hills\n",
+  "mode": "off",
+  "seed": 2026,
+  "min_tokens": 300,
+  "max_tokens": 900,
+  "request_id": "studio-hub-yue2-bridge-check",
+  "memory_budget_gib": 26
+}

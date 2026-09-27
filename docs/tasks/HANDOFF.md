@@ -3,7 +3,7 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.85** (the documents that still said the small video model could not run, 2026-09-27).
+Last updated: **0.6.86** (YuE2 joins the Music lane with a measured tier, 2026-09-27).
 
 > **0.6.84 — the model lists were empty, and the switch reached the Video page.**
 >
@@ -61,6 +61,59 @@ Last updated: **0.6.85** (the documents that still said the small video model co
 > **No behaviour changes in this release.**
 >
 > **Gate 1384 passed / 11 skipped / 1111 subtests; `native/build.sh` green.**
+
+> **0.6.86 — YuE2 adopted into the Music lane, and its tier measured rather than claimed.**
+>
+> **A third music engine, and the first that cannot share an interpreter.** `mlx-Yue` pins
+> `mlx==0.32.2` while the Voice runtime (and therefore the Music overlay) carries `mlx==0.31.2`, so
+> YuE2 runs in its own pinned Python 3.12 tree — `packaging/yue2-runtime/build.sh`, the port at
+> `9253ed133343406947bde7b67d43c7a63fb39d99`, MLX 0.32.2, pinned by content at
+> `YUE2_RUNTIME_SHA256 = 75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4` and
+> staged as `runtimes/music-yue2`. The worker spawns `yue2_runner.py` with it
+> (`generation.yue2_runtime_python()` resolves env → the sibling of the worker's own tree → the
+> checkout → `.build/yue2-runtime`), reads one JSON object per line, and the **bridge samples its
+> own footprint** because the memory is in the child.
+>
+> **The owner asked what the minimum machine is. The model card publishes no memory table at all**,
+> so the answer is three measured runs on this 32 GB Mac, peak by sampled
+> `footprint phys_footprint_peak`:
+>
+> | Configuration | Audio | Wall | Peak |
+> | --- | --- | --- | --- |
+> | 8-bit, mode off, 600 tokens | 24.0 s | 58.6 s | **10.79 GB** |
+> | 8-bit, 900 tokens, **through this app's bridge** | 36.0 s | 103.2 s | **11.81 GB** |
+> | 8-bit, mode off, 3000 tokens | 120.0 s | 429.8 s | **11.93 GB** |
+>
+> **8 GB cannot run it in any configuration this port offers** (the AR is the only quantizable
+> part; 4-bit saves ~1 GB against an 11.9 GB peak), **16 GB is the minimum**, 24 GB is comfortable.
+> Receipts: `qualification/yue2-music-results-20260927/`.
+>
+> **Two packages.** `yue2-3b-mlx` (9 files, 9.92 GB) and the decoder companion `yue2-vae` (7 files,
+> 0.53 GB). The generator's capture **includes `ar-bf16.safetensors`** — the 4.33 GB file the 8-bit
+> AR was quantized from — because the port's `verify_conversion` refuses a converted tree without
+> it. That is why the owner had to pull it before anything could run.
+>
+> **The lane refuses what the engine cannot do, by name:** lyrics are required (it sings; the
+> refusal points at ACE-Step and Stable Audio), steps are bounded by the port's two documented
+> configurations (8/32), guidance by its protocol's 0–20, mode by its three, and seconds are
+> converted to the port's token budget at the measured ~25 tokens per second.
+>
+> **One test stopped testing a list:** the music contract test intersected published parameters with
+> a hard-coded four-name set, so it failed on the new engine's honest `mode`/`precision` while still
+> passing if a declared parameter were dropped. It compares both directions now.
+>
+> **Two records were behind the fleet, and tests caught both.** The generated model record
+> (`docs/model-benchmarks.md`) maps engines to lanes in the generator, and that table did not name
+> `music-yue2` — so the package could ship and be silently absent from the page. It learned the
+> engine, and the page gained the two measured rows that until now lived only in `qualification/`:
+> **Lance** (8.11 GB `relay` / 20.0 GB `parallel`, 184.9 s / 329.5 s) and **YuE2** (10.79 / 11.81 /
+> 11.93 GB), each naming its receipt. Every cell in the measured table now states its unit — the
+> configuration-qualified keys (`peak_mlx_gb_default`, `generation_seconds_low_ram`) were dropping
+> it. `research/st01-runtime-contracts.json` also refused the new engine until told what it is; that
+> entry exposed its `video-lance` reason still saying the runner "is not adopted into this build
+> yet", false since 0.6.82, and it now carries the tree and the two measured runs instead.
+>
+> **Gate 1400 passed / 11 skipped / 1137 subtests; native green.**
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what

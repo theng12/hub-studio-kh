@@ -141,6 +141,26 @@ LM_06B = Checkpoint(
 # A second music engine: Stability's latent-diffusion model, run through the
 # vendored pure-MLX runtime under ``components/music/engines/stable_audio_3``.
 # Instrumental only (no vocals); 44.1 kHz stereo; 380 s absolute maximum.
+# ── The third engine: YuE2, in its own pinned runtime ─────────────────────
+#
+# `mlx-Yue` pins `mlx==0.32.2` while this worker's own runtime (the Voice runtime plus the Music
+# overlay) carries `mlx==0.31.2`, so the engine runs in a separate interpreter and this worker
+# spawns it — the same shape the Video lane uses for its two engines. The tier below is MEASURED on
+# this Mac, not read from a card: the model card publishes no memory table at all.
+YUE2_REPO = "vanch007/mlx-Yue2-3B"
+YUE2_REVISION = "fa66d203dd56d7e033e05ee8b32269768984c4cc"
+YUE2_VAE_REPO = "m-a-p/YuE2-Vae"
+YUE2_VAE_REVISION = "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a"
+# The port's own source, pinned at an exact commit — it is the runner, so its revision is part of
+# this model's identity the way a package revision is for an MLX engine.
+YUE2_PORT_REPO = "vanch007/mlx-Yue"
+YUE2_PORT_COMMIT = "9253ed133343406947bde7b67d43c7a63fb39d99"
+# What the port's AR stage emits per second of 48 kHz audio, measured: 3000 tokens produced 120.0 s
+# and 600 produced 24.0 s, so ~25 tokens per second. Published nowhere by the port; this is the
+# constant the worker converts a caller's seconds with, and the receipt is
+# `qualification/yue2-music-results-20260927/`.
+YUE2_TOKENS_PER_SECOND = 25
+
 STABLE_AUDIO_REPO = "stabilityai/stable-audio-3-optimized"
 STABLE_AUDIO_REVISION = "da6edc54ddba10bfd79a077102ded687f80e882b"
 SA3_MAX_DURATION_SECONDS = 380
@@ -151,6 +171,9 @@ SA3_MAX_DURATION_SECONDS = 380
 # naming the model and this file; add the engine there when you add the model.
 RUNTIME_ACE_STEP = "ace-step"
 RUNTIME_STABLE_AUDIO = "stable-audio"
+# The engine's manifest token, so the Hub resolves its worker and modality the way it does for every
+# other package, and the worker picks the interpreter from it.
+RUNTIME_YUE2 = "music-yue2"
 
 SA3_DIT_MEDIUM = Checkpoint(
     name="dit_medium", kind="dit", repo=STABLE_AUDIO_REPO,
@@ -512,6 +535,105 @@ CATALOG: tuple[ModelEntry, ...] = (
         long_form=SA3_LONG_FORM,
         default_lm_model="",
         inference_steps=8,
+        guidance_scale=1.0,
+    ),
+    ModelEntry(
+        repo=YUE2_REPO,
+        label="YuE2 3B Music (8-bit AR + bf16 NAR)",
+        family="yue2",
+        checkpoint="yue2-3b",
+        size_gb=9920168755 / 1e9,
+        gated=False,
+        package_id="yue2-3b-mlx",
+        package_root="model",
+        revision=YUE2_REVISION,
+        runtime=RUNTIME_YUE2,
+        # Every value here is one the three measured runs used: mode off, the port's standard
+        # 32 ODE steps, its default guidance, and the 8-bit AR. 36 s is that run's length.
+        defaults={"mode": "off", "duration_seconds": 36, "steps": 32, "guidance_scale": 1.0,
+                  "precision": "8bit", "seed": -1},
+        limits={
+            "min_duration_seconds": 8,
+            "max_duration_seconds": 360,
+            "single_pass_max_seconds": 360,
+            # The port's two documented configurations: 8 steps is its "ultra-fast mode" and 32 is
+            # its standard (`GenerationConfig.ode_steps`, and the README's own benchmark table).
+            # Both are real controls — the worker passes the chosen count into the pipeline's
+            # generation config — so the lane offers them rather than dropping them.
+            "min_steps": 8,
+            "max_steps": 32,
+            # `SongRequest.cfg_scale` is validated by the port itself to [0, 20]; this is that
+            # bound, not an invented one.
+            "min_guidance": 0.0,
+            "max_guidance": 20.0,
+            "min_seed": -1,
+            "max_seed": 2 ** 63 - 1,
+        },
+        qualification={
+            "measured_runs": [
+                {"precision": "8bit", "mode": "off", "max_tokens": 600, "audio_seconds": 24.0,
+                 "wall_seconds": 67.7, "peak_footprint_bytes": 10793966216},
+                {"precision": "8bit", "mode": "off", "max_tokens": 900, "audio_seconds": 36.0,
+                 "wall_seconds": 103.2, "peak_footprint_bytes": 11811160064,
+                 "via": "this app's runner bridge"},
+                {"precision": "8bit", "mode": "off", "max_tokens": 3000, "audio_seconds": 120.0,
+                 "wall_seconds": 429.8, "peak_footprint_bytes": 11930000000},
+            ],
+            "memory_evidence": (
+                "MEASURED here [M], three runs, by sampled `footprint phys_footprint_peak` in the "
+                "process doing the work: 24.0 s of audio at 10.79 GB peak, 36.0 s through this "
+                "app's runner bridge at 11.81 GB, and 120.0 s at 11.93 GB. The peak barely moves "
+                "with length because the weights dominate (2.66 GB 8-bit AR + 2.93 GB bf16 NAR + "
+                "0.51 GB VAE), which is also why an 8 GB Mac cannot run it in any configuration "
+                "this port offers: the AR is the only quantizable part and 4-bit would save about "
+                "1 GB against an 11.9 GB peak."),
+            "measured_on": "32 GiB M2 Max (Mac14,13), macOS 27.0, mlx 0.32.2, the port at "
+                           "9253ed133343406947bde7b67d43c7a63fb39d99",
+            "source": "qualification/yue2-music-results-20260927/",
+            "status": "qualified",
+        },
+        min_unified_memory_gb=16,
+        recommended_hardware=(
+            "16 GB or more. Measured peak 10.79-11.93 GB on a 32 GB M2 Max under no memory "
+            "pressure, so a 16 GB Mac has roughly 4 GB left for macOS; 24 GB is comfortable."),
+        capabilities=("music", "text-to-music", "lyrics", "long-form"),
+        best_for=(
+            "Sung songs with lyrics, up to about six minutes, at 48 kHz stereo. This is the only "
+            "engine here that writes a vocal; ACE-Step 1.5 also sings, and Stable Audio 3 cannot. "
+            "Measured: 36 s of song in 103 s on an M2 Max."),
+        sample_rate_hz=48000,
+        channels=2,
+        license_name="Apache-2.0 (generator); CC BY-NC 4.0 (decoder)",
+        license_source="vanch007/mlx-Yue2-3B and m-a-p/YuE2-Vae model cards",
+        measured_runtime={
+            "measured": [
+                {"duration_seconds": 24.0, "seconds": 58.6, "max_tokens": 600},
+                {"duration_seconds": 36.0, "seconds": 103.2, "max_tokens": 900},
+                {"duration_seconds": 120.0, "seconds": 429.8, "max_tokens": 3000},
+            ],
+            "measured_on": "M2 Max 32 GB, YuE2 3B 8-bit AR + bf16 NAR, mode off, seed 2026",
+            "evidence": "measured",
+        },
+        checkpoints=(),
+        dit_tiers=(),
+        lm_tiers=(),
+        tiers=(),
+        long_form=LongFormStrategy(
+            single_pass_max_seconds=360,
+            single_pass_cap_source="the port's own semantic budget: 9000 tokens at the measured "
+                                   "~25 tokens per second of 48 kHz audio",
+            beyond_cap="Not in one request. The port's context is 24576 tokens (~16 minutes at the "
+                       "measured rate), and this lane publishes 360 s; a longer song is rendered in "
+                       "sections.",
+            repaint_task_type="", repaint_mode="", repaint_strength=0.0,
+            repaint_latent_crossfade_frames=0, repaint_wav_crossfade_sec=0.0,
+            note="The caller's seconds are converted to the port's token budget; the port stops "
+                 "when the model emits its own end token, so a request may come back shorter than "
+                 "asked and never longer.",
+        ),
+        default_lm_model="",
+        # The port's standard step count, which is what the three measured runs used.
+        inference_steps=32,
         guidance_scale=1.0,
     ),
 )

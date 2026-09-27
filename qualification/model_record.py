@@ -58,6 +58,7 @@ ENGINE_NAMES = {
     "chat-mlx": "MLX (text)",
     "image-mflux": "mflux (MLX)",
     "music-mlx": "MLX (audio)",
+    "music-yue2": "mlx-Yue2 (MLX)",
     "subtitle-mlx": "MLX (speech-to-text)",
     "video-lance": "lance-mlx (MLX)",
     "video-ltx": "ltx-2-mlx (MLX)",
@@ -81,6 +82,7 @@ MODALITY_OF_ENGINE = {
     "subtitle-mlx": "subtitle",
     "image-mflux": "image",
     "music-mlx": "music",
+    "music-yue2": "music",
     "video-ltx": "video",
     "video-lance": "video",
 }
@@ -177,16 +179,40 @@ METRIC_LABELS = {
     "memory_available_at_start_gb": "memory free at start",
     "weights_on_disk_gb": "weights on disk",
     "low_ram_mode": "low-RAM mode",
+    "audio_seconds": "audio produced",
+    "peak_footprint_gb": "peak footprint",
+    "peak_footprint_gb_relay": "peak footprint, relay",
+    "peak_process_rss_gb_relay": "peak RSS, relay",
+    "peak_rss_gb": "peak RSS",
+    "generation_seconds_relay": "generation, relay",
 }
+
+
+# A metric key may carry the configuration it belongs to (`_default`, `_low_ram`, `_relay`). The
+# unit is decided by what the key is *about*, not by its last word, so every cell states one.
+QUALIFIERS = ("_default", "_low_ram", "_relay")
+
+
+def unit_key(key: str) -> str:
+    for qualifier in QUALIFIERS:
+        if key.endswith(qualifier):
+            return key[: -len(qualifier)]
+    return key
 
 
 def metric_words(key: str, value: Any) -> str:
     label = METRIC_LABELS.get(key, key.replace("_", " "))
-    if isinstance(value, (int, float)) and key.endswith(("_gb", "_mb")):
-        unit = "GB" if key.endswith("_gb") else "MB"
+    base = unit_key(key)
+    if isinstance(value, (int, float)) and base.endswith(("_gb", "_mb")):
+        unit = "GB" if base.endswith("_gb") else "MB"
         return f"{label} {value} {unit}"
-    if isinstance(value, (int, float)) and key.endswith("_seconds"):
+    if isinstance(value, (int, float)) and base.endswith("_seconds"):
         return f"{label} {value} s"
+    if isinstance(value, str) and base.endswith(("_gb", "_seconds")):
+        # Several runs in one cell read as "10.79 / 11.81 / 11.93"; the unit still belongs there,
+        # and a cell that already carries one is left alone rather than doubled.
+        unit = "GB" if key.endswith("_gb") else "s"
+        return f"{label} {value}" if value.rstrip().endswith(unit) else f"{label} {value} {unit}"
     return f"{label} {value}"
 
 

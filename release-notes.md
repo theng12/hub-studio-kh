@@ -2,6 +2,35 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.86 — 2026-09-27
+
+### A third music model, and the only one that sings a full song
+
+**YuE2 3B** joins ACE-Step 1.5 and Stable Audio 3 in the Music picker. It writes a sung song from
+your lyrics and a style, at 48 kHz stereo, up to about six minutes. ACE-Step also sings; Stable
+Audio cannot sing at all; this one is the strongest of the three at a vocal over a full arrangement.
+
+### What it costs, measured on this Mac
+
+Three runs, 8-bit: **10.8 GB** of memory for a 24-second song, **11.8 GB** for 36 seconds, **11.9 GB**
+for two minutes. The memory barely changes with length — the weights are most of it — which is why
+the answer is simple: **a 16 GB Mac is the minimum, 24 GB is comfortable, and an 8 GB Mac cannot run
+it at all.** It also takes its time: about three minutes of work for a 36-second song.
+
+### Two things the app will tell you rather than let you discover
+
+**Lyrics are required.** This model sings, and it has no "instrumental" switch — ask for a song
+without words and the app says so and points you at the two models that can do it. And **the memory
+guard is set from your Mac**: the engine refuses to thrash, and the app tells it how much it can
+afford instead of assuming 16 GB.
+
+### The measurement page now lists every model it has numbers for
+
+`docs/model-benchmarks.md` — the one page that answers "what can this Mac run, and what has actually
+been run?" — was missing the new music model, and it was missing the smaller video model's
+measurements too. Both are on it now, with the run each figure came from named beside it, and every
+number in the measured table says its unit.
+
 ## 0.6.85 — 2026-09-27
 
 ### The instructions said the smaller video model could not run

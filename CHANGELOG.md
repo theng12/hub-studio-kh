@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.86 — 2026-09-27 · YuE2 joins the Music lane, and the tier is measured rather than claimed
+
+**A third music engine, and the first that cannot share an interpreter.** `mlx-Yue` pins
+`mlx==0.32.2` while the Voice runtime — and therefore the Music overlay built on it — carries
+`mlx==0.31.2`, so YuE2 runs in its own pinned Python 3.12 tree (`packaging/yue2-runtime`, the port
+at `9253ed13…`, MLX 0.32.2), staged as `runtimes/music-yue2` and driven by a bridge the worker
+spawns. That is the same conclusion the video lane reached with its two engines: the engine a
+manifest declares decides the runtime.
+
+**What it is for: a vocal.** YuE2 is the only engine here that writes a *sung* song — ACE-Step 1.5
+also sings and Stable Audio 3 cannot — at 48 kHz stereo, up to about six minutes. The lane adds it
+beside the other two rather than replacing either.
+
+**The tier is MEASURED, because the model card publishes none.** Three runs on this 32 GB Mac, peak
+by sampled `footprint phys_footprint_peak` in the process doing the work:
+
+| Configuration | Audio | Wall | Peak |
+| --- | --- | --- | --- |
+| 8-bit, mode off, 600 tokens | 24.0 s | 58.6 s | **10.79 GB** |
+| 8-bit, mode off, 900 tokens, through this app's bridge | 36.0 s | 103.2 s | **11.81 GB** |
+| 8-bit, mode off, 3000 tokens | 120.0 s | 429.8 s | **11.93 GB** |
+
+**The peak barely moves with length, because the weights dominate** — 2.66 GB 8-bit AR + 2.93 GB
+bf16 NAR + 0.51 GB VAE — and that is what settles the fleet question the owner asked: **8 GB cannot
+run it in any configuration this port offers** (the AR is the only quantizable part; 4-bit would
+save about 1 GB against an 11.9 GB peak), **16 GB is the minimum**, and 24 GB is comfortable. The
+receipts are in `qualification/yue2-music-results-20260927/`, including the run made through the
+app's own bridge.
+
+**Two packages, and the bf16 twin ships on purpose.** `yue2-3b-mlx` (9 files, 9.92 GB) and its
+decoder companion `yue2-vae` (7 files, 0.53 GB). The generator's capture deliberately includes
+`ar-bf16.safetensors`, the 4.33 GB file the 8-bit AR was quantized from, because the port's
+`verify_conversion` refuses a converted tree without it.
+
+**The lane refuses what the engine cannot do, by name.** Lyrics are required — this engine sings and
+has no instrumental switch, and the refusal points at the two engines that do. The step count is
+bounded by the port's two documented configurations (8 = its fast mode, 32 = its standard), the
+guidance scale by its own protocol's 0–20, and the mode by the three the port offers. Seconds are
+converted to the port's token budget at the measured ~25 tokens per second.
+
+**One test stopped testing a list.** The music contract test intersected the published parameters
+with a hard-coded `{shift, instrumental, lyrics, vocal_language}`; the fourth engine publishes
+`mode` and `precision`, so the assertion failed on the new engine's honest parameters while still
+passing if a declared one were dropped. It now compares the declared set with the published set in
+both directions — the invariant, which holds for any engine.
+
+**Two records were behind the fleet, and tests caught both rather than a reader.** The generated
+model record (`docs/model-benchmarks.md`) had nowhere to put a second music engine: its engine→lane
+table did not name `music-yue2`, so the package could ship and be silently absent from the page —
+exactly the drift that page's own test exists to catch. It learned the engine, and the page gained
+the two measured rows that had been living only in `qualification/`: **Lance** (8.11 GB in `relay`,
+20.0 GB in `parallel`; 184.9 s / 329.5 s) and **YuE2** (10.79 / 11.81 / 11.93 GB). Every cell in its
+measured table now states its unit — the configuration-qualified keys (`peak_mlx_gb_default`,
+`generation_seconds_low_ram`) had been quietly dropping them. The second record,
+`research/st01-runtime-contracts.json`, refused the new engine until it was told what the engine is;
+writing that entry exposed that its `video-lance` reason still said the runner "is not adopted into
+this build yet", which has been false since 0.6.82.
+
 ## 0.6.85 — 2026-09-27 · The documentation said the small video model could not run
 
 **A claim the code had already outgrown.** Five places still described the `lance-mlx` runner as

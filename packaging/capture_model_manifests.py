@@ -104,6 +104,24 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "revision": "66285546d2b821cf421d4f5eb2576359d3770cd3", "engine": "video-lance",
      "include": ("config.json", "generation_config.json", "merges.txt",
                  "preprocessor_config.json", "tokenizer_config.json", "vocab.json")},
+    # ── YuE2: the Music lane's third engine, and its decoder companion ──
+    # The generator pack is the 8-bit AR, the bf16 NAR and the tokenizer. **`ar-bf16.safetensors`
+    # is captured even though this lane runs 8-bit**, because the port's `verify_conversion`
+    # refuses a converted tree that does not carry it — the bf16 file is what the 8-bit one was
+    # quantized from, and the port uses it to prove the tree is the one it produced. Measured
+    # 2026-09-27: the three weight files plus the two licence notices are what a run needs.
+    {"package_id": "yue2-3b-mlx", "model_id": "vanch007/mlx-Yue2-3B",
+     "revision": "fa66d203dd56d7e033e05ee8b32269768984c4cc", "engine": "music-yue2",
+     "requires_packages": ("yue2-vae",),
+     "exclude": ("assets/*", "*.png", "*.pdf", "*.svg", "__pycache__/*")},
+    # The decoder. The port's own README installs it from this repository and passes it as
+    # `--vae`; the generator pack ships without it, so a run without this companion fails at load
+    # rather than producing quiet audio.
+    {"package_id": "yue2-vae", "model_id": "m-a-p/YuE2-Vae",
+     "revision": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a", "engine": "music-yue2",
+     "include": ("config.json", "model.safetensors", "modeling_vae.py", "weights_manifest.json",
+                 "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*")},
+
     # ── ST-14: the local Chat Studio's MLX text model ──
     # Owner-selected Qwen3.5-9B, uniform 4-bit, text-only accepted. The OptiQ build was
     # rejected: its index requires an `optiq_vision` shard, making the snapshot 8.22 GB.
@@ -241,6 +259,17 @@ DETAILS: dict[str, dict[str, Any]] = {
         "defaults": {"parameters_source": "model/tokenizer_config.json"},
         "memory": (16, 16, "Not a model: a tokenizer plus an image-processor config, so it carries no weights of its own. Its memory is MEASURED inside the Lance runner's process: 8.11 GB peak footprint at 256x256, 13 frames, relay mode, 2026-09-27 (_orchestra/evidence/lance-first-run-20260927.json)."),
         "qualification": {"status": "qualified", "reason": "Required companion of the Lance-3B-Video-bf16 pack: the pipeline loads it by repository id, and the pack ships only the tokenizer. Six files, 4.5 MB, captured at the revision the first measured run used."},
+    },
+    "yue2-3b-mlx": {
+        "defaults": {"mode": "off", "duration_seconds": 36, "seed": -1, "precision": "8bit",
+                     "parameters_source": "components/music/app/backend/catalog.py"},
+        "memory": (16, 24, "MEASURED here [M], three runs, by sampled `footprint phys_footprint_peak` in the process doing the work: 600 tokens -> 24.0 s of 48 kHz stereo audio, 58.6 s end to end, peak 10.79 GB; 900 tokens through the runner bridge -> 36.0 s, 103.2 s, peak 11.81 GB (receipt qualification/yue2-music-results-20260927/bridge-run.json); 3000 tokens -> 120.0 s, 429.8 s, peak 11.93 GB. The peak barely moves with length because the weights dominate: 2.66 GB 8-bit AR + 2.93 GB bf16 NAR + 0.51 GB VAE. A 16 GB Mac therefore has roughly 4 GB left for macOS, and the port's own monitor defaults to a 16 GiB process budget and fails closed on more than 64 MiB of new swap. An 8 GB Mac cannot run it in any configuration this port offers: the AR is the only quantizable part, and 4-bit would save about 1 GB against an 11.9 GB peak."),
+        "qualification": {"status": "qualified", "reason": "MEASURED by three local runs on the owner's 32 GB M2 Max through the port's own pipeline at the pinned commit 9253ed133343406947bde7b67d43c7a63fb39d99, two of them through this app's runner bridge, with the peak taken by sampled `footprint` in the process doing the work rather than from MLX's own allocator (which reports about half). What is NOT covered and is not claimed: no 16 GB or 24 GB machine has run it - the tier is a floor from a host under no memory pressure, and the 16 GB verdict is the owner's run to make. The port's own README targets a 16 GiB process budget and states it was tested on an M3 Max (128 GB) and an M5 Air (32 GB); it publishes no memory table of its own, so the numbers above are the only measured ones that exist."},
+    },
+    "yue2-vae": {
+        "defaults": {"parameters_source": "model/config.json"},
+        "memory": (16, 24, "Companion decoder of the YuE2 generator, and not a model: 0.51 GB of FP32 weights with no text tower. MEASURED inside the generator's own runs — it is loaded beside the generator, so it is part of every peak recorded there (10.79 GB at 600 tokens, 11.81 GB through the runner bridge, 11.93 GB at 3000 tokens)."),
+        "qualification": {"status": "qualified", "reason": "Required companion of yue2-3b-mlx: the port loads it as `--vae` and the generator pack ships without it. Captured at the revision the three measured runs used, and its single weight file is verified against the `weights_manifest.json` the repository publishes."},
     },
     "lance-3b-video-bf16": {
         "defaults": {"mode": "text-to-video", "aspect_ratio": "1:1", "resolution": "256p",

@@ -1,0 +1,8 @@
+{
+  "id": "kh-song-8bit",
+  "style": "Warm acoustic ballad, soft piano, brushed drums, intimate male vocal, 70 BPM",
+  "lyrics": "[Verse]\nMorning light across the harbour wall\nEvery boat is sleeping through the squall\nThe gulls are turning circles out at sea\nAnd every quiet street belongs to me\n\n[Chorus]\nStay with me until the water stills\nStay with me across the quiet hills\nWe will let the tide decide the way\nStay with me until the break of day\n\n[Verse]\nSalt along the railings on the pier\nSomeone left a lantern burning here\nThe fishing boats are rocking in the bay\nAnd none of them are going out today\n\n[Chorus]\nStay with me until the water stills\nStay with me across the quiet hills\nWe will let the tide decide the way\nStay with me until the break of day\n\n[Outro]\nUntil the water stills\n",
+  "seed": 2026,
+  "cot": "off",
+  "semantic_sampling": { "max_tokens": 3000, "min_tokens": 1500, "top_k": 80 }
+}

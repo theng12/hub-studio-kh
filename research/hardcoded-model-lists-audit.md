@@ -294,6 +294,14 @@ These are listed so the next reader does not "fix" them. Each states why it is c
 
 ## Annex 2 — stale hardcoded counts in documents (docs are read; these are wrong)
 
+> **Correction, 2026-09-27.** Every count in this annex was read when the catalog held **24**
+> packages; it holds **30** now (123.8 GB), and all five count rows below were fixed in 0.6.85 and
+> 0.6.86 — the numbers are recomputed from `model-manifests/*.json` by
+> `tests/test_document_inventory.py`, so they cannot drift silently again. Two rows remain open and
+> are *not* count problems: `packaging/kit-readmes/README.md`'s pinned version and the stale
+> `qualification/focused-release-manifest.json` sample. The lesson this annex was written for stands
+> and had a third instance the same week: a count in prose is a copy, and a copy needs a check.
+
 | Location | Literal | Measured |
 |---|---|---|
 | `model-manifests/README.md:3` | `This catalog contains 37 bounded model packages. The files describe` (and `:4` `89,369,563,824 expected bytes`) | **24** packages (verified `ls model-manifests/*.json \| wc -l`) |
@@ -369,7 +377,8 @@ Work top to bottom. The right-hand column is the failure you get if you skip the
 | Register it in the allowlist | `components/model_packages.py:56` | `PackageError` → **503 on `/api/hub/model-packages` → every picker blank on every Mac** (B1, A13) |
 | Register it in the worker map | `components/hub/standalone.py:82` `_worker_for_engine` | same 503 (the drift test at `tests/test_model_manifest_catalog.py:65` catches this one) |
 | **Register it in the modality map** | `components/hub/standalone.py:189` `expected_modality` | **every job for that engine is refused** as `MODEL_MODALITY_MISMATCH` — "model is not available for this job modality" — blaming the user (A11). **The drift test does not cover this dict.** |
-| Give it a runtime contract | `research/st01-runtime-contracts.json` + `docs/runtime-contract.md:27` | `tests/test_st01_runtime_contracts.py:74` is red; the doc stays wrong |
+| Give it a runtime contract | `research/st01-runtime-contracts.json` + `docs/runtime-contract.md:27` | `tests/test_st01_runtime_contracts.py:74` is red; the doc stays wrong. **Two ways in, both named by that test:** an entry under `runtimes`, or — when the engine runs in its own pinned interpreter as `video-lance` and `music-yue2` do — an entry under `engines_outside_this_contract` with a `reason` and the `record` that holds its runtime story. A bare omission is not an option; the test says which two files to edit. |
+| **If it is a second engine in a lane that already ships one** | a pinned runtime tree of its own (`packaging/<engine>-runtime/build.sh`), staged and pinned by content in `packaging/stage_voice.py`, plus a bridge the worker spawns | **the engine shares the lane's interpreter and silently cannot import**: `mlx-Yue` pins `mlx==0.32.2` while the Voice/Music tree carries `mlx==0.31.2`, and two MLX majors cannot coexist. That is why `music-yue2` is a runtime, not a catalog row — and why the Hub must learn the engine in `_ENGINE_ROUTE` (which since 0.6.61 (`f20fd1a`) carries the worker **and** the modality in one table, so `expected_modality` no longer has an entry of its own to forget), in the `ENGINES` allowlist, and in the stager. |
 | Teach the app to decode its control shape | `native/StudioAPI.swift:5008` / `:5019` (the `imageConfiguration` / `musicConfiguration` validators) | `supported = false` → **silently filtered out of the picker** (B24) — or, for a transcription engine, `native/StudioAPI.swift:4348` (B22) |
 
 ### 3. Every new **worker / studio / modality**

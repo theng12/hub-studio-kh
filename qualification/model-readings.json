@@ -122,6 +122,48 @@
       "evidence": "M",
       "source": "the standalone qualification record and the worker's own job receipt for job 627c7fbc3aef49e8a06c26fab7be0144",
       "source_path": "qualification/ltx-video-worker-results-20260926-210721/measurement.json"
+    },
+    {
+      "package_id": "lance-3b-video-bf16",
+      "model": "Lance 3B Video bf16 (MLX)",
+      "quantization": "bf16 MLX (the pack publishes no quantized variant)",
+      "engine": "video-lance",
+      "machine": "32 GiB · Apple M2 Max",
+      "tier_gb": 16,
+      "outcome": "one run of each memory mode through the Video worker's own job path — relay at 256×256 × 13 frames, parallel at 256×256 × 25 frames; below ~18 GiB the runner resolves to relay, so 8.11 GB is what a 16 GB Mac sees",
+      "metrics": {
+        "peak_footprint_gb_relay": 8.11,
+        "peak_process_rss_gb_relay": 6.89,
+        "generation_seconds_relay": 184.9,
+        "load_seconds": 9.4,
+        "peak_footprint_gb_default": 20.0,
+        "generation_seconds_default": 329.5,
+        "resolution": "256x256",
+        "frames": "13 relay / 25 parallel"
+      },
+      "evidence": "M",
+      "source": "the worker's own job receipt for job 0f259095f44a4c03958e64119f435b47 and the Lance section of qualification/README-video-hardware-test.md",
+      "source_path": "qualification/lance-video-worker-results-20260927-first/measurement.json"
+    },
+    {
+      "package_id": "yue2-3b-mlx",
+      "model": "YuE2 3B Music (8-bit AR + bf16 NAR)",
+      "quantization": "8-bit AR + bf16 NAR + bf16 VAE (MLX)",
+      "engine": "music-yue2",
+      "machine": "32 GiB · Apple M2 Max",
+      "tier_gb": 16,
+      "outcome": "three songs at 24 / 36 / 120 s of 48 kHz stereo, mode off, seed fixed; the 36 s one through this app's own runner bridge and its runtime pinned by content",
+      "metrics": {
+        "audio_seconds": "24.0 / 36.0 / 120.0",
+        "generation_seconds": "58.6 / 103.2 / 429.8",
+        "load_seconds": 6.8,
+        "peak_footprint_gb": "10.79 / 11.81 / 11.93",
+        "peak_rss_gb": 6.23,
+        "weights_on_disk_gb": 9.9
+      },
+      "evidence": "M",
+      "source": "three runs at port commit 9253ed133343406947bde7b67d43c7a63fb39d99 and runtime sha256 75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4, peaks by sampled footprint in the process doing the work",
+      "source_path": "qualification/yue2-music-results-20260927/bridge-run.json"
     }
   ]
 }
