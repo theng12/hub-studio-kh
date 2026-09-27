@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -36,6 +37,130 @@ from components.music.app.backend import catalog, generation, yue2  # noqa: E402
 
 def yue2_model():
     return catalog.require_model(catalog.YUE2_REPO)
+
+
+class SecondEngineIsReadableTests(unittest.TestCase):
+    """The worker must be able to *read* its second engine's package, not only run it.
+
+    The bug this pins: `MusicCache` verified every manifest against one global engine constant
+    (`catalog.ENGINE`, "music-mlx"). YuE2's manifest declares "music-yue2" — correctly, because it
+    runs in its own pinned interpreter — so constructing the cache raised, `preflight` reported
+    `manifest_unavailable`, and the catalogue route flattened that to `cache.state: "missing"`.
+    The app then told the owner to download a package that was installed, verified and eligible.
+    """
+
+    def test_every_model_declares_the_engine_its_manifest_carries(self):
+        root = Path(__file__).resolve().parents[1]
+        for model in catalog.CATALOG:
+            with self.subTest(repo=model.repo):
+                manifest = json.loads(
+                    (root / "model-manifests" / model.manifest_name).read_text())
+                self.assertEqual(manifest["engine"], model.manifest_engine,
+                                 f"{model.package_id}'s manifest engine is not the one its "
+                                 f"catalogue entry declares")
+                self.assertEqual(catalog.manifest_engine_for(model.repo), model.manifest_engine)
+
+    def test_the_yue2_package_is_readable_from_the_workers_own_cache(self):
+        model = yue2_model()
+        with tempfile.TemporaryDirectory() as library:
+            cache = generation.cache_module.MusicCache(library=library, repo=model.repo)
+            status = cache.status()
+        # Nothing is installed in an empty library, and the worker's own word for that is
+        # "missing" (it maps `not_installed`). What matters is that the manifest was *read*: an
+        # engine mismatch raised before any file was looked for, which is what this pins — the
+        # revision comes back, and the reason is about files rather than about the engine.
+        self.assertEqual(status["state"], "missing")
+        self.assertEqual(status["manifest_revision"], model.revision)
+        self.assertEqual(status["package_id"], "yue2-3b-mlx")
+        self.assertIn("no files in this library", status["reason"])
+        self.assertNotIn("engine", status["reason"].lower())
+
+    def test_preflight_answers_for_the_second_engine_rather_than_refusing_it(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            library = root / "library"
+            library.mkdir()
+            manager = generation.GenerationManager(root / "data", library_dir=str(library))
+            report = manager.preflight(catalog.YUE2_REPO)
+        self.assertNotIn(report["state"], ("manifest_unavailable", "runtime_unsupported"),
+                         f"the worker refused its own second engine: {report}")
+        # The worker's own word for an empty library, and the reason is about the files rather
+        # than about the engine — which is the whole difference this test exists to pin.
+        self.assertEqual(report["state"], "missing")
+        self.assertIn("no files in this library", report["reason"])
+
+    def test_the_companion_check_needs_the_catalog_that_names_the_companion(self):
+        """A companion is named by *another* manifest; a check without the catalog cannot see it.
+
+        The second half of the same defect: `yue2-3b-mlx` requires `yue2-vae`, and the worker
+        asked `model_packages.preflight` without the catalog map — so a package that was installed,
+        hashed and verified answered `dependency_missing` for ever.
+
+        Both packages are installed here for real, from the shipped manifests with one-byte stand-in
+        files, because the rule being pinned is the *preflight* one and a stubbed receipt would skip
+        the code under test.
+        """
+        import hashlib
+        from components import model_packages
+
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            library, manifests = work / "library", work / "model-manifests"
+            library.mkdir()
+            manifests.mkdir()
+            stand_in = b"x"
+            digest = hashlib.sha256(stand_in).hexdigest()
+            for name in ("yue2-3b-mlx", "yue2-vae"):
+                manifest = json.loads((root / "model-manifests" / f"{name}.json").read_text())
+                for entry in manifest["files"]:
+                    entry["size"] = len(stand_in)
+                    entry["sha256"] = digest
+                    entry.pop("urls", None)
+                (manifests / f"{name}.json").write_text(json.dumps(manifest))
+                installed = library / manifest["package_id"] / manifest["revision"]
+                for entry in manifest["files"]:
+                    target = installed / entry["path"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(stand_in)
+            catalog_map = model_packages.load_catalog(manifests)
+            model_manifest = json.loads((manifests / "yue2-3b-mlx.json").read_text())
+            # The companion first: a package may only be adopted once what it requires is.
+            for name in ("yue2-vae", "yue2-3b-mlx"):
+                verified = model_packages.verify_installed(
+                    json.loads((manifests / f"{name}.json").read_text()), library,
+                    catalog=catalog_map)
+                self.assertEqual(verified["state"], "files_verified", verified)
+
+            without = model_packages.preflight(model_manifest, library)
+            with_catalog = model_packages.preflight(model_manifest, library, catalog=catalog_map)
+
+        self.assertEqual(without["state"], "dependency_missing")
+        self.assertEqual(without.get("dependency"), "yue2-vae")
+        self.assertEqual(with_catalog["state"], "files_verified")
+
+    def test_the_worker_hands_its_package_check_the_companion_catalog(self):
+        from components import model_packages
+
+        seen = {}
+        real = model_packages.preflight
+
+        def spy(manifest, library, **kwargs):
+            seen["catalog"] = kwargs.get("catalog")
+            return real(manifest, library, **kwargs)
+
+        with tempfile.TemporaryDirectory() as library, \
+                mock.patch.object(generation.cache_module.model_packages, "preflight", spy):
+            generation.cache_module.MusicCache(library=library, repo=catalog.YUE2_REPO).status()
+        self.assertTrue(seen.get("catalog"),
+                        "the worker checked a package without the catalog that names its companion")
+
+    def test_the_route_publishes_the_package_state_it_measured(self):
+        """`cache.state` is the package's state, so a manifest problem cannot read as "missing"."""
+        source = (Path(__file__).resolve().parents[1]
+                  / "components" / "music" / "app" / "backend" / "main.py").read_text()
+        self.assertIn('"cache": {"state": files["state"]', source)
+        self.assertNotIn('"state": "cached" if cached else "missing"', source)
 
 
 class TierAndCatalogTests(unittest.TestCase):

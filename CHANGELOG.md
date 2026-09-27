@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.89 — 2026-09-28 · The worker could not read its own second engine
+
+**The owner installed YuE2 and the app still said "Not installed" — and he asked twice, because the
+files were plainly there.** They were: the Hub answered `files_verified` / `eligible` for both
+packages, while the picker read `missing` from the *worker's* own catalogue. Three defects were
+stacked, each hiding the next.
+
+**1. `MusicCache` verified every manifest against one global engine constant.** `catalog.ENGINE` is
+`music-mlx`, ACE-Step's token. YuE2's manifest correctly declares `music-yue2` — it runs in its own
+pinned interpreter — so constructing the cache raised *"Music manifest engine does not match the
+worker"* before a single file was looked for. Every model now carries its own
+`ModelEntry.manifest_engine`, read through `manifest_engine_for`, so the check is the model's own.
+`runtime` (the executor inside this worker: `ace-step`, `stable-audio`, `music-yue2`) stays a
+separate fact from the manifest's routing token, which is what conflating them cost.
+
+**2. The companion check ran without the catalogue that names companions.** `yue2-3b-mlx` requires
+`yue2-vae`; `preflight` takes a `catalog` map to resolve that and the worker passed none, so an
+installed, hashed, verified package answered `dependency_missing` for ever.
+`model_packages.load_catalog(directory)` is the worker-side reader of a manifest directory (the Hub
+keeps its own, which degrades per manifest because it feeds a route), and `MusicCache` now passes it.
+
+**3. The route flattened every failure to `"missing"`.** `cache.state` was
+`"cached" if cached else "missing"`, so `manifest_unavailable`, `runtime_unsupported` and
+`engine_root_missing` all reached the operator as *"download it"*. It publishes the state the worker
+measured, with its reason — a refusal that names its cause and is then renamed by the caller is the
+defect, not the refusal.
+
+**And `preflight` refused the engine it ships.** It returned `runtime_unsupported` for any runtime
+that was not ACE-Step's or Stable Audio's, so YuE2 could never report as installed even once its
+manifest was readable. Both engines that bring their own runtime now pass straight through to the
+package answer, which is the only question being asked of them.
+
+**Verified against the real library, not only in tests:** `preflight("vanch007/mlx-Yue2-3B")` now
+returns `cached` with its checkpoint root on this Mac. New tests pin the engine token against every
+shipped manifest, the companion rule (both packages installed for real from the shipped manifests,
+with one-byte stand-ins, because the rule under test is `preflight`'s and a stubbed receipt would
+skip it), and that the worker hands its package check the catalogue. One neighbouring test that had
+pinned the flattened `"missing"` now pins the named cause it was hiding.
+
 ## 0.6.88 — 2026-09-28 · The video verdicts, and six things the app could not show you
 
 **Two owner verdicts recorded, and one of them cancels a run.** Lance is **not pursued** — the owner

@@ -74,8 +74,12 @@ class MusicCache:
         model_packages.validate_manifest(self.manifest)
         if self.manifest["package_id"] != catalog.package_id_for(self.repo):
             raise ValueError("Music manifest package identity does not match the worker")
-        if self.manifest["engine"] != catalog.ENGINE:
-            raise ValueError("Music manifest engine does not match the worker")
+        expected_engine = catalog.manifest_engine_for(self.repo)
+        if self.manifest["engine"] != expected_engine:
+            raise ValueError(
+                f"Music manifest engine does not match the model: {self.manifest_path} declares "
+                f"{self.manifest['engine']!r}, and {self.repo} declares {expected_engine!r} "
+                f"(catalog.ModelEntry.manifest_engine)")
         # Where this engine's files live inside the imported package folder.
         self.root_relative = catalog.package_root_for(self.repo)
 
@@ -94,9 +98,15 @@ class MusicCache:
         return sum(int(entry["size"]) for entry in self.entries())
 
     def _package_status(self, *, deep: bool) -> dict:
+        # With the catalog, because a package's companions are named by *other* manifests: without
+        # it a companion check cannot see them and answers `dependency_missing` for a package whose
+        # companion is installed and verified. Both packages here declare companions on this
+        # engine's side (`yue2-3b-mlx` requires `yue2-vae`).
+        catalog_map = model_packages.load_catalog(self.manifest_path.parent)
         if deep:
-            return model_packages.verify_installed(self.manifest, self.library)
-        return model_packages.preflight(self.manifest, self.library)
+            return model_packages.verify_installed(self.manifest, self.library,
+                                                    catalog=catalog_map)
+        return model_packages.preflight(self.manifest, self.library, catalog=catalog_map)
 
     def status(self, *, deep: bool = False) -> dict:
         report = self._package_status(deep=deep)

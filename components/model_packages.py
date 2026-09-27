@@ -1083,6 +1083,36 @@ def _receipt_failure(manifest, record, root, error):
         f'Verify Files to rehash the package and rewrite its receipt.')}
 
 
+def load_catalog(directory) -> dict:
+    """Every manifest in a directory, keyed by package id.
+
+    A package's **companions are named by other manifests**, so a check that cannot see them
+    reports `dependency_missing` for a package whose companion is installed, verified and sitting
+    beside it. The Hub builds its own catalog map for its routes (it must degrade per manifest
+    rather than raise); this is the same walk for the workers, which read the `model-manifests`
+    directory out of their own bundle.
+
+    A manifest that cannot be parsed is skipped rather than raising: one bad file must not stop a
+    worker from reading the rest, and the package it describes reports its own state.
+    """
+    from functools import lru_cache
+
+    @lru_cache(maxsize=4)
+    def _read(root: str) -> dict:
+        catalog: dict = {}
+        for path in sorted(Path(root).glob('*.json')):
+            try:
+                manifest = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            package_id = manifest.get('package_id') if isinstance(manifest, dict) else None
+            if isinstance(package_id, str) and package_id:
+                catalog[package_id] = manifest
+        return catalog
+
+    return _read(str(Path(directory).resolve()))
+
+
 def preflight(manifest, library, *, catalog=None, _seen=None):
     """Cheap readability/change check against a previous full verification receipt.
 

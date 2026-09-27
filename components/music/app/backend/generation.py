@@ -1232,9 +1232,12 @@ class GenerationManager:
             status = cache.status()
         except (OSError, ValueError, KeyError) as exc:
             return {"state": "manifest_unavailable", "reason": str(exc)}
-        if model.runtime == catalog.RUNTIME_STABLE_AUDIO:
-            # Stable Audio 3 ships its own vendored MLX runtime; it has no ACE
-            # engine root to verify.
+        if model.runtime in (catalog.RUNTIME_STABLE_AUDIO, catalog.RUNTIME_YUE2):
+            # Both of these ship their own runtime and have no ACE engine root to verify: Stable
+            # Audio 3 vendors its MLX implementation, and YuE2 runs in its own pinned interpreter
+            # (`packaging/yue2-runtime`, staged as `runtimes/music-yue2`) because its port pins a
+            # different MLX. The package's files are the whole question here, and a runtime that is
+            # genuinely absent is named when a job resolves it.
             return status
         if model.runtime != catalog.RUNTIME_ACE_STEP:
             return {"state": "runtime_unsupported",

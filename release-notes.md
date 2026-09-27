@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.89 — 2026-09-28
+
+### YuE2 said "not installed" when it was installed
+
+You asked twice, and you were right both times. The files were there and verified; the app was being
+told "missing" by the music worker, which had three problems at once — it checked YuE2's package
+against ACE-Step's engine name, it looked for YuE2's decoder without the list that names it, and it
+described every kind of failure with the same word, "missing". All three are fixed, and the picker
+shows YuE2 as installed now. Nothing about the model changed: only what the app was able to say
+about it.
+
 ## 0.6.88 — 2026-09-28
 
 ### The video decisions, written down

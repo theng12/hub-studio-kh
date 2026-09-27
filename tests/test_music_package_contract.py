@@ -266,7 +266,13 @@ class MusicPackageContractTests(unittest.TestCase):
             self.assertIn("a-new-engine", str(caught.exception))
             self.assertIn(model.repo, str(caught.exception))
             row = published_rows(catalog.CATALOG)[model.repo]
-        self.assertEqual(row["cache"]["state"], "missing")
+        # The published state is the one the worker measured. It used to be flattened to
+        # "missing" for every failure, which told an operator to download a package when the real
+        # answer was "this worker has no executor for that engine" — the refusal named its own
+        # cause and the row threw the name away.
+        self.assertEqual(row["cache"]["state"], "runtime_unsupported")
+        self.assertIn("a-new-engine", row["cache"]["reason"])
+        self.assertIn("generation.py", row["cache"]["reason"])
         self.assertIn("a-new-engine", row["readiness"]["reason"])
 
     def test_each_model_verifies_its_own_package_manifest(self):

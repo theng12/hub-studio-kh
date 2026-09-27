@@ -358,6 +358,16 @@ class ModelEntry:
     inference_steps: int
     guidance_scale: float
     # ── Optional prose and checkpoint detail; an honest empty means "none" ──
+    #
+    # ── The token this model's **manifest** declares as `engine` ──
+    #
+    # A different fact from `runtime`, and conflating the two broke the second engine: `runtime`
+    # names the executor inside this worker ("ace-step", "stable-audio"), while the manifest's
+    # `engine` is the Hub's routing vocabulary ("music-mlx", "music-yue2"). ACE-Step and Stable
+    # Audio share `music-mlx`; YuE2 runs in its own pinned interpreter and its manifest says so. A
+    # single global constant therefore verified every package against ACE-Step's engine, and
+    # YuE2's package — correctly installed, correctly hashed — was reported as unreadable.
+    manifest_engine: str = ENGINE
     recommended_hardware: str = ""
     best_for: str = ""
     checkpoints: tuple[Checkpoint, ...] = field(default_factory=tuple)
@@ -548,6 +558,7 @@ CATALOG: tuple[ModelEntry, ...] = (
         package_root="model",
         revision=YUE2_REVISION,
         runtime=RUNTIME_YUE2,
+        manifest_engine=RUNTIME_YUE2,
         # Every value here is one the three measured runs used: mode off, the port's standard
         # 32 ODE steps, its default guidance, and the 8-bit AR. 36 s is that run's length.
         defaults={"mode": "off", "duration_seconds": 36, "steps": 32, "guidance_scale": 1.0,
@@ -719,6 +730,15 @@ def require_model(identifier: str) -> ModelEntry:
 
 def manifest_name_for(repo: str) -> str:
     return require_model(repo).manifest_name
+
+
+def manifest_engine_for(repo: str) -> str:
+    """The `engine` token this model's manifest must declare.
+
+    Read from the model's own entry, never from one global constant: a lane with two engines has
+    two tokens, and the second one's absence from the first's manifest is the point of it.
+    """
+    return require_model(repo).manifest_engine
 
 
 def package_id_for(repo: str) -> str:

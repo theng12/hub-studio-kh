@@ -149,7 +149,13 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                 "min_total_memory_gb": model.min_unified_memory_gb,
                 "qualified_minimum_memory_gb": QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
                 "memory_warning": host.get("memory_warning"),
-                "cache": {"state": "cached" if cached else "missing",
+                # The package's own state, not a flattening of it. Every failure above already
+                # named itself — `manifest_unavailable`, `engine_root_missing`, `invalid` — and
+                # collapsing them all to "missing" told the operator to download a package that
+                # was installed, hashed and verified, whenever the real problem was a manifest
+                # the worker could not read.
+                "cache": {"state": files["state"],
+                          "reason": files.get("reason"),
                           "package_id": model.package_id,
                           "model_revision": revision,
                           "manifest_revision": files.get("manifest_revision"),
