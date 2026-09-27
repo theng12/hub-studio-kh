@@ -108,20 +108,20 @@
       "engine": "video-ltx",
       "machine": "32 GiB · Apple M2 Max",
       "tier_gb": 24,
-      "outcome": "one image-to-video generation, 704x448 at 97 frames/24 fps, with audio; run twice — standalone (298.5 s) and through the Video worker's own job path (304.0 s)",
+      "outcome": "image-to-video at the true-16:9 canvas the owner accepts — 1024×576, 49 frames at 24 fps, 2.04 s of output with audio, through the Video worker's own job path (job e9caa8c4ce2a4074a29d2349a99193ce)",
       "metrics": {
-        "generation_seconds_default": 304.0,
-        "peak_mlx_gb_default": 13.19,
-        "peak_footprint_gb_default": 16.38,
+        "peak_footprint_gb_default": 16.92,
+        "peak_mlx_gb_default": 10.05,
+        "peak_process_rss_gb": 9.25,
+        "generation_seconds_default": 258.0,
         "weights_on_disk_gb": 17.81,
-        "output_seconds": 4.04,
-        "resolution": "704x448",
-        "frames": 97,
+        "resolution": "1024x576",
+        "frames": 49,
         "audio": "yes (one audio track verified in the produced MP4)"
       },
       "evidence": "M",
-      "source": "the standalone qualification record and the worker's own job receipt for job 627c7fbc3aef49e8a06c26fab7be0144",
-      "source_path": "qualification/ltx-video-worker-results-20260926-210721/measurement.json"
+      "source": "the worker's own job receipt, footprint sampled ri_phys_footprint at 1 Hz in the process doing the work; the earlier 448p canvas measured 13.19 GB MLX / 15.71 GB footprint in 304.0 s",
+      "source_path": "qualification/ltx-video-worker-results-20260928-004554/measurement.json"
     },
     {
       "package_id": "lance-3b-video-bf16",

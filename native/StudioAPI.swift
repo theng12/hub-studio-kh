@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import AVFoundation
 import Foundation
@@ -1604,11 +1605,28 @@ struct NativeJob: Identifiable, Equatable {
     var sha256: String? = nil
     var imageSettings: NativeImageSettings? = nil
     var musicSettings: NativeMusicSettings? = nil
+    /// What this job was asked for, for the Studio or modality that publishes those controls.
+    /// Exactly one of them is set for a job this build submitted; all are nil for a job another
+    /// client filed, which is why the facts line is built from whatever is here and never assumes.
+    var videoSettings: NativeVideoSettings? = nil
+    var voiceSettings: NativeVoiceSettings? = nil
+    /// Where the artifact is on this Mac, when the worker that made it is on this Mac. The Hub
+    /// records the worker's own `output_path`; a nil here means the row cannot point Finder at a
+    /// file, and its Show in Folder action is disabled rather than opening an empty window.
+    var artifactPath: String? = nil
     /// Runtime facts the Hub recorded for this result, shown beside it so an operator can see
     /// what they actually got without opening the file.
     var durationSeconds: Double? = nil
     var requestedWidth: Int? = nil
     var requestedHeight: Int? = nil
+    /// The **finished clip's** own measured facts, which the Hub copies onto the item from the
+    /// worker's report. Kept separate from `requestedWidth`/`requestedHeight`, which are what was
+    /// asked for: a lane that resolves its own canvas (Video does) states these and not those.
+    var clipWidth: Int? = nil
+    var clipHeight: Int? = nil
+    var clipFrames: Int? = nil
+    var clipFrameRate: Double? = nil
+    var clipHasAudio: Bool? = nil
     /// How long the generation took, or has been running. Separate from `durationSeconds`, which
     /// is the length of the media produced.
     var generationSeconds: Double? = nil
@@ -1718,6 +1736,11 @@ struct NativeJob: Identifiable, Equatable {
     }
 
     /// "12.5 s · 1.4 MB · 1024×1024" — only the parts that are known.
+    ///
+    /// This is the **result** line: what came out. The canvas falls back from the clip's own
+    /// measured size to the size that was requested, because a lane that resolves its own canvas
+    /// (Video) states the first and not the second — a finished 1024×576 clip read as "2.0 s ·
+    /// 381 KB" with no dimensions at all until this fallback existed.
     var assetFacts: String {
         var parts: [String] = []
         if let durationSeconds, durationSeconds > 0 {
@@ -1729,11 +1752,81 @@ struct NativeJob: Identifiable, Equatable {
         if let bytes, bytes > 0 {
             parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
         }
-        if let requestedWidth, let requestedHeight {
-            parts.append("\(requestedWidth)×\(requestedHeight)")
+        if let width = clipWidth ?? requestedWidth, let height = clipHeight ?? requestedHeight {
+            parts.append("\(width)×\(height)")
+        }
+        // Frames and frame rate together, and only where a frame rate exists: the Hub copies a
+        // raw `frames` count for Music and Voice items too, where it is the sample count — a song
+        // read "441000 frames" beside its own length, which is a number about nothing.
+        if let clipFrameRate, clipFrameRate > 0 {
+            if let clipFrames, clipFrames > 0 { parts.append("\(clipFrames) frames") }
+            parts.append("\(Self.trimmed(clipFrameRate)) fps")
+        }
+        if let clipHasAudio { parts.append(clipHasAudio ? "with audio" : "silent") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// What this job was **asked for**: the controls that explain a result, as the Hub echoed them
+    /// back. The counterpart to `assetFacts`, which says what came out.
+    ///
+    /// One function, read by the Studio pages and the Jobs tab alike, so the same job cannot be
+    /// described two ways. The canvas is deliberately left to `assetFacts` for Image — it would
+    /// otherwise print twice in one row — and shown here for Video, where "576p · 16:9" is the
+    /// operator's own choice and the pixel canvas is the lane's.
+    func requestFacts(for function: StudioFunction) -> String {
+        var parts: [String] = []
+        switch function {
+        case .image:
+            if let settings = imageSettings {
+                if let steps = settings.steps { parts.append("\(steps) steps") }
+                if let guidance = settings.guidance { parts.append("guidance \(Self.trimmed(guidance))") }
+                if let seed = settings.seed, seed >= 0 { parts.append("seed \(seed)") }
+            }
+        case .music:
+            if let settings = musicSettings {
+                parts.append(Self.clock(settings.durationSeconds))
+                if let steps = settings.steps { parts.append("\(steps) steps") }
+                if let guidance = settings.guidanceScale {
+                    parts.append("guidance \(Self.trimmed(guidance))")
+                }
+                if let shift = settings.shift { parts.append("shift \(Self.trimmed(shift))") }
+                if let seed = settings.seed, seed >= 0 { parts.append("seed \(seed)") }
+                if settings.instrumental == true { parts.append("instrumental") }
+            }
+        case .video:
+            if let settings = videoSettings {
+                if let resolution = settings.resolution { parts.append(resolution) }
+                if let aspect = settings.aspectRatio { parts.append(aspect) }
+                if let seconds = settings.durationSeconds { parts.append(Self.clock(seconds)) }
+                if let audio = settings.audio { parts.append(audio ? "audio on" : "audio off") }
+                if let mode = settings.mode, !mode.isEmpty { parts.append(mode) }
+                if let seed = settings.seed, seed >= 0 { parts.append("seed \(seed)") }
+            }
+        case .audio:
+            // The script's own length, which is the number a Voice budget is spent in — and which
+            // the Audio rows never showed, so a 1,200-character script and a two-word one looked
+            // the same in history.
+            if !text.isEmpty { parts.append("\(text.count) characters") }
+            if let speed = voiceSettings?.speed { parts.append("speed \(Self.trimmed(speed))×") }
+        case .chat, .transcription:
+            break
         }
         return parts.joined(separator: " · ")
     }
+
+    /// Whether Finder can be pointed at this job's file: the worker wrote it on this Mac.
+    var canRevealArtifact: Bool {
+        guard let artifactPath, !artifactPath.isEmpty else { return false }
+        return FileManager.default.fileExists(atPath: artifactPath)
+    }
+
+    /// "1.5", "1", "0.35" — a control's value with no trailing zeros and no invented precision.
+    static func trimmed(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        if value == value.rounded() { return String(Int(value)) }
+        return String(format: "%g", value)
+    }
+
 }
 
 struct NativeDownload: Identifiable, Equatable {
@@ -4039,6 +4132,20 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// A file inside the app's own Playback folder, created on demand.
+    ///
+    /// A view that hands an artifact to AVFoundation needs a URL rather than bytes, and the folder
+    /// belongs to the app — never `/tmp`, and never a path a view invents for itself.
+    func playbackFile(named name: String) throws -> URL {
+        guard let directory = dataDirectory else {
+            throw NativeAPIError.message("The app data directory is unavailable.")
+        }
+        let folder = directory.appendingPathComponent("Playback", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        return folder.appendingPathComponent(name)
+    }
+
     /// Hand a finished music clip to the shared preview player.
     func playMusic(_ job: NativeJob, with player: PreviewPlayer) async throws {
         let data = try await musicData(for: job)
@@ -4046,6 +4153,24 @@ final class NativeWorkspaceStore: ObservableObject {
             throw NativeAPIError.message("The app data directory is unavailable.")
         }
         try player.play(data, extension: Self.audioExtension(of: data), in: directory)
+    }
+
+    /// Show a finished job's file where it actually is.
+    ///
+    /// The operator's question was *"where is it?"* — the app could play, save and preview a
+    /// result but never point at the file, so the only way to find a generated clip was to know
+    /// the worker's own output directory. The Hub records the worker's `output_path` on the item
+    /// and this reveals exactly that, selected in its folder.
+    ///
+    /// **A file that is not here is not revealed.** The path is checked first, because a job whose
+    /// worker sits on another Mac has no local file and Finder would open on nothing. The row's
+    /// button is disabled in that case, and this returns false so a caller can say why.
+    @discardableResult
+    func revealArtifact(_ job: NativeJob) -> Bool {
+        guard let path = job.artifactPath, !path.isEmpty,
+              FileManager.default.fileExists(atPath: path) else { return false }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        return true
     }
 
     /// Read the saved voices from this Mac's Voice worker.
@@ -7040,8 +7165,13 @@ final class NativeWorkspaceStore: ObservableObject {
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,
+            videoSettings: item?.params?.videoSettings,
+            voiceSettings: item?.params?.voiceSettings,
+            artifactPath: item?.artifactPath,
             durationSeconds: item?.audioDurationS ?? item?.durationSeconds,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
+            clipWidth: item?.width, clipHeight: item?.height, clipFrames: item?.frames,
+            clipFrameRate: item?.frameRate, clipHasAudio: item?.hasAudio,
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
             completionTokens: item?.usage?.completionTokens,
             statedGenerationSeconds: item?.generationS,
@@ -8007,6 +8137,20 @@ private struct HubJobItem: Decodable {
     let bytes: Int64?
     let sha256: String?
     let params: HubJobParams?
+    /// Where the worker wrote the artifact **on its own disk**, which the Hub records when it
+    /// adopts a finished job (`artifact_path`). This is what "Show in Folder" reveals, and it is
+    /// the only field that answers the operator's question — *where is the actual file?* — without
+    /// fetching it. Nil is honest for a job whose worker sits on another Mac: that file is not on
+    /// this one, and the row says so rather than opening Finder on nothing.
+    let artifactPath: String?
+    /// The finished clip's own measured facts, copied onto the item by the Hub from the worker's
+    /// report, so a 1024×576 video says so without the app opening the MP4. Image and Video both
+    /// carry `width`/`height`; `frames`, `frame_rate` and `has_audio` are Video's.
+    let width: Int?
+    let height: Int?
+    let frames: Int?
+    let frameRate: Double?
+    let hasAudio: Bool?
     /// How long the produced audio runs. The Hub records it when it adopts a finished voice
     /// job, and the app showed none of it - a generated clip had no stated length.
     let audioDurationS: Double?
@@ -8047,6 +8191,17 @@ private struct HubJobParams: Decodable {
     let instrumental: Bool?
     let lyrics: String?
     let vocalLanguage: String?
+    /// Video's own controls: the canvas the operator picked and the switch they set. The lane
+    /// resolves `resolution` + `aspect_ratio` into a pixel canvas itself, so these are shown as
+    /// asked rather than converted here into numbers the lane never published.
+    let aspectRatio: String?
+    let resolution: String?
+    let audio: Bool?
+    let mode: String?
+    /// Voice's own controls. `speed` is the pace the operator chose, which the engine's own
+    /// default equals 1.0; the row shows it because a clip generated at 1.5× is a different
+    /// result from one at the model's pace.
+    let speed: Double?
     /// A finished job's own controls, exactly as the Hub echoed them. A control the model did not
     /// publish is absent here too, so the row shows what was really asked for.
     var imageSettings: NativeImageSettings? {
@@ -8061,6 +8216,32 @@ private struct HubJobParams: Decodable {
                                    instrumental: instrumental, lyrics: lyrics,
                                    vocalLanguage: vocalLanguage)
     }
+    var videoSettings: NativeVideoSettings? {
+        guard resolution != nil || aspectRatio != nil || durationSeconds != nil else { return nil }
+        return NativeVideoSettings(aspectRatio: aspectRatio, resolution: resolution,
+                                   durationSeconds: durationSeconds, audio: audio, mode: mode,
+                                   seed: seed)
+    }
+    var voiceSettings: NativeVoiceSettings? {
+        guard speed != nil else { return nil }
+        return NativeVoiceSettings(speed: speed)
+    }
+}
+
+/// What a Video job was asked for. Kept apart from `NativeVideoConfiguration`, which is what the
+/// **lane publishes** for the form: this is what one job actually sent.
+struct NativeVideoSettings: Equatable {
+    var aspectRatio: String?
+    var resolution: String?
+    var durationSeconds: Double?
+    var audio: Bool?
+    var mode: String?
+    var seed: Int64?
+}
+
+/// What a Voice job was asked for, beyond the model and the text.
+struct NativeVoiceSettings: Equatable {
+    var speed: Double?
 }
 private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
 private struct HubCancelResponse: Decodable { let ok: Bool }

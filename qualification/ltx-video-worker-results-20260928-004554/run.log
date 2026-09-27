@@ -1,0 +1,69 @@
+Studio Hub — LTX-2.3 video measurement through the Video worker
+==============================================================
+
+This Mac: Apple M2 Max (Mac14,13), 32 GB unified memory, macOS 27.0
+swap now: total = 2048.00M  used = 987.94M  free = 1060.06M  (encrypted)
+
+runtime:  /Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3
+          3.11.16 mlx 0.32.2
+hub:      /Applications/Studio Hub.app/Contents/Resources
+model:    ltx-2-3-22b-ram-12gb-mlx (LTX-2.3 22B RAM-12GB, mixed 2-8 bit) in /build/StudioHubModels
+tier:     24 GB published minimum, 32 GB recommended
+
+door:     image-to-video (/build/Developer/studio-hub-kh/qualification/scene.png)
+
+starting. this can take a long time; the log is kept either way.
+
+accepted e9caa8c4ce2a4074a29d2349a99193ce (running)
+  running preparing 2%
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] done in 3.4s
+[Encoding prompt] ...
+[Encoding prompt] done in 12.1s
+[Loading transformer (transformer-distilled.safetensors)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+  Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
+[Loading transformer (transformer-distilled.safetensors)] done in 3.4s
+[estimate] denoising: 8 steps x 1 passes over 1008 video + 51 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/8 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 18 s remaining (11.2 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/8 [00:11<?, ?it/s]Denoising:  12%|█▎        | 1/8 [00:11<01:18, 11.17s/it]                                                        [estimate] denoising: ~1 min 5 s remaining (10.8 s/forward) (refined)
+Denoising:  12%|█▎        | 1/8 [00:21<01:18, 11.17s/it]Denoising:  25%|██▌       | 2/8 [00:21<01:05, 10.95s/it]Denoising:  38%|███▊      | 3/8 [00:32<00:54, 10.86s/it]Denoising:  50%|█████     | 4/8 [00:43<00:43, 10.82s/it]Denoising:  62%|██████▎   | 5/8 [00:54<00:32, 10.77s/it]Denoising:  75%|███████▌  | 6/8 [01:05<00:21, 10.86s/it]Denoising:  88%|████████▊ | 7/8 [01:16<00:10, 10.86s/it]Denoising: 100%|██████████| 8/8 [01:26<00:00, 10.83s/it]Denoising: 100%|██████████| 8/8 [01:26<00:00, 10.85s/it]
+[estimate] denoising: 3 steps x 1 passes over 4032 video + 51 audio tokens = 3 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/3 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 28 s remaining (44.0 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/3 [00:43<?, ?it/s]Denoising:  33%|███▎      | 1/3 [00:43<01:27, 43.95s/it]                                                        [estimate] denoising: ~42 s remaining (41.7 s/forward) (refined)
+Denoising:  33%|███▎      | 1/3 [01:25<01:27, 43.95s/it]Denoising:  67%|██████▋   | 2/3 [01:25<00:42, 42.66s/it]Denoising: 100%|██████████| 3/3 [02:07<00:00, 42.11s/it]Denoising: 100%|██████████| 3/3 [02:07<00:00, 42.38s/it]
+[Loading decoders (VAE + audio + vocoder)] ...
+[Loading decoders (VAE + audio + vocoder)] done in 0.1s
+[Decoding video + audio + muxing] ...
+[vae-decode tiling] frames=40/8 px=768/64 est. 10.7 GB budget=16.0 GB
+[vae-decode tiling] peak Metal memory 9.36 GB
+[Decoding video + audio + muxing] done in 19.7s
+  done generating 100%
+{
+  "status": "ok",
+  "job": "e9caa8c4ce2a4074a29d2349a99193ce",
+  "wall_seconds": 257.9852569103241,
+  "peak_footprint_bytes": 16919438528,
+  "peak_mlx_bytes": 10046030772,
+  "artifact": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
+  "results": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554"
+}
+
+----- what the lane recorded -----
+status:            ok
+job:               e9caa8c4ce2a4074a29d2349a99193ce (done)
+wall seconds:      257.9852569103241
+peak MLX bytes:    10046030772
+peak footprint:    16919438528
+resolution:        1024x576 x 49 frames
+artifact:          /build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4
+  duration:        2.0416666666666665 s
+  tracks:          1 video, 1 audio
+
+Results folder: /build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554
+Send that folder back (or just its measurement.json) and nothing else is needed.
+Nothing was installed, moved or deleted.
+
+EXIT=0

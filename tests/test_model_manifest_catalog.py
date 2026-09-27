@@ -310,7 +310,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Refreshed 2026-09-27 (0.6.83) with the true-16:9 measurement: a third run at
             # 1024x576, 49 frames, 351.6 s, 9.36 GB peak MLX Metal, recorded in the manifest's
             # `memory_evidence` and `reason`.
-            "ltx-2-3-22b-ram-12gb-mlx": "af06641190e9e9512772a470ab7c671a440d421fbed5a7f027164f01a046717e",
+            "ltx-2-3-22b-ram-12gb-mlx": "6b5b1fd18209117eb4739a15c1e7f50850d9d8ccc500e83c299d23359016b9a1",
             # A companion: 13 files / 8,068,018,787 bytes, the text encoder every LTX prompt
             # loads. It has no runtime of its own and no picker row (the Hub marks it a
             # dependency), which is why its floor mirrors the model it serves.

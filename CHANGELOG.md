@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.6.88 — 2026-09-28 · The video verdicts, and six things the app could not show you
+
+**Two owner verdicts recorded, and one of them cancels a run.** Lance is **not pursued** — the owner
+tried its output and the quality does not hold up — so the 16 GB Lance run the hardware README had
+been asking him for is cancelled. **Nothing is removed:** the runner stays pinned and staged, both
+packages stay in the catalog, and its measured rows stay published, because a model kept as a known
+spare is a different thing from a model being recommended. LTX-2.3 at **1024×576 true 16:9 with
+audio** is accepted as *"close to acceptable"*, so that is the canvas the fleet plans around.
+
+**The accepted canvas now carries the statistic that decides its tier.** Measured through the shipped
+worker's own job path — job `e9caa8c4…`, image-to-video, 49 frames at 24 fps, 2.04 s of output with
+an audio track, 258.0 s — **16.92 GB peak process footprint** (`ri_phys_footprint`, sampled at 1 Hz)
+against **10.05 GB** on the MLX Metal allocator. The allocator alone reads as though a 16 GB Mac fits;
+the footprint says it does not, which is why the published tier stays **24 GB minimum / 32 GB
+recommended** and 16 GB stays refused by name. The run is in the LTX manifest's `memory_evidence`, in
+`qualification/model-readings.json` (so the generated record shows it), and in the receipt
+`qualification/ltx-video-worker-results-20260928-004554/`; the manifest's frozen digest moved with it,
+as it must.
+
+**An environment lesson, written where the next person will look.** The first attempt at this canvas
+died at 15 % after 13 s with `[METAL] Command buffer execution failed: Impacting Interactivity` —
+macOS's GPU watchdog firing on a command buffer that held the GPU while the display wanted it, not a
+defect in the lane — and the identical command completed on retry. `qualification/
+README-video-hardware-test.md` records it beside the numbers, and the "what to expect by Mac" table
+now says the 16 GB refusal is confirmed by measurement rather than merely by policy.
+
+### The app surface: six things reported after a real session with it
+
+**The buttons stopped moving.** Every row action was sized by its own label, so `Save…` was narrow
+and `Check Original Result` was wide, and the column shifted as the list scrolled. All of them now
+share one width and every row reserves one fixed action column (`RowActions`, `rowAction()`), so the
+same job reads the same on its Studio page and on the Jobs tab. Two labels were shortened to fit the
+shared width: `Check Original Result` is `Check Result`, because a control that cannot fit its own
+column is a control that will drift again.
+
+**Every result can be found on disk.** No row could answer *where is the file?* — the app could play,
+preview and save a result but never point at it. The Hub has always recorded the worker's own
+`output_path` as `artifact_path`; the app now decodes it and every finished row carries **Show in
+Folder**, which reveals the file in Finder. It is **disabled, with the reason in its tooltip**, for a
+job whose worker is on another Mac, because a button that opens an empty Finder window is worse than
+one that explains itself.
+
+**Every row says what it was asked for.** A row showed the result (length, size, and for images the
+canvas) and nothing about the request. `requestFacts(for:)` now prints the controls per modality —
+Image: steps, guidance, seed; Music: length, steps, guidance, shift, seed, instrumental; Video:
+resolution, ratio, length, audio on/off, mode, seed; Audio: the script's character count and the pace
+— one function, read by every row, so the Studio page and the Jobs tab cannot describe one job two
+ways. **The clip's own measured facts** (canvas, frames, frame rate, whether it has an audio track)
+were already on the Hub's item for Video and are now decoded, so a finished 1024×576 clip no longer
+reads as "2.0 s · 381 KB" with no dimensions.
+
+**Video rows have a preview.** A clip was a filename and a byte count until it was saved and opened
+elsewhere. The row now shows a still from the clip — fetched through the Hub like every other
+artifact, handed to AVFoundation from a file in the app's own Playback folder, and cached as a
+downscaled frame — and **Preview** plays the clip in place. The frame is taken a tenth of a second in,
+not at zero, because frame zero of an image-to-video clip is the still that was submitted.
+
+**The Audio page has a transport.** It had Play and nothing else: no scrub bar, no elapsed time, and
+no way to see the pace a clip was made at. It now carries the same transport the Music page already
+had — play/pause, stop, a scrub bar, `0:07 / 0:30` — plus the **speed** the job was generated at, and
+the finished rows state the **script's character count**, which is the unit a Voice budget is spent in
+and which history never showed. The Music lyrics field gained the character count its prompt box
+already had.
+
+**YuE2 is installed, and the reason it was not is worth recording.** The Music page said
+`yue2-3b-mlx has no files in this library`. Two separate causes: the **SSD kits do not carry YuE2 at
+all** — they were built at 0.6.70, before the package existed, which is the open kit-refresh item —
+and the copy under `~/StudioHubModels/yue2-3b-mlx/` was in the layout it was downloaded in
+(`model/`, `vae/` at the top), not the layout a package verifies against
+(`<library>/<package_id>/<revision>/…`). Both packages are now in that layout, hard-linked so no byte
+is duplicated, verified by full rehash against their manifests, and the Hub reports
+`files_verified` / `dispatch_state: eligible` for `yue2-3b-mlx` and its `yue2-vae` companion. The
+VAE's two licence files were absent from the download and byte-identical copies already existed in
+the model package, so they were linked from there — the same publisher bytes, checked against the
+manifest's own hashes.
+
 ## 0.6.86 — 2026-09-27 · YuE2 joins the Music lane, and the tier is measured rather than claimed
 
 **A third music engine, and the first that cannot share an interpreter.** `mlx-Yue` pins

@@ -23,13 +23,16 @@ machine's afternoon rather than this run.
 
 The manifest publishes a **24 GB** minimum for this model, measured here on a 32 GB M2 Max
 (peak process footprint 16.38 GB [M]) — the vendor's own card claims 16 GB [V], and the
-measured run is why the lane does not offer 16 GB.
+measured run is why the lane does not offer 16 GB. **The canvas the owner accepts (1024×576 true
+16:9, 2 s with audio) was measured through the worker on 2026-09-28: 16.92 GB peak footprint against
+10.05 GB on the MLX allocator — see the section near the end.** Read the footprint: the allocator
+alone would suggest a 16 GB Mac fits, and it does not.
 
 | This Mac | `RUN-LTX-VIDEO-WORKER.command` | `RUN-16GB-LTX-VIDEO.command` |
 | --- | --- | --- |
 | 32 GB | should complete | should complete |
 | 24 GB | should complete — **this is the machine nobody has measured yet** | should complete |
-| 16 GB | **refuses**, by design, before loading anything | the open question — this is the run worth having |
+| 16 GB | **refuses**, by design, before loading anything — now confirmed by the accepted canvas's own 16.92 GB footprint | still the open question: the standalone script runs the model outside the lane's tier |
 | 8 GB | refuses | expected to fail or swap hard; informative only |
 
 A refusal from the worker test is that test passing, not failing: it is the lane declining to
@@ -96,16 +99,52 @@ artifact's checksum.
 
 ---
 
-## Lance on 16 GB — measured here, and the 16 GB verdict is still yours
+## Lance — the owner's verdict, 2026-09-28: not pursued, and no run needed
 
-The 16 GB target is **Lance 3B Video bf16** (`mlx-community/Lance-3B-Video-bf16`), whose own card
-claims 8–16 GB. Its runner **is adopted** (Hub 0.6.82: `packaging/lance-runtime`, pinned at
-`f8ecc5a8…`, staged as `runtimes/video-lance`) and the lane is measured on **this** 32 GB Mac:
-**8.11 GB** peak footprint in `relay` mode at 256×256 × 13 frames, 184.9 s, and **20.0 GB** in
-`parallel` at 25 frames, 329.5 s — both by sampled `footprint phys_footprint_peak` in the process
-doing the work. Below ~18 GiB the runner resolves to `relay`, so 8.11 GB is what a 16 GB Mac sees.
+**Decision: Lance is not pursued.** The owner tried the quality himself and it does not hold up
+(*"lance sucks. can't generate good enough quality"*), so **the 16 GB Lance run this file used to ask
+for is cancelled** — do not spend a drive session on it. **Nothing is removed:** the runner stays
+adopted, pinned and staged, the two packages stay in the catalog, and the measurements below stay
+published, because a model kept as a known spare is a different thing from a model being recommended.
 
-**What is still not measured is a 16 GB machine**, and that is the run only you can do: the figure
-above is a floor from a host under no memory pressure, and the card's own claim stays `[V]`. The
-weights are on the SSD shelf (`model-library/video-models/lance-3b-video-bf16`) and a hard-linked
-installed layout exists at `model-library/_installed` for qualification runs (`--models-dir`).
+The measurements as they stand, for the record — **Lance 3B Video bf16**
+(`mlx-community/Lance-3B-Video-bf16`), whose own card claims 8–16 GB, adopted in Hub 0.6.82
+(`packaging/lance-runtime`, pinned at `f8ecc5a8…`, staged as `runtimes/video-lance`), measured on
+**this** 32 GB Mac: **8.11 GB** peak footprint in `relay` mode at 256×256 × 13 frames, 184.9 s, and
+**20.0 GB** in `parallel` at 25 frames, 329.5 s — both by sampled `footprint phys_footprint_peak` in
+the process doing the work. Below ~18 GiB the runner resolves to `relay`, so 8.11 GB is what a 16 GB
+Mac would have seen. The weights are on the SSD shelf
+(`model-library/video-models/lance-3b-video-bf16`).
+
+---
+
+## The canvas the owner accepts: 1024×576 true 16:9, and what it costs
+
+**Verdict, 2026-09-28:** `576p` `16:9` (1024×576) with audio is *"close to acceptable … i think it's
+ok"*. That makes it the configuration the fleet plans around, and it is the one to quote.
+
+Measured through the shipped worker's own job path on this 32 GB M2 Max — image-to-video, 49 frames
+at 24 fps, 2.04 s of output **with an audio track**, job `e9caa8c4ce2a4074a29d2349a99193ce`,
+receipt `qualification/ltx-video-worker-results-20260928-004554/`:
+
+| Statistic | Value |
+| --- | --- |
+| **Peak process footprint** (`ri_phys_footprint`, 1 Hz) | **16.92 GB** (16,919,438,528 B) |
+| Peak MLX Metal allocation | 10.05 GB (10,046,030,772 B) |
+| Peak process RSS | 9.25 GB |
+| Wall clock | 258.0 s |
+| Artifact | 2,055,736 B, one video + one audio track |
+
+**Read the footprint, not the allocator.** The MLX number is about 10 GB, which would *look* like a
+16 GB Mac fits; the process footprint at the same moment is **16.9 GB**, because the 17.81 GB of
+mixed 2–8 bit weights load outside what that counter tracks. The published tier therefore stays
+**24 GB minimum / 32 GB recommended**, and **16 GB is not offered this model**. For comparison, the
+shorter 704×448 4 s canvas measured 13.19 GB MLX / 15.71 GB footprint in 304.0 s: the footprint barely
+moves between canvases because the weights dominate, while the allocator moves with frames per pass.
+
+**One environment note from the run.** The first attempt at this canvas died at 15 % with
+`[METAL] Command buffer execution failed: Impacting Interactivity` after 13 s — macOS's GPU watchdog
+firing on a command buffer that held the GPU too long while the display wanted it. The identical
+command succeeded on retry (258.0 s, `done`). If a video job fails that way, **retry once before
+believing it**; it is contention with whatever else is drawing, not the lane.
+

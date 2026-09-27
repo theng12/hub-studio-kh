@@ -119,13 +119,24 @@ class JobsTabTests(unittest.TestCase):
         self.assertIn("modelName(job.model)", row,
                       "the row must name the model by its published label, quantization included")
         self.assertIn("job.generationSuffix", row, "the row must show how long it took")
-        self.assertIn("job.durationSeconds", row,
-                      "a clip's own measured length is the fact the Hub records for video")
+        # The clip's own measured facts, through the one derivation every row reads. The length is
+        # the fact the Hub records for video; it reaches the row inside `assetFacts` rather than on
+        # a second line of its own, which printed the same number twice in one row. Asserted in two
+        # halves so the number cannot quietly leave the row: the row reads the derivation, and the
+        # derivation reads `durationSeconds`.
+        self.assertIn("job.assetFacts", row,
+                      "the row must state the clip's own measured facts, not only how long it took")
+        facts = body(API, "    var assetFacts: String {")
+        for fact in ("durationSeconds", "clipWidth", "clipFrames", "clipFrameRate", "clipHasAudio"):
+            self.assertIn(fact, facts,
+                          f"a clip's {fact} is measured by the worker and belongs in its facts")
         for offered in ('Button("Save…")', 'Button("Cancel")'):
             self.assertIn(offered, row, f"a finished or running clip must offer {offered}")
-        # No audio or image affordance may leak into a video row.
-        for wrong in ('Button("Play")', 'Button("Preview")', "imageJobRow", "musicJobRow",
-                      "subtitleJobRow", "Open Transcript"):
+        # No **other** Studio's affordance may leak into a video row. Preview is the exception that
+        # proves the rule: it is the clip's own player now (`previewVideoID`), where it once meant
+        # "select this id on the Image page" — which is exactly what stays forbidden here.
+        for wrong in ('Button("Play")', "imageJobRow", "musicJobRow", "subtitleJobRow",
+                      "Open Transcript", "selectedImageID", "saveImage(", "saveMusic("):
             self.assertNotIn(wrong, row, f"a clip is not another Studio's artifact: no {wrong}")
         # ...and the placeholder branch still exists for the next engine-less Studio, driven by
         # the tab rather than by a name written into the page.

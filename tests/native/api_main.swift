@@ -825,7 +825,12 @@ final class FixtureProtocol: URLProtocol {
                            "artifact_url": "/api/hub/jobs/video-job/items/0/artifact",
                            "bytes": Self.mp4.count, "sha256": sha,
                            "media_type": "video/mp4", "duration_seconds": 4.04,
-                           "width": 704, "height": 448, "frames": 97, "runtime_s": 304.0,
+                           "width": 704, "height": 448, "frames": 97, "frame_rate": 24,
+                           "has_audio": true, "runtime_s": 304.0,
+                           // The worker's own path, which is what Show in Folder reveals. It is a
+                           // path this fixture never creates, so the same field also pins the
+                           // negative: a file that is not there must not offer a folder.
+                           "artifact_path": "/nonexistent/fixture/video-job.mp4",
                            "params": ["aspect_ratio": "11:7", "resolution": "448p",
                                       "duration_seconds": 4]]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
@@ -3028,6 +3033,30 @@ struct NativeAPITests {
                 "a finished clip must carry the length the worker measured, got: \(String(describing: videoJobs.first?.durationSeconds))")
         require(store.audioJobs.allSatisfy { $0.id != "video-job" },
                 "a Video batch must not be filed under another Studio's history")
+        // The row's two lines: what was asked for, and what came out. A video row used to say
+        // neither — no canvas, no frames, no frame rate and no audio — so a finished clip was a
+        // length and a byte count.
+        let videoJob = videoJobs[0]
+        require(videoJob.requestFacts(for: .video) == "448p · 11:7 · 4.0 s",
+                "the Video row must state the canvas and length that were asked for, got: "
+                    + videoJob.requestFacts(for: .video))
+        // Asserted in parts: the byte count is the fixture's own clip, which is not this test's
+        // subject, while the canvas, frames, frame rate and audio are.
+        require(videoJob.assetFacts.hasPrefix("4.0 s · ")
+                    && videoJob.assetFacts.hasSuffix("704×448 · 97 frames · 24 fps · with audio"),
+                "the Video row must state the clip's own measured facts, got: \(videoJob.assetFacts)")
+        require(videoJob.canRevealArtifact == false,
+                "a worker path that is not on this Mac must not offer Show in Folder")
+        require(videoJob.requestFacts(for: .image).isEmpty,
+                "a Video job showed Image facts, which means the modality is not deciding the line")
+        let voiceJob = store.jobs(for: .audio).first { !$0.answer.isEmpty } ?? store.jobs(for: .audio)[0]
+        if !voiceJob.text.isEmpty {
+            require(voiceJob.requestFacts(for: .audio).hasPrefix("\(voiceJob.text.count) characters"),
+                    "a Voice row must state the script's own length, got: "
+                        + voiceJob.requestFacts(for: .audio))
+        }
+        require(NativeJob.trimmed(1.0) == "1" && NativeJob.trimmed(1.5) == "1.5",
+                "a control's value must be shown without trailing zeros")
 
         // B28: "Use in …" must point the Studio that owns the model at it. It used to set the
         // Subtitle selection for every non-audio model.

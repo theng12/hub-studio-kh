@@ -1,0 +1,10 @@
+accepted f818706993e84be7945c375acb172a13 (running)
+  running preparing 2%
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] ...
+warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+[Loading text encoder (Gemma)] done in 4.2s
+[Encoding prompt] ...
+[Encoding prompt] done in 8.3s
+  error generating 15%
+failed: [METAL] Command buffer execution failed: Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity).

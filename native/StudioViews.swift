@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import AVFoundation
+import AVKit
 import UniformTypeIdentifiers
 
 struct StudioWindow: View {
@@ -118,6 +119,152 @@ final class ImageThumbnailStore: ObservableObject {
     }
 }
 
+/// A still from a finished video, for the row that made it.
+///
+/// Video rows had no preview at all, so a clip was a filename and a byte count until it was saved
+/// and opened elsewhere. This asks the Hub for the clip's bytes, hands them to AVFoundation, and
+/// keeps the first frame — the same shape as `ImageThumbnailStore`, with one difference that
+/// matters: **a video is fetched to a file, not held in memory**, because a clip can be far larger
+/// than an image and `AVAssetImageGenerator` needs a URL to seek in.
+///
+/// The scratch file lives under the app's own Playback directory (the same folder the audio player
+/// uses) and is removed as soon as the frame is taken, so a thumbnail never leaves a video copy
+/// behind. Only the downscaled frame is cached.
+final class VideoThumbnailStore: ObservableObject {
+    @Published private(set) var thumbnails: [String: NSImage] = [:]
+    private var loading: Set<String> = []
+    /// The same soft ceiling the image store keeps, for the same reason: the Hub prunes history,
+    /// this only stops a long session pinning decoded frames forever.
+    private let limit = 120
+
+    func thumbnail(for job: NativeJob, using workspace: NativeWorkspaceStore) async -> NSImage? {
+        if let ready = thumbnails[job.id] { return ready }
+        guard job.state == "done", !loading.contains(job.id) else { return nil }
+        loading.insert(job.id)
+        defer { loading.remove(job.id) }
+        do {
+            let data = try await workspace.videoData(for: job)
+            guard let frame = await Self.firstFrame(of: data, using: workspace) else { return nil }
+            if thumbnails.count >= limit { thumbnails.removeAll() }
+            thumbnails[job.id] = frame
+            return frame
+        } catch {
+            return nil
+        }
+    }
+
+    /// The clip's first frame, downscaled. Written to a file first because the generator seeks —
+    /// and `AVAsset` cannot seek in bytes it has no URL for.
+    @MainActor
+    private static func firstFrame(of data: Data, using workspace: NativeWorkspaceStore) async -> NSImage? {
+        guard let file = try? workspace.playbackFile(named: "thumb-\(UUID().uuidString).mp4") else {
+            return nil
+        }
+        do {
+            try data.write(to: file, options: [.atomic, .completeFileProtection])
+        } catch { return nil }
+        defer { try? FileManager.default.removeItem(at: file) }
+        let asset = AVURLAsset(url: file)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 144, height: 144)
+        // A tenth of a second in, not frame zero: the first frame of an image-to-video clip is the
+        // still that was submitted, which would show the input rather than the animation.
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        guard let cgImage = try? await generator.image(at: time).image else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+}
+
+/// The clip, playing in place.
+///
+/// The bytes come from the Hub like every other artifact, are written to the app's own Playback
+/// folder because `AVPlayer` needs a file, and are removed when the sheet closes.
+private struct VideoPreviewSheet: View {
+    let job: NativeJob
+    @ObservedObject var workspace: NativeWorkspaceStore
+    let dismiss: () -> Void
+
+    @State private var url: URL?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(job.text.isEmpty ? "Generated clip" : job.text)
+                        .font(.headline).lineLimit(2)
+                    if !job.assetFacts.isEmpty {
+                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            Group {
+                if let url {
+                    VideoPlayer(player: AVPlayer(url: url))
+                } else if let failure {
+                    Text(failure).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading the clip…").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(minWidth: 720, minHeight: 420)
+        }
+        .padding(20)
+        .task(id: job.id) { await load() }
+        .onDisappear {
+            if let url { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    private func load() async {
+        guard url == nil, failure == nil else { return }
+        do {
+            let data = try await workspace.videoData(for: job)
+            let file = try workspace.playbackFile(named: "preview-\(job.id).mp4")
+            try data.write(to: file, options: [.atomic, .completeFileProtection])
+            url = file
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+}
+
+/// One low-cost still from a completed video. Same contract as `JobThumbnail`: a placeholder until
+/// the frame arrives, and nothing else in the row waits on it.
+private struct VideoThumbnail: View {
+    let job: NativeJob
+    let connected: Bool
+    @ObservedObject var store: VideoThumbnailStore
+    @ObservedObject var workspace: NativeWorkspaceStore
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+            if let image = store.thumbnails[job.id] {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: "film").font(.title3).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+        .accessibilityLabel(job.text.isEmpty ? "Generated video thumbnail" : "Thumbnail of \(job.text)")
+        .task(id: "\(job.id)-\(connected)") {
+            guard connected else { return }
+            _ = await store.thumbnail(for: job, using: workspace)
+        }
+    }
+}
+
 /// One low-cost preview of a completed Image.
 ///
 /// It is deliberately not the preview pane: the full image still loads only on Preview/Save. This
@@ -148,6 +295,48 @@ private struct JobThumbnail: View {
             guard connected else { return }
             _ = await store.thumbnail(for: job, using: workspace)
         }
+    }
+}
+
+/// One width for every row action in the app.
+///
+/// The owner's report: *"the buttons change sizes each time. i want them stable and consistent."*
+/// Each action was sized by its own label, so `Save…` was narrow and `Check Original Result` was
+/// wide, and the column moved as the list scrolled — a row's controls read as part of the row's
+/// content rather than as a column of controls.
+///
+/// Every action button now takes the same width and every row reserves the same trailing space, so
+/// the column is the same on every row of every Studio and on the Jobs tab.
+private struct RowActionButton: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.callout)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(width: 104)
+    }
+}
+
+private extension View {
+    /// Marks a row action: one width, one font, one place to change both.
+    func rowAction() -> some View { modifier(RowActionButton()) }
+}
+
+/// The trailing actions of one row, in a column of a fixed width.
+///
+/// The width is the two buttons a finished row can carry plus their spacing, so a row with one
+/// action and a row with three both keep the same right edge and the same left edge.
+private struct RowActions<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: 6) { content }
+            .frame(width: 214, alignment: .trailing)
+            // The column is laid out before the row's text, so a long prompt wraps inside what is
+            // left instead of running under the buttons. Without this the text — which asks for
+            // `maxWidth: .infinity` to wrap at all — was given its ideal width and the two
+            // overlapped on the Jobs tab, where the prompts are longest.
+            .layoutPriority(1)
     }
 }
 
@@ -273,6 +462,11 @@ struct StudioContent: View {
     @State private var imagePreview: NSImage?
     @State private var selectedImageID: String?
     @State private var selectedMusicID: String?
+    /// The clip the operator asked to preview, by job id. Nil shows the list as it was.
+    @State private var previewVideoID: String?
+    /// Which finished Voice clip the shared player is holding, so the transport under the Audio
+    /// list controls the clip that is actually loaded rather than whichever row was last drawn.
+    @State private var loadedAudioJobID: String?
     @State private var historyTab = HistoryTab.all
     @State private var loadingImage = false
     @State private var revealedToken = false
@@ -298,6 +492,9 @@ struct StudioContent: View {
     @State private var transcribingClip = false
     /// Decoded Image thumbnails, shared by every history row so one artifact is fetched once.
     @StateObject private var thumbnails = ImageThumbnailStore()
+    /// Video stills are a separate store: they cost a clip download each, and mixing them into the
+    /// image cache would evict image previews for frames the operator may never look at again.
+    @StateObject private var videoThumbnails = VideoThumbnailStore()
     /// The uncertain job the operator asked to discard, held until they confirm.
     @State private var pendingDiscard: PendingDiscard?
     /// The gateway public key being pasted, and its optional label. Kept as plain text so the
@@ -1293,6 +1490,31 @@ struct StudioContent: View {
         }
     }
 
+    /// What a job was asked for, under the model line. Renders nothing when the job states no
+    /// controls — a job another client filed, or a modality with none — rather than an empty line.
+    @ViewBuilder
+    private func jobRequestFacts(_ job: NativeJob, _ function: StudioFunction) -> some View {
+        let facts = job.requestFacts(for: function)
+        if !facts.isEmpty {
+            Text(facts).font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("Requested settings: \(facts)")
+        }
+    }
+
+    /// Point Finder at the file the job produced.
+    ///
+    /// Disabled — with the reason in its tooltip — when the artifact is not on this Mac, because a
+    /// button that opens an empty Finder window is worse than one that says why it cannot.
+    @ViewBuilder
+    private func revealButton(_ job: NativeJob) -> some View {
+        Button("Show in Folder") { workspace.revealArtifact(job) }
+            .disabled(!job.canRevealArtifact)
+            .help(job.canRevealArtifact
+                  ? "Reveal \(job.artifactPath ?? "") in Finder"
+                  : "This result is not a file on this Mac, so there is no folder to show.")
+            .rowAction()
+    }
+
     private func imageJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 10) {
@@ -1307,20 +1529,24 @@ struct StudioContent: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
+                    jobRequestFacts(job, .image)
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
                     }
                 }
                 Spacer()
-                if job.state == "done" {
-                    Button("Preview") { selectedImageID = job.id; studio.select(.image) }
-                    Button("Save…") { saveImage(job) }.disabled(!connected)
-                } else if job.state == "uncertain" {
-                    Button("Check Original Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected)
-                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .image) }.disabled(!connected)
-                } else if active(job.state) {
-                    Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected)
+                RowActions {
+                    if job.state == "done" {
+                        Button("Preview") { selectedImageID = job.id; studio.select(.image) }.rowAction()
+                        Button("Save…") { saveImage(job) }.disabled(!connected).rowAction()
+                        revealButton(job)
+                    } else if job.state == "uncertain" {
+                        Button("Check Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected).rowAction()
+                        Button("Discard…", role: .destructive) { requestDiscard(job, kind: .image) }.disabled(!connected).rowAction()
+                    } else if active(job.state) {
+                        Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected).rowAction()
+                    }
                 }
             }
             if let message = job.error, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -1586,6 +1812,10 @@ struct StudioContent: View {
                             get: { workspace.musicSettings?.lyrics ?? configuration.defaults.lyrics ?? "" },
                             set: { workspace.musicSettings?.lyrics = $0 }), axis: .vertical)
                             .lineLimit(3...6).textFieldStyle(.roundedBorder)
+                        // The same count the prompt box carries: a lyric sheet is what the engine
+                        // sings, and how long it is decides how much of it survives.
+                        Text("\((workspace.musicSettings?.lyrics ?? configuration.defaults.lyrics ?? "").count) characters")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Vocal language").font(.callout)
@@ -1642,6 +1872,7 @@ struct StudioContent: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
+                    jobRequestFacts(job, .music)
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -1655,17 +1886,20 @@ struct StudioContent: View {
                     }
                 }
                 Spacer()
-                if job.state == "done" {
-                    Button("Preview") { selectedMusicID = job.id; studio.select(.music) }
-                    Button("Play") {
-                        Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
-                    }.disabled(!connected)
-                    Button("Save…") { saveMusic(job) }.disabled(!connected)
-                } else if job.state == "uncertain" {
-                    Button("Check Original Result") { Task { await workspace.reconcileMusic(job) } }.disabled(!connected)
-                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .music) }.disabled(!connected)
-                } else if active(job.state) {
-                    Button("Cancel") { Task { await workspace.cancelMusic(job) } }.disabled(!connected)
+                RowActions {
+                    if job.state == "done" {
+                        Button("Preview") { selectedMusicID = job.id; studio.select(.music) }.rowAction()
+                        Button("Play") {
+                            Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
+                        }.disabled(!connected).rowAction()
+                        Button("Save…") { saveMusic(job) }.disabled(!connected).rowAction()
+                        revealButton(job)
+                    } else if job.state == "uncertain" {
+                        Button("Check Result") { Task { await workspace.reconcileMusic(job) } }.disabled(!connected).rowAction()
+                        Button("Discard…", role: .destructive) { requestDiscard(job, kind: .music) }.disabled(!connected).rowAction()
+                    } else if active(job.state) {
+                        Button("Cancel") { Task { await workspace.cancelMusic(job) } }.disabled(!connected).rowAction()
+                    }
                 }
             }
             if let message = job.error, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -1808,6 +2042,11 @@ struct StudioContent: View {
         .task(id: workspace.videoModel) {
             snapVideoControlsToPublishedCanvases()
         }
+        // The clip, playing where it was made. Preview used to mean Save… and open it elsewhere.
+        .sheet(item: Binding(get: { previewVideoID.flatMap { id in workspace.videoJobs.first { $0.id == id } } },
+                             set: { if $0 == nil { previewVideoID = nil } })) { job in
+            VideoPreviewSheet(job: job, workspace: workspace) { previewVideoID = nil }
+        }
     }
 
     /// The canvases this lane publishes, if it publishes them as pairs.
@@ -1938,9 +2177,15 @@ struct StudioContent: View {
     private func videoJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: active(job.state) ? "film" : job.state == "done"
-                      ? "checkmark.circle" : "exclamationmark.circle")
-                    .foregroundStyle(stateColor(job.state))
+                // A still from the clip itself, the way an Image result shows a thumbnail. A video
+                // row was a line of text with a film icon, so the only way to see what had been
+                // generated was to save it and open it somewhere else.
+                if job.state == "done" {
+                    VideoThumbnail(job: job, connected: connected, store: videoThumbnails, workspace: workspace)
+                } else {
+                    Image(systemName: active(job.state) ? "film" : "exclamationmark.circle")
+                        .foregroundStyle(stateColor(job.state))
+                }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     HStack(spacing: 8) {
@@ -1949,23 +2194,26 @@ struct StudioContent: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
+                    jobRequestFacts(job, .video)
+                    // The clip's own facts already carry its length, so the separate "Clip length"
+                    // line is gone: it printed the same number twice in one row.
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
                     }
-                    if job.state == "done", let seconds = job.durationSeconds, seconds > 0 {
-                        Text("Clip length \(NativeJob.clock(seconds))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
                 Spacer()
-                if job.state == "done" {
-                    Button("Save…") { saveVideo(job) }.disabled(!connected)
-                } else if job.state == "uncertain" {
-                    Button("Check Original Result") { Task { await workspace.reconcileVideo(job) } }.disabled(!connected)
-                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .video) }.disabled(!connected)
-                } else if active(job.state) {
-                    Button("Cancel") { Task { await workspace.cancelVideo(job) } }.disabled(!connected)
+                RowActions {
+                    if job.state == "done" {
+                        Button("Preview") { previewVideoID = job.id }.rowAction()
+                        Button("Save…") { saveVideo(job) }.disabled(!connected).rowAction()
+                        revealButton(job)
+                    } else if job.state == "uncertain" {
+                        Button("Check Result") { Task { await workspace.reconcileVideo(job) } }.disabled(!connected).rowAction()
+                        Button("Discard…", role: .destructive) { requestDiscard(job, kind: .video) }.disabled(!connected).rowAction()
+                    } else if active(job.state) {
+                        Button("Cancel") { Task { await workspace.cancelVideo(job) } }.disabled(!connected).rowAction()
+                    }
                 }
             }
             if let message = job.error, !message.isEmpty {
@@ -2148,9 +2396,15 @@ struct StudioContent: View {
                     HStack {
                         Text("Recent audio").font(.headline)
                         Spacer()
-                        if player.playing { Button("Stop Playback") { player.stop() } }
+                        if player.playing { Button("Stop Playback") { player.stop(); loadedAudioJobID = nil } }
                         Button("All Jobs") { studio.select(.jobs) }
                     }
+                    // The loaded clip's own transport, in the shape the Music page already had:
+                    // play/pause, a stop, a scrub bar, the elapsed time of the audio actually
+                    // loaded, and the pace the clip was made at. The Audio page offered Play and
+                    // nothing else, so a three-minute script could not be scrubbed, paused where it
+                    // mattered, or compared against its own length.
+                    if let job = loadedAudioJob, player.hasAudio { audioTransport(job) }
                     ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
                         Group {
                             if workspace.audioJobs.isEmpty {
@@ -3291,21 +3545,23 @@ struct StudioContent: View {
                     }
                 }
                 Spacer()
-                if job.state == "done" {
-                    // Opens the Subtitle page, where the transcript is exported and delivery is
-                    // acknowledged - the same path the Subtitle screen already uses.
-                    // Loads the transcript from the batch, then shows it. Switching pages alone
-                    // left the Subtitle page empty for anything not transcribed in this sitting.
-                    Button("Open Transcript") {
-                        Task {
-                            do {
-                                try await workspace.openSubtitle(job)
-                                studio.select(.transcription)
-                            } catch { fileActionError = error.localizedDescription }
-                        }
-                    }.disabled(!connected)
-                } else if active(job.state) {
-                    Button("Cancel") { Task { await workspace.cancelSubtitle(job) } }.disabled(!connected)
+                RowActions {
+                    if job.state == "done" {
+                        // Opens the Subtitle page, where the transcript is exported and delivery is
+                        // acknowledged - the same path the Subtitle screen already uses.
+                        // Loads the transcript from the batch, then shows it. Switching pages alone
+                        // left the Subtitle page empty for anything not transcribed in this sitting.
+                        Button("Open Transcript") {
+                            Task {
+                                do {
+                                    try await workspace.openSubtitle(job)
+                                    studio.select(.transcription)
+                                } catch { fileActionError = error.localizedDescription }
+                            }
+                        }.disabled(!connected).rowAction()
+                    } else if active(job.state) {
+                        Button("Cancel") { Task { await workspace.cancelSubtitle(job) } }.disabled(!connected).rowAction()
+                    }
                 }
             }
             if let error = job.error, !error.isEmpty {
@@ -3357,8 +3613,10 @@ struct StudioContent: View {
                 // Only a real answer has anything to copy or save. A failed attempt offers
                 // neither, because there is nothing there to offer.
                 if job.state == "done", !job.answer.isEmpty {
-                    Button("Copy Answer") { copyAnswer(job) }
-                    Button("Save…") { saveAnswer(job) }
+                    RowActions {
+                        Button("Copy Answer") { copyAnswer(job) }.rowAction()
+                        Button("Save…") { saveAnswer(job) }.rowAction()
+                    }
                 }
             }
             if let error = job.error, !error.isEmpty {
@@ -3395,6 +3653,7 @@ struct StudioContent: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
+                    jobRequestFacts(job, .audio)
                     // What was actually produced: length, size and the size requested. An asset
                     // with no stated facts is hard to tell apart from one that came back wrong.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -3403,16 +3662,73 @@ struct StudioContent: View {
                     }
                 }
                 Spacer()
-                if job.state == "done" {
-                    Button("Play") { Task { do { try await workspace.play(job, with: player) } catch { fileActionError = error.localizedDescription } } }.disabled(!connected)
-                    Button("Save…") { saveAudio(job) }.disabled(!connected)
-                } else if job.state == "uncertain" {
-                    Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected)
-                } else if active(job.state) { Button("Cancel") { Task { await workspace.cancelAudio(job) } }.disabled(!connected) }
+                RowActions {
+                    if job.state == "done" {
+                        Button("Play") {
+                            Task {
+                                do {
+                                    try await workspace.play(job, with: player)
+                                    loadedAudioJobID = job.id
+                                } catch { fileActionError = error.localizedDescription }
+                            }
+                        }.disabled(!connected).rowAction()
+                        Button("Save…") { saveAudio(job) }.disabled(!connected).rowAction()
+                        revealButton(job)
+                    } else if job.state == "uncertain" {
+                        Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected).rowAction()
+                    } else if active(job.state) { Button("Cancel") { Task { await workspace.cancelAudio(job) } }.disabled(!connected).rowAction() }
+                }
             }
             if let error = job.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
         }
     }
+    /// The finished Voice clip the shared player is holding, by id. Nil until something is played.
+    private var loadedAudioJob: NativeJob? {
+        guard let loadedAudioJobID else { return nil }
+        return workspace.audioJobs.first { $0.id == loadedAudioJobID }
+    }
+
+    /// A conventional transport for the loaded Voice clip. Nothing starts on its own: the row's
+    /// Play loads the clip, and this controls what is loaded.
+    @ViewBuilder private func audioTransport(_ job: NativeJob) -> some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                Button {
+                    if player.playing { player.pause() } else { player.resume() }
+                } label: {
+                    Label(player.playing ? "Pause" : "Play",
+                          systemImage: player.playing ? "pause.fill" : "play.fill")
+                }
+                .accessibilityLabel(player.playing ? "Pause the loaded clip" : "Resume the loaded clip")
+                Button {
+                    player.stop()
+                    loadedAudioJobID = nil
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                Spacer()
+                // The pace the operator chose, when the lane publishes one: a clip made at 1.5× is
+                // a different result from one at the model's own pace, and the row could not say so.
+                if let speed = job.voiceSettings?.speed {
+                    Text("speed \(NativeJob.trimmed(speed))×")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Playback pace the clip was generated at")
+                }
+                Text(player.timeLabel)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Elapsed and total time")
+            }
+            Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }),
+                   in: 0...max(player.duration, 0.001))
+                .accessibilityLabel("Playback position")
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     private func downloadRow(_ download: NativeDownload) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {

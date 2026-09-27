@@ -2,6 +2,51 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.88 — 2026-09-28
+
+### The video decisions, written down
+
+**Lance is not being pursued.** You tried its output and the quality is not good enough, so the 16 GB
+test this guide was asking you to run is cancelled. It stays installed and offered — nothing was
+removed, and its measurements stay published — it is simply not the small video model we are betting
+on.
+
+**The canvas you accepted now has its numbers.** LTX-2.3 at **1024×576 true 16:9 with audio** measured
+**16.9 GB** of memory at its peak, against the 10 GB the graphics allocator reports on its own. That
+is why it needs a 24 GB Mac, and why a 16 GB Mac is refused before anything loads: the weights sit
+outside what the smaller number counts.
+
+### If a video run dies with a Metal error, try it once more
+
+The first attempt at that canvas failed after 13 seconds with a Metal "impacting interactivity"
+error. That is macOS's graphics watchdog cutting in — the app was holding the graphics chip while the
+screen wanted it — not a fault in the app. The same run completed on the second try.
+
+### Six things you could not see, now on the screen
+
+**The buttons hold still.** Every row's buttons were sized by their own label, so the column shifted
+as you scrolled. They are one width now, in one column, on every page.
+
+**"Show in Folder" on every finished result.** The question the app could not answer was *where is
+it?* Now every row can open Finder on the actual file. A result made on another Mac says why it
+cannot instead of opening an empty window.
+
+**Each row says what it was asked for.** Below the model you now see the settings that made it —
+steps, guidance, seed for images; length, steps and whether it is instrumental for music; resolution,
+ratio, length and whether audio is on for video; the script's length and speed for audio — and for a
+clip, its real canvas, frame count and frame rate.
+
+**Video rows show a frame of the clip**, and Preview plays it right there instead of making you save
+it first.
+
+**The Audio page has a proper player now**: play/pause, stop, a bar you can drag, the elapsed and
+total time, and the speed the clip was made at. Finished audio rows also show how many characters the
+script was.
+
+**YuE2 is installed and verified.** It was not missing from your Mac — it was in the folder you
+downloaded it to rather than the layout the app checks, and the SSD kits predate it entirely. Both
+YuE2 packages are now verified against their published checksums and ready in the Music picker.
+
 ## 0.6.86 — 2026-09-27
 
 ### A third music model, and the only one that sings a full song
