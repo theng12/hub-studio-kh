@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.90 — 2026-09-28
+
+### The kit's own paperwork is now part of the kit
+
+The documents that tell you which version is on a drive were three releases out of date — one of them
+said 0.6.58 while the app beside it was newer — because nothing copied them when a drive was prepared.
+They are copied now, and the Studio Hub line no longer states a number at all: it points at the kit's
+own generated manifest, so it cannot disagree with the app in the same folder.
+
+### The drives carry the whole library now
+
+They had 24 of the 30 models. YuE2 (the new singing model), LTX and its text encoder are on every
+drive now, each verified against its published checksums *on the drive itself*, so "Copy the models"
+has what the catalogue advertises. Lance went on the drive that already had it — you are not using it,
+and 15.6 GB on three more drives would buy nothing.
+
 ## 0.6.89 — 2026-09-28
 
 ### YuE2 said "not installed" when it was installed

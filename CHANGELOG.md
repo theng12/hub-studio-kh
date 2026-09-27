@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.90 — 2026-09-28 · The drive index named versions three releases old
+
+**The kit's own READMEs were the last thing anyone updated.** Preparing the drives for distribution
+turned up the same drift the ledger has recorded before, in both documents at once: the kit `README.md`
+named Story Studio **1.4.219** and GatewayKH **0.2.44** while the kits shipped beside them carried
+1.4.234 and 0.2.60, and `Studio Hub KH.md` — the page whose whole job is to tell an operator which
+build they have — said **0.6.58 / `eea477e`**, twenty-nine releases behind the bundle in the same
+folder. The repository's own copy was worse than the drives': it said GatewayKH **0.2.2**.
+
+**Nothing copied them, which is why they drifted.** `prepare-kit.sh` refreshed the app, the Technical
+folder and the kit manifest on every drive and never touched the two index documents, so each drive
+kept whatever it was born with. Both are now copied from `packaging/kit-readmes/` on every prepare,
+and the Studio Hub row in `README.md` no longer carries a number at all: it points at the drive's own
+`focused-release-manifest.json`, which is generated from the bundle on that drive and therefore cannot
+disagree with it. The two numbers that remain — Story Studio and GatewayKH — are named, and a prepare
+that ships a different build of either is now visibly out of date rather than silently so.
+
+**The kit stopped being a subset of the catalogue.** The drives carried **24 of 30** packages. Every
+kit library now has the six the catalogue adds on top — **YuE2 3B and its decoder** (the new singing
+engine, on no drive before this), **LTX-2.3 22B**, **gemma-3-12b** (LTX's text encoder) and, where
+the drive already held the weights, **Lance 3B and its processor** — in the layout a package verifies
+against. Each drive's own `.studiohub/installed.json` records them after a full rehash **on that
+drive**: a copy is not an installation until the bytes have been read back, which is why
+`release_kit.py` said "not shipped" about packages that were sitting on the disk.
+
+**Where the volume already had the weights, nothing was written twice.** NOVA carried Lance in its
+exploration library and LTX on all but UGREEN; the kit layout was built by **hard link** — 15.6 GB
+adopted on NOVA with no new bytes. **One deliberate gap remains: Lance is on NOVA only.** It is not
+pursued, the owner asked for it to be kept rather than removed, and copying 15.6 GB to three drives
+for a model nobody will run is not a good trade; the kit manifests on those drives say it is not
+shipped, which is true and is what the app offers as a download.
+
 ## 0.6.89 — 2026-09-28 · The worker could not read its own second engine
 
 **The owner installed YuE2 and the app still said "Not installed" — and he asked twice, because the
