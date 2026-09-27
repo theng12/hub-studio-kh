@@ -3,7 +3,82 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.86** (YuE2 joins the Music lane with a measured tier, 2026-09-27).
+Last updated: **0.6.88** (the video verdicts, and six things the app could not show you, 2026-09-28).
+
+> **0.6.88 — the video verdicts, and six things the app could not show you.**
+>
+> **Two owner verdicts, one cancelling a run.** **Lance is not pursued** — the owner tried its output
+> and the quality does not hold up — so the 16 GB Lance run `qualification/README-video-hardware-test.md`
+> had been asking him for is **cancelled**. Nothing is removed: the runner stays pinned and staged,
+> both packages stay in the catalog, and its measurements stay published, because a model kept as a
+> known spare is not a model being recommended. **LTX-2.3 at 1024×576 true 16:9 with audio is
+> accepted** (*"close to acceptable"*), and it now carries the statistic that decides its tier,
+> measured through the shipped worker's own job path (job `e9caa8c4…`, image-to-video, 49 frames at
+> 24 fps, 2.04 s with an audio track, 258.0 s): **16.92 GB peak process footprint** against **10.05 GB**
+> on the MLX allocator. The allocator alone reads as though a 16 GB Mac fits; the footprint says it
+> does not, so the tier stays **24 GB minimum / 32 GB recommended** and 16 GB stays refused by name.
+> The LTX manifest's `memory_evidence`, its capture spec and the frozen digest moved together, and
+> `docs/model-benchmarks.md` was regenerated — **the generated page and its generator must be
+> changed together; editing a manifest alone fails `test_model_manifest_catalog`.**
+>
+> **An environment lesson worth keeping.** The first 576p attempt died at 15 % after 13 s with
+> `[METAL] Command buffer execution failed: Impacting Interactivity` — macOS's GPU watchdog firing on
+> a command buffer that held the GPU while the display wanted it, **not** the lane — and the identical
+> command completed on retry (258.0 s, `done`). If a video job fails that way, retry once before
+> believing it.
+>
+> **Six reports from the owner's own session with the app.**
+>
+> 1. **Buttons stopped moving.** Each row action was sized by its own label, so the column shifted as
+>    the list scrolled. `RowActions` + `rowAction()` give every action one width (104 pt) in one fixed
+>    column (214 pt, `layoutPriority(1)` so a long prompt wraps beside it rather than under it) on
+>    every Studio page and on the Jobs tab. `Check Original Result` is now `Check Result` — a label
+>    that cannot fit its own column will drift again.
+> 2. **Every result can be found.** No row could answer *where is the file?* The Hub has always
+>    recorded the worker's `output_path` as `artifact_path`; the app now decodes it and every finished
+>    row offers **Show in Folder**, disabled with its reason when the artifact is not on this Mac.
+> 3. **Every row says what it was asked for.** `requestFacts(for:)` prints the controls per modality
+>    (Image: steps/guidance/seed; Music: length/steps/guidance/shift/seed/instrumental; Video:
+>    resolution/ratio/length/audio/mode/seed; Audio: character count and speed) — one function read by
+>    every row, so the Studio pages and the Jobs tab cannot describe one job two ways. The clip's own
+>    measured facts (`width`, `height`, `frames`, `frame_rate`, `has_audio`) were already on the Hub's
+>    item and are now decoded, so a finished 1024×576 clip no longer reads as "2.0 s · 381 KB".
+>    Frames print **only where a frame rate exists**: the Hub copies a raw `frames` count for Music and
+>    Voice items too, where it is a sample count, and a song read "441000 frames" beside its length.
+> 4. **Video rows have a preview**, and Preview plays the clip in place. `VideoThumbnail` fetches
+>    through the Hub, writes to the app's own `Playback` folder (`playbackFile(named:)` — a view never
+>    invents a path), asks AVFoundation for a frame **0.1 s in** — frame zero of an image-to-video clip
+>    is the still that was submitted — and caches the downscaled frame.
+> 5. **The Audio page has a transport**: play/pause, stop, a scrub bar, `0:07 / 0:30`, and the speed
+>    the clip was generated at, plus the script's character count on every finished row. The Music
+>    lyrics field gained the count its prompt box already had.
+> 6. **YuE2 is installed and verified.** It read as not installed for two separate reasons: **the SSD
+>    kits were built at 0.6.70 and do not carry YuE2 at all** (the open kit-refresh item), and the
+>    downloaded copy was in the layout it arrived in (`model/`, `vae/` at the top) rather than
+>    `<library>/<package_id>/<revision>/…`. Both packages are now in that layout, **hard-linked** so no
+>    byte is duplicated, and verified by full rehash — the Hub answers `files_verified` /
+>    `dispatch_state: eligible` for `yue2-3b-mlx` and its `yue2-vae` companion. The VAE's two licence
+>    files were missing from the download and **byte-identical copies were already in the model
+>    package**, so they were linked from there: the publisher's own bytes, checked against the
+>    manifest's hashes.
+>
+> **One test changed with the code, not around it.** `tests/test_jobs_tabs.py` asserted the literal
+> `job.durationSeconds` inside `videoJobRow`; the measured length now reaches the row through
+> `assetFacts`, so the test asserts both halves (the row reads the derivation, the derivation reads
+> the measured fields) and keeps `Preview` forbidden only where it meant *another Studio's* artifact.
+> `tests/native/api_main.swift`'s video fixture carries the clip facts, the worker path and the video
+> params, and pins the two new lines by value.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1401 tests, OK (11 skipped), 558 s, exit 0;
+> `native/build.sh` green (boundary, API contract and lifecycle checks).**
+>
+> **Released 2026-09-28.** `dist/StudioHub-0.6.88-65cb5e7.dmg` — **1,938,831,262 bytes**, sha256
+> `c670514f81b593bf3b44bb7362129562844bc9fff12fc95e017c439f85e929af`. Installed and live:
+> `hub-ready.json` → `0.6.88`, and the route the Music page reads answers `files_verified` /
+> `eligible` for `yue2-3b-mlx` and `yue2-vae`. `implementation/voice-runtime` and `main` are both
+> `65cb5e7`. The row renders used to check the layout are in
+> `qualification/ui-rows-20260928/` (rendered offscreen against the live Hub, so they are the pages
+> that ship).
 
 > **0.6.84 — the model lists were empty, and the switch reached the Video page.**
 >
