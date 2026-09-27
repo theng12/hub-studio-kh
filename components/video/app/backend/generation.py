@@ -19,10 +19,14 @@ package is installed on machines of different sizes.
   qualification runner measured it. The pack's own loader is applied **before** the pipeline is
   constructed — the stock ``apply_quantization`` applies ONE bit width to a mixed 2–8-bit pack
   and dies on a shape error deep in ``quantized_matmul``.
-* ``video-lance`` names the ``lance-mlx`` source runner, which is **not adopted into this build
-  yet**. A manifest for that engine is published with a row that says so —
-  ``execution_ready: false`` and a reason naming the adoption step — rather than being dropped
-  silently.
+* ``video-lance`` runs ``lance-mlx`` in a **second interpreter**, because that runner declares
+  ``requires-python >= 3.12`` while ``ltx_pipelines_mlx`` needs 3.11. ``lance_runtime_python()``
+  resolves the pinned runtime staged beside this worker, and ``run_lance`` spawns the bridge with
+  it — the runner's own CLI is a stub at the pinned commit, so its library API is the only surface.
+  The engine is adopted and measured: 8.11 GB peak at 256x256 relay mode, 20.0 GB in parallel, both
+  by sampled ``footprint`` in the process doing the work (``model-manifests/lance-3b-video-bf16``).
+  A manifest whose engine no runtime here serves is still published with ``execution_ready: false``
+  and a reason naming the gap — that guard is for the next engine, not for this one.
 
 Three things the qualification runner learned and this worker must not relearn:
 

@@ -96,11 +96,16 @@ artifact's checksum.
 
 ---
 
-## Lance on 16 GB — not this folder yet
+## Lance on 16 GB — measured here, and the 16 GB verdict is still yours
 
 The 16 GB target is **Lance 3B Video bf16** (`mlx-community/Lance-3B-Video-bf16`), whose own card
-claims 8–16 GB. It is published in the catalogue with `execution_ready: false` and is offered
-nowhere: its runner is the `lance-mlx` source repo and it has not been adopted into this build
-yet, so there is no measurement of it on any machine here. The weights are on the SSD
-(`model-library/video-models/lance-3b-video-bf16`). Until that adoption lands, running it on a
-16 GB Mac is not something these commands can measure.
+claims 8–16 GB. Its runner **is adopted** (Hub 0.6.82: `packaging/lance-runtime`, pinned at
+`f8ecc5a8…`, staged as `runtimes/video-lance`) and the lane is measured on **this** 32 GB Mac:
+**8.11 GB** peak footprint in `relay` mode at 256×256 × 13 frames, 184.9 s, and **20.0 GB** in
+`parallel` at 25 frames, 329.5 s — both by sampled `footprint phys_footprint_peak` in the process
+doing the work. Below ~18 GiB the runner resolves to `relay`, so 8.11 GB is what a 16 GB Mac sees.
+
+**What is still not measured is a 16 GB machine**, and that is the run only you can do: the figure
+above is a floor from a host under no memory pressure, and the card's own claim stays `[V]`. The
+weights are on the SSD shelf (`model-library/video-models/lance-3b-video-bf16`) and a hard-linked
+installed layout exists at `model-library/_installed` for qualification runs (`--models-dir`).

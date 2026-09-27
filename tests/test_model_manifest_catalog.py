@@ -315,9 +315,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # loads. It has no runtime of its own and no picker row (the Hub marks it a
             # dependency), which is why its floor mirrors the model it serves.
             "gemma-3-12b-it-4bit": "7e286faf28c5cdd894187b261e92ff41aad0313547d9dc065596534047e98ff1",
-            # Lance 3B, the small tier's T2V model: 10 files / 15,631,104,325 bytes. The manifest
-            # and the tier ship now; the `lance-mlx` runner is not adopted into this build, so the
-            # worker publishes the row with `execution_ready: false` and names that step.
+            # Lance 3B, the small tier's T2V model: 10 files / 15,631,104,325 bytes.
             # Refreshed 2026-09-27 with the runner adoption: the defaults are the model's own
             # (256p square at 12 fps), the qualification carries two measured runs, and the
             # Qwen2.5-VL processor is declared as a requirement. Refreshed again the same day

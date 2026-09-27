@@ -3,7 +3,7 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.84** (two decoding defects that emptied every model list, and the audio switch on the Video page, 2026-09-27).
+Last updated: **0.6.85** (the documents that still said the small video model could not run, 2026-09-27).
 
 > **0.6.84 — the model lists were empty, and the switch reached the Video page.**
 >
@@ -38,6 +38,27 @@ Last updated: **0.6.84** (two decoding defects that emptied every model list, an
 > **`native/render-page.sh` gained `STUDIOHUB_RENDER_VIDEO_MODEL=<repo>`** so the controls below the
 > picker can be looked at without selecting a model by hand. Evidence:
 > `qualification/native-video-switch-20260927/video-page-with-published-switch.png`.
+>
+> **Gate 1384 passed / 11 skipped / 1111 subtests; `native/build.sh` green.**
+
+> **0.6.85 — five documents still said the Lance runner was not adopted, and it was.**
+>
+> Found while re-verifying the adoption for the goal's evidence: the runner is pinned
+> (`f8ecc5a8…`), staged (`runtimes/video-lance`), measured twice and published eligible — and five
+> places still said otherwise. All five now agree with the code:
+>
+> | Where | What it said |
+> | --- | --- |
+> | `components/video/app/backend/generation.py` — the module docstring | "``video-lance`` … is **not adopted into this build yet**" |
+> | `packaging/capture_model_manifests.py` | "neither the lance-mlx runner nor the weights are adopted here yet" |
+> | `packaging/video-runtime/smoke_imports.py` | the `None` mapping is right, its reason was stale |
+> | `qualification/README-video-hardware-test.md` | "offered nowhere" and "not something these commands can measure" — **the one document whose job is to say which run to do** |
+> | `tests/test_model_manifest_catalog.py` | a digest comment describing a row that no longer exists |
+>
+> The hardware README now carries the measured numbers (8.11 GB `relay`, 20.0 GB `parallel`, both by
+> sampled `footprint phys_footprint_peak`) and the honest remainder: **no 16 GB machine has run it —
+> that is the owner's run**, and the card's claim stays `[V]`. Also fixed there: `SDD` → SSD.
+> **No behaviour changes in this release.**
 >
 > **Gate 1384 passed / 11 skipped / 1111 subtests; `native/build.sh` green.**
 

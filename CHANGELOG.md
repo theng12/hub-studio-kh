@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.85 — 2026-09-27 · The documentation said the small video model could not run
+
+**A claim the code had already outgrown.** Five places still described the `lance-mlx` runner as
+"not adopted into this build": the video worker's own module docstring, the capture spec's note
+beside the processor package, the LTX runtime's smoke-import explanation, the hardware-test README
+a person reads before running Lance on a 16 GB Mac, and a comment beside the manifest digest. The
+runner was adopted in 0.6.82 — it is pinned at `f8ecc5a8…`, staged as `runtimes/video-lance`,
+measured twice, and published as eligible — so every one of those was a document contradicting the
+code that ships beside it.
+
+**Why it mattered rather than being cosmetic.** The hardware-test README told a reader that Lance
+"is offered nowhere" and that its 16 GB run "is not something these commands can measure" — the one
+document whose whole job is to tell the owner which run to do. Corrected, with the measured numbers
+it should have carried: **8.11 GB** peak in `relay` mode (what a 16 GB Mac gets) and **20.0 GB** in
+`parallel`, both by sampled `footprint phys_footprint_peak`, and the honest remainder — a 16 GB
+machine has still not run it, which is the owner's run to make.
+
+**Also corrected in the same pass:** the LTX runtime's smoke check still maps `video-lance` to
+`None`, which is right — that engine lives in its own Python 3.12 tree — but the reason it printed
+was the stale one; and a typo (`SDD` for SSD) in the same README.
+
+Nothing about the lane's behaviour changes: this release is the code's own account of itself.
+
 ## 0.6.84 — 2026-09-27 · The pickers were empty, and the switch reaches the Video page
 
 **A live defect, found by a test written for something else.** The Video page needed a test for

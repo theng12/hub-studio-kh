@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.85 — 2026-09-27
+
+### The instructions said the smaller video model could not run
+
+The smaller video model's runner was adopted a few releases ago — it is pinned, packaged, measured
+and offered by the app. Five documents still said it was "not adopted yet", including the sheet that
+tells you which model to test on which Mac, which claimed the app offers it nowhere. All five now
+say what the app does, with the measured numbers: about **8 GB** of memory in the mode a 16 GB Mac
+uses, about **20 GB** on this Mac's faster mode. Nothing about the app's behaviour changed in this
+release; it is the paperwork catching up with the app.
+
 ## 0.6.84 — 2026-09-27
 
 ### The model lists were coming up empty

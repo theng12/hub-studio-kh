@@ -233,8 +233,8 @@ DETAILS: dict[str, dict[str, Any]] = {
     # pipeline loads it, because a machine that cannot hold the 22B model cannot use the encoder
     # either.
     "gemma-3-12b-it-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (24, 32, "Companion of the LTX-2.3 22B pack: the pipeline loads this text encoder for every prompt, and its 5.0 GB of weights are inside that pack's measured 16.38 GB process footprint.")},
-    # [V] The model card's own figures, and they are the only evidence that exists: no local run,
-    # because neither the lance-mlx runner nor the weights are adopted here yet. The card groups
+    # [V] The model card's own figures for the *processor*, which is not a model: it carries no
+    # weights, so no run measures it on its own. Its memory is the runner's, measured. The card groups
     # 8-16 GB together while its own worked example (256x61f, ~8.7 GB by ri_phys) exceeds an
     # 8 GB machine's whole RAM, so the published floor is the card's credible side.
     "lance-3b-processor-qwen2-5-vl": {
