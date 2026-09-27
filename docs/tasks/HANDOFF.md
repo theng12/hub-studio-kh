@@ -3,7 +3,44 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.88** (the video verdicts, and six things the app could not show you, 2026-09-28).
+Last updated: **0.6.89** (the worker could not read its own second engine, 2026-09-28).
+
+> **0.6.89 — the app said "Not installed" about a package that was installed.**
+>
+> The owner asked twice, and the second time was the tell: the Hub answered `files_verified` /
+> `eligible` for `yue2-3b-mlx` while the picker read `missing`. The picker reads the **worker's**
+> catalogue, and three defects were stacked there, each hiding the next:
+>
+> 1. **`MusicCache` checked every manifest against one global engine constant.** `catalog.ENGINE` is
+>    `music-mlx` (ACE-Step's token); YuE2's manifest correctly says `music-yue2`, so the cache raised
+>    *"Music manifest engine does not match the worker"* before looking for a single file. Models now
+>    carry their own `ModelEntry.manifest_engine`, read via `manifest_engine_for`. **`runtime` (the
+>    executor in this worker) and the manifest's `engine` (the Hub's routing token) are different
+>    facts** — for ACE-Step they are `ace-step` and `music-mlx`, for YuE2 both are `music-yue2`.
+>    Conflating them is what cost this release.
+> 2. **The companion check ran without the catalogue that names companions.** `preflight` takes a
+>    `catalog` map to resolve `requires_packages`; the worker passed none, so `yue2-3b-mlx` — which
+>    requires `yue2-vae` — answered `dependency_missing` for ever, however well it was verified.
+>    `model_packages.load_catalog(directory)` is the worker-side reader (the Hub keeps its own, which
+>    degrades per manifest because it feeds a route) and `MusicCache` passes it.
+> 3. **The route flattened every failure to `"missing"`.** `manifest_unavailable`,
+>    `runtime_unsupported` and `engine_root_missing` all reached the operator as *"download it"*. The
+>    route publishes the state the worker measured, with its reason. **Do not re-flatten it:** a
+>    refusal that names its cause and is renamed by its caller is the defect.
+>
+> `preflight` also refused the engine it ships (`runtime_unsupported` for anything not ACE-Step or
+> Stable Audio), so YuE2 could never report as installed even with a readable manifest; both
+> self-runtime engines now pass through to the package answer.
+>
+> **Live proof, not just tests:** the Music worker's own catalogue now answers
+> `vanch007/mlx-Yue2-3B → cache=cached, runtime_ready=True` (ACE-Step is `missing` because it really
+> is not in this Mac's library — it lives on the SSD kit), and `preflight` returns `cached` with its
+> checkpoint root.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1407 tests, OK (11 skipped), 590 s, exit 0.**
+> **Released 2026-09-28.** `dist/StudioHub-0.6.89-86e5a45.dmg` — **1,941,667,170 bytes**, sha256
+> `1edd2b926fdd79d70455b041bf3e34323262b1c4dd3593acca73647adbd59456`. Installed and live: 0.6.89.
+> `implementation/voice-runtime` and `main` are both `86e5a45`.
 
 > **0.6.88 — the video verdicts, and six things the app could not show you.**
 >
