@@ -3,7 +3,43 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.83** (silent video on request, and a canvas that is really 16:9, 2026-09-27).
+Last updated: **0.6.84** (two decoding defects that emptied every model list, and the audio switch on the Video page, 2026-09-27).
+
+> **0.6.84 — the model lists were empty, and the switch reached the Video page.**
+>
+> **A live defect, found by a test written for something else.** The Video page needed a test for the
+> audio switch, so the native fixture gained a video model carrying the lane contract the running Hub
+> actually publishes. The catalogue stopped decoding — and it turned out the app on this Mac had been
+> in that state since the video lane began publishing canvases:
+>
+> - **`enum` is not always strings.** The video lane publishes `"enum": [2, 4]` for
+>   `duration_seconds` and `[24]` for `frame_rate`; `NativeLaneParameter` decoded `enum` as
+>   `[String]`, so the response failed with `typeMismatch … parameters[4].enum[0]`. The lane's values
+>   are read as JSON values (`optionValues`) now and rendered as text for pickers (`options`), so `2`
+>   is the integer the lane published and shows as `2`.
+> - **A snake_case `CodingKey` can never match under this app's key strategy.** `perform` sets
+>   `.convertFromSnakeCase`, which rewrites the JSON's `aspect_ratio` to `aspectRatio` before
+>   matching — so `case aspectRatio = "aspect_ratio"` in `NativeLaneCanvas` was unreachable and every
+>   canvas failed with `keyNotFound: aspect_ratio`.
+>
+> **Why one bad row emptied every picker:** `/api/hub/catalog` is decoded whole. Measured against the
+> running Hub 0.6.83 with the app's own types: **33 models failed to decode before, 33 decode now**,
+> with the LTX lane's five canvases, its `["2", "4"]` duration options and its `audio` switch. The
+> fixture keeps a video row with both shapes, so either regression empties the list and fails the
+> completeness assertion by name.
+>
+> **The switch is on the Video page.** Every boolean parameter the selected model publishes gets a
+> toggle, with the lane's own note under it. A lane that publishes none (Lance) gets no control; an
+> untouched switch is left out of the request so the lane's own default decides; a model change drops
+> a choice the newly selected model does not publish; and a switch with no published default is
+> disabled rather than drawn as off, which would be this app answering for the lane. The store owns
+> the pruning (`snapVideoSwitchesToPublished`), so a second caller cannot forget it.
+>
+> **`native/render-page.sh` gained `STUDIOHUB_RENDER_VIDEO_MODEL=<repo>`** so the controls below the
+> picker can be looked at without selecting a model by hand. Evidence:
+> `qualification/native-video-switch-20260927/video-page-with-published-switch.png`.
+>
+> **Gate 1384 passed / 11 skipped / 1111 subtests; `native/build.sh` green.**
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
