@@ -435,8 +435,18 @@ struct NativeLaneParameter: Decodable, Equatable, Identifiable {
     let maximumExclusive: Bool?
     let maxCharacters: Int?
     let maxBytes: Int?
-    /// The lane's own options, in the lane's own order.
+    /// The lane's own options, in the lane's own order, as text for a picker.
+    ///
+    /// **`enum` is not always strings, and decoding it as if it were took the whole catalogue
+    /// down.** Measured 2026-09-27 against the running Hub 0.6.83: the video lane publishes
+    /// `"enum": [2, 4]` for `duration_seconds` and `[24]` for `frame_rate`, so `[String]` failed,
+    /// the `/api/hub/catalog` response failed to decode, and every model list in the app went
+    /// empty — voice, image and chat included, for a number in one video parameter. `optionValues`
+    /// keeps the lane's own values with their types; this is the same list rendered for display,
+    /// because a duration of 2 seconds is the integer 2 and reads as "2".
     let options: [String]?
+    /// The lane's options exactly as published, with their own JSON types.
+    let optionValues: [NativeJSONValue]?
     let defaultValue: NativeJSONValue?
     /// The lane's own sentence about the parameter — including that it is accepted and ignored.
     let note: String?
@@ -453,8 +463,73 @@ struct NativeLaneParameter: Decodable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case name, type, required, minimum, maximum, note, ignored, ladder
         case minimumExclusive, maximumExclusive, maxCharacters, maxBytes, boundSource
-        case options = "enum"
+        case optionValues = "enum"
         case defaultValue = "default"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(String.self, forKey: .type)
+        required = try container.decodeIfPresent(Bool.self, forKey: .required)
+        minimum = try container.decodeIfPresent(Double.self, forKey: .minimum)
+        maximum = try container.decodeIfPresent(Double.self, forKey: .maximum)
+        minimumExclusive = try container.decodeIfPresent(Bool.self, forKey: .minimumExclusive)
+        maximumExclusive = try container.decodeIfPresent(Bool.self, forKey: .maximumExclusive)
+        maxCharacters = try container.decodeIfPresent(Int.self, forKey: .maxCharacters)
+        maxBytes = try container.decodeIfPresent(Int.self, forKey: .maxBytes)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        ignored = try container.decodeIfPresent(Bool.self, forKey: .ignored)
+        ladder = try container.decodeIfPresent([NativeLadderRung].self, forKey: .ladder)
+        boundSource = try container.decodeIfPresent(String.self, forKey: .boundSource)
+        defaultValue = try container.decodeIfPresent(NativeJSONValue.self, forKey: .defaultValue)
+        // The lane's own values, whatever types it used. An entry this app has no rule for is
+        // dropped with the rest of the list kept: one unreadable option must not empty a picker,
+        // and it must not fail the catalogue either.
+        let values = (try? container.decodeIfPresent([NativeJSONValue].self, forKey: .optionValues)) ?? nil
+        optionValues = values
+        options = values?.compactMap(Self.optionText)
+    }
+
+    /// Build one parameter from values already in hand.
+    ///
+    /// The decoder above is what reads the wire; this exists for callers that construct a
+    /// parameter directly (tests, and any future editor), and it keeps `optionValues` derived from
+    /// `options` so the two can never disagree. Declaring `init(from:)` suppresses the implicit
+    /// memberwise initializer, which is why it is written out here.
+    init(name: String, type: String, required: Bool?, minimum: Double?, maximum: Double?,
+         minimumExclusive: Bool?, maximumExclusive: Bool?, maxCharacters: Int?, maxBytes: Int?,
+         options: [String]?, defaultValue: NativeJSONValue?, note: String?, ignored: Bool?,
+         ladder: [NativeLadderRung]?, boundSource: String?) {
+        self.name = name
+        self.type = type
+        self.required = required
+        self.minimum = minimum
+        self.maximum = maximum
+        self.minimumExclusive = minimumExclusive
+        self.maximumExclusive = maximumExclusive
+        self.maxCharacters = maxCharacters
+        self.maxBytes = maxBytes
+        self.options = options
+        self.optionValues = options?.map { .string($0) }
+        self.defaultValue = defaultValue
+        self.note = note
+        self.ignored = ignored
+        self.ladder = ladder
+        self.boundSource = boundSource
+    }
+
+    /// One published option as text. Integers and numbers are written plainly — the lane said
+    /// `2` and a picker shows `2` — and every other kind is left out rather than described.
+    private static func optionText(_ value: NativeJSONValue) -> String? {
+        switch value {
+        case .string(let text): return text
+        case .integer(let number): return String(number)
+        case .number(let number):
+            return number == number.rounded() ? String(Int(number)) : String(number)
+        case .bool(let flag): return flag ? "true" : "false"
+        case .null: return nil
+        }
     }
 
     /// Whether the lane itself says it accepts this parameter and discards it.
@@ -537,9 +612,16 @@ struct NativeLaneCanvas: Decodable, Equatable {
     let height: Int
     let durations: [Int]
 
+    // **No explicit `"aspect_ratio"` here, and that is the fix for a live defect.** The decoder
+    // this app uses sets `keyDecodingStrategy = .convertFromSnakeCase`, which rewrites the JSON's
+    // `aspect_ratio` to `aspectRatio` before matching — so a CodingKey whose raw value is the
+    // snake_case spelling can never be found. Every canvas failed to decode, and because the
+    // catalogue response is decoded whole, one canvas emptied **every** model list in the app.
+    // Measured 2026-09-27 against the running Hub 0.6.83: `keyNotFound: aspect_ratio …
+    // models[19].laneContract.canvases[0]`. The strategy is the only key mapping this app needs;
+    // the key is spelled the way the strategy produces it.
     enum CodingKeys: String, CodingKey {
-        case aspectRatio = "aspect_ratio"
-        case resolution, width, height, durations
+        case aspectRatio, resolution, width, height, durations
     }
 }
 
@@ -1025,6 +1107,16 @@ struct NativeModel: Identifiable, Equatable {
     /// discards), so their absence is what "this model cannot sing" is read from. This list
     /// interprets a published vocabulary; it never decides whether a control exists.
     static let vocalParameters: Set<String> = ["instrumental", "lyrics", "vocal_language"]
+
+    /// The lane's published **switches**: every boolean parameter it honours, in its own order.
+    ///
+    /// A switch is a choice, not a capability, and it is the lane's to publish. Studio Hub 0.6.83
+    /// gave the LTX lane an `audio` parameter (default true, with the lane's own note) and no other
+    /// video parameter is a boolean, so the Video page renders a toggle for exactly what this
+    /// returns and never for a name this app knows on its own. Empty means the lane publishes none.
+    var publishedBooleanParameters: [NativeLaneParameter] {
+        (laneContract?.parameters ?? []).filter { $0.type.lowercased() == "boolean" }
+    }
 }
 
 extension NativeModel {
@@ -2158,6 +2250,12 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var videoAspectRatio = "" { didSet { scheduleSave() } }
     @Published var videoResolution = "" { didSet { scheduleSave() } }
     @Published var videoDurationSeconds = 0 { didSet { scheduleSave() } }
+    /// The operator's own value for each **published switch** on the selected video model, by the
+    /// lane's own parameter name. Empty means nobody chose anything, which is not the same as
+    /// "off": an untouched switch leaves the field out of the request so the lane's own default
+    /// decides. Only names the selected model publishes are ever sent, and
+    /// `snapVideoControlsToPublishedCanvases` prunes a choice that belonged to a previous model.
+    @Published var videoSwitches: [String: Bool] = [:] { didSet { scheduleSave() } }
     /// A Video-only note, shown beside the Video form.
     @Published var videoNote: String?
     @Published private(set) var submittingVideo = false
@@ -3707,6 +3805,26 @@ final class NativeWorkspaceStore: ObservableObject {
     /// `aspect_ratio`, `resolution` and `duration_seconds`, each taken from the lane's own enum.
     /// A model that publishes none of them still submits a prompt, because those are optional in
     /// every video contract this build ships.
+    /// The selected video model's published switches, in the lane's own order.
+    ///
+    /// Read from the model's contract rather than a list in the view, so the page renders exactly
+    /// what this Mac's worker will honour — including nothing at all for a lane that publishes none.
+    var selectedVideoSwitches: [NativeLaneParameter] {
+        supportedModels(for: .video).first { $0.repo == videoModel }?.publishedBooleanParameters ?? []
+    }
+
+    /// Drop any switch value the selected model does not publish.
+    ///
+    /// Called when the page opens and whenever the model changes. A value that survived a model
+    /// change would be sent for a lane that never offered the choice, and the operator would have
+    /// no way to see why — this is the store's invariant, not the view's, so a second caller
+    /// cannot forget it.
+    func snapVideoSwitchesToPublished() {
+        let published = Set(selectedVideoSwitches.map(\.name))
+        let pruned = videoSwitches.filter { published.contains($0.key) }
+        if pruned != videoSwitches { videoSwitches = pruned }
+    }
+
     func generateVideo() async {
         guard !submittingVideo, let requestConnection = connectionID else { return }
         do {
@@ -3718,6 +3836,14 @@ final class NativeWorkspaceStore: ObservableObject {
             if !videoAspectRatio.isEmpty { params["aspect_ratio"] = .string(videoAspectRatio) }
             if !videoResolution.isEmpty { params["resolution"] = .string(videoResolution) }
             if videoDurationSeconds > 0 { params["duration"] = .integer(videoDurationSeconds) }
+            // The published switches this model honours, and only those: a value for a switch it
+            // does not publish is dropped here rather than sent for the lane to ignore or refuse.
+            // An untouched switch is absent, so the lane's own default stands — never a value
+            // this app decided on the operator's behalf.
+            for parameter in model.publishedBooleanParameters {
+                guard let choice = videoSwitches[parameter.name] else { continue }
+                params[parameter.name] = .bool(choice)
+            }
             let body = HubVideoRequest(
                 modality: "video", model: model.repo,
                 clientRequestId: "native:\(UUID().uuidString)",

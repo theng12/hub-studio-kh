@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.84 — 2026-09-27 · The pickers were empty, and the switch reaches the Video page
+
+**A live defect, found by a test written for something else.** The Video page needed a test for
+the audio switch, so the native fixture gained a video model with the lane contract the running
+Hub actually publishes — numeric enums, canvases and all. The catalogue stopped decoding, and it
+turned out the app on this Mac had been in that state for three releases:
+
+- **`enum` is not always strings.** The video lane publishes `"enum": [2, 4]` for
+  `duration_seconds` and `[24]` for `frame_rate`; `NativeLaneParameter` decoded `enum` as
+  `[String]`, so the response failed with `typeMismatch … parameters[4].enum[0]`. The lane's
+  values are now read as JSON values (`optionValues`) and rendered as text for pickers (`options`),
+  so `2` is the integer the lane published and shows as `2`.
+- **A snake_case `CodingKey` can never match under this app's key strategy.** The decoder sets
+  `.convertFromSnakeCase`, which rewrites the JSON's `aspect_ratio` to `aspectRatio` before
+  matching — so `case aspectRatio = "aspect_ratio"` in `NativeLaneCanvas` was unreachable and
+  every canvas failed with `keyNotFound: aspect_ratio`.
+
+**Why that emptied every list and not just the video page:** `/api/hub/catalog` is decoded whole,
+so one unreadable row fails the entire response. Measured against the running Hub 0.6.83 with the
+app's own types: 33 models failed to decode before, and 33 decode now, with the LTX lane's five
+canvases, its `["2", "4"]` duration options and its `audio` switch. The fixture keeps a video row
+with both shapes, so either regression empties the list and fails the completeness assertion by
+name.
+
+**The audio switch is on the Video page now.** Every boolean parameter the selected model
+publishes gets a toggle, with the lane's own note under it — for LTX that is the sentence saying
+picture and sound are made in one pass, so a silent clip is not cheaper or faster. A lane that
+publishes no switch (Lance) gets no control, an untouched switch is left out of the request so the
+lane's own default decides, and a model change drops a choice the newly selected model does not
+publish rather than sending it on.
+
+**Evidence:** `qualification/native-video-switch-20260927/video-page-with-published-switch.png` —
+the real page, rendered offscreen against the running Hub by `native/render-page.sh`, with the
+switch, the lane's note and the catalogue counts in the sidebar.
+
 ## 0.6.83 — 2026-09-27 · Sound becomes a choice, and 16:9 becomes real
 
 **Ask for a video without sound.** LTX denoises picture and sound *together*, so the audio it makes

@@ -69,6 +69,14 @@ struct PageRenderHarness {
             }
         }
 
+        // `STUDIOHUB_RENDER_VIDEO_MODEL=<repo>` renders the Video page with a model already
+        // chosen, because every control below the picker — the canvas pairs, the durations and the
+        // lane's published switches — is drawn only once a model is selected. Without it a layout
+        // change to those controls can only be checked by selecting a model by hand in the app.
+        if let repo = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_VIDEO_MODEL"], !repo.isEmpty {
+            studio.workspace.videoModel = repo
+        }
+
         // `STUDIOHUB_RENDER_RESTART=1` pretends a change is waiting for a restart, so the notice
         // that only appears while the services run can still be looked at.
         if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_RESTART"] == "1" {

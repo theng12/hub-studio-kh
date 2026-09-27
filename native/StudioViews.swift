@@ -1731,6 +1731,32 @@ struct StudioContent: View {
                                 }.labelsHidden().frame(maxWidth: 220)
                             }
                         }
+                        // The lane's own switches, from its own contract. The lane's `note` is
+                        // shown under each one, because it is the only honest statement of what
+                        // the switch does — for `audio` it says the model makes picture and sound
+                        // in one pass, so a silent clip is not cheaper or faster.
+                        ForEach(selectedVideoModel?.publishedBooleanParameters ?? []) { parameter in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Toggle(videoSwitchLabel(parameter.name), isOn: videoSwitchBinding(parameter))
+                                    .toggleStyle(.switch)
+                                    .frame(maxWidth: 260, alignment: .leading)
+                                    // A switch with no published default has no position this page
+                                    // can honestly show, so it is left to the lane rather than
+                                    // drawn as off — which would be this app answering for the lane.
+                                    .disabled(parameter.defaultValue == nil)
+                                if parameter.defaultValue == nil {
+                                    Text("This lane publishes no default for this switch, so it is "
+                                         + "left to the model.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: 420, alignment: .leading)
+                                } else if let note = parameter.note, !note.isEmpty {
+                                    Text(note).font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: 420, alignment: .leading)
+                                }
+                            }
+                        }
                         HStack {
                             if workspace.submittingVideo { ProgressView().controlSize(.small) }
                             Button("Generate Video") { Task { await workspace.generateVideo() } }
@@ -1834,6 +1860,10 @@ struct StudioContent: View {
     /// A control left on a pair no canvas carries is the defect this exists to prevent — the
     /// worker refuses it, and the operator sees a refusal for a choice this page offered.
     private func snapVideoControlsToPublishedCanvases() {
+        // A switch the newly selected model does not publish is dropped, not carried: a value that
+        // survived a model change would be sent for a lane that never offered the choice, and the
+        // operator would have no way to see why. Published names are kept with their values.
+        workspace.snapVideoSwitchesToPublished()
         if let value = videoDefault("aspect_ratio"), workspace.videoAspectRatio.isEmpty {
             workspace.videoAspectRatio = value
         }
@@ -1860,6 +1890,25 @@ struct StudioContent: View {
             workspace.videoDurationSeconds = durations.contains(preferred ?? -1)
                 ? (preferred ?? durations[0]) : durations[0]
         }
+    }
+
+    /// A switch's label, from the lane's own parameter name. The lane's `note` carries the meaning;
+    /// this only turns `audio` into `Audio` so the control reads as a label rather than a field.
+    private func videoSwitchLabel(_ name: String) -> String {
+        name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// What a switch shows: the operator's own choice when they made one, otherwise the lane's
+    /// published default. **A lane that publishes no default shows off and cannot be moved** — the
+    /// page cannot display a state nobody stated, and sending one would decide for the lane.
+    private func videoSwitchBinding(_ parameter: NativeLaneParameter) -> Binding<Bool> {
+        Binding(
+            get: {
+                if let chosen = workspace.videoSwitches[parameter.name] { return chosen }
+                if case .bool(let stated) = parameter.defaultValue { return stated }
+                return false
+            },
+            set: { value in workspace.videoSwitches[parameter.name] = value })
     }
 
     private func videoDefault(_ name: String) -> String? {

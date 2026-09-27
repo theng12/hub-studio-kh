@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.84 — 2026-09-27
+
+### The model lists were coming up empty
+
+A test written for the video switch found something worse: the app could not read your Hub's model
+catalogue at all. Two things in a video model's published settings broke it — a list of numbers
+where the app expected words (`2 s`, `4 s`, `24 fps`), and a field name the app was looking for in
+a spelling its reader never produces. Because the catalogue arrives in one piece, one unreadable
+model emptied **every** picker: Image, Audio, Chat and Video alike. Both are fixed, and the whole
+list of 33 models now reads.
+
+### The small model's sound control is on the Video page
+
+The video page now shows a **switch for every on/off setting the selected model publishes** — for
+the big model, that is Audio. Under it is the model's own sentence about what the switch does: it
+makes picture and sound in one pass, so leaving sound off does not make the clip cheaper or
+quicker, it just writes a file with no audio track. The smaller model publishes no such switch, so
+its page shows none, and a setting you never touched is left to the model to decide.
+
 ## 0.6.83 — 2026-09-27
 
 ### You can ask for a video with no sound
