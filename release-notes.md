@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.91 — 2026-09-28
+
+### The drive's version label writes itself now
+
+The sheet on each drive that says which build you have was wrong three times over — it said 0.6.89
+while the app beside it was 0.6.90 — because someone had to remember to edit it. It is now stamped
+from the app itself as the drive is prepared, so the two cannot disagree.
+
 ## 0.6.90 — 2026-09-28
 
 ### The kit's own paperwork is now part of the kit

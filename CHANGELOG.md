@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.91 — 2026-09-28 · The drive index now stamps itself
+
+**A hand-maintained answer to "which build is this?" has been wrong three times.** The ledger has it
+twice — `0.6.63` printed against a `0.6.70` bundle, `0.6.70` printed against `0.6.89` — and this
+release is the third: preparing the drives at 0.6.90 copied `Studio Hub KH.md` faithfully, and the
+document still said `0.6.89`, because that is what the repository copy said when it was written an
+hour earlier. Editing the number again would have been the fourth.
+
+**`prepare-kit.sh` now stamps the two version lines from the app it has just placed on the drive** —
+`CFBundleShortVersionString` and the commit in that bundle's own `release-manifest.json` — so the
+document beside the app cannot disagree with it, whatever the repository copy says. The repository
+copy is corrected to 0.6.90 as well, because a file in git that names the wrong build is the same
+defect one level up.
+
+This is the same medicine `README.md`'s Studio Hub row already takes: it names no version at all and
+points at the drive's generated `focused-release-manifest.json`. The rule both now follow is the one
+this project keeps relearning — **a copy of a fact needs a check, or it needs to be derived.**
+
 ## 0.6.90 — 2026-09-28 · The drive index named versions three releases old
 
 **The kit's own READMEs were the last thing anyone updated.** Preparing the drives for distribution

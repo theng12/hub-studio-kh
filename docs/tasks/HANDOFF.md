@@ -3,7 +3,54 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.89** (the worker could not read its own second engine, 2026-09-28).
+Last updated: **0.6.90** (the drive index named versions three releases old, 2026-09-28).
+
+> **0.6.90 — the distribution kits are current, and their index documents can no longer drift.**
+>
+> **The drift, found while preparing the drives for distribution.** The kit's two index documents
+> named versions *three releases old*: `README.md` said Story Studio **1.4.219** and GatewayKH
+> **0.2.44** against kits carrying 1.4.234 and 0.2.60, and `Studio Hub KH.md` — the page whose entire
+> job is to say which build an operator has — said **0.6.58 / `eea477e`**. The repository's copy was
+> worse than the drives': GatewayKH **0.2.2**. **Nothing copied them**, which is why: `prepare-kit.sh`
+> refreshed the app, the Technical folder and the kit manifest and never touched the index documents,
+> so each drive kept whatever it was born with. Both are now copied on every prepare, and the Studio
+> Hub row in `README.md` no longer states a number — it points at the drive's own
+> `focused-release-manifest.json`, which is generated from the bundle **on that drive** and cannot
+> disagree with it.
+>
+> **The kits were a subset of the catalogue.** The drives carried **24 of 30** packages. Every kit
+> library now carries the six the catalogue adds — **YuE2 3B and its decoder** (on no drive before
+> this), **LTX-2.3 22B**, **gemma-3-12b** (LTX's text encoder) and, where the volume already held the
+> weights, **Lance 3B and its processor** — in the layout a package verifies against, recorded in each
+> drive's own `.studiohub/installed.json` after a **full rehash on that drive**. A copy is not an
+> installation until the bytes are read back, and that is why `release_kit.py` called packages "not
+> shipped" while they sat on the disk. Where the exploration library already had the bytes they were
+> adopted by **hard link**: 15.6 GB on NOVA with no new bytes written.
+>
+> **Two tools, in `.build/` (untracked, like the DMG and kit scripts).** `kit-add-models.sh` places a
+> package in the kit layout — hard link when the volume already has it, copy when it does not — and
+> `kit-verify-models.sh` rehashes a drive's library into its own index, **adopting companions before
+> their dependents** (`yue2-3b-mlx` requires `yue2-vae`; verifying in catalogue order answers
+> `dependency_missing` for ever). `prepare-kit.sh` now takes its stage from `STAGE_DIR` instead of a
+> hard-coded `.build/StudioHub-0670`, which is how a drive gets prepared from an old build while the
+> release moves on.
+>
+> **The four drives, as they now stand** (`verify-kit.sh` → PASS on all four):
+>
+> | Drive | Kit | Packages | Library | Note |
+> |---|---|---|---|---|
+> | KH-STUDIO-NOVA | 0.6.90 | **30 / 30** | 115.3 GiB | the only drive carrying Lance |
+> | KH-STUDIO-ATLAS | 0.6.90 | 28 / 30 | 100.7 GiB | Lance not shipped |
+> | KH-STUDIO-ORICO | 0.6.90 | 28 / 30 | 100.7 GiB | Lance not shipped |
+> | KH-STUDIO-UGREEN | 0.6.90 | 28 / 30 | 100.7 GiB | Lance not shipped |
+>
+> **Lance is on NOVA only, deliberately.** The owner is not pursuing it and asked for it to be kept
+> rather than removed; copying 15.6 GB to three more drives would buy nothing, and those kit manifests
+> say "not shipped", which is true and is what the app offers as a download.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1407 tests, OK (11 skipped), 588 s, exit 0.**
+> **Released 2026-09-28.** `dist/StudioHub-0.6.90-20d1795.dmg` — **1,941,403,910 bytes**, sha256
+> `PENDING`. Installed and live: 0.6.90. `implementation/voice-runtime` and `main` are `20d1795`.
 
 > **0.6.89 — the app said "Not installed" about a package that was installed.**
 >
