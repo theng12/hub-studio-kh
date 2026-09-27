@@ -3,7 +3,66 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.90** (the drive index named versions three releases old, 2026-09-28).
+Last updated: **0.6.91** (the drive index stamps itself; the kits are current, 2026-09-28).
+
+> **0.6.91 — the distribution kits are current, and their index documents can no longer drift.**
+>
+> **Every drive is at 0.6.91 and every verifier says PASS.** `verify-kit.sh` on each volume reports
+> app 0.6.91 (92,896 files, 5.37 GB), identity `0.6.91 92d7642…`, 0 quarantined files, and the app in
+> the kit starting and answering its health check:
+>
+> | Drive | Kit | Packages | Kit library | `Studio Hub KH.md` | Lance |
+> |---|---|---|---|---|---|
+> | KH-STUDIO-NOVA | 0.6.91 | **30 / 30** | 132.4 GB (123.8 GB checked) | `0.6.91 · 92d7642` | shipped |
+> | KH-STUDIO-ATLAS | 0.6.91 | 28 / 30 | 118.8 GB (108.2 GB checked) | `0.6.91 · 92d7642` | not shipped |
+> | KH-STUDIO-ORICO | 0.6.91 | 28 / 30 | 118.8 GB (108.2 GB checked) | `0.6.91 · 92d7642` | not shipped |
+> | KH-STUDIO-UGREEN | 0.6.91 | 28 / 30 | 118.8 GB (108.2 GB checked) | `0.6.91 · 92d7642` | not shipped |
+>
+> **Lance is on NOVA only, deliberately.** The owner is not pursuing it and asked for it to be kept
+> rather than removed; copying 15.6 GB to three more drives buys nothing, and those manifests say
+> "not shipped", which is true and is what the app offers as a download.
+>
+> **Three defects were found by preparing the drives, and all three are fixed at their cause:**
+>
+> 1. **The kit's index documents were three releases old.** `README.md` named Story Studio **1.4.219**
+>    and GatewayKH **0.2.44** against kits carrying 1.4.234 and 0.2.60; `Studio Hub KH.md` — the page
+>    whose job is to say which build an operator has — said **0.6.58 / `eea477e`**, and the
+>    repository's own copy was worse (GatewayKH **0.2.2**). **Nothing copied them**: `prepare-kit.sh`
+>    refreshed the app, the Technical folder and the kit manifest and never touched the index pages,
+>    so every drive kept whatever it was born with. They are copied on every prepare now, the Studio
+>    Hub row in `README.md` names no version at all (it points at the drive's generated
+>    `focused-release-manifest.json`), and **the two version lines in `Studio Hub KH.md` are stamped
+>    from the app being placed on the drive** — `CFBundleShortVersionString` plus
+>    `implementation_commit` from that bundle's own `release-manifest.json`. The first attempt read a
+>    key that does not exist (`commit`) and stamped `0.6.91 · unknown` on four drives; the key is
+>    `implementation_commit`.
+> 2. **The kit was a subset of the catalogue — 24 of 30.** Every kit library now carries the six the
+>    catalogue adds: **YuE2 3B and its decoder** (on no drive before this), **LTX-2.3 22B**,
+>    **gemma-3-12b** (LTX's text encoder) and, where the volume already had the bytes, Lance, in the
+>    layout a package verifies against. Each drive's `.studiohub/installed.json` records them after a
+>    **full rehash on that drive** — a copy is not an installation until the bytes are read back,
+>    which is why `release_kit.py` called packages "not shipped" while they sat on the disk.
+> 3. **Story Studio and GatewayKH were never refreshed either, and GatewayKH's installer was
+>    missing.** The drives offered **Story Studio 1.4.219** and a `SHA256SUMS.txt` that named
+>    `installers/gateway-kh-0.2.44.dmg` — **for an `installers/` folder that did not exist**. All four
+>    drives now carry `Story Studio KH 1.4.234-arm64.dmg` and `GatewayKH/installers/gateway-kh-0.2.60.dmg`,
+>    with every checksum file **regenerated from the file beside it** and the two READMEs stamped from
+>    the installer's name and (for Gateway) the `studio_hub.SUPPORTED_STUDIO_HUB_VERSION` its own
+>    source declares. Superseded installers went to each drive's `_trash`.
+>
+> **Four tools, all in `.build/` (untracked, like the DMG and kit scripts):**
+> `kit-add-models.sh` (hard link when the volume has the bytes, copy when it does not),
+> `kit-verify-models.sh` (rehash a drive's library into its index, **adopting companions before their
+> dependents** — catalogue order answers `dependency_missing` for ever otherwise),
+> `kit-refresh-apps.sh` (Story + Gateway installers and their checksums) and `kit-reprepare-all.sh`
+> (prepare and verify all four drives). `prepare-kit.sh` now takes `STAGE_DIR` instead of a hard-coded
+> `.build/StudioHub-0670` — that hard-coding is how a drive gets prepared from an old build while the
+> release moves on.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1407 tests, OK (11 skipped), 600 s, exit 0.**
+> **Released 2026-09-28.** `dist/StudioHub-0.6.91-92d7642.dmg` — **1,939,227,793 bytes**, sha256
+> `430bcd114a02b4e389cd98d78f3201af8fa07527f74639c5681f979211aa0b60`. Installed and live: 0.6.91.
+> `implementation/voice-runtime` and `main` are both `92d7642`.
 
 > **0.6.90 — the distribution kits are current, and their index documents can no longer drift.**
 >
