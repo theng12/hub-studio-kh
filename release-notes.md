@@ -2,6 +2,29 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.82 — 2026-09-27
+
+### The second video model can run now
+
+The smaller video model, Lance 3B (bf16), was listed but not runnable: its runner had not been
+adopted into the app. It is now part of the build, with its own runtime, and it has made real clips
+on this Mac — including one measured through the app's own video worker. Text-to-video at 256×256:
+about three minutes for a two-second clip, and about 8 GB of memory in the mode a 16 GB Mac uses.
+
+### What it needed, and what that changed
+
+The two video models need **different Python versions**, which is why the app now carries two video
+runtimes rather than one. The smaller model also needs a small helper file set (4.5 MB) beside its
+weights; without it the model would try to reach the internet while loading. Both are packaged and
+checked by content, like every other runtime in this app.
+
+### Also fixed
+
+The app used to describe every video model with the big model's sizes and frame rate. The smaller
+model has its own — square frames at 12 per second — and now says so. And a memory measurement that
+was reported as a few dozen megabytes (it was watching the wrong process) now reports the real
+figure.
+
 ## 0.6.81 — 2026-09-27
 
 ### A video was not the shape the app said it was

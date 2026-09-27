@@ -48,15 +48,30 @@ def rewrite(site_packages: Path) -> int:
     return changed
 
 
+def site_packages(root: Path) -> list[Path]:
+    """Every ``lib/python3.*/site-packages`` in the tree.
+
+    **This used to be the literal string ``python3.11``**, which was right for the one runtime
+    that called it and silently wrong for the next: the Lance runtime is Python **3.12** (its
+    runner declares ``requires-python >= 3.12`` while the LTX one needs 3.11), so this walked
+    past its site-packages, returned early, and left every RECORD hashing the *pre-rewrite*
+    scripts — whose shebangs carried the absolute build path. That is precisely the failure this
+    file documents at the top, and it would have made the Lance digest depend on where it was
+    built. Globbing removes the assumption instead of adding a second hardcoded version.
+    """
+    return sorted(path for path in (root / "lib").glob("python3.*/site-packages") if path.is_dir())
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: normalize_records.py <runtime-root>", file=sys.stderr)
         return 2
-    site = Path(argv[1]) / "lib" / "python3.11" / "site-packages"
-    if not site.is_dir():
+    found = site_packages(Path(argv[1]))
+    if not found:
         print(f"no site-packages under {argv[1]}", file=sys.stderr)
         return 2
-    print(f"normalized {rewrite(site)} RECORD file(s)")
+    total = sum(rewrite(site) for site in found)
+    print(f"normalized {total} RECORD file(s) in {len(found)} site-packages tree(s)")
     return 0
 
 

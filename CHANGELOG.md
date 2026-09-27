@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.6.82 — 2026-09-27 · Lance runs, and the lane stops being LTX-shaped
+
+**The second engine is adopted, and it needed a second interpreter.** `lance-mlx` declares
+`requires-python >= 3.12` while `ltx_pipelines_mlx` needs 3.11 — opposite constraints, so
+"model-agnostic lane" turned out to mean *two pinned runtimes and an interpreter per engine*, not
+one tree with two packages. `packaging/lance-runtime/build.sh` builds the second tree (Python
+3.14→3.12.14 + lance-mlx at `f8ecc5a8…` + MLX 0.31.2), pinned by content at
+`LANCE_RUNTIME_SHA256 = 48dd2bd2…`, and the stager refuses anything else.
+
+**Measured, twice, in the two modes the policy chooses between:**
+
+| Mode | Config | Peak footprint | Wall |
+| --- | --- | --- | --- |
+| `relay` (what a 16 GB Mac gets) | 256×256, 13 frames | **8.11 GB** | 184.9 s |
+| `parallel` (this 32 GB Mac, through the worker's own routes) | 256×256, 25 frames | **20.0 GB** | 329.5 s |
+
+Both by sampled `footprint phys_footprint_peak` **in the process doing the work** — see the defect
+below. The card's 16 GB claim stays `[V]`; 8.11 GB on a machine with no memory pressure is a floor.
+
+**The lane stopped assuming LTX's shape.** Canvases, frame rate, frame grid and the latent ceiling
+were module constants; a Lance request would have been offered 704×448 at 24 fps on an `8k+1` grid,
+outside everything its runner was validated on. They are now per model: Lance publishes square
+256²/512² at **12 fps** on a **`4k+1`** grid (measured: 16 frames in, 13 out), checked against its
+own card's `n_lat ≤ 16,128` production bound rather than LTX's 30,000-token cliff.
+
+**The bridge, and three defects it found.**
+
+- `run_lance` spawns `runtimes/video-lance/bin/python3 lance_runner.py <spec>` and reads one JSON
+  object per line. The runner's own CLI is a **stub** at the pinned commit, so the library API is
+  the only surface.
+- **The worker measured the wrong process.** Its footprint sampler watches the worker, but for this
+  engine the memory is in the child: the first lane run recorded **57 MB** for a job whose real peak
+  was ~8 GB, and would have published it. The bridge samples itself now, and its number wins; the
+  job names the method.
+- **A fixed key list swallowed the measurement.** The bridge reported the peak; `run_lance` copied
+  five named keys and dropped it. The list is now explicit and holds the measurement fields.
+- **The frame-rate parameter still published 24.** LTX's constant was hardcoded in
+  `lane_parameters`, so the Lance default request failed its own validator — found by the first
+  worker-alone run, which is what that run is for.
+
+**Also in this release:** the Qwen2.5-VL processor is a **required companion package**
+(`lance-3b-processor-qwen2-5-vl`, six files, 4.5 MB, captured at `66285546…`). The weights pack
+ships only the tokenizer, so without it the pipeline reaches for huggingface.co at load time; the
+first measured run proved a node can work offline with it installed. And
+`packaging/video-runtime/normalize_records.py` no longer hardcodes `python3.11` — it walked past the
+3.12 tree and would have left every RECORD hashing pre-rewrite scripts whose shebangs carry the
+build path, which is exactly the machine-specific digest that file exists to prevent.
+
+**Evidence.** `qualification/lance-video-worker-results-20260927-first/measurement.json` — job
+`0f259095f44a4c03958e64119f435b47`, `done`, 256×256, 2.084 s, 276,726 bytes, one video track and
+**no audio track** (Lance's t2v is silent, and the LTX-only audio check correctly did not reject
+it). `_orchestra/evidence/lance-first-run-20260927.json` for the relay run. Gate: **1380 passed / 11
+skipped / 1088 subtests**; `bash native/build.sh` green.
+
 ## 0.6.81 — 2026-09-27 · The lane published a canvas its own pack resizes
 
 **Measuring the lane from the SSD found this, and it is the sharpest defect in the video work so

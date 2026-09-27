@@ -36,7 +36,7 @@ Three things the qualification runner learned and this worker must not relearn:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import ctypes
 import importlib.util
@@ -47,7 +47,9 @@ import os
 from pathlib import Path
 import random
 import resource
+import shutil
 import subprocess
+import sys
 import threading
 import time
 from uuid import uuid4
@@ -96,35 +98,61 @@ TWO_STAGE_GRID = 64
 # 1024x576 — far outside the published envelope — and every smaller "16:9" is a 2:1 or 3:2 clip
 # wearing the wrong label. The classes name the *short* side, so 256p is 448x256 or 256x448 and the
 # ratio beside it is the ratio that canvas actually has.
-CANVAS_CLASSES: dict[str, dict[str, tuple[int, int]]] = {
+LTX_CANVASES: dict[str, dict[str, tuple[int, int]]] = {
     '256p': {'7:4': (448, 256), '4:7': (256, 448)},
     '448p': {'1:1': (448, 448), '11:7': (704, 448)},
 }
 
+# **Lance's canvases are its own, and that is the point of the table being per model.**
+#
+# The card's validated envelope is square and stops where the VAE starts producing mesh artifacts
+# (n_lat ≥ ~30k): production through 768²×25f, and 768²×49f measured as degraded. A lane that
+# offered Lance the LTX table — 704×448 at 24 fps, 97 frames — would be offering a configuration
+# outside everything the runner was validated on, which is exactly what the "publish what is known"
+# rule exists to prevent. 640² and 768² are deliberately *not* published yet: they are the card's
+# configs, not this build's, and the tier's job is to keep a 16 GB Mac inside the small end.
+LANCE_CANVASES: dict[str, dict[str, tuple[int, int]]] = {
+    '256p': {'1:1': (256, 256)},
+    '512p': {'1:1': (512, 512)},
+}
 
-def _assert_canvases_are_snap_stable() -> None:
+
+def _assert_canvases_are_snap_stable(
+    table: dict[str, dict[str, tuple[int, int]]], *, grid: int, why: str, name: str
+) -> None:
     """Refuse to import a canvas the pack would silently resize.
 
-    A table entry off the two-stage grid is not a smaller picture or a bigger one — it is a
+    A table entry off the pipeline's grid is not a smaller picture or a bigger one — it is a
     *different aspect ratio* than the one advertised, which is how Story Studio's widescreen
     request received a 2:1 clip. Failing at import names the entry and the rule, instead of
     publishing it and discovering it in an artifact.
     """
-    for klass, canvases in CANVAS_CLASSES.items():
+    for klass, canvases in table.items():
         for ratio, (width, height) in canvases.items():
-            if width % TWO_STAGE_GRID or height % TWO_STAGE_GRID:
+            if width % grid or height % grid:
                 raise ValueError(
-                    f'canvas {klass} {ratio} {width}x{height} is not a multiple of '
-                    f'{TWO_STAGE_GRID} on both sides, so the LTX two-stage pipeline would snap it '
-                    f'to {width - width % TWO_STAGE_GRID}x{height - height % TWO_STAGE_GRID} and '
-                    f'the artifact would not be {ratio}. Publish the snapped canvas, or a canvas '
-                    f'that is already on the grid.')
+                    f'{name} canvas {klass} {ratio} {width}x{height} is not a multiple of '
+                    f'{grid} on both sides, so {why} would snap it to '
+                    f'{width - width % grid}x{height - height % grid} and the artifact would not '
+                    f'be {ratio}. Publish the snapped canvas, or a canvas that is already on the '
+                    f'grid.')
 
 
-_assert_canvases_are_snap_stable()
+_assert_canvases_are_snap_stable(
+    LTX_CANVASES, grid=TWO_STAGE_GRID, name='LTX',
+    why='the two-stage pipeline')
+# Lance's Wan2.2 VAE compresses 16× spatially (and 4× in time), so its stable grid is 16.
+_assert_canvases_are_snap_stable(
+    LANCE_CANVASES, grid=16, name='Lance',
+    why='the Wan2.2 VAE')
+
+# The table a model falls back to when it declares none: the LTX one, which is what every model in
+# this lane published before the table became per-model.
+CANVAS_CLASSES = LTX_CANVASES
 
 # Durations the lane answers, in whole seconds at the published frame rate. 49 and 97 frames are
-# 8k+1 at 24 fps; 97 frames at 704x448 is the measured configuration.
+# 8k+1 at 24 fps; 97 frames at 704x448 is the measured configuration. Lance reaches 25 and 49 at
+# 12 fps on its `4k+1` grid — the same two seconds values, a different frame rule.
 DURATIONS_SECONDS = (2, 4)
 MAX_PROMPT_CHARACTERS = 4000
 
@@ -135,50 +163,60 @@ MAX_PROMPT_CHARACTERS = 4000
 # discovering it in the decode.
 MAX_LATENT_TOKENS = 30_000
 
-# Durations the lane answers, in whole seconds at the published frame rate. 49 and 97 frames are
-# 8k+1 at 24 fps; 97 frames at 704x448 is the measured configuration.
-DURATIONS_SECONDS = (2, 4)
-MAX_PROMPT_CHARACTERS = 4000
+# Lance's ceiling, from its card: n_lat = (w/16) * (h/16) * ((frames-1)//4 + 1), production clean
+# through 16,128 (768²×25f), structured-but-degraded from ~30k. So the number checked here is the
+# card's own production bound rather than LTX's, because they are different quantities on different
+# grids and sharing one constant would make one of the two models lie.
+MAX_LANCE_LATENT_TOKENS = 16_128
+
+# Lance's own frame rules, all from its card and its VAE: 12 fps, a `4k+1` output grid, a 16-px
+# spatial latent grid and 4x temporal compression. Named here because the model entry, the
+# validator and the compiler all read them, and a second copy is free to disagree.
+LANCE_FRAME_RATE = 12
+LANCE_FRAME_GRID = 4
+LANCE_LATENT_GRID = 16
+LANCE_TEMPORAL_DIVISOR = 4
 
 
-def canvas_durations(width: int, height: int) -> list[int]:
+def canvas_durations(model: 'VideoModel', width: int, height: int) -> list[int]:
     """The published durations this canvas accepts, from the same guard the validator enforces.
 
     Per canvas rather than one list for all of them, because the two are not the same statement:
-    the pack's latent-token ceiling makes a big canvas expensive at the longer duration, and a
-    contract that offers that pair is offering work the lane refuses. Both the contract and
+    the pack's latent ceiling makes a big canvas expensive at the longer duration, and a contract
+    that offers that pair is offering work the lane refuses. Both the contract and
     :func:`validate_request` read this function, so the published pairs and the accepted pairs are
     the same set by construction.
     """
     return [seconds for seconds in DURATIONS_SECONDS
-            if latent_tokens(width, height, frames_for(seconds, DEFAULT_FRAME_RATE))
-            < MAX_LATENT_TOKENS]
+            if latent_load(model, width, height,
+                           frames_for(seconds, model.frame_rate, model.frame_grid))
+            < model.max_latent_tokens]
 
 
-def canvases() -> list[dict]:
-    """Every canvas this lane publishes: the pair, its exact size, and the durations it accepts."""
+def published_canvases(model: 'VideoModel') -> list[dict]:
+    """Every canvas this model publishes: the pair, its exact size, and the durations it takes."""
     return [
         {'resolution': klass, 'aspect_ratio': ratio, 'width': width, 'height': height,
-         'durations': canvas_durations(width, height)}
-        for klass, entries in sorted(CANVAS_CLASSES.items())
+         'durations': canvas_durations(model, width, height)}
+        for klass, entries in sorted(model.canvases.items())
         for ratio, (width, height) in sorted(entries.items())
     ]
 
 
-def aspect_ratios() -> list[str]:
-    return sorted({ratio for canvases in CANVAS_CLASSES.values() for ratio in canvases})
+def aspect_ratios(model: 'VideoModel') -> list[str]:
+    return sorted({ratio for canvases in model.canvases.values() for ratio in canvases})
 
 
-def resolutions() -> list[str]:
-    return sorted(CANVAS_CLASSES)
+def resolutions(model: 'VideoModel') -> list[str]:
+    return sorted(model.canvases)
 
 
-def canvas_for(aspect_ratio: str, resolution: str) -> tuple[int, int] | None:
-    return (CANVAS_CLASSES.get(resolution) or {}).get(aspect_ratio)
+def canvas_for(model: 'VideoModel', aspect_ratio: str, resolution: str) -> tuple[int, int] | None:
+    return (model.canvases.get(resolution) or {}).get(aspect_ratio)
 
 
-def resolution_classes_for(aspect_ratio: str) -> list[str]:
-    return sorted(name for name, canvases in CANVAS_CLASSES.items()
+def resolution_classes_for(model: 'VideoModel', aspect_ratio: str) -> list[str]:
+    return sorted(name for name, canvases in model.canvases.items()
                   if aspect_ratio in canvases)
 
 
@@ -228,6 +266,21 @@ class VideoModel:
     # Companion packages the engine loads. The runner resolves their installed folders and
     # passes them as local paths, so an offline node never reaches for the Hub.
     requires: tuple[str, ...] = ()
+    # **The four facts that differ per engine, and the reason this lane is model-agnostic rather
+    # than LTX-shaped.** Canvases and the frame grid are the model's own (see the tables above);
+    # the latent rule is the quantity each card states its cliff in. The defaults are LTX's, so a
+    # model that declares none keeps exactly the behaviour this lane published before they existed.
+    canvases: dict[str, dict[str, tuple[int, int]]] = field(
+        default_factory=lambda: dict(LTX_CANVASES))
+    frame_rate: int = DEFAULT_FRAME_RATE
+    frame_grid: int = FRAME_GRID
+    latent_grid: int = CANVAS_GRID
+    latent_temporal_divisor: int = 1
+    max_latent_tokens: int = MAX_LATENT_TOKENS
+    # Sampling knobs a runner needs and the lane does not expose (the distilled LTX path
+    # takes none of them; Lance does). Defaults are the card's and the measured run's.
+    lance_steps: int = 30
+    lance_cfg_scale: float = 4.0
     # False when this build has no runner for the engine. The row is still published, with the
     # reason and `execution_ready: false`, because an absent row is invisible everywhere.
     runnable: bool = True
@@ -310,6 +363,7 @@ LTX_23 = VideoModel(
     # worker resolves the installed companion folder and passes that path — the Hub mirrors
     # companions into the engine cache, and a local path is what keeps that honest offline.
     requires=('gemma-3-12b-it-4bit',),
+    canvases=LTX_CANVASES,
     # The measured run produced 4.04 s of output with an audio track; the worker refuses a
     # completion whose MP4 has no audio, so this is a checked claim rather than a hope.
     generates_audio=True,
@@ -323,38 +377,71 @@ LANCE_3B = VideoModel(
     family='lance-3b-video',
     engine=LANCE_ENGINE,
     tasks=('text-to-video',),
+    # 12 fps on the `4k+1` grid Lance's Wan2.2 VAE produces; 256² is the config its card calls
+    # production-quality and the one this Mac measured (13 frames, 8.11 GB peak).
     defaults={'mode': 'text-to-video', 'aspect_ratio': '1:1',
-              'resolution': '448p', 'duration_seconds': 4,
-              'frame_rate': DEFAULT_FRAME_RATE, 'seed': -1},
-    limits={'max_prompt': MAX_PROMPT_CHARACTERS, 'min_frames': 9, 'max_frames': 121,
-            'min_frame_rate': 24, 'max_frame_rate': 24,
+              'resolution': '256p', 'duration_seconds': 2,
+              'frame_rate': LANCE_FRAME_RATE, 'seed': -1},
+    limits={'max_prompt': MAX_PROMPT_CHARACTERS, 'min_frames': 5, 'max_frames': 49,
+            'min_frame_rate': LANCE_FRAME_RATE, 'max_frame_rate': LANCE_FRAME_RATE,
             'min_seed': -1, 'max_seed': 2**32 - 1},
+    canvases=LANCE_CANVASES,
+    frame_rate=LANCE_FRAME_RATE,
+    frame_grid=LANCE_FRAME_GRID,
+    latent_grid=LANCE_LATENT_GRID,
+    latent_temporal_divisor=LANCE_TEMPORAL_DIVISOR,
+    max_latent_tokens=MAX_LANCE_LATENT_TOKENS,
     memory=MemoryPolicy(
         low_memory=False, relay_on_below_bytes=18 * 1024**3,
         single_mode_reason=(
             "Lance's own runtime selects memory_mode=relay below ~18 GiB: the understanding "
             'tower is shed after prefill and the generation tower is freed before VAE decode, '
-            'so the peak is the heaviest single phase rather than their sum. The frame-MD5 '
-            'output is byte-identical to the resident parallel mode, per the model card.')),
+            'so the peak is the heaviest single phase rather than their sum. The card states the '
+            'frame output is byte-identical to the resident parallel mode.')),
     qualification={
+        'measured_on': ('32 GiB M2 Max (Mac14,13), macOS 27.0, mlx 0.31.2, lance-mlx '
+                        'f8ecc5a86d28b94bd8dc688c200c3e22ffafff4a, Lance-3B-Video-bf16 bf16'),
+        'measured_runs': [{
+            'task': 'text-to-video', 'mode': 'relay',
+            'measured_via': 'the runner directly', 'width': 256, 'height': 256, 'frames': 13,
+            'frame_rate': 12.0, 'seed': 42, 'steps': 30, 'cfg_scale': 4.0,
+            'memory_mode': 'relay', 'lossless_decode': True,
+            'wall_seconds': 184.9, 'load_seconds': 9.4,
+            'peak_process_footprint_gb': 8.11, 'peak_rss_gb': 6.89,
+            'output_bytes': 185673, 'audio': False,
+            'source': '_orchestra/evidence/lance-first-run-20260927.json',
+        }, {
+            'task': 'text-to-video', 'mode': 'parallel',
+            'measured_via': "the worker's own routes (qualification/lance-video-worker-run.py)",
+            'width': 256, 'height': 256, 'frames': 25,
+            'frame_rate': 12.0, 'seed': -1, 'steps': 30, 'cfg_scale': 4.0,
+            'lossless_decode': True,
+            'wall_seconds': 329.5, 'load_seconds': 18.0, 'generate_seconds': 308.0,
+            'peak_process_footprint_gb': 20.0, 'output_seconds': 2.084,
+            'output_bytes': 276726, 'audio': False,
+            'source': 'qualification/lance-video-worker-results-20260927-first/measurement.json',
+        }],
         'memory_evidence': (
-            'Model card only [V]: memory_mode=relay fits 8–16 GB; lossless streaming decode '
-            '256²x49f 7.99 GB, 256²x121f 8.05 GB, 512²x61f 12.64 GB, all by ri_phys '
-            '(OS-committed footprint). No local run exists: the runner is the lance-mlx source '
-            'repo and neither it nor the weights are adopted here yet. The card groups 8–16 GB '
-            'together while its own worked example is 256²x61f at ~8.7 GB, which is more than an '
-            '8 GB machine holds — so the 8 GB tier is doubtful, not promised, and the tier this '
-            'worker publishes (16 GB) is the card\'s credible side.'),
-        'status': 'unqualified',
+            'MEASURED here [M], twice, by sampled `footprint` phys_footprint_peak in the '
+            'process doing the work: **relay** at 256x256, 13 frames - 8.11 GB peak footprint '
+            '(RSS 6.89 GB), 184.9 s generating plus 9.4 s loading; and **parallel** through the '
+            "worker's own routes at 256x256, 25 frames - 20.0 GB peak, 329.5 s. The mode is "
+            "the policy's, not a choice of the run: below 18 GiB this model resolves to relay "
+            'and above it to parallel, so 8.11 GB is what a 16 GB Mac would see and 20.0 GB is '
+            'what a 24 GB+ Mac does with the pipeline resident. The 16 GB claim stays the '
+            "card's [V]: 8.11 GB on a 32 GB machine with no memory pressure is a floor, and "
+            "the card's worked example (256x61f, ~8.7 GB) is close enough to a 16 GB machine's "
+            'whole RAM that only a 16 GB run settles it. 8 GB is doubtful, not promised.'),
+        'status': 'partially-qualified',
     },
     qualified_minimum_memory_gb=16.0,
-    runnable=False,
-    unavailable_reason=(
-        'Lance-3B-Video-bf16 needs the lance-mlx source runner (github.com/xocialize/lance-mlx), '
-        'which is not adopted into this build yet. Adopt it at an exact commit as an engine, '
-        'then this row becomes executable with no change to the lane: the manifest and the '
-        'memory tier are already published.'),
+    # The Qwen2.5-VL processor the pipeline loads by repo id. It is not weights but it is not
+    # optional either, and the pack ships only the tokenizer — so an offline node needs these
+    # files beside the weights or the pipeline reaches for huggingface.co at load time.
+    requires=('lance-3b-processor-qwen2-5-vl',),
+    generates_audio=False,
 )
+
 
 MODELS: dict[str, VideoModel] = {model.repo: model for model in (LTX_23, LANCE_3B)}
 
@@ -565,18 +652,44 @@ def _pipeline_class(model: VideoModel):
 
 # ── the lane's own limits, published and enforced from one place ─────────────
 
-def frames_for(duration_seconds: int, frame_rate: int) -> int:
-    """The frame count a whole-second duration maps to on the pack's 8k+1 grid."""
-    return round(duration_seconds * frame_rate) // FRAME_GRID * FRAME_GRID + 1
+def frames_for(duration_seconds: int, frame_rate: int, grid: int = FRAME_GRID) -> int:
+    """The frame count a whole-second duration maps to on the pack's `grid*k + 1` grid.
+
+    The grid is the model's: LTX is `8k+1` (its distilled pipeline's temporal grid), Lance is
+    `4k+1` (its Wan2.2 VAE compresses 4× in time, so `t_lat = (frames-1)//4 + 1` and the decoded
+    clip lands back on `4k+1`). Sharing one constant would have made one of the two models' frame
+    counts unrepresentable — measured on the first real Lance run: 16 frames in, **13** out.
+    """
+    return round(duration_seconds * frame_rate) // grid * grid + 1
 
 
-def duration_for(frames: int, frame_rate: int) -> int:
+def duration_for(frames: int, frame_rate: int, grid: int = FRAME_GRID) -> int:
     """The whole-second duration a legacy frame count maps to, or 0 when it maps to none."""
     seconds = round(frames / frame_rate)
-    return seconds if frames == frames_for(seconds, frame_rate) else 0
+    return seconds if frames == frames_for(seconds, frame_rate, grid) else 0
+
+
+def latent_load(model: 'VideoModel', width: int, height: int, frames: int) -> int:
+    """The model's own measure of how much latent work a request is.
+
+    Two different quantities, which is why this is a function of the model and not a formula:
+
+      * **LTX** counts latent *tokens* on a 32-px grid: `(w/32) * (h/32) * frames`. Its card's
+        cliff is n_lat ≥ ~30k (768×768×49f), where the VAE produces mesh artifacts.
+      * **Lance** counts latent *frames × spatial patches* on a 16-px grid with 4× temporal
+        compression: `(w/16) * (h/16) * ((frames-1)//4 + 1)`. Its card's production envelope ends at
+        16,128 (768²×25f) and degrades from ~30k.
+
+    The numbers are not comparable across the two, so each model carries its own ceiling.
+    """
+    spatial = (width // model.latent_grid) * (height // model.latent_grid)
+    latent_frames = ((frames - 1) // model.latent_temporal_divisor + 1
+                     if model.latent_temporal_divisor > 1 else frames)
+    return spatial * latent_frames
 
 
 def latent_tokens(width: int, height: int, frames: int) -> int:
+    """LTX's latent token count — kept as a named function because tests and receipts cite it."""
     return (width // CANVAS_GRID) * (height // CANVAS_GRID) * frames
 
 
@@ -612,11 +725,11 @@ def lane_parameters(model: VideoModel) -> list[dict]:
          'enum': list(model.tasks), 'default': model.defaults['mode'],
          'note': 'image-to-video needs a source image; text-to-video does not'},
         {'name': 'aspect_ratio', 'type': 'string', 'required': False,
-         'enum': aspect_ratios(), 'default': model.defaults['aspect_ratio'],
+         'enum': aspect_ratios(model), 'default': model.defaults['aspect_ratio'],
          'note': 'width and height follow from the aspect ratio and the size class; a pair this '
                  'lane does not publish is refused'},
         {'name': 'resolution', 'type': 'string', 'required': False,
-         'enum': resolutions(), 'default': model.defaults['resolution'],
+         'enum': resolutions(model), 'default': model.defaults['resolution'],
          'note': ("an orientation-free size class naming the canvas's short side. Which aspect "
                   "ratios it carries, the exact width and height, and the durations that canvas "
                   "accepts are in `canvases` — the pack's two-stage pipeline floors each side to "
@@ -625,7 +738,10 @@ def lane_parameters(model: VideoModel) -> list[dict]:
         {'name': 'duration_seconds', 'type': 'integer', 'required': False,
          'enum': list(DURATIONS_SECONDS), 'default': model.defaults['duration_seconds']},
         {'name': 'frame_rate', 'type': 'number', 'required': False,
-         'enum': [DEFAULT_FRAME_RATE], 'default': DEFAULT_FRAME_RATE},
+         # Per model, like the canvases: LTX's distilled pipeline publishes 24 fps, Lance's VAE
+         # and its card's envelope are 12. Publishing one number here made the Lance default
+         # request fail its own validator — caught by the first worker-alone run.
+         'enum': [model.frame_rate], 'default': model.frame_rate},
         {'name': 'seed', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
          'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
@@ -712,48 +828,50 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     if width or height:
         if not width or not height:
             raise ValueError('width and height must be supplied together')
-        match = next(((name, klass) for klass, canvases in CANVAS_CLASSES.items()
+        match = next(((name, klass) for klass, canvases in model.canvases.items()
                       for name, canvas in canvases.items() if canvas == (width, height)), None)
         if match is None:
             canvases = ', '.join(f'{name} {klass} {w}x{h}'
-                                 for klass, entries in sorted(CANVAS_CLASSES.items())
+                                 for klass, entries in sorted(model.canvases.items())
                                  for name, (w, h) in sorted(entries.items()))
             raise ValueError(f'{width}x{height} is not a published canvas; this lane offers: '
                              f'{canvases}')
         ratio, resolution = match
     if resolution is not None:
         resolution = str(resolution)
-        if resolution not in CANVAS_CLASSES:
-            raise ValueError(f'{resolution!r} is not a published size class; this lane offers: '
-                             + ', '.join(resolutions()))
+        if resolution not in model.canvases:
+            raise ValueError(f'{resolution!r} is not a published size class; '
+                             f'{model.label} offers: ' + ', '.join(resolutions(model)))
     if ratio is None:
         ratio = defaults['aspect_ratio']
     ratio = str(ratio)
-    if ratio not in aspect_ratios():
-        raise ValueError(f'{ratio!r} is not a published aspect ratio; this lane offers: '
-                         + ', '.join(aspect_ratios()))
+    if ratio not in aspect_ratios(model):
+        raise ValueError(f'{ratio!r} is not a published aspect ratio; {model.label} offers: '
+                         + ', '.join(aspect_ratios(model)))
     if resolution is None:
         # The model's default class, unless the requested ratio does not publish it.
-        resolution = (defaults['resolution'] if ratio in CANVAS_CLASSES[defaults['resolution']]
-                      else resolution_classes_for(ratio)[0])
-    if canvas_for(ratio, resolution) is None:
+        resolution = (defaults['resolution'] if ratio in model.canvases[defaults['resolution']]
+                      else resolution_classes_for(model, ratio)[0])
+    if canvas_for(model, ratio, resolution) is None:
         raise ValueError(
             f'{resolution} is not published for {ratio}; that aspect ratio offers: '
-            + ', '.join(resolution_classes_for(ratio)))
-    width, height = canvas_for(ratio, resolution)
+            + ', '.join(resolution_classes_for(model, ratio)))
+    width, height = canvas_for(model, ratio, resolution)
 
     frame_rate = _int(raw.get('frame_rate', raw.get('fps', defaults['frame_rate'])))
-    if frame_rate != DEFAULT_FRAME_RATE:
-        raise ValueError(f'This lane publishes {DEFAULT_FRAME_RATE} fps only')
+    if frame_rate != model.frame_rate:
+        # Per model: LTX publishes 24 fps, Lance's VAE and its card's envelope are 12.
+        raise ValueError(f'{model.label} publishes {model.frame_rate} fps only')
     # Duration: whole published seconds, or the Hub's frame count mapped back onto them.
     duration = _int(raw.get('duration_seconds', raw.get('duration')))
     frames = _int(raw.get('frames', raw.get('num_frames')))
     if frames is not None:
-        mapped = duration_for(frames, frame_rate)
+        mapped = duration_for(frames, frame_rate, model.frame_grid)
         if not mapped:
             raise ValueError(
                 f'{frames} frames is not a published duration at {frame_rate} fps; this lane '
-                f'offers ' + ', '.join(f'{seconds}s ({frames_for(seconds, frame_rate)} frames)'
+                f'offers ' + ', '.join(
+                    f'{seconds}s ({frames_for(seconds, frame_rate, model.frame_grid)} frames)'
                                        for seconds in DURATIONS_SECONDS))
         if duration is not None and duration != mapped:
             raise ValueError(f'duration {duration}s and {frames} frames disagree')
@@ -765,16 +883,16 @@ def validate_request(raw: dict, data_dir=None) -> dict:
                          f'not {duration}')
     # The canvas's own durations, not the lane's whole list: a big canvas at the longer duration is
     # the pair the token ceiling refuses, and `canvases` publishes exactly this set.
-    allowed = canvas_durations(width, height)
+    allowed = canvas_durations(model, width, height)
     if duration not in allowed:
-        frames_at = frames_for(duration, frame_rate)
+        frames_at = frames_for(duration, frame_rate, model.frame_grid)
         raise ValueError(
             f'{width}x{height} is not published at {duration}s '
-            f'({latent_tokens(width, height, frames_at)} latent tokens, at or above the '
-            f'{MAX_LATENT_TOKENS}-token point where this pack produces mesh artifacts); this '
-            f'canvas takes ' + ', '.join(f'{seconds}s' for seconds in allowed) +
+            f'({latent_load(model, width, height, frames_at)} latent units, at or above the '
+            f'{model.max_latent_tokens}-unit point where this model produces mesh artifacts); '
+            f'this canvas takes ' + ', '.join(f'{seconds}s' for seconds in allowed) +
             ' or a smaller canvas')
-    frames = frames_for(duration, frame_rate)
+    frames = frames_for(duration, frame_rate, model.frame_grid)
     if not model.limits['min_frames'] <= frames <= model.limits['max_frames']:
         raise ValueError(f'This lane generates {model.limits["min_frames"]}–'
                          f'{model.limits["max_frames"]} frames')
@@ -828,7 +946,7 @@ def lane_contract(model: VideoModel, data_dir=None) -> dict:
         # at `256p`, which is a request this lane refuses. Measured on the first consumer to try it
         # (Story Studio, whose widescreen request is 16:9) — the cross product of two enums is not
         # a set of canvases.
-        'canvases': canvases(),
+        'canvases': published_canvases(model),
         'artifact': {'modality': 'video', 'media_type': 'video/mp4', 'extension': 'mp4',
                      'per_item': 1},
         'states': {
@@ -1051,10 +1169,18 @@ def _companion_folder(manager, package_id: str, model: VideoModel) -> Path | Non
 
     The runner resolves the text encoder by path so an offline node never reaches the network.
     A companion that is not installed is not fatal here: the engine's own lookup is the
-    fallback, and the job receipt records which path was used.
+    fallback, and the job receipt records which path was used. (For Lance it *is* fatal — its
+    pipeline reaches for huggingface.co without a local processor — and `run_lance` says so by
+    name; this function's job is only to answer where it is.)
+
+    A `manager` of ``None`` answers "nowhere": callers that have no library yet (a unit test
+    exercising the refusal path, a worker before its first package scan) get the same `None` as a
+    missing package rather than an `AttributeError` from inside a helper.
     """
     from components import model_packages
 
+    if manager is None:
+        return None
     manifest = manager.manifests.get(package_id)
     if not isinstance(manifest, dict):
         return None
@@ -1122,15 +1248,150 @@ def run_ltx(model: VideoModel, manager, folder: Path, params: dict, output: Path
             'gemma_model_path': str(gemma_folder) if gemma_folder else None}
 
 
+def lance_runtime_python() -> Path:
+    """The interpreter that can import ``lance_mlx`` — Python 3.12, a *different* tree from ours.
+
+    Three places, in order: an explicit override (how the qualification runs point at
+    ``.build/lance-runtime``), the sibling runtime inside the installed app
+    (``resources/runtimes/video-lance`` next to this worker's own ``runtimes/video``), and the
+    checkout's build output. Raising with the list is deliberate: "python3.12 not found" without
+    naming where it looked is the kind of error that costs an hour.
+    """
+    candidates: list[Path] = []
+    override = os.environ.get('STUDIOHUB_LANCE_RUNTIME')
+    if override:
+        candidates.append(Path(override) / 'bin' / 'python3')
+    candidates.append(Path(sys.executable).resolve().parents[1] / 'video-lance' / 'bin' / 'python3')
+    # components/video/app/backend/generation.py -> the repository root, four levels up.
+    checkout_root = Path(__file__).resolve().parents[4]
+    candidates.append(checkout_root / '.build' / 'lance-runtime' / 'bin' / 'python3')
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        'the Lance engine needs its own runtime (Python 3.12: lance-mlx declares '
+        'requires-python >= 3.12 while this worker is 3.11), and none is installed. Looked in: '
+        + ', '.join(str(path) for path in candidates)
+        + '. Build it with packaging/lance-runtime/build.sh, or point STUDIOHUB_LANCE_RUNTIME at '
+          'the tree.')
+
+
+def _lance_companions(model: VideoModel, manager) -> tuple[Path | None, Path | None]:
+    """Where this model's weights and its Qwen2.5-VL processor live.
+
+    The processor is a *companion package* in exactly the sense the LTX text encoder is: a second
+    install the pipeline loads by name. It is small (six files) but not optional — without it the
+    runner would reach for huggingface.co at load time, which a node in the field may not reach.
+    """
+    weights = None
+    for companion in model.requires:
+        candidate = _companion_folder(manager, companion, model)
+        if candidate is not None:
+            weights = candidate
+            break
+    # `folder` is this model's own package; the processor is the one in `requires`.
+    processor = None
+    for companion in model.requires:
+        candidate = _companion_folder(manager, companion, model)
+        if candidate is not None:
+            processor = candidate
+            break
+    return weights, processor
+
+
 def run_lance(model: VideoModel, manager, folder: Path, params: dict, output: Path,
               progress) -> dict:
-    """Refuse, naming the adoption step — this build has no Lance runner.
+    """Run one clip through the Lance runner, in its own interpreter.
 
-    The manifest, the memory tier and the row are all published; only the runner is missing.
-    Raising here rather than pretending is what keeps the Hub's ``MODEL_FILES_UNAVAILABLE`` /
-    ``MODEL_RUNTIME_UNAVAILABLE`` path honest.
+    The runner is a *subprocess*, not an import: `lance-mlx` needs Python 3.12 and this worker is
+    3.11 (LTX's constraint). The bridge script is the library API with this app's conventions
+    around it — the runner's own CLI is a stub at the pinned commit.
+
+    Memory mode follows the host, and the model's card says why that is safe: `relay` sheds the
+    understanding tower after prefill and frees the generation tower before VAE decode, so the peak
+    is the heaviest single phase (~8 GB measured here) rather than their sum; below ~18 GiB the
+    runner's own `auto` resolves to relay, and above it `parallel` keeps the pipeline resident.
     """
-    raise RuntimeError(f'MODEL_RUNTIME_UNAVAILABLE: {model.unavailable_reason}')
+    processor = None
+    for companion in model.requires:
+        candidate = _companion_folder(manager, companion, model)
+        if candidate is not None:
+            processor = candidate
+            break
+    if processor is None:
+        raise RuntimeError(
+            f"{model.label} needs its processor companion "
+            f"({', '.join(model.requires)}), which is not installed in this library")
+
+    mode = 'relay' if host_memory_bytes() < model.memory.relay_on_below_bytes else 'parallel'
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        raise RuntimeError(
+            "no ffmpeg on PATH; the Lance bridge writes its MP4 with this app's own")
+
+    spec = {
+        'weights_dir': str(folder),
+        'processor_dir': str(processor),
+        'output': str(output),
+        'ffmpeg': ffmpeg,
+        'prompt': params['prompt'],
+        'num_frames': params['frames'],
+        'height': params['height'],
+        'width': params['width'],
+        'fps': params['frame_rate'],
+        'num_steps': model.lance_steps,
+        'cfg_scale': model.lance_cfg_scale,
+        'seed': params['seed'] if params['seed'] >= 0 else int.from_bytes(os.urandom(4), 'big'),
+        'memory_mode': mode,
+        'lossless_decode': True,
+    }
+    spec_path = output.with_suffix('.spec.json')
+    spec_path.write_text(json.dumps(spec, indent=2) + '\n')
+
+    python = lance_runtime_python()
+    bridge = Path(__file__).with_name('lance_runner.py')
+    progress('loading', 0.05)
+    process = subprocess.Popen(
+        [str(python), '-I', '-B', str(bridge), str(spec_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+    )
+    stages = {'loading': 0.08, 'generating': 0.2, 'muxing': 0.9}
+    detail: dict = {'runner': 'lance-mlx', 'memory_mode': mode}
+    stderr_tail = ''
+    assert process.stdout is not None and process.stderr is not None
+    for line in process.stdout:
+        line = line.strip()
+        if not line.startswith('{'):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if 'stage' in event:
+            progress(event['stage'], stages.get(event['stage'], 0.5))
+        if event.get('status') == 'ok':
+            # Every fact the bridge reports that the job record should carry. This was a fixed
+            # list that omitted the measurement keys, so a run whose peak the runner had measured
+            # perfectly well still published the worker's own idle-process number (57 MB for an
+            # ~8 GB job, measured 2026-09-27). The list is the contract: adding a fact to the
+            # bridge means adding it here, and the receipt test pins the two together.
+            bridge_facts = ('load_seconds', 'generate_seconds', 'frames', 'memory_mode',
+                            'lossless_decode', 'peak_footprint_bytes', 'peak_rss_bytes',
+                            'footprint_method')
+            detail.update({key: event[key] for key in bridge_facts if key in event})
+        elif event.get('status') == 'failed':
+            stderr_tail = str(event.get('error') or 'the Lance runner failed')
+    # stderr is the runner's own traceback; keep its tail for the failure message.
+    remainder = process.stderr.read()
+    return_code = process.wait()
+    if return_code != 0:
+        raise RuntimeError(
+            f'Lance runner exited {return_code}: {stderr_tail or remainder[-600:] or "no message"}')
+    if not output.is_file():
+        raise RuntimeError('the Lance runner reported success but wrote no MP4')
+    detail['companion_path'] = str(processor)
+    spec_path.unlink(missing_ok=True)
+    return detail
 
 
 RUNNERS = {LTX_ENGINE: run_ltx, LANCE_ENGINE: run_lance}
@@ -1526,11 +1787,30 @@ class GenerationManager:
                             has_audio=bool(facts['audio_tracks']),
                             quantization_loader=detail.get('quantization_loader'),
                             gemma_model_path=detail.get('gemma_model_path'),
+                            # **Which engine actually ran, and what it loaded.** `gemma_model_path`
+                            # above is LTX's text encoder by name; Lance's companion is the
+                            # Qwen2.5-VL processor, so the neutral field carries both and the
+                            # runner names itself. A job record that says only
+                            # "video" cannot answer "which engine made this clip".
+                            runner=detail.get('runner') or model.engine,
+                            companion_path=(detail.get('companion_path')
+                                            or detail.get('gemma_model_path')),
+                            runner_detail={key: detail[key] for key in
+                                           ('memory_mode', 'load_seconds', 'generate_seconds',
+                                            'lossless_decode') if key in detail},
                             peak_mlx_bytes=peak_mlx_bytes(),
-                            peak_process_rss_bytes=peak_rss_bytes(),
-                            peak_footprint_bytes=footprint,
-                            footprint_method=('sampled ri_phys_footprint at 1 Hz'
-                                              if footprint else None))
+                            peak_process_rss_bytes=(detail.get('peak_rss_bytes')
+                                                    or peak_rss_bytes()),
+                            # **Whose memory was measured.** For LTX the work is in this process,
+                            # so the sampler above is right. For Lance the work is in the bridge's
+                            # process and this one idles — measured 2026-09-27: the worker's
+                            # sampler reported 57 MB for a job whose real peak was ~8 GB, which the
+                            # job record would then have published as the run's cost. The runner's
+                            # own number wins wherever it has one, and the method names it.
+                            peak_footprint_bytes=(detail.get('peak_footprint_bytes') or footprint),
+                            footprint_method=(detail.get('footprint_method')
+                                              or ('sampled ri_phys_footprint at 1 Hz'
+                                                  if footprint else None)))
                     try:
                         self._persist()
                     except Exception:

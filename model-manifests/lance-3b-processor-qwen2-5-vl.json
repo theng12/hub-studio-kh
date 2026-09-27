@@ -1,0 +1,94 @@
+{
+  "defaults": {
+    "parameters_source": "model/tokenizer_config.json"
+  },
+  "engine": "video-lance",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "7ed3eed5be6924cc800e8a5e53fc405c1aab1aaf36bad65c33403b36c56827f5",
+      "size": 1373,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "533f191cc257b7de37a4fccd0a7a1706d75e1aa660f93efaa54e5a2a9f9aace9",
+      "size": 216,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/merges.txt",
+      "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+      "size": 1671839,
+      "source_path": "merges.txt",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/merges.txt"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "f2058c716eef96ccaed1cc1e2d0c08306b62586d535b28d9d08e691b2fab7ca0",
+      "size": 350,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "4abd3520120e266da84c0864fee064d1fb10806f02225911a47253dd38dc5f56",
+      "size": 5702,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size": 2776833,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/resolve/66285546d2b821cf421d4f5eb2576359d3770cd3/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "package_id": "lance-3b-processor-qwen2-5-vl",
+  "qualification": {
+    "memory_evidence": "Not a model: a tokenizer plus an image-processor config, so it carries no weights of its own. Its memory is MEASURED inside the Lance runner's process: 8.11 GB peak footprint at 256x256, 13 frames, relay mode, 2026-09-27 (_orchestra/evidence/lance-first-run-20260927.json).",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Required companion of the Lance-3B-Video-bf16 pack: the pipeline loads it by repository id, and the pack ships only the tokenizer. Six files, 4.5 MB, captured at the revision the first measured run used.",
+    "recommended_unified_memory_gb": 16,
+    "status": "qualified"
+  },
+  "revision": "66285546d2b821cf421d4f5eb2576359d3770cd3",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "revision": "66285546d2b821cf421d4f5eb2576359d3770cd3"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "revision": "66285546d2b821cf421d4f5eb2576359d3770cd3",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/Qwen/Qwen2.5-VL-3B-Instruct/revision/66285546d2b821cf421d4f5eb2576359d3770cd3",
+        "tree_api_url": "https://huggingface.co/api/models/Qwen/Qwen2.5-VL-3B-Instruct/tree/66285546d2b821cf421d4f5eb2576359d3770cd3?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

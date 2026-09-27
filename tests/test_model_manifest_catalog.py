@@ -315,7 +315,16 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Lance 3B, the small tier's T2V model: 10 files / 15,631,104,325 bytes. The manifest
             # and the tier ship now; the `lance-mlx` runner is not adopted into this build, so the
             # worker publishes the row with `execution_ready: false` and names that step.
-            "lance-3b-video-bf16": "4aa7a0063ba43e3821f4d658b8b5aa0e0c4a35046c05634b69c4ef251b1679b0",
+            # Refreshed 2026-09-27 with the runner adoption: the defaults are the model's own
+            # (256p square at 12 fps), the qualification carries two measured runs, and the
+            # Qwen2.5-VL processor is declared as a requirement.
+            "lance-3b-video-bf16":
+                "5099ce562e5de1ac082a0e5e3f7188ebec1349b23d99744475c3eb5bd22f342d",
+            # Added 2026-09-27 with the Lance runner adoption: the Qwen2.5-VL processor the
+            # pipeline loads by repo id. The weights pack ships only the tokenizer, so this is a
+            # *required* companion — without it the runner reaches for huggingface.co at load.
+            "lance-3b-processor-qwen2-5-vl":
+                "e944388a11a2b017cd74c59aa44b542b9026e4580255df1b18c651e9b14dc6b2",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

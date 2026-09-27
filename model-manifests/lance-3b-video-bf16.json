@@ -1,11 +1,11 @@
 {
   "defaults": {
     "aspect_ratio": "1:1",
-    "duration_seconds": 4,
-    "frame_rate": 24,
+    "duration_seconds": 2,
+    "frame_rate": 12,
     "mode": "text-to-video",
     "parameters_source": "components/video/app/backend/generation.py",
-    "resolution": "448x448",
+    "resolution": "256p",
     "seed": -1
   },
   "engine": "video-lance",
@@ -105,12 +105,15 @@
   "model_id": "mlx-community/Lance-3B-Video-bf16",
   "package_id": "lance-3b-video-bf16",
   "qualification": {
-    "memory_evidence": "Vendor claim [V], not measured here: memory_mode=relay fits 8-16 GB; lossless streaming VAE decode is flat in frame count at 256x49f 7.99 GB, 256x121f 8.05 GB, 512x61f 12.64 GB by ri_phys (OS-committed footprint). The card's worked example, 256x61f at ~8.7 GB, is larger than an 8 GB machine's whole RAM, so 8 GB is doubtful and not promised; 16 GB is the tier this manifest publishes.",
+    "memory_evidence": "MEASURED here [M], twice, by sampled `footprint` phys_footprint_peak in the process doing the work: relay at 256x256 13 frames - 8.11 GB peak (RSS 6.89 GB), 184.9 s generating plus 9.4 s loading; parallel through the worker's own routes at 256x256 25 frames - 20.0 GB peak, 329.5 s. Below 18 GiB the runner resolves to relay and above it to parallel, so 8.11 GB is what a 16 GB Mac sees. The card's 16 GB claim stays [V] and 8 GB is doubtful, not promised.",
     "minimum_unified_memory_gb": 16,
-    "reason": "No local run exists. The runner is the lance-mlx source repo and is not adopted into this build yet, so the worker publishes the package with execution_ready false and names that adoption step.",
+    "reason": "MEASURED by two local runs of one configuration each: relay at 256x256x13f (8.11 GB peak, 184.9 s) and parallel at 256x256x25f through the worker's own routes (20.0 GB peak, 329.5 s), with the runner adopted at an exact commit and its Qwen2.5-VL processor packaged as a required companion. What is NOT covered and is not claimed: no 16 GB machine has run it - that measurement is the owner's - so the tier is a vendor claim plus this 32 GB measurement's floor, and the card's 512x61f and 768x configs are not offered.",
     "recommended_unified_memory_gb": 16,
-    "status": "unqualified"
+    "status": "qualified"
   },
+  "requires_packages": [
+    "lance-3b-processor-qwen2-5-vl"
+  ],
   "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af",
   "schema_version": 1,
   "source": {

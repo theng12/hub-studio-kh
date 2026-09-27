@@ -69,6 +69,11 @@ MUSIC_OVERLAY_PACKAGES = {
 # answer for `libx264`.
 VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db513cc2ad7'
 
+# The Lance engine's runtime, pinned by the same content rule. It is a *second* tree because
+# the two engines cannot share an interpreter: lance-mlx declares `requires-python >= 3.12`
+# while LTX's pipeline needs 3.11.
+LANCE_RUNTIME_SHA256 = '48dd2bd2d34ea9561cc66a02461505220889651983bd6b7e3430d14b5d31ff40'
+
 
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     digest = hashlib.sha256()
@@ -386,6 +391,30 @@ def _stage_video(context: dict) -> dict | None:
     copy_tracked_tree(ROOT / 'components/video', video_source)
     shutil.copytree(context['video_runtime'], resources / 'runtimes/video', symlinks=True)
     shutil.copyfile(ROOT / 'packaging/video_worker.py', resources / 'video_worker.py')
+
+    # **The second runtime, for the second engine.** Same component, same release: a lane whose
+    # model-agnostic contract offers two engines has to ship both interpreters, and the worker
+    # resolves `runtimes/video-lance` as the sibling of its own tree (`generation.
+    # lance_runtime_python`). Staged only when the build passes one, so an LTX-only proof build
+    # still works; the pin is checked the same way.
+    lance_note = None
+    if context.get('lance_runtime') is not None:
+        lance_found = tree_digest(context['lance_runtime'])
+        lance_reason = context.get('unqualified_lance_runtime')
+        if lance_found != LANCE_RUNTIME_SHA256 and not lance_reason:
+            raise SystemExit(
+                'REFUSING TO STAGE: the Lance runtime handed to this build is not the one the '
+                'Lance engine was measured with.\n'
+                f'  handed:   {lance_found}\n'
+                f'            {context["lance_runtime"]}\n'
+                f'  required: {LANCE_RUNTIME_SHA256}\n'
+                '            Python 3.12 + lance-mlx f8ecc5a86d28b94bd8dc688c200c3e22ffafff4a, '
+                'the interpreter the first Lance run and the worker-alone run used\n'
+                '  pass --lance-runtime .build/lance-runtime, or update this pin with the '
+                'qualification that moved it.')
+        shutil.copytree(context['lance_runtime'], resources / 'runtimes/video-lance', symlinks=True)
+        lance_note = {'lance_runtime_sha256': lance_found,
+                      'lance_runtime_qualified': lance_found == LANCE_RUNTIME_SHA256}
     matched = {'runtime_qualified': True}
     if found != VIDEO_RUNTIME_SHA256:
         matched = {
@@ -396,6 +425,7 @@ def _stage_video(context: dict) -> dict | None:
         }
     return {
         **matched,
+        **({k: v for k, v in (lance_note or {}).items()}),
         'runtime': 'video',
         'runtime_sha256': tree_digest(resources / 'runtimes/video'),
         'source_sha256': tree_digest(video_source),
@@ -518,6 +548,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           unqualified_image_runtime: str | None = None,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
+          lance_runtime: Path | None = None, unqualified_lance_runtime: str | None = None,
           music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
@@ -529,6 +560,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         include_hub = True
     if video_runtime is not None:
         video_runtime = video_runtime.expanduser().resolve()
+    if lance_runtime is not None:
+        lance_runtime = lance_runtime.expanduser().resolve()
         validate_runtime(video_runtime)
         include_hub = True
     if (music_runtime is None) != (music_engine is None):
@@ -611,6 +644,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'unqualified_image_runtime': unqualified_image_runtime,
         'video_runtime': video_runtime,
         'unqualified_video_runtime': unqualified_video_runtime,
+        'lance_runtime': lance_runtime,
+        'unqualified_lance_runtime': unqualified_lance_runtime,
         'music_engine': music_engine, 'provenance': provenance,
         'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
     }
@@ -713,6 +748,10 @@ if __name__ == '__main__':
                         help='Stage a non-qualified Image runtime anyway, recording this reason')
     parser.add_argument('--video-runtime', type=Path,
                         help='Include the pinned Python 3.11 LTX Video runtime and worker')
+    parser.add_argument('--lance-runtime', type=Path,
+                        help='Include the pinned Python 3.12 Lance runtime and bridge')
+    parser.add_argument('--unqualified-lance-runtime', metavar='REASON',
+                        help='Stage a non-qualified Lance runtime anyway, recording this reason')
     parser.add_argument('--unqualified-video-runtime', metavar='REASON',
                         help='Stage a non-qualified Video runtime anyway, recording this reason')
     parser.add_argument('--music-runtime', type=Path,
@@ -724,6 +763,6 @@ if __name__ == '__main__':
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
                 include_hub=args.hub, image_runtime=args.image_runtime,
                 unqualified_image_runtime=args.unqualified_image_runtime,
-                video_runtime=args.video_runtime,
+                video_runtime=args.video_runtime, lance_runtime=args.lance_runtime,
                 unqualified_video_runtime=args.unqualified_video_runtime,
                 music_runtime=args.music_runtime, music_engine=args.music_engine))

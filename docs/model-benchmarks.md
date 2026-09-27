@@ -57,6 +57,7 @@ may still run there, and one at or below may still not (see the peak-memory note
 | ACE-Step 1.5 Turbo (2B DiT) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Stable Audio 3 Medium (1.4B) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | **Video** | | | | | | |
+| lance-3b-processor-qwen2-5-vl *(supporting files)* | lance-mlx (MLX) | 16 GB | no | yes | yes | yes |
 | Lance 3B Video MLX bf16 | lance-mlx (MLX) | 16 GB | no | yes | yes | yes |
 | gemma-3-12b-it-4bit *(supporting files)* | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
 | LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB) | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
@@ -100,12 +101,12 @@ than a curated one:
 
 ## What is NOT measured
 
-23 of 27 packages have no run behind them — their floor is
+22 of 28 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`ace-step-1-5-turbo`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `lance-3b-video-bf16`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`ace-step-1-5-turbo`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -136,4 +137,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 27 manifests, 6 recorded readings and 5 voice runtime rows.
+Generated from 28 manifests, 6 recorded readings and 5 voice runtime rows.

@@ -88,7 +88,7 @@ class RequestValidationTests(unittest.TestCase):
         self.assertEqual(params["frame_rate"], 24)
 
     def test_every_published_canvas_pair_is_accepted(self) -> None:
-        for canvas in generation.canvases():
+        for canvas in generation.published_canvases(generation.LTX_23):
             for seconds in canvas["durations"]:
                 with self.subTest(canvas=canvas, seconds=seconds):
                     params = self._request(mode="text-to-video",
@@ -107,15 +107,17 @@ class RequestValidationTests(unittest.TestCase):
         the lane does not produce. The guard is an import-time check, and this pins that it exists
         and that it fires.
         """
-        for resolution, canvases in generation.CANVAS_CLASSES.items():
+        for resolution, canvases in generation.LTX_CANVASES.items():
             for ratio, (width, height) in canvases.items():
                 with self.subTest(ratio=ratio, resolution=resolution):
                     self.assertEqual(width % generation.TWO_STAGE_GRID, 0)
                     self.assertEqual(height % generation.TWO_STAGE_GRID, 0)
         with self.assertRaises(ValueError) as raised:
-            with unittest.mock.patch.dict(generation.CANVAS_CLASSES,
+            with unittest.mock.patch.dict(generation.LTX_CANVASES,
                                           {"288p": {"16:9": (512, 288)}}):
-                generation._assert_canvases_are_snap_stable()
+                generation._assert_canvases_are_snap_stable(
+                    generation.LTX_CANVASES, grid=generation.TWO_STAGE_GRID, name='LTX',
+                    why='the two-stage pipeline')
         message = str(raised.exception)
         self.assertIn("512x288", message, "the off-grid canvas must be named")
         self.assertIn("512x256", message, "and the size the pack would substitute for it")
@@ -143,15 +145,16 @@ class RequestValidationTests(unittest.TestCase):
         121 frames is not a published duration — so the check is arithmetic on the whole table
         rather than one refused request.
         """
-        for resolution, canvases in generation.CANVAS_CLASSES.items():
+        for resolution, canvases in generation.LTX_CANVASES.items():
             for ratio, (width, height) in canvases.items():
                 for seconds in generation.DURATIONS_SECONDS:
                     with self.subTest(ratio=ratio, resolution=resolution, seconds=seconds):
-                        frames = generation.frames_for(seconds, generation.DEFAULT_FRAME_RATE)
-                        self.assertLess(generation.latent_tokens(width, height, frames),
+                        frames = generation.frames_for(seconds, generation.DEFAULT_FRAME_RATE,
+                                                   generation.LTX_23.frame_grid)
+                        self.assertLess(generation.latent_load(generation.LTX_23, width, height, frames),
                                         generation.MAX_LATENT_TOKENS)
         # The guard itself is live, not decorative: the same canvas one duration longer crosses it.
-        self.assertGreaterEqual(generation.latent_tokens(704, 448, 121),
+        self.assertGreaterEqual(generation.latent_load(generation.LTX_23, 704, 448, 121),
                                 generation.MAX_LATENT_TOKENS)
         with self.assertRaises(ValueError) as raised:
             self._request(mode="text-to-video", aspect_ratio="11:7", resolution="448p",
@@ -202,8 +205,8 @@ class LaneContractTests(unittest.TestCase):
                      for seconds in canvas["durations"]}
         self.assertTrue(published, "the lane must publish at least one canvas")
 
-        for resolution in generation.resolutions():
-            for ratio in generation.aspect_ratios():
+        for resolution in generation.resolutions(generation.LTX_23):
+            for ratio in generation.aspect_ratios(generation.LTX_23):
                 for seconds in generation.DURATIONS_SECONDS:
                     request = {"repo": generation.MODEL_ID, "mode": "text-to-video",
                                "prompt": "a quiet harbour at dawn",
@@ -249,13 +252,64 @@ class LaneContractTests(unittest.TestCase):
 
 
 class EngineRowTests(unittest.TestCase):
-    def test_the_unadopted_runner_refuses_by_naming_its_adoption_step(self) -> None:
+    """The Lance engine is adopted now, and these pin what replaced the refusal.
+
+    Until this release the row published `runnable: false` with a sentence naming the adoption
+    step, and the test here asserted that refusal — the honest measure that the lane was built but
+    the second engine was not. `run_lance` now runs the real thing, so what needs pinning is the
+    shape of its *failure* modes: a node missing the processor companion must be told that, by
+    name, instead of being handed a crash from inside the runner.
+    """
+
+    def test_lance_is_runnable_and_says_which_engine_runs_it(self) -> None:
+        self.assertTrue(generation.LANCE_3B.runnable)
+        self.assertIsNone(generation.LANCE_3B.unavailable_reason)
+        self.assertEqual(generation.LANCE_3B.requires, ("lance-3b-processor-qwen2-5-vl",))
+        self.assertIs(generation.LANCE_3B.generates_audio, False)
+
+    def test_a_missing_processor_companion_is_named_before_anything_loads(self) -> None:
         with self.assertRaises(RuntimeError) as raised:
             generation.run_lance(generation.LANCE_3B, None, Path("/nonexistent"), {}, Path("/tmp/x"),
                                  lambda *_: None)
         message = str(raised.exception)
-        self.assertIn("MODEL_RUNTIME_UNAVAILABLE", message)
-        self.assertIn("lance-mlx", message)
+        self.assertIn("lance-3b-processor-qwen2-5-vl", message)
+        self.assertIn("companion", message)
+        # And NOT the old adoption refusal: this build has the runner.
+        self.assertNotIn("MODEL_RUNTIME_UNAVAILABLE", message)
+
+    def test_the_lance_engine_resolves_its_own_interpreter(self) -> None:
+        """Two engines, two Pythons: LTX is 3.11 here, lance-mlx declares >= 3.12."""
+        found = generation.lance_runtime_python()
+        self.assertTrue(str(found).endswith("bin/python3"), found)
+        self.assertIn("lance", str(found))
+
+    def test_lance_publishes_its_own_frame_grid_not_ltxs(self) -> None:
+        """12 fps on a `4k+1` grid — measured: 16 frames requested, 13 returned."""
+        self.assertEqual(generation.LANCE_3B.frame_rate, 12)
+        self.assertEqual(generation.frames_for(2, 12, generation.LANCE_3B.frame_grid), 25)
+        self.assertEqual(generation.frames_for(4, 12, generation.LANCE_3B.frame_grid), 49)
+        # LTX is unchanged: 24 fps, 8k+1.
+        self.assertEqual(generation.frames_for(2, 24, generation.LTX_23.frame_grid), 49)
+        self.assertEqual(generation.frames_for(4, 24, generation.LTX_23.frame_grid), 97)
+
+    def test_lance_canvases_are_square_and_inside_its_card_envelope(self) -> None:
+        canvases = generation.published_canvases(generation.LANCE_3B)
+        self.assertEqual({(c["width"], c["height"]) for c in canvases},
+                         {(256, 256), (512, 512)})
+        # Every published pair is under the card's production ceiling (n_lat 16,128); 768² is the
+        # config it calls degraded, so it is deliberately not offered.
+        for canvas in canvases:
+            for seconds in canvas["durations"]:
+                frames = generation.frames_for(seconds, generation.LANCE_3B.frame_rate,
+                                               generation.LANCE_3B.frame_grid)
+                self.assertLess(
+                    generation.latent_load(generation.LANCE_3B, canvas["width"], canvas["height"],
+                                           frames),
+                    generation.MAX_LANCE_LATENT_TOKENS)
+        self.assertGreaterEqual(
+            generation.latent_load(generation.LANCE_3B, 768, 768, 49),
+            generation.MAX_LANCE_LATENT_TOKENS,
+            "768²x49f is the card's degraded config; the ceiling must actually exclude something")
 
     def test_every_registered_engine_has_a_runner(self) -> None:
         for model in generation.MODELS.values():

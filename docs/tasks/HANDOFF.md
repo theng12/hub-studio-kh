@@ -3,13 +3,69 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.81** (the lane published a canvas its own pack resizes, and the video hardware test can run from the SSD, 2026-09-27).
+Last updated: **0.6.82** (the Lance engine is adopted and has run through the lane's own routes, 2026-09-27).
 
 **A note on the DMGs named below.** The release loop moves each superseded DMG out of `dist/`, so
 `dist/` holds exactly the build just made; **a DMG path in an older entry here is a record of what
 shipped, not a file still on disk.** `_trash/dist/` holds whatever history has not been cleared, and
 `_trash/` is the owner's to sort out — the 0.6.69 and 0.6.70 DMGs named further down are gone.
 
+> **0.6.82 — the second engine runs, and the lane stops being LTX-shaped.**
+> `lance-mlx` declares `requires-python >= 3.12` and `ltx_pipelines_mlx` needs 3.11, so
+> "model-agnostic lane" turned out to mean **two pinned runtimes and an interpreter per engine**.
+> `packaging/lance-runtime/build.sh` builds the second tree (Python 3.12.14 + lance-mlx at
+> `f8ecc5a86d28b94bd8dc688c200c3e22ffafff4a` + MLX 0.31.2), pinned at
+> `LANCE_RUNTIME_SHA256 = 48dd2bd2d34ea9561cc66a02461505220889651983bd6b7e3430d14b5d31ff40`, and
+> `stage_voice.py --lance-runtime` stages it to `runtimes/video-lance` beside the LTX tree.
+> `generation.lance_runtime_python()` resolves it (env override → the sibling of the worker's own
+> tree → the checkout), and `run_lance` spawns `lance_runner.py` with it — the runner's own CLI is a
+> **stub** at the pinned commit, so the library API is the only surface. The bridge streams one JSON
+> object per line (loading / generating / muxing / ok) and writes the MP4 with **this app's ffmpeg**
+> via `IMAGEIO_FFMPEG_EXE`, so imageio never downloads its own.
+>
+> **Measured `[M]`, twice, in the two modes the policy chooses between:**
+>
+> | Mode | Config | Peak footprint | Wall |
+> | --- | --- | --- | --- |
+> | `relay` (what a 16 GB Mac gets) | 256², 13 frames | **8.11 GB** | 184.9 s |
+> | `parallel` (this 32 GB Mac, through the worker's own routes) | 256², 25 frames | **20.0 GB** | 329.5 s |
+>
+> Both by sampled `footprint phys_footprint_peak` in the process doing the work. The card's 16 GB
+> claim stays `[V]`: 8.11 GB with no memory pressure is a floor, and the 16 GB run is the owner's.
+> Receipts: `qualification/lance-video-worker-results-20260927-first/measurement.json` (job
+> `0f259095f44a4c03958e64119f435b47`, `done`, 256×256, 2.084 s, **no audio track** — Lance's t2v is
+> silent and the LTX-only audio check correctly did not reject it) and
+> `_orchestra/evidence/lance-first-run-20260927.json`.
+>
+> **The lane stopped assuming LTX's shape.** Canvases, frame rate, frame grid and the latent ceiling
+> were module constants; a Lance request would have been offered 704×448 at 24 fps on an `8k+1`
+> grid, outside everything its runner was validated on. They are per model now (`VideoModel.canvases`,
+> `frame_rate`, `frame_grid`, `latent_grid`, `latent_temporal_divisor`, `max_latent_tokens`), with
+> LTX's values as the defaults so nothing about LTX changed. Lance publishes square 256²/512² at
+> **12 fps** on a **`4k+1`** grid — measured: 16 frames requested, **13** returned — checked against
+> its card's own `n_lat ≤ 16,128` production bound rather than LTX's 30,000-token cliff.
+>
+> **Four defects the adoption found, all fixed here.** (1) The worker's footprint sampler watches the
+> *worker*, and for this engine the memory is in the child: the first lane run recorded **57 MB**
+> for an ~8 GB job. The bridge samples itself and its number wins. (2) `run_lance` copied five named
+> keys from the bridge's final line and dropped the measurement ones — the list is explicit now.
+> (3) `lane_parameters` still published LTX's 24 fps, so the Lance default request failed its own
+> validator. (4) `packaging/video-runtime/normalize_records.py` hardcoded `python3.11`: it walked
+> past the 3.12 tree and would have left every RECORD hashing pre-rewrite scripts whose shebangs
+> carry the absolute build path — the machine-specific digest that file exists to prevent. It globs
+> `lib/python3.*/site-packages` now.
+>
+> **A new required companion.** `lance-3b-processor-qwen2-5-vl` (six files, 4.5 MB, captured at
+> `66285546d2b821cf421d4f5eb2576359d3770cd3`): the pipeline calls `AutoProcessor.from_pretrained`
+> and the weights pack ships only the tokenizer. Without it the runner reaches for huggingface.co at
+> load time; the measured runs used `HF_HUB_OFFLINE=1` to prove a node can work with it installed.
+>
+> **What is NOT done:** the 16 GB hardware run (the owner's), and the lane's own tier verdict for a
+> 16 GB host is still inference — the policy resolves `relay` below 18 GiB, and relay is what was
+> measured at 8.11 GB. The weights are on the NOVA shelf, sha256-verified, and a hard-linked
+> installed layout exists at `/Volumes/KH-STUDIO-NOVA/model-library/_installed` for qualification
+> runs (`--models-dir`).
+>
 > **0.6.81 — the lane's canvases are pairs now, and the pack was resizing the old ones.**
 > `CANVAS_CLASSES` was `288p: {16:9: 512x288, 9:16: 288x512}` and `448p: {1:1, 11:7}`, and the LTX
 > pack floors each output side to a multiple of **64** on its two-stage path
