@@ -1393,6 +1393,26 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
 
 ## The release loop, exactly
 
+> **Order matters, and this loop had it wrong for one step. Corrected 2026-09-28.**
+>
+> **Commit before you stage, and push after you have verified.** The loop used to end *"stage,
+> install, build the DMG, push"*, and a build that runs before its own commit can only stamp the
+> **parent** commit — `stage_voice.py` writes `implementation_commit` from `git HEAD`, and
+> `make-dmg.sh` names the file from it too. Measured twice on 2026-09-28: the 0.6.96 stage carried
+> `789bd41` while the release was `5684a6a`, and GatewayKH's 0.2.68 build stamped `01c5992` against a
+> pushed `01f1eac`. The drive indexes record that stamp, so **a lagging stamp travels all the way to
+> the operator's front page** — the same class of defect as the drive index naming a version the
+> drive does not carry.
+>
+> So the order is: write the version and both documents → **commit locally** → gate → stage →
+> install → DMG → **then push** (both branches). Committing first costs nothing and the push still
+> happens only after the artifact is verified, which is what the old order was protecting.
+> **The `VERSION` value is the release; the stamp is where it was built.** If they disagree, the
+> stamp is the younger truth.
+>
+> Applied to 0.6.98: committed as `a7021b6`, staged from it, and the bundle's own
+> `release-manifest.json` reads `"version": "0.6.98"` / `"implementation_commit": "a7021b6…"`.
+
 1. `VERSION` → the new number.
 2. Write the `CHANGELOG.md` and `release-notes.md` entries (both, every time; the release notes
    are read by the owner, the changelog by a developer).
