@@ -58,8 +58,21 @@ start a job it would have to swap through. The refusal is recorded with its reas
 **`RUN-16GB-LTX-VIDEO.command`** needs the weights, and finds them on the SSD by itself:
 
 ```
-/Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx
+<drive>/Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx/<revision>/model
 ```
+
+That is the kit's **own** library — the one `verify-kit.sh` checks and the one that reports 30 of 30
+on every drive. It is tried first, and a copy is used only if it is **complete**.
+
+> **Corrected 2026-09-28.** This file named `/Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx`,
+> and the script looked there — a **stale duplicate that nothing verifies**. Measured the same day,
+> its package count was 43/35/35/34 across the four drives while the kit's library was **31 every
+> time**, and on ATLAS and ORICO its `transformer-distilled.safetensors` was **1.86 GB where the pack
+> ships 9.97 GB**. Because the glob expands alphabetically the script chose **ATLAS** and died 24 s
+> in with *"invalid data offsets … Perhaps an incomplete download or corrupt file?"* — which reads as
+> a corrupt model when the truth is a truncated copy on a drive. The script warned about the size and
+> ran anyway; it now treats an incomplete copy as **ineligible** and refuses rather than producing
+> that error. Found by running the harness end to end, which had never been done.
 
 It also needs a Python 3.11 runtime that can import `mlx.core` and `ltx_pipelines_mlx`. On a Mac
 with the app installed that is already true — the app's video runtime is exactly that

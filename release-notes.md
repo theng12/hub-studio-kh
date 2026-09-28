@@ -2,6 +2,30 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.99 — 2026-09-28
+
+### The video test is now on every SSD, and it was pointing at a broken copy
+
+Two things were wrong with the video test you would run on a 16 GB Mac.
+
+**It was on none of your drives.** It existed, it was documented, and every SSD's Technical folder
+had the 8 GB Z-Image test and the chat-tier test and nothing for video. So there was no way to run
+the one test that decides whether video is a fleet feature. It is on all four drives now.
+
+**And the copy it picked was truncated.** The test looked for the model in a second model folder at
+the top of each drive — a leftover that nothing checks. On two drives the biggest file in that folder
+was cut short at 1.9 GB instead of 9.9 GB, so the test died after 24 seconds saying the model looked
+*corrupt*. It is not corrupt: that folder is stale, and the complete model has been sitting in the
+drive's proper model library the whole time, checked and reported as 30 of 30 on every drive. The
+test now uses that one, and if it ever finds only an unfinished copy it stops and says so instead of
+giving you a misleading error.
+
+**What this does not do is answer the 16 GB question.** Every video measurement so far was on the
+32 GB Mac Studio, and the video lane has no smaller-machine setting to imitate one with — so a test
+run here would measure a pretend limit, not a real Mac. It needs one of your 16 GB machines. It ran
+all the way through here on the good copy, so the test itself is known to work; take a drive to a
+16 GB Mac and run it.
+
 ## 0.6.98 — 2026-09-28
 
 ### Your video lane already works — our notes said it didn't

@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.99 — 2026-09-28 · The video harness shipped on no drive, and the one it was pointed at held a truncated model
+
+**Two defects, found by doing the thing the handoff said had never been done: running
+`RUN-16GB-LTX-VIDEO.command` end to end.** It failed, 24 seconds in, with
+
+```
+[load_safetensors] Tensor 'transformer.adaln_single.emb.timestep_embedder.linear1.bias'
+invalid data offsets (8706572288, 8706580480) exceeding the size of the file.
+Perhaps an incomplete download or corrupt file?
+```
+
+which reads as **a corrupt model**. The truth was a truncated copy on a drive.
+
+**The script looked in the wrong place, and its own comment says why that is expensive.** It resolved
+the model from `/Volumes/KH-STUDIO-*/model-library/video-models/…` — the **drive-root** library, a
+stale duplicate that **nothing verifies**. Measured across the four drives, its package count is
+**43/35/35/34** while the kit's own verified library is **31 every time**; on ATLAS and ORICO
+`transformer-distilled.safetensors` is **1.86 GB where the pack ships 9.97 GB**, and UGREEN has no
+copy there at all. The glob expands **alphabetically**, so the script chose **ATLAS** — the truncated
+one — and the partial-copy check it does have fired as a *warning after selection* rather than as a
+reason not to select it. **The complete copy is on all four drives**, inside the library
+`verify-kit.sh` actually checks.
+
+- The kit's own library is now tried **first**, by revision path.
+- **An incomplete copy is ineligible, not warned about.** A truncated pack cannot load, so running
+  it produces a misleading error and wastes the trip — the script now refuses (exit 3) and names the
+  first incomplete copy it rejected. An explicit `STUDIOHUB_LTX_MODEL` is still honoured, loudly,
+  because that is an operator naming a copy on purpose.
+- **And the harness is on the drives at all now.** It was written, documented in
+  `README-video-hardware-test.md`, and shipped **nowhere**: every kit's `Technical/` folder carried
+  the 8 GB Z-Image and Chat-tier commands and nothing for video, so the owner could not run the test
+  that decides whether video is a fleet feature — while the LTX pack sat complete on all four drives.
+  `RUN-16GB-LTX-VIDEO.command`, its runner, `ltx-video-measure.py`, `RUN-LTX-VIDEO-WORKER.command`,
+  `ltx-video-worker-run.py` and the README are now part of the kit's managed set.
+
+**What the run proved, on this 32 GB Mac.** With the complete copy selected, the harness goes all the
+way through: it resolves the app's own bundled Python 3.11 video runtime with no setup, loads the
+transformer's **1,415 mixed-precision layers** (`{2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}`),
+and generates. The one warning it prints — *"no transformer config … using hardcoded defaults"* — is
+present in **every** prior run including both successes, so it is a property of this pack and not a
+finding.
+
+**The 16 GB tier is still unmeasured, and this release does not change that.** Every LTX number
+remains `measured_on: 32 GiB M2 Max`, and the video lane has **no per-tier memory limit to imitate
+one with** (`memory_policy.FIXED = True`; the pipeline is built and dropped per job). A capped run on
+a 32 GB Mac would measure the cap, not the machine. **The test needs a 16 GB Mac, and now a drive
+carries everything it needs to run there.**
+
 ## 0.6.98 — 2026-09-28 · The video lane was written down as unbuilt while it was live, offered and already making files
 
 **Asked what was wrong with the Hub's video lane, the honest answer was "nothing, and this file

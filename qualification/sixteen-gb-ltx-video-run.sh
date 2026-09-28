@@ -88,46 +88,81 @@ echo "          $("$RUNTIME" -c 'import mlx.core as mx; print("mlx", mx.__versio
 
 # ---- the model
 #
-# **The drive comes before `~/StudioHubModels`, and that order is the fix for a wasted run.**
-# It used to be the other way round, so this script picked a **10 GB partial** copy on the root
-# volume over the complete **17.81 GiB** one on NOVA — the two differ because an old rsync was
-# interrupted — and the failure that produced was
-#   `[load_safetensors] … invalid data offsets … Perhaps an incomplete download or corrupt file?`
-# which reads as "the model is corrupt" when the truth is "this copy is unfinished". A complete
-# copy on a mounted drive is worth more than a nearer partial one.
+# **Two rules, and both were learned by wasting a run.**
+#
+# 1. *A complete copy is worth more than a nearer one.* This list used to try `~/StudioHubModels`
+#    first, so it picked a **10 GB partial** there over the complete **17.81 GiB** copy on NOVA. The
+#    failure that produced was `[load_safetensors] … invalid data offsets … Perhaps an incomplete
+#    download or corrupt file?`, which reads as "the model is corrupt" when the truth is "this copy
+#    is unfinished". The drive moved above the home folder for that reason.
+#
+# 2. ***Completeness, not position, picks the copy — and the verified library comes first.*** Rule 1
+#    was applied to `~/StudioHubModels` and not to the drives themselves, and on 2026-09-28 that cost
+#    a run: the glob `/Volumes/KH-STUDIO-*/…` expands **alphabetically**, so it chose **ATLAS**, whose
+#    drive-root copy is truncated — `transformer-distilled.safetensors` was 1.86 GB where the package
+#    ships 9.97 GB — and the run died 24 s in with the same "corrupt file" sentence. **The script
+#    warned about it and ran anyway.**
+#
+#    The drive-root `model-library/<modality>-models/` tree is a **stale duplicate that nothing
+#    verifies**: measured the same day, its package count was 43/35/35/34 across the four drives
+#    while the kit's own library was **31 every time**. The complete copy is in the tree the kit's
+#    verifier actually checks, `<drive>/Video Generation Kit/Studio Hub KH/model-library/<package>/<rev>/model`,
+#    and it is complete on all four drives. So that path is tried **first**, and an incomplete
+#    candidate is now **ineligible** rather than chosen-then-warned-about: a truncated pack cannot
+#    load, so running it only produces a misleading error.
+COMPLETE_KB=18674324
+FLOOR_KB=$((COMPLETE_KB * 90 / 100))
 MODEL_DIR=""
+MODEL_PARTIAL=""
 for cand in \
     "${STUDIOHUB_LTX_MODEL:-}" \
     "$HERE/ltx-2.3-22b-ram-12gb-mlx" \
+    /Volumes/KH-STUDIO-*/"Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx"/*/model \
     /Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx \
     "$HOME/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx"
 do
-    [ -n "$cand" ] && [ -d "$cand" ] && { MODEL_DIR="$cand"; break; }
+    [ -n "$cand" ] && [ -d "$cand" ] || continue
+    CAND_KB=$(du -sk "$cand" 2>/dev/null | cut -f1)
+    if [ -n "$CAND_KB" ] && [ "$CAND_KB" -ge "$FLOOR_KB" ]; then
+        MODEL_DIR="$cand"
+        break
+    fi
+    # An explicit override is the operator naming a copy on purpose, so it is honoured even when
+    # incomplete — loudly, and with the sentence that says what will happen next.
+    if [ "$cand" = "${STUDIOHUB_LTX_MODEL:-}" ]; then
+        MODEL_DIR="$cand"
+        echo "WARNING: STUDIOHUB_LTX_MODEL names a copy of $((CAND_KB / 1048576)) GiB against the"
+        echo "         package's 17.81 GiB, so it is unfinished and will fail inside load_safetensors."
+        break
+    fi
+    [ -n "$MODEL_PARTIAL" ] || MODEL_PARTIAL="$cand ($((CAND_KB / 1048576)) GiB)"
 done
 if [ -z "$MODEL_DIR" ]; then
     echo
-    echo "The model is not on this Mac. LTX-2.3 22B RAM-12GB (mixed 2-8 bit, 17.81 GiB) is"
-    echo "downloaded to the drive shelf 'model-library/video-models/' and backed up to every SSD,"
-    echo "and a copy belongs on this Mac's own disk before measuring."
-    echo
-    echo "Point this script at it:  STUDIOHUB_LTX_MODEL=/path/to/ltx-2.3-22b-ram-12gb-mlx $0"
-    exit 1
+    if [ -n "$MODEL_PARTIAL" ]; then
+        echo "Every copy of the model on this Mac is unfinished, so there is nothing to measure with."
+        echo "  first incomplete copy: $MODEL_PARTIAL"
+        echo
+        echo "A partial copy does not fail as a missing file — it fails deep inside load_safetensors"
+        echo "as an invalid-data-offsets error, which reads as a corrupt model. Refusing here rather"
+        echo "than running it is the point of this message."
+        echo
+        echo "The complete copy ships on the KH-STUDIO drives at"
+        echo "  <drive>/Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx/<rev>/model"
+        echo "and the app installs one to ~/StudioHubModels when you pick the model in Models."
+        echo
+        echo "Point this script at a good copy:  STUDIOHUB_LTX_MODEL=/path/to/model $0"
+    else
+        echo "The model is not on this Mac. LTX-2.3 22B RAM-12GB (mixed 2-8 bit, 17.81 GiB) is"
+        echo "downloaded to the drive shelf and backed up to every SSD, and a copy belongs on this"
+        echo "Mac's own disk before measuring."
+        echo
+        echo "Point this script at it:  STUDIOHUB_LTX_MODEL=/path/to/ltx-2.3-22b-ram-12gb-mlx $0"
+    fi
+    exit 3
 fi
 SIZE=$(du -sh "$MODEL_DIR" 2>/dev/null | cut -f1)
 echo "model:    $MODEL_DIR ($SIZE)"
-
-# A partial copy fails late and confusingly, so say so here instead. `du -sk` of the complete
-# package on NOVA is 18,674,324 KiB; anything under 90% of that is a copy that did not finish.
-MODEL_KB=$(du -sk "$MODEL_DIR" 2>/dev/null | cut -f1)
-COMPLETE_KB=18674324
-if [ -n "$MODEL_KB" ] && [ "$MODEL_KB" -lt $((COMPLETE_KB * 90 / 100)) ]; then
-    echo
-    echo "WARNING: this copy is $SIZE against the package's 17.81 GiB, so it looks unfinished."
-    echo "         A partial copy does not fail as a missing file — it fails deep inside"
-    echo "         load_safetensors as a shape error, which reads as a corrupt model."
-    echo "         The complete copy is on the KH-STUDIO drives at model-library/video-models/."
-    echo
-fi
 
 # ---- a source scene for image-to-video (a requirement: the owner works scene-first)
 IMG=""

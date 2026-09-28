@@ -1,0 +1,1 @@
+warning: no transformer config (embedded_config.json / config.json) found in /Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
