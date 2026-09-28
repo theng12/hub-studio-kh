@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.93 — 2026-09-28 · The cluster follows the promotion, not just the credential
+
+**A promotion moved every node's token and left the new controller's roster empty.** The §9
+rehearsal measured it: the handover reported `verified: 1`, the node adopted the new address and
+token, and the new head answered `node_summary.total: 0` — so the site that had three Macs came
+back with a capacity of one. The nodes had followed the credential and nobody had told their new
+head who they were. A node now **introduces itself to the controller it has just been moved to**,
+from the Hub rather than only from the app, using the address the *old* controller reached it at —
+which is the only party that knows it, because which interface a Mac answers on is the app's
+decision at join time.
+
+**And the promoted Mac was reported as a machine that could not be reached.** It is still on the
+retiring controller's roster, so the handover pushed to it, it correctly rejected a token that is
+no longer its group's, and the operator's result said `manual: 1` — naming the *new controller* as
+the failure. Its row is now forgotten without an eviction record (it is being promoted, not sold),
+it is skipped by the push, and it is named in the answer as `promoted` so a machine missing from
+the list is visibly recognised rather than silently absent.
+
+Both were found by running the rehearsal, not by reading the code, and both are why that step is
+in the release loop.
+
 ## 0.6.92 — 2026-09-28 · A removed Mac stays removed, and a cluster follows its own promotion
 
 **Removal used to be bookkeeping, and the fleet treated it as one.** Deleting a node's row left the

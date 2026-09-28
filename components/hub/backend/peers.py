@@ -731,6 +731,14 @@ async def sync_fleet_token(
         body: dict[str, object] = {"token": new_token, "sync": False}
         if controller_url:
             body["controller_url"] = controller_url
+            # **Where this Mac answers, so it can introduce itself to its new head** (A3 step 3).
+            # The old controller is the authority on that: it has been probing this machine at
+            # exactly this address, and a node cannot reliably derive its own — which interface
+            # (Tailscale or LAN) it is reachable on is the *app's* decision at join time, and the
+            # Hub must not guess it. Without this the cluster follows the credential but the new
+            # controller's roster stays empty, so the site's capacity collapses to one Mac: a
+            # rehearsal measured exactly that (`verified: 1`, new head `total: 0`).
+            body["self_address"] = url
         try:
             response = await client.post(
                 f"{url}/api/hub/fleet", headers=headers,

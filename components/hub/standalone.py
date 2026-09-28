@@ -898,6 +898,63 @@ def _bind_facts() -> dict[str, Any]:
     }
 
 
+async def _register_with_controller(controller_url: str, token: str, self_address: Any,
+                                    fleet: Any, monitor: Any) -> dict[str, Any] | None:
+    """Introduce this Mac to a controller it has just been moved to.
+
+    A3 step 3. Returns the controller's answer (which carries this Mac's own credential) or `None`
+    when the registration could not be attempted. **Never raises**: the membership has already
+    changed by the time this runs, and a node that could not announce itself is still a node — it
+    will announce itself on its next re-join. Raising here would report a failed handover for a Mac
+    that had in fact followed.
+
+    `self_address` comes from the controller that handed over, because that is the party which has
+    been probing this Mac and therefore knows where it answers. Without it this Mac has no honest
+    way to name itself: which interface it is reachable on is the *app's* decision at join time,
+    not the Hub's.
+
+    **Why the Hub does this and not only the app.** A handover that changed every node's token but
+    left the new controller's roster empty collapsed the site's capacity to one Mac — measured in
+    the §9 rehearsal as `verified: 1` with the new head reporting `node_summary.total: 0`. The
+    nodes had followed the credential and nobody had told their new head who they were.
+    """
+    logger = logging.getLogger("studiohub.fleet")
+    address = str(self_address or "").strip()
+    if not address:
+        logger.warning(
+            "moved to %s but no address came with the handover, so this Mac cannot introduce "
+            "itself; it will register on its next re-join", controller_url)
+        return None
+    from .backend import control_plane as _control_plane
+    settings = _control_plane.load_settings()
+    studios = [{"id": str(row.get("id")), "modality": str(row.get("modality"))}
+               for row in (getattr(monitor, "registry", None) or [])
+               if row.get("id") and row.get("modality") and not row.get("fleet_node")]
+    body = {
+        "node_id": str(settings.get("controller_id") or ""),
+        "name": str(settings.get("machine_name") or settings.get("controller_id") or ""),
+        "address": address,
+        "studios": studios,
+    }
+    try:
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            response = await client.post(f"{controller_url}/api/hub/fleet/nodes",
+                                         json=body, timeout=15.0,
+                                         headers={"X-Hub-Token": token})
+    except (httpx.HTTPError, OSError) as exc:
+        logger.warning("could not introduce this Mac to %s: %s", controller_url, exc)
+        return None
+    if response.status_code >= 400:
+        logger.warning("introducing this Mac to %s was refused (HTTP %s): %s",
+                       controller_url, response.status_code, response.text[:200])
+        return None
+    try:
+        answer = response.json()
+    except ValueError:
+        return {"ok": True}
+    return answer if isinstance(answer, dict) else {"ok": True}
+
+
 def create_app(*, start_background: bool = True) -> FastAPI:
     """Create one owner-authenticated Hub bound to packaged worker descriptors."""
     monitor = StudioMonitor()
@@ -1595,6 +1652,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     raise HTTPException(400, f"controller_url {exc}") from exc
             else:
                 controller_url = control_plane.load_settings().get("parent_controller_url")
+            previous = control_plane.load_settings().get("parent_controller_url")
             peers.set_fleet_token(value)
             # The credential this Mac was issued by its previous controller is that
             # controller's record, not the new one's: clearing it means the new controller
@@ -1605,7 +1663,19 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "parent_controller_url": controller_url,
                 "role": "agent",
             })
-            return {"ok": True, "adopted": True, "controller_url": controller_url}
+            # **And this Mac introduces itself to its new head, at once** (A3 step 3). A node that
+            # only changed its token would leave the new controller with an empty roster and the
+            # site's capacity at one Mac, which the §9 rehearsal measured. The address is the one
+            # the *old* controller reached this Mac at, because which interface a Mac answers on is
+            # the app's decision at join time and the Hub must not guess it.
+            registered: dict[str, Any] | None = None
+            if controller_url and controller_url != previous:
+                registered = await _register_with_controller(
+                    controller_url, value, body.get("self_address"), fleet, monitor)
+                if registered and registered.get("credential"):
+                    fleet.set_node_credential(str(registered["credential"]))
+            return {"ok": True, "adopted": True, "controller_url": controller_url,
+                    "registered": registered}
 
         # Rotate. The local credential changes only after every push has been attempted, so a
         # partial failure leaves this controller working and names the Macs that need the
@@ -1645,7 +1715,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", new_token):
             raise HTTPException(
                 400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
-        registry = fleet.remote_studios()
+        # **The promoted Mac is not a node any more, so it is not asked to follow.** It is the new
+        # head, it has minted its own credential, and this push reaches it with a token it
+        # correctly rejects — which the rehearsal measured as `manual: 1`, an operator sentence
+        # naming the *new* controller as the machine that could not be reached. Its roster row is
+        # forgotten without an eviction record (it is being promoted, not sold) and the push skips
+        # it.
+        promoted = [node_id for node_id, row in fleet._read().items()
+                    if str(row.get("address") or "").rstrip("/") == controller_url]
+        for node_id in promoted:
+            fleet.leave(node_id)
+        registry = [row for row in fleet.remote_studios()
+                    if str(row.get("fleet_node") or "") not in promoted]
         async with httpx.AsyncClient(follow_redirects=False) as client:
             result = await peers.sync_fleet_token(
                 registry, client, new_token,
@@ -1661,6 +1742,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         })
         return {"ok": True, "handed_over_to": controller_url,
                 "handed_over_at": control_plane.load_settings().get("handed_over_at"),
+                # Named so the operator can see the new head was recognised rather than silently
+                # skipped: a machine missing from the push with no explanation reads as a failure.
+                "promoted": promoted,
                 **result}
 
     # ── remote app-update release (controller side) ────────────────────────

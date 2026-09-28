@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.93 — 2026-09-28
+
+### The Macs really do follow a promoted controller now
+
+Promoting a Mac to controller and handing over moved every Mac's key but left the new controller
+not knowing who its members were, so the group came back with a capacity of one machine. Each Mac
+now introduces itself to its new controller as soon as it is told where that controller is. The
+promoted Mac is also no longer reported as a machine that "could not be reached" — it was the new
+controller, and the result now says so.
+
 ## 0.6.92 — 2026-09-28
 
 ### Removing a Mac now means it is gone
