@@ -6,8 +6,8 @@ and the order to set them up.
 
 | Folder | App | Version | What it does |
 |---|---|---|---|
-| `Story Studio/` | Story Studio KH | 1.4.234 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
-| `GatewayKH/` | GatewayKH | 0.2.60 | The middle man: one address, one model catalogue, routes work to your Macs |
+| `Story Studio/` | Story Studio KH | 1.4.235 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
+| `GatewayKH/` | GatewayKH | 0.2.67 | The middle man: one address, one model catalogue, routes work to your Macs |
 | `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
 
 ---
@@ -23,6 +23,14 @@ model itself.
 and GatewayKH decides which of your Macs should do the work. It holds the combined model
 catalogue and a private shelf of your Content Packs. It does **not** generate anything, so
 it needs no GPU and very little memory; it can run on a small always-on Mac.
+
+> **The two version numbers above are stamped on the drive, not taken from this file.**
+> `packaging/kit_stamp_index.py` reads them from the newest `Story Studio/*.dmg` and
+> `GatewayKH/installers/*.dmg` actually present and rewrites these rows — and the drive-root copy
+> of this document — every time a kit is prepared. Hand-editing them here is only about giving the
+> *repository* copy a sensible value; the drive always describes what it carries. The Studio Hub row
+> names no version at all for the same reason: it points at the kit's generated
+> `focused-release-manifest.json`.
 
 **Studio Hub** is the muscle. It runs the actual models on each Mac. One Mac is the
 **controller** (it owns a site: itself plus every Mac that joins it) and the others are

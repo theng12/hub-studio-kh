@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.94 — 2026-09-28 · The kit index names the versions the drive actually carries
+
+**Preparing the three drives for this round turned up the same defect a fourth time.** The kit's
+index document named Story Studio **1.4.234** and GatewayKH **0.2.60** on drives that carried
+**1.4.235** and **0.2.67**; the drive-root copy of the same 130-line document, untouched since
+2026-09-26, still said **1.4.219**, **0.2.44** and **0.6.70**. 0.6.90 and 0.6.91 fixed the copying
+and derived the Studio Hub line from the bundle — and left the other two rows to be edited by hand,
+which is exactly the pattern that fails. `packaging/kit_stamp_index.py` now reads both from the
+newest installer **on the drive** and rewrites those rows, and refreshes the drive-root copy from
+the kit copy so the two cannot describe different drives. It **refuses to write a half-stamped
+index**: a folder with no installer, or a filename with no version in it, leaves the document
+exactly as it was and says which folder confused it, because a stamped `unknown` would be a new
+wrong answer rather than a fix for an old one. Wired into `prepare-kit.sh`, so every future prepare
+does it without anyone remembering.
+
 ## 0.6.93 — 2026-09-28 · The cluster follows the promotion, not just the credential
 
 **A promotion moved every node's token and left the new controller's roster empty.** The §9

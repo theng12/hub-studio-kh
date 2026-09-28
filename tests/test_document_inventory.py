@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -171,3 +172,86 @@ class KitDocumentNumbersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
+    """The kit index names the versions the drive carries, not the ones a file remembered.
+
+    Recorded in the ledger three times before this: `0.6.63` against a `0.6.70` bundle, `0.6.70`
+    against `0.6.89`, and again when the three drives were prepared carrying Story **1.4.235** and
+    GatewayKH **0.2.67** while the index said **1.4.234** / **0.2.60** and the drive-root copy of
+    the same document still said **1.4.219**. The Studio Hub row was fixed by deriving it; these
+    two rows are now derived the same way.
+    """
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
+        import kit_stamp_index
+        self.stamp = kit_stamp_index
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.drive = Path(self.tmp.name)
+
+    def _kit(self, *, story: str | None = "Story Studio KH 9.9.9-arm64.dmg",
+             gateway: str | None = "gateway-kh-8.8.8.dmg",
+             index: str | None = None) -> Path:
+        kit = self.drive / "Video Generation Kit"
+        (kit / "Studio Hub KH").mkdir(parents=True, exist_ok=True)
+        if story:
+            (kit / "Story Studio").mkdir(parents=True, exist_ok=True)
+            (kit / "Story Studio" / story).write_bytes(b"dmg")
+        if gateway:
+            (kit / "GatewayKH" / "installers").mkdir(parents=True, exist_ok=True)
+            (kit / "GatewayKH" / "installers" / gateway).write_bytes(b"dmg")
+        (kit / "Studio Hub KH" / "README.md").write_text(index or (
+            "| Folder | App | Version | What it does |\n"
+            "|---|---|---|---|\n"
+            "| `Story Studio/` | Story Studio KH | 1.4.234 | Writes and produces the episode |\n"
+            "| `GatewayKH/` | GatewayKH | 0.2.60 | The middle man |\n"
+            "| `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models |\n"
+        ), encoding="utf-8")
+        return kit
+
+    def test_both_rows_take_the_version_the_installer_states(self) -> None:
+        kit = self._kit()
+        self.assertEqual(self.stamp.stamp(self.drive), 0)
+        text = (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("| 9.9.9 |", text)
+        self.assertIn("| 8.8.8 |", text)
+        self.assertNotIn("1.4.234", text)
+        self.assertNotIn("0.2.60", text)
+
+    def test_the_studio_hub_row_is_left_alone(self) -> None:
+        # It points at the kit's generated manifest, which derives its own number; restating one
+        # here would be the second copy this script exists to remove.
+        kit = self._kit()
+        self.stamp.stamp(self.drive)
+        self.assertIn("its `focused-release-manifest.json`",
+                      (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+
+    def test_a_missing_installer_refuses_rather_than_stamping_unknown(self) -> None:
+        kit = self._kit(story=None)
+        self.assertEqual(self.stamp.stamp(self.drive), 2)
+        self.assertIn("1.4.234", (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"),
+                      "a refusal must leave the document exactly as it was")
+
+    def test_a_filename_with_no_version_refuses_too(self) -> None:
+        self._kit(gateway="gateway-kh-latest.dmg")
+        self.assertEqual(self.stamp.stamp(self.drive), 2)
+
+    def test_the_drive_root_copy_is_refreshed_from_the_kit_copy(self) -> None:
+        # The two were the same document at different ages, which is how one drive came to name
+        # 1.4.219 while the kit beside it carried 1.4.234.
+        kit = self._kit()
+        (kit / "README.md").write_text("stale", encoding="utf-8")
+        self.stamp.stamp(self.drive)
+        self.assertEqual((kit / "README.md").read_text(encoding="utf-8"),
+                         (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+
+    def test_the_newest_installer_wins(self) -> None:
+        kit = self._kit()
+        (kit / "Story Studio" / "Story Studio KH 9.9.10-arm64.dmg").write_bytes(b"dmg")
+        import os
+        os.utime(kit / "Story Studio" / "Story Studio KH 9.9.10-arm64.dmg", (2_000_000_000, 2_000_000_000))
+        self.stamp.stamp(self.drive)
+        self.assertIn("| 9.9.10 |", (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))

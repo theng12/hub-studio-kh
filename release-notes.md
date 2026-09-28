@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.94 — 2026-09-28
+
+### The sheet on the drive can no longer name the wrong versions
+
+The index document on each drive listed the apps and their versions — and two of those three
+numbers were typed in by hand, so a drive could carry Story Studio 1.4.235 and GatewayKH 0.2.67
+while its own index said 1.4.234 and 0.2.60. They are read from the installers sitting on the drive
+now, and the drive-root copy of that document is refreshed from the kit's copy so the two cannot
+disagree. If a folder has no installer to read, nothing is written and the reason is printed —
+a half-updated index would be worse than a stale one.
+
 ## 0.6.93 — 2026-09-28
 
 ### The Macs really do follow a promoted controller now
