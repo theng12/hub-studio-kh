@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.97 — 2026-09-28 · The check that keeps the drive's index honest was refusing to run, and saying so in a way that read like success
+
+**Every drive's index page has been stamped by hand-copied numbers for as long as the stamper has
+existed.** `packaging/kit_stamp_index.py` was written to end a bug recorded three times — a drive
+index naming `0.6.63` beside a `0.6.70` bundle, `0.6.70` beside `0.6.89`, and Story `1.4.219` beside
+a `1.4.234` installer. It derives each row from the installer actually sitting on the drive.
+
+It was never run successfully. `prepare-kit.sh` passes the bare volume name it loops over, and the
+script did `Path(sys.argv[1])` — so `KH-STUDIO-NOVA` was a **relative** path, the kit index was looked
+for under the current directory, and the write refused. On every drive, every time.
+
+**What made it survive is the part worth recording.** The refusal was not hidden: it printed
+`no kit index at KH-STUDIO-NOVA/Video Generation Kit/Studio Hub KH/README.md`, four lines into each
+drive's 30-line preparation log. That message is a real path missing its `/Volumes`, and it reads
+like a path. An operator — or a summary that counts `RESULT: PASS` at the end of the same log — has
+nothing to catch. So the rows stayed right for four releases **by luck**: the repository template the
+drives were copied from happened to name the current versions, while the mechanism that derives them
+from the drive was dead. Only the next release would have shown it, and it would have shown it as the
+same stale row this script exists to prevent.
+
+- A name with no path separator is now read as a volume: `KH-STUDIO-NOVA` → `/Volumes/KH-STUDIO-NOVA`.
+  An explicit path is left exactly as given.
+- **A refusal names an absolute path** and asks whether that was the drive, so the next one of these
+  is visible in the log rather than merely plausible in it.
+- `prepare-kit.sh` passes `/Volumes/$VOLUME` as well. The script is defensible on its own and the
+  caller is still corrected, because the caller is the thing that was wrong.
+- Two stranded `if __name__ == "__main__":` guards found and moved while fixing this — one inside
+  `stamp()` in the stamper (unreachable after its `return`, so it had never run and could not) and
+  one **mid-file** in `tests/test_document_inventory.py`, which meant running that file directly
+  silently skipped the entire kit-index suite. The second is the same accident in the same shape as
+  the first, and it is how a suite of tests stops being run without anything going red.
+- Three tests added, asserting the rule rather than the membership: a bare volume name resolves to a
+  volume, an explicit path is untouched, and a refusal prints where it actually looked.
+
+Verified on the drives: **ORICO and UGREEN stamped on this pass** (the fix landed between volumes),
+**NOVA and ATLAS re-stamped afterwards**, all four now carrying `Story Studio 1.4.235` and
+`GatewayKH 0.2.67` derived from the installers beside them rather than from a template.
+
 ## 0.6.96 — 2026-09-28 · A drive that looked deliberately lighter was carrying a file that could not verify
 
 **The owner asked why NOVA had 30 packages and the other three had 28, and whether they could be made

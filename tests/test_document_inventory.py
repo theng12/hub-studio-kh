@@ -16,6 +16,8 @@ a wrong answer six months later.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 import sys
@@ -170,10 +172,6 @@ class KitDocumentNumbersTests(unittest.TestCase):
             "point at the kit's own focused-release-manifest.json instead")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
     """The kit index names the versions the drive carries, not the ones a file remembered.
 
@@ -287,3 +285,39 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         os.utime(kit / "Story Studio" / "Story Studio KH 9.9.10-arm64.dmg", (2_000_000_000, 2_000_000_000))
         self.stamp.stamp(self.drive)
         self.assertIn("| 9.9.10 |", (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+
+    def test_a_bare_volume_name_is_read_as_a_volume(self) -> None:
+        """`prepare-kit.sh` passes the bare name it loops over, and that is how the write was lost.
+
+        `Path("KH-STUDIO-NOVA")` is relative, so the index was looked for under the current
+        directory, never found, and the stamp refused — on every drive, every time, with the refusal
+        printed as a path that reads like a real one. The mechanism that derives these rows from the
+        drive was dead while the rows themselves were right, because the template they were copied
+        from happened to be current. Only the *next* release would have shown it.
+        """
+        self.assertEqual(self.stamp.resolve_drive("KH-STUDIO-NOVA"),
+                         Path("/Volumes/KH-STUDIO-NOVA"))
+
+    def test_an_explicit_path_is_left_alone(self) -> None:
+        self.assertEqual(self.stamp.resolve_drive("/Volumes/KH-STUDIO-ORICO"),
+                         Path("/Volumes/KH-STUDIO-ORICO"))
+        self.assertEqual(self.stamp.resolve_drive("./some/drive"), Path("./some/drive"))
+
+    def test_a_refusal_names_an_absolute_path(self) -> None:
+        """The refusal was printed in full and still hid for four releases: it read as relative.
+
+        A message that names where it actually looked is the difference between a log line that can
+        be checked and one that can only be believed.
+        """
+        empty = self.drive / "not-a-drive"
+        empty.mkdir()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(self.stamp.stamp(empty), 1)
+        message = stdout.getvalue()
+        self.assertIn(str(empty.resolve()), message)
+        self.assertTrue(message.strip().endswith("the drive?"), message)
+
+
+if __name__ == "__main__":
+    unittest.main()

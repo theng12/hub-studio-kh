@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.97 — 2026-09-28
+
+### The drive's front page now really does check itself
+
+Each SSD has a front page listing which version of each app it carries. That list was supposed to be
+read off the installers sitting on the drive, so it could never name something the drive does not
+have. It never actually ran — the check was looking in the wrong place, and quietly gave up every
+time while the numbers stayed correct by coincidence. They were right today and would have been
+wrong on the next release, which is the worst way for a thing to be broken.
+
+The numbers on all four drives are now read from the installers beside them, and if the check ever
+cannot read one, it says so plainly instead of leaving a page that merely looks current.
+
 ## 0.6.96 — 2026-09-28
 
 ### All four drives now carry the same 30 models

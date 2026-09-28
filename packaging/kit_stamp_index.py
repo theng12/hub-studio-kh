@@ -2,6 +2,7 @@
 """Stamp a kit drive's index documents **from the files actually on the drive**.
 
     python3 packaging/kit_stamp_index.py /Volumes/KH-STUDIO-NOVA
+    python3 packaging/kit_stamp_index.py KH-STUDIO-NOVA     # a bare volume name is understood
 
 **Why this exists.** The drive's index — the table that answers "which build is on this drive?" —
 has now been wrong three times, and every time for the same reason: two of its three version rows
@@ -72,11 +73,33 @@ def _stamp_row(text: str, label: str, version: str) -> tuple[str, bool]:
     return new, count == 1
 
 
+def resolve_drive(argument: str) -> Path:
+    """The drive a caller meant, whether they named a path or only the volume.
+
+    **This is the defect that hid the last one.** Every caller passes the bare volume name it loops
+    over, so `Path("KH-STUDIO-NOVA")` was a *relative* path: the kit index was looked for under the
+    current directory, never found, and the write refused — on every drive ever prepared this way.
+    The refusal was even printed in full, reading `no kit index at KH-STUDIO-NOVA/Video Generation
+    Kit/...`, which is exactly what a path missing its `/Volumes` looks like and exactly what nobody
+    reads at the end of a 30-line log.
+
+    It cost nothing only by luck: the repository template the drives were copied from happened to
+    name the current versions, so the *content* was right while the mechanism that derives it from
+    the drive — the point of this script, and the fix for three recorded stale-index bugs — was dead.
+    A name with no separator is therefore read as a volume, and every refusal below prints an
+    absolute path so the next one of these is visible in the log rather than plausible in it.
+    """
+    candidate = Path(argument)
+    if candidate.exists() or "/" in argument:
+        return candidate
+    return Path("/Volumes") / argument
+
+
 def stamp(drive: Path) -> int:
     kit = drive / "Video Generation Kit"
     index = kit / "Studio Hub KH" / "README.md"
     if not index.exists():
-        print(f"no kit index at {index}")
+        print(f"no kit index at {index.resolve()} — is {drive.resolve()} the drive?")
         return 1
 
     text = index.read_text(encoding="utf-8")
@@ -128,8 +151,6 @@ def stamp(drive: Path) -> int:
         print(f"refreshed the drive-root copy: {root_copy}")
     return 0
 
-
-    raise SystemExit(stamp(Path(sys.argv[1])))
 
 #: The text documents inside an app's kit folder that name its installer.
 DOC_SUFFIXES = (".md", ".txt", ".command", ".sh")
@@ -228,4 +249,4 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(__doc__)
         raise SystemExit(1)
-    raise SystemExit(stamp(Path(sys.argv[1])))
+    raise SystemExit(stamp(resolve_drive(sys.argv[1])))

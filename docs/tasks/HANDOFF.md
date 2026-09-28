@@ -3,11 +3,65 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.92** (the fleet work: per-node credentials and permanent eviction, promotion with a live handover, Fleet-token rotation, members and last-seen on the Connections page, quantisation on every manifest — 2026-09-28).
+Last updated: **0.6.97** (the drive index stamper was never running: it resolved a relative path and refused on every drive, while the rows stayed right by luck — 2026-09-28).
 
-> **0.6.92 — the fleet work has landed. Start with the `## 0.6.92` section below** (per-node
-> credentials so a removal sticks, promotion with a handover the cluster follows on its own, Fleet
-> token rotation, and the Connections page showing who has joined and when each Mac was last seen).
+> **0.6.97 — the check that keeps each drive's front page honest was refusing to run, and saying so
+> in a message that read like a path.**
+>
+> `packaging/kit_stamp_index.py` exists to derive the kit index's Story and Gateway rows from the
+> installers actually on the drive, and to rewrite every backticked `*.dmg` in the kit's own
+> instructions. It was written to close a bug recorded **three times** — a drive index naming `0.6.63`
+> beside a `0.6.70` bundle, `0.6.70` beside `0.6.89`, Story `1.4.219` beside a `1.4.234` installer.
+>
+> **It had never once succeeded.** `prepare-kit.sh` passes the bare volume name it loops over, and the
+> script did `Path(sys.argv[1])` — so `KH-STUDIO-NOVA` was a **relative** path, the index was looked
+> for under the current directory, and the write refused. Every drive, every time, since the script
+> was written. Found while refreshing the four drives to 0.6.96 and reading a log line that had been
+> printed in full and ignored four releases running:
+>
+> ```
+> no kit index at KH-STUDIO-NOVA/Video Generation Kit/Studio Hub KH/README.md
+>    kit index NOT stamped — see above
+> ```
+>
+> **That is a real path missing its `/Volumes`, and it reads like a path.** The drive's summary line
+> three lines below says `launch-PASS`, which is about the app and not the index. So nothing was
+> ever red. The rows were right for four releases **by luck**: the repository template the drives are
+> copied from happened to name current versions. Only the *next* release would have shown it — as the
+> same stale row this script exists to prevent, in the document an operator reads to answer "which
+> build is on this drive".
+>
+> Fixed at both ends, deliberately: a bare name is now read as a volume (`KH-STUDIO-NOVA` →
+> `/Volumes/KH-STUDIO-NOVA`), an explicit path is passed through untouched, **a refusal names an
+> absolute path and asks whether that was the drive**, and `prepare-kit.sh` passes
+> `/Volumes/$VOLUME`. The script is defensible alone; the caller was still corrected, because the
+> caller is what was wrong.
+>
+> **Two stranded `if __name__ == "__main__":` guards were found and moved in the same sweep** — one
+> inside `stamp()` in the stamper (unreachable after its `return`), and one **mid-file** in
+> `tests/test_document_inventory.py`, which meant running that file directly silently skipped the
+> entire kit-index class. Same accident, same shape; the second is how tests stop running without
+> anything going red. Both files are clean; three tests were added (`resolve_drive`, an explicit path
+> untouched, and a refusal printing where it looked).
+>
+> **Verified on the four drives, not just in tests:** ORICO and UGREEN stamped **during** this
+> refresh — the fix landed between volumes — and NOVA and ATLAS were re-stamped afterwards. All four
+> now carry `Story Studio 1.4.235` and `GatewayKH 0.2.67` **derived from the installers beside them**,
+> in both the kit copy and the drive-root copy.
+>
+> **The drives carry 0.6.96 and were deliberately not re-staged for 0.6.97.** Nothing in this release
+> is inside `Studio Hub.app`: the changes are this stamping tool, its tests, and the version/document
+> files. Re-copying 4 × 5.4 GB would buy a version string and nothing else, and the drive's own index
+> correctly describes the drive it is on — which is the point of the fix.
+>
+> **A gap in this file's own release loop was found and fixed below:** step 3 named `--image-runtime`
+> and `--music-runtime` but not `--video-runtime`, `--lance-runtime` or `--yue2-runtime`, so the
+> documented command would stage a bundle with no Video lane. The staged 0.6.96 manifest proves all
+> three were passed. The loop now shows the command that was actually run.
+>
+> **0.6.92 — the fleet work has landed** (per-node credentials so a removal sticks, promotion with a
+> handover the cluster follows on its own, Fleet token rotation, and the Connections page showing who
+> has joined and when each Mac was last seen).
 >
 > **0.6.91 — the distribution kits are current, and their index documents can no longer drift.**
 >
@@ -1357,10 +1411,21 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
    .build/voice-runtime/bin/python3 -B packaging/stage_voice.py \
      --runtime .build/voice-runtime --native-shell .build/StudioHub \
      --image-runtime .build/image-runtime-mflux020 \
+     --video-runtime .build/video-runtime \
+     --lance-runtime .build/lance-runtime \
+     --yue2-runtime .build/yue2-runtime \
      --music-runtime .build/music-runtime \
      --music-engine .build/music-engine-source \
      --output ".build/StudioHub-<n>/Studio Hub.app"
    ```
+
+   **Corrected 2026-09-28.** This line showed only `--image-runtime` and `--music-runtime`, so
+   following it produced a bundle with **no Video lane at all** — the three flags above were passed
+   by hand every time and nothing recorded them. The staged 0.6.96
+   `release-manifest.json` is what proves it: its `components.video` carries
+   `lance_runtime_sha256` and `yue2_runtime_sha256` beside the LTX runtime, none of which exist
+   unless those flags are given. **Check that manifest after staging** — a missing
+   `components.video` is the whole defect, and it is one `json.load` away from being visible.
 4. Install: `bash packaging/install_local.sh ".build/StudioHub-<n>/Studio Hub.app"`.
    It verifies what landed. **Never** `cp` a bundle into `/Applications` by hand, and never
    chain a swap with `|| true` — that is how a stale app went unnoticed for three releases.
