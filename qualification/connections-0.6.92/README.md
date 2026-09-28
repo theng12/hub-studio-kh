@@ -20,3 +20,11 @@ banner and its sentence, the retired-controller banner, the confirmations on rol
 remove, the Promote / Hand over / Rotate results with their per-Mac lists, and the pin-clearing
 behaviour. Those predicates and sentences live in `native/StartupRecovery.swift` (`FleetCopy`) and
 the contract suite, precisely because a screenshot cannot hold them.
+
+## Also here: the same page at 0.6.93
+
+`connections-0.6.93-1920x1053.png`, rendered the same way against the installed **0.6.93 /
+`c7feed7`** after the rehearsal's two handover fixes. The differences from the 0.6.92 render are in
+behaviour rather than layout — the promotion and handover results, and a node's own registration
+with a new controller — so the still looks the same and the picture is here as the record that the
+page still renders on the released build.
