@@ -1365,6 +1365,11 @@ struct NativeControllerSettings: Decodable, Equatable {
     /// "minted" for a Mac running its own group, "adopted" for one that joined somebody else's.
     /// Absent from a Hub older than this field, which is why it is optional.
     let fleetCredentialOrigin: String?
+    /// The controller this Mac's Hub handed its group to, and when. Non-nil means this Hub is
+    /// **retired**: it keeps its history and refuses remote work, so the app must not show it as
+    /// still taking jobs. Absent from a Hub older than the handover route.
+    let handedOverTo: String?
+    let handedOverAt: Double?
 }
 
 struct NativeControllerReadiness: Decodable, Equatable {
@@ -1436,7 +1441,25 @@ struct NativeMachineUsage: Decodable, Equatable, Identifiable {
     var id: String { machine }
 }
 
+/// One Studio a joined Mac runs, as the node reported it at join time.
+struct NativeFleetStudio: Decodable, Equatable {
+    let id: String
+    let modality: String?
+
+    /// "Image (image)" is not how a person reads a list; the modality is the part that decides
+    /// what work the Mac can take, so it is what the row shows when it is published.
+    var display: String {
+        guard let modality, !modality.isEmpty else { return id }
+        return "\(id) · \(modality)"
+    }
+}
+
 /// One Mac that has joined this controller, with the state it is actually in.
+///
+/// Every field below `state` is published by `GET /api/hub/fleet/nodes` and was decoded by nothing:
+/// `role`, `studios`, `version`, `joined_at`, `last_seen_at` and the credential's own dates. A
+/// roster row that shows only a name and an address cannot answer "is this the Mac I think it is,
+/// what can it run, and when was it last here" — which is what the row is for.
 struct NativeFleetNode: Decodable, Equatable, Identifiable {
     let id: String
     let name: String
@@ -1444,13 +1467,44 @@ struct NativeFleetNode: Decodable, Equatable, Identifiable {
     let state: String
     let detail: String?
     let version: String?
+    let role: String?
+    let studios: [NativeFleetStudio]?
     let joinedAt: Double?
+    /// The last time this controller heard from the Mac. Absent until it has answered a probe.
+    let lastSeenAt: Double?
+    /// When the credential this Mac holds was issued. Published so a revocation is visible as a
+    /// fact on the roster rather than only as the node's behaviour.
+    let credentialIssuedAt: Double?
+    /// Whether this controller holds a credential for the Mac. False is a row from before
+    /// per-node credentials, which has to prove itself on its next join.
+    let hasCredential: Bool?
+
     var isReachable: Bool { state == "reachable" }
+    /// The node answered and refused *this controller's* credential — a different fault from a
+    /// Mac that is switched off, and one that no amount of waiting fixes.
+    var isUnauthorized: Bool { state == "unauthorized" }
+    var isFaulted: Bool { state == "error" }
+}
+
+/// A machine this controller has evicted. Published by `GET /api/hub/fleet/nodes` under `removed`
+/// so the only way to re-admit one is not "remember its id".
+struct NativeFleetRemovedNode: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let address: String?
+    let removedAt: Double?
+    let removedBy: String?
+    let role: String?
+    let studios: [NativeFleetStudio]?
+    let joinedAt: Double?
 }
 
 struct NativeFleetInventory: Decodable, Equatable {
     let role: String
     let nodes: [NativeFleetNode]
+    /// The evicted machines. Absent from a Hub older than the removal record, which is why it is
+    /// optional rather than an empty list that would read as "nothing was ever removed".
+    let removed: [NativeFleetRemovedNode]?
     let summary: NativeFleetSummary
 }
 
@@ -1459,6 +1513,86 @@ struct NativeFleetSummary: Decodable, Equatable {
     let reachable: Int
     let unreachable: Int
     let error: Int
+    /// Answered, but refused this controller's credential. Its own count, because a fleet page
+    /// that folded it into "unreachable" sent the operator to look at the network.
+    let unauthorized: Int?
+    let removed: Int?
+}
+
+/// One Mac's outcome in a Fleet-token rotation or a handover, keyed by machine id in the answer.
+struct NativeFleetSyncMachine: Decodable, Equatable {
+    let ok: Bool?
+    /// `verified`, `manual`, `failed` or `unreachable`.
+    let status: String?
+    let detail: String?
+
+    /// What happened to this Mac, in the words the page shows. The Hub's own vocabulary is honest
+    /// but internal: `manual` means "it refused the credential it was given, so somebody has to
+    /// walk to it", which is the sentence the operator needs.
+    var outcome: String {
+        switch status {
+        case "verified": return "followed"
+        case "manual": return "refused the old credential"
+        case "unreachable": return "could not be reached"
+        case "failed": return "answered with an error"
+        case let other?: return other
+        default: return "did not answer"
+        }
+    }
+}
+
+/// `POST /api/hub/fleet` (rotate) and `POST /api/hub/fleet/handover`.
+///
+/// One shape because it is one operation with two callers: every joined Mac is handed a new
+/// credential, and — for a handover — a new head. `verified + manual + pending == total` is the
+/// whole point of the answer: a partial result is never a success, so the app must be able to say
+/// which Macs did not follow by name.
+struct NativeFleetSyncAnswer: Decodable, Equatable {
+    let ok: Bool?
+    let rotated: Bool?
+    let handedOverTo: String?
+    let handedOverAt: Double?
+    let token: String?
+    let total: Int
+    let verified: Int
+    let manual: Int
+    let pending: Int
+    let machines: [String: NativeFleetSyncMachine]
+}
+
+/// What the operator is shown after a rotation or a handover.
+///
+/// Built from the Hub's answer rather than from the request, so the page reports what happened to
+/// each Mac. `followed` and `unfinished` carry the machine ids, which the page resolves to names
+/// from the roster it already has.
+struct FleetOperationReport: Equatable {
+    enum Kind: Equatable { case rotation, handover }
+    let kind: Kind
+    /// The new controller's address, for a handover.
+    let target: String?
+    /// The new Fleet token, shown once so the operator can give it to GatewayKH.
+    let token: String?
+    let total: Int
+    let verified: Int
+    let manual: Int
+    let pending: Int
+    let followed: [String]
+    let unfinished: [String]
+    /// Machine id -> what happened to it, in words. A list of ids cannot say *why* a Mac did not
+    /// follow, and the two reasons need different work: one is off, the other refused a credential.
+    let outcomes: [String: String]
+
+    var isComplete: Bool { manual == 0 && pending == 0 }
+
+    /// The line that must never read as success when it was not.
+    var summary: String {
+        let action = kind == .handover ? "Handover" : "Fleet token rotation"
+        let lead = "\(action): \(verified) of \(total) Mac\(total == 1 ? "" : "s") followed."
+        guard let unfinishedLine = FleetCopy.unfinishedNotice(total: total, verified: verified,
+                                                             manual: manual, pending: pending)
+        else { return lead }
+        return "\(lead) \(unfinishedLine)"
+    }
 }
 
 /// One Mac in the fleet, with everything needed to judge whether to send it work.
@@ -2637,7 +2771,54 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Whether the controller this Mac joined is answering, and a sentence saying so. Kept as
     /// state, not as a transient note, so the Connections page always has something to read.
     @Published private(set) var controllerReachable: Bool?
+    /// True when the controller answered the authenticated read and refused this Mac's credential.
+    /// A third state, not a flavour of "unreachable": 52 Macs showed green after a controller
+    /// replacement while that controller called every one of them `unauthorized`, and the fix was
+    /// to ask with a credential and to say which of the two answers came back.
+    @Published private(set) var controllerCredentialRefused = false
     @Published private(set) var controllerHealthNote: String?
+    /// Set when this Mac's controller has **removed** it. Terminal: the re-join loop stops, the
+    /// group credential goes, and the page says who removed it, when, and where re-admitting
+    /// happens. Nil while this Mac is a member or was never one.
+    @Published private(set) var controllerRemoval: ControllerRemoval?
+    /// This Mac's own node credential, issued by its controller in the join answer. Presented on
+    /// every call this Mac makes home — register, re-join, read the group, remove itself — and the
+    /// only credential whose revocation is about this Mac alone (A8). Kept with the membership the
+    /// app already persists; the Hub keeps its own 0600 copy, written over
+    /// `POST /api/hub/fleet/adopt`, and presents it on the reads it makes itself.
+    @Published private(set) var nodeCredential: String?
+    /// The last Fleet-token rotation or handover, with each Mac's outcome. Nil until one is run.
+    @Published private(set) var fleetOperation: FleetOperationReport?
+    @Published private(set) var fleetOperationRunning = false
+    /// Persist or clear the node credential with the membership, the way the pinned release key is
+    /// kept. The app owns the preferences file; the workspace owns the value.
+    var onNodeCredentialChanged: ((String?) -> Void)?
+    /// Called when the Hub's **Fleet token** has been replaced on this Mac — a rotation this Mac
+    /// performed, or a leave that minted its own. The page shows that value next to a Copy button,
+    /// so a rotation that left the old one on screen would hand GatewayKH a token that no longer
+    /// opens anything.
+    var onFleetCredentialChanged: (() -> Void)?
+    /// The Hub's **current** Fleet token, read from the Hub's own state file by the app layer.
+    ///
+    /// The membership's copy is a snapshot taken when this Mac joined or started, and a rotation
+    /// another Mac pushed to this one's Hub replaces it without telling this app. Presenting the
+    /// stale value on an authenticated read would then report a healthy Mac as refused — so the
+    /// read asks the app for the live value at the moment it needs it.
+    var fleetTokenProvider: (@MainActor () -> String?)?
+
+    /// What this Mac's controller did to it, in the words its own page shows.
+    struct ControllerRemoval: Equatable {
+        /// The date the controller stated, e.g. "2026-09-28".
+        let date: String?
+        /// The controller's own refusal, quoted verbatim.
+        let detail: String
+        let address: String
+        /// False when the local Hub could not be told to mint its own credential, which is a
+        /// different sentence: the Mac stopped re-joining either way, but it may still hold the
+        /// group's token.
+        let clearedGroupCredential: Bool
+    }
+
     /// What this Mac needs to re-join its controller by itself: the address it was told, this
     /// Mac's own fleet credential (which, after joining, *is* the controller's), and the networks
     /// it is reachable on. Set by the app from its saved preferences once the Hub is ready.
@@ -2645,6 +2826,9 @@ final class NativeWorkspaceStore: ObservableObject {
         let controllerAddress: String
         let token: String?
         let boundHosts: [String]
+        /// This Mac's own node credential, issued by that controller. Part of the membership: the
+        /// app persists it beside the address, and a Mac that rejoins after a restart presents it.
+        var nodeCredential: String? = nil
         /// The controller's release key pinned on first read. Part of the membership: it is
         /// restored with it at startup and cleared when this Mac leaves the group.
         var releasePublisherKey: ReleasePublisherKey? = nil
@@ -5224,9 +5408,15 @@ final class NativeWorkspaceStore: ObservableObject {
                 ["api", "hub", "machine-label"], method: "POST", body: RenameRequest(name: name))
             guard connectionID == requestConnection else { return }
             await refreshConnection()
+            // **The rename is reported as a rename, and the identity it did not change is named.**
+            // `controller_id` is what a join registers and what the controller routes by; a note
+            // that only said "this Mac is now called X" left the operator to assume the fleet saw a
+            // different machine.
+            let identity = controllerIdentity?.settings.controllerId ?? "unchanged"
             roleNote = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Name cleared; this Mac shows its hostname again."
-                : "This Mac is now called \(name.trimmingCharacters(in: .whitespacesAndNewlines))."
+                ? "Name cleared; this Mac shows its hostname again. Its node identity is still \(identity)."
+                : "This Mac is now called \(name.trimmingCharacters(in: .whitespacesAndNewlines)). "
+                    + "Its node identity is still \(identity), so nothing re-registered."
             error = nil
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Rename this Mac") } }
     }
@@ -5265,6 +5455,63 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    // MARK: This Mac's own node credential (A8)
+
+    /// The credential to present on a route **this Mac's own node credential may use**: register
+    /// and re-join, read the group's roster and overview, remove itself.
+    ///
+    /// The node credential comes first because it is the one that survives a group rotation: it
+    /// names this Mac alone, so a controller that re-issued the shared Fleet token has not
+    /// invalidated it. The group Fleet token is presented only by a Mac that has not been issued
+    /// one yet — the no-flag-day path for a roster written before per-node credentials existed.
+    private var nodeOriginCredential: String? {
+        if let held = heldNodeCredential { return held }
+        let token = storedMembership?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (token?.isEmpty ?? true) ? nil : token
+    }
+
+    /// This Mac's own node credential, from the live value or from the membership it is persisted
+    /// with. Nil means this Mac has never been issued one — the state a roster written before
+    /// per-node credentials leaves it in.
+    private var heldNodeCredential: String? {
+        if let nodeCredential, !nodeCredential.isEmpty { return nodeCredential }
+        if let held = storedMembership?.nodeCredential, !held.isEmpty { return held }
+        return nil
+    }
+
+    /// The credential to present on a route **only the group Fleet token may use** — the
+    /// authenticated read this app makes to its controller for the connection light, and the
+    /// rotation verification the Hub itself performs. A node credential is refused there by
+    /// design, so presenting it would report a permission as a fault.
+    private var fleetTokenCredential: String? {
+        // The live value first: the membership's copy predates any rotation this Mac did not
+        // perform itself, and the Hub's own file is the authority on what it holds now.
+        if let live = fleetTokenProvider?(), !live.isEmpty { return live }
+        let token = storedMembership?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let token, !token.isEmpty { return token }
+        return nodeCredential
+    }
+
+    /// Record the credential this Mac was issued, and persist it with the membership.
+    ///
+    /// Called from every successful join, because **each join mints a fresh credential**: the
+    /// controller keeps only the newest hash, so a Mac that kept the old value would be holding a
+    /// secret its controller no longer recognises.
+    private func setNodeCredential(_ value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let clean = trimmed.isEmpty ? nil : trimmed
+        guard clean != nodeCredential else { return }
+        nodeCredential = clean
+        // The membership is what the app persists, so the live value and the stored one are kept
+        // equal here rather than by every caller remembering to do both.
+        storedMembership?.nodeCredential = clean
+        onNodeCredentialChanged?(clean)
+    }
+
+    /// Dismiss the removal notice. The date is the controller's decision, so dismissing it is a
+    /// deliberate act rather than something the next refresh does silently.
+    func dismissControllerRemoval() { controllerRemoval = nil }
+
     /// Read the nodes that have joined this Mac, and their live state.
     func refreshFleetNodes() async {
         guard let requestConnection = connectionID else { return }
@@ -5287,6 +5534,36 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             fleetOverview = nil
         }
+        clearRoutingPinIfItsMachineLeft()
+    }
+
+    /// Drop a "Send here" pin whose machine is no longer in this fleet.
+    ///
+    /// A pin is a standing promise about a Mac, and once that Mac leaves, the promise cannot be
+    /// kept: the Hub refuses every new job with "no machine named X is in this fleet" and the
+    /// screen that shows the refusal had no way to clear the pin that caused it.
+    ///
+    /// Two callers, and the difference is the evidence. A **refresh** may only clear a pin when the
+    /// roster read succeeded and no longer lists that machine — a failed read says nothing about who
+    /// is in the fleet. `justRemoved` is the operator's own removal on this controller, which is
+    /// conclusive straight away: the machine is gone from routing whether or not the next read
+    /// succeeds.
+    func clearRoutingPinIfItsMachineLeft(justRemoved machine: String? = nil) {
+        guard let pin = routingPin, pin.hasPrefix("machine:") else { return }
+        let pinned = String(pin.dropFirst("machine:".count)).lowercased()
+        guard !pinned.isEmpty, pinned != "local",
+              pinned != (controllerIdentity?.settings.controllerId ?? "").lowercased() else { return }
+        if let machine {
+            guard machine.lowercased() == pinned else { return }
+        } else {
+            // The local roster is the list of machines this Hub may send work to. It is only
+            // authoritative when the read succeeded.
+            guard let fleet = fleetNodes else { return }
+            guard !fleet.nodes.contains(where: { $0.id.lowercased() == pinned }) else { return }
+        }
+        routingPin = nil
+        fleetNote = "The Mac pinned with Send here (\(pinned)) is no longer in this fleet, "
+            + "so the pin was cleared. New work runs on whichever Mac can take it."
     }
 
     /// Join this Mac to a controller at an address the operator typed.
@@ -5294,6 +5571,11 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The request leaves this Mac for another one, so it does not go through the helper that
     /// targets our own Hub — and the address is validated here as well as on the controller,
     /// because a token must never be sent to a host that was not checked first.
+    ///
+    /// **Two credentials, and both are needed.** This Mac presents the node credential its
+    /// controller issued it (A8) — the one value that names this Mac alone and therefore survives a
+    /// group-wide Fleet-token rotation — and the group Fleet token is what it hands over on the
+    /// first join and on the one retry that can hear a removal.
     @discardableResult
     func joinController(address: String, token: String, boundHosts: [String] = [],
                         quiet: Bool = false, startupAttemptID: UUID? = nil,
@@ -5315,12 +5597,6 @@ final class NativeWorkspaceStore: ObservableObject {
             let nodeID = (controllerIdentity?.settings.controllerId ?? "studiohub-node")
                 .lowercased()
             let name = controllerIdentity?.settings.machineName ?? "Studio Hub"
-            var request = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes"))
-            request.httpMethod = "POST"
-            request.timeoutInterval = 30
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue(secret, forHTTPHeaderField: "X-Hub-Token")
             guard let ownAddress = Self.studioAddress(for: target, port: baseURL?.port,
                                                       boundHosts: boundHosts) else {
                 throw NativeAPIError.message("This Mac is not reachable at any address a controller could use. Choose a network address under Connections → Fleet, restart the services, then join.")
@@ -5334,13 +5610,6 @@ final class NativeWorkspaceStore: ObservableObject {
             guard !studios.isEmpty else {
                 throw NativeAPIError.message("This Mac is not running any studios yet, so there is nothing to offer a controller.")
             }
-            // The Hub reads snake_case here, like its other administration routes. Sending the
-            // Swift names would have the controller refuse a join for a missing node_id while
-            // the app reported only that it was refused.
-            let encoder = JSONEncoder()
-            encoder.keyEncodingStrategy = .convertToSnakeCase
-            request.httpBody = try encoder.encode(JoinRequest(
-                nodeId: nodeID, name: name, address: ownAddress, studios: studios))
             joiningFleet = true
             defer {
                 if connectionID == requestConnection,
@@ -5348,40 +5617,51 @@ final class NativeWorkspaceStore: ObservableObject {
                     joiningFleet = false
                 }
             }
-            let (data, response) = try await session.data(for: request)
+            func request(presenting credential: String) throws -> URLRequest {
+                // The Hub reads snake_case here, like its other administration routes. Sending the
+                // Swift names would have the controller refuse a join for a missing node_id while
+                // the app reported only that it was refused.
+                var attempt = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes"))
+                attempt.httpMethod = "POST"
+                attempt.timeoutInterval = 30
+                attempt.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                attempt.setValue("application/json", forHTTPHeaderField: "Accept")
+                attempt.setValue(credential, forHTTPHeaderField: "X-Hub-Token")
+                let encoder = JSONEncoder()
+                encoder.keyEncodingStrategy = .convertToSnakeCase
+                // The node credential travels in the body as well as the header: the controller
+                // accepts either as proof of identity, and a request that carries its own proof is
+                // the one that still parses if something in between rewrites headers.
+                attempt.httpBody = try encoder.encode(JoinRequest(
+                    nodeId: nodeID, name: name, address: ownAddress, studios: studios,
+                    credential: heldNodeCredential))
+                return attempt
+            }
+            /// The credential this Mac presents first. Its own, unless it has never been issued one.
+            let own = nodeOriginCredential ?? secret
+            var (data, response) = try await session.data(for: try request(presenting: own))
             guard connectionID == requestConnection,
                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
-            guard let http = response as? HTTPURLResponse else {
+            guard var http = response as? HTTPURLResponse else {
                 throw NativeAPIError.message("The controller returned no response.")
             }
-            if (200..<300).contains(http.statusCode), !secret.isEmpty {
-                // Take on the controller's credential, which is what registration means.
-                //
-                // The route existed and nothing called it, so a Mac joined a controller and then
-                // answered 401 to that controller: the controller drives its nodes with its own
-                // credential, and handing it over is the point of registering. The one credential
-                // per cluster is the whole design, and this is the half that installs it.
-                //
-                // Registration first, adoption second: the controller has to accept the node before
-                // the node stops accepting its own credential.
-                do {
-                    try await adoptClusterCredential(secret, controller: target)
-                } catch {
-                    // A join without adoption is not a working join: the controller has this Mac
-                    // on its roster and then gets 401 from it, which reads as "unreachable" with
-                    // no explanation. A startup retry may try again quietly, but a person who
-                    // pressed Join must be told.
-                    if startupAttemptID != nil { throw error }
-                    let message = "The controller accepted this Mac, but taking on its Fleet "
-                        + "token failed, so the controller cannot send it work yet. "
-                        + Self.actionable(error, action: "Adopt the controller's token")
-                    note(.failure, message)
-                    self.error = message
-                    return false
+            // **A revoked credential answers 401, and a 401 says nothing about why.** The removal
+            // sentence is only served to a request the controller will authenticate at all, so a
+            // 401 on this Mac's own credential is retried exactly once with the group Fleet token.
+            // One retry, two cases: a Mac the controller has **removed** hears a decision that was
+            // already made instead of retrying for ever against a bare 401, and a Mac that was
+            // **re-admitted** — whose row therefore holds no credential — is let back in and issued
+            // a fresh one.
+            if http.statusCode == 401, let ownCredential = heldNodeCredential,
+               own == ownCredential, secret != ownCredential {
+                (data, response) = try await session.data(for: try request(presenting: secret))
+                guard connectionID == requestConnection,
+                      startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
+                guard let retried = response as? HTTPURLResponse else {
+                    throw NativeAPIError.message("The controller returned no response.")
                 }
+                http = retried
             }
-            guard connectionID == requestConnection,
-                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
             guard (200..<300).contains(http.statusCode) else {
                 lastJoinAuthStatus = (http.statusCode == 401 || http.statusCode == 403)
                     ? http.statusCode : nil
@@ -5390,12 +5670,56 @@ final class NativeWorkspaceStore: ObservableObject {
                 let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 let reason = (body?["detail"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                // **A removal is terminal.** It is a decision the controller already made, not a
+                // credential this Mac can replace, so the re-join loop stops here and the page says
+                // who removed this Mac and when.
+                if http.statusCode == 403, FleetCopy.isRemoval(reason) {
+                    await handleControllerRemoval(detail: reason, address: address, target: target)
+                    return false
+                }
                 throw NativeAPIError.message(reason.isEmpty
                     ? (http.statusCode == 401
                         ? "The controller refused this Mac's join (401). Use the controller's Fleet token, not its Hub token."
                         : "The controller refused the join (\(http.statusCode)).")
                     : "The controller refused this Mac's join: \(reason)")
             }
+            // This Mac's own credential, minted for it in this answer and returned nowhere else.
+            let issued = ((try? JSONDecoder().decode(JoinAnswer.self, from: data))?.credential)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let issued, !issued.isEmpty {
+                setNodeCredential(issued)
+            }
+            // Take on the controller's group credential, which is what registration means.
+            //
+            // The route existed and nothing called it, so a Mac joined a controller and then
+            // answered 401 to that controller: the controller drives its nodes with its own
+            // credential, and handing it over is the point of registering. The one credential
+            // per cluster is the whole design, and this is the half that installs it.
+            //
+            // Registration first, adoption second: the controller has to accept the node before
+            // the node stops accepting its own credential. The node credential goes with it, so the
+            // local Hub presents *this Mac's* credential on the reads it makes itself (A8) —
+            // the app never has to know where the Hub keeps its state.
+            do {
+                try await adoptClusterCredential(secret, controller: target, nodeCredential: issued)
+            } catch {
+                // A join without adoption is not a working join: the controller has this Mac
+                // on its roster and then gets 401 from it, which reads as "unreachable" with
+                // no explanation. A startup retry may try again quietly, but a person who
+                // pressed Join must be told.
+                if startupAttemptID != nil { throw error }
+                let message = "The controller accepted this Mac, but taking on its Fleet "
+                    + "token failed, so the controller cannot send it work yet. "
+                    + Self.actionable(error, action: "Adopt the controller's token")
+                note(.failure, message)
+                self.error = message
+                return false
+            }
+            guard connectionID == requestConnection,
+                  startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
+            // A Mac that joined is not a Mac that was removed: the notice is about the previous
+            // controller's decision, and it has been overtaken by a re-admission.
+            controllerRemoval = nil
             controllerAddress = "\(target.host ?? ""):\(target.port ?? 0)"
             note(.success, "Joined the controller at \(controllerAddress). "
                  + "This Mac can now be sent work by it.")
@@ -5423,6 +5747,72 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             return false
         }
+    }
+
+    /// The controller has removed this Mac: stop, drop the group credential, and say so.
+    ///
+    /// A removal is the one refusal that must not be retried. The owner removes Macs to sell them,
+    /// so a Mac that kept re-joining would look broken rather than retired; the app stops the loop
+    /// and the startup attempt, tells the local Hub to mint its own credential (which is what
+    /// actually takes the group's token off this Mac), and keeps the controller's own sentence on
+    /// screen with the date it named.
+    private func handleControllerRemoval(detail: String, address: String, target: URL) async {
+        // This Mac's own credential was revoked the moment it was removed; keeping it would only
+        // invite a retry the controller has already refused.
+        setNodeCredential(nil)
+        let date = FleetCopy.removalDate(in: detail)
+        let shown = address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "\(target.host ?? ""):\(target.port ?? 0)" : address
+        // **The local leave runs before the loops are cancelled.** Cancelling first would tear down
+        // the very task this code is running in — the re-join loop or the startup attempt called
+        // this join — and a cancelled URLSession request cannot take the group's token off this Mac.
+        // The terminal state below is what stops the loop; the cancel is the belt to that braces.
+        let cleared = await clearGroupMembershipLocally()
+        controllerRemoval = ControllerRemoval(date: date, detail: detail, address: shown,
+                                              clearedGroupCredential: cleared)
+        cancelMembershipRejoin()
+        invalidateStartupMembershipAttempt()
+        controllerReachable = false
+        controllerCredentialRefused = false
+        controllerHealthNote = FleetCopy.removalNotice(date: date, address: shown)
+        // A removal is a failure the operator has to act on, and it is also the answer to a join
+        // they may have just pressed: both the banner and the standing line carry it.
+        note(.failure, controllerHealthNote ?? detail)
+        self.error = controllerHealthNote
+    }
+
+    /// Tell this Mac's own Hub to stop being a node: it mints its own credential and forgets the
+    /// controller it borrowed one from. Best-effort — a Mac whose Hub is not answering has still
+    /// stopped being a member here, and the caller says which of the two happened.
+    @discardableResult
+    private func clearGroupMembershipLocally() async -> Bool {
+        var cleared = true
+        do {
+            var request = try makeRequest(["api", "hub", "fleet", "leave"], method: "POST")
+            request.timeoutInterval = 30
+            let (_, response) = try await session.data(for: request)
+            cleared = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+        } catch {
+            cleared = false
+        }
+        storedMembership = nil
+        controllerAddress = ""
+        // This Mac's own node credential belonged to the controller it just left, so it goes with
+        // the membership: keeping it would leave a working membership secret on a Mac that is
+        // being retired or sold, which is the one thing leaving exists to prevent.
+        setNodeCredential(nil)
+        // The Hub has minted its own Fleet token, so the value on the page is re-read rather than
+        // left showing the credential of a group this Mac is no longer in.
+        onFleetCredentialChanged?()
+        releasePublisherKey = nil
+        onReleasePublisherKeyChanged?(nil)
+        offeredRelease = nil
+        offeredReleaseDescriptor = nil
+        updateOffered = false
+        offeredReleaseIsOlder = false
+        releaseRefusal = nil
+        onControllerJoined?(nil)
+        return cleared
     }
 
     /// Re-join the controller this Mac belongs to during startup.
@@ -5496,6 +5886,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// loop stops when the join succeeds or this Mac stops being a node.
     private func scheduleMembershipRejoin() {
         guard rejoinTask == nil else { return }
+        // **A removal is terminal.** The controller has already decided, so a Mac that was removed
+        // does not start a new re-join loop — not after a failed startup attempt, and not when the
+        // lifecycle refresh notices the membership is gone.
+        guard controllerRemoval == nil else { return }
         guard hasRejoinableMembership,
               controllerIdentity?.settings.fleetCredentialOrigin == "adopted",
               let requestConnection = connectionID else { return }
@@ -5508,9 +5902,10 @@ final class NativeWorkspaceStore: ObservableObject {
             guard let self else { return }
             while !Task.isCancelled {
                 // The pure schedule decides whether there is anything left to do and how long to
-                // wait; the loop only carries it out. Leaving the group, a role change or a lost
-                // membership stops it here rather than re-enrolling a Mac that left.
-                let isNode = self.controllerIdentity?.settings.fleetCredentialOrigin == "adopted"
+                // wait; the loop only carries it out. Leaving the group, a role change, a removal or
+                // a lost membership stops it here rather than re-enrolling a Mac that left.
+                let isNode = self.controllerRemoval == nil
+                    && self.controllerIdentity?.settings.fleetCredentialOrigin == "adopted"
                 let hasMembership = self.hasRejoinableMembership
                 guard case .wait(let delay) = RejoinRecovery.nextAction(
                     attempt: self.rejoinAttempt, isNode: isNode, hasMembership: hasMembership,
@@ -5590,74 +5985,294 @@ final class NativeWorkspaceStore: ObservableObject {
         // The pinned release key travels with the membership: restore it before any release is
         // read, so the first read verifies against the key pinned at the last join.
         releasePublisherKey = membership.releasePublisherKey
+        // **This Mac's node credential travels with the membership too.** It is the value that
+        // names this Mac alone, so it is what the re-join presents; without it a controller whose
+        // roster already holds a credential for this id refuses the join (H12), and a Mac would
+        // have to be re-admitted by hand after every restart.
+        setUpNodeCredentialAndPublish(membership.nodeCredential)
         startupMembershipAttemptID = UUID()
         // Read the identity before deciding: the credential origin is what says whether this Mac
         // borrowed somebody else's token and therefore belongs to a group.
         await retryStartupMembershipIfNeeded(waitForJoin: true)
     }
 
+    /// Restore a credential that is already this Mac's, without telling the app to save it again.
+    private func setUpNodeCredentialAndPublish(_ value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        nodeCredential = trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Leave the group this Mac belongs to: stop carrying its token and run on this Mac's own.
     ///
     /// This is the action for a Mac that is being retired, sold or moved, and the only one that
     /// takes the group's credential off it. Telling the controller to drop this Mac from its roster
-    /// happens first, while the borrowed token still works; if the controller is off or already
-    /// gone, leaving is still this Mac's decision and goes ahead with a line saying so.
+    /// happens first, while this Mac's own credential still works; if the controller is off or
+    /// already gone, leaving is still this Mac's decision and goes ahead with a line saying so.
+    ///
+    /// **The removal request goes out with this Mac's own credential (A8).** It used to present the
+    /// shared Fleet token, which cannot remove anything: a credential every member holds identifies
+    /// nobody. The controller's answer is reported as it comes — including its own reason — because
+    /// the failure this replaces was an app that said "left the group" while the controller still
+    /// listed the Mac.
     func leaveGroup() async {
         guard let requestConnection = connectionID else { return }
         invalidateStartupMembershipAttempt()
         cancelMembershipRejoin()
         fleetNote = nil
         var controllerNote = ""
-        if let membership = storedMembership, let token = membership.token, !token.isEmpty,
+        let membership = storedMembership
+        if let membership, let token = membership.token, !token.isEmpty,
            let nodeID = controllerIdentity?.settings.controllerId.lowercased(),
            let target = try? Self.privateHTTPAddress(membership.controllerAddress) {
-            var request = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes/\(nodeID)"))
-            request.httpMethod = "DELETE"
-            request.timeoutInterval = 15
-            request.setValue(token, forHTTPHeaderField: "X-Hub-Token")
-            if let (_, response) = try? await session.data(for: request),
-               let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                controllerNote = " The controller at \(membership.controllerAddress) still lists this Mac; remove it there."
+            let outcome = await removeThisMacFromController(target: target, nodeID: nodeID,
+                                                            groupToken: token)
+            switch outcome {
+            case .removed:
+                controllerNote = ""
+            case .removedEarlier(let detail):
+                controllerNote = " The controller had already removed this Mac: \(detail)"
+            case .credentialNotRecognised(let detail):
+                controllerNote = " The controller did not recognise this Mac's own credential (HTTP 401), "
+                    + "so this Mac is probably no longer on its roster"
+                    + (detail.isEmpty ? "." : ", and the group Fleet token was refused too: \(detail)")
+            case .refused(let status, let detail):
+                controllerNote = detail.isEmpty
+                    ? " The controller refused to remove this Mac (HTTP \(status)); remove it there."
+                    : " The controller refused to remove this Mac (HTTP \(status)): \(detail)"
+            case .unavailable(let reason):
+                controllerNote = " The controller at \(membership.controllerAddress) answered nothing "
+                    + "(\(reason)); it may still list this Mac — remove it there."
             }
         }
         guard connectionID == requestConnection else { return }
+        let cleared = await clearGroupMembershipLocally()
+        guard connectionID == requestConnection else { return }
+        controllerRemoval = nil
+        await refreshConnection()
+        guard connectionID == requestConnection else { return }
+        guard cleared else {
+            let message = "This Mac stopped re-joining, but its own Hub did not confirm leaving, so "
+                + "it may still hold the group's token. Start the local services and try again."
+            note(.failure, message)
+            self.error = message
+            return
+        }
+        note(.success, "This Mac has left the group and now runs on its own credential." + controllerNote)
+        error = nil
+    }
+
+    /// How the controller answered a self-removal.
+    private enum SelfRemovalOutcome {
+        case removed
+        /// The controller had already evicted this Mac — the same decision, already taken.
+        case removedEarlier(String)
+        case refused(Int, String)
+        /// This Mac's own credential is not recognised (401), and the group token it still holds
+        /// cannot remove anything either. Both halves are named, because together they mean "this
+        /// Mac is probably no longer on that roster" — which is a different sentence from "the
+        /// controller refused".
+        case credentialNotRecognised(String)
+        case unavailable(String)
+    }
+
+    /// Ask this Mac's controller to drop it, with this Mac's own credential, once.
+    ///
+    /// A node credential is the only thing that may remove this Mac: the shared Fleet token
+    /// identifies nobody, so a self-removal with it is refused by design. The Fleet token is used
+    /// only by a Mac that has not been issued a node credential (a roster written before A8).
+    private func removeThisMacFromController(target: URL, nodeID: String,
+                                             groupToken: String) async -> SelfRemovalOutcome {
+        let credential = heldNodeCredential ?? groupToken
+        func request(_ token: String) -> URLRequest {
+            var attempt = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes/\(nodeID)"))
+            attempt.httpMethod = "DELETE"
+            attempt.timeoutInterval = 15
+            attempt.setValue("application/json", forHTTPHeaderField: "Accept")
+            attempt.setValue(token, forHTTPHeaderField: "X-Hub-Token")
+            return attempt
+        }
         do {
-            var request = try makeRequest(["api", "hub", "fleet", "leave"], method: "POST")
-            request.timeoutInterval = 30
-            let (_, response) = try await session.data(for: request)
-            guard connectionID == requestConnection else { return }
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw NativeAPIError.message("The Hub refused to leave the group (\((response as? HTTPURLResponse)?.statusCode ?? 0)).")
+            var (data, response) = try await session.data(for: request(credential))
+            guard let http = response as? HTTPURLResponse else {
+                return .unavailable("no HTTP response")
             }
-            storedMembership = nil
-            controllerAddress = ""
-            // Leaving the group ends the trust that group had: the pinned release key goes with it.
-            releasePublisherKey = nil
-            onReleasePublisherKeyChanged?(nil)
-            offeredRelease = nil
-            offeredReleaseDescriptor = nil
-            updateOffered = false
-            offeredReleaseIsOlder = false
-            releaseRefusal = nil
-            onControllerJoined?(nil)
-            await refreshConnection()
-            note(.success, "This Mac has left the group and now runs on its own credential." + controllerNote)
-            error = nil
+            // A 401 on this Mac's own credential means it is no longer on the roster. The
+            // controller's *own* sentence is only served to a request it will authenticate, so a
+            // stale-credential Mac retries once with the group token — which cannot remove anything
+            // either, and that pair of answers is reported as what it is.
+            if http.statusCode == 401, credential != groupToken {
+                (data, response) = try await session.data(for: request(groupToken))
+                guard let retried = response as? HTTPURLResponse else {
+                    return .unavailable("no HTTP response")
+                }
+                switch Self.removalOutcome(status: retried.statusCode, data: data) {
+                case .removed:
+                    return .removedEarlier("it answered the group token and removed this Mac")
+                case .refused(_, let detail):
+                    return .credentialNotRecognised(detail)
+                case .credentialNotRecognised(let detail), .removedEarlier(let detail):
+                    return .credentialNotRecognised(detail)
+                case .unavailable(let reason):
+                    return .unavailable(reason)
+                }
+            }
+            return Self.removalOutcome(status: http.statusCode, data: data)
         } catch {
-            guard connectionID == requestConnection else { return }
-            self.error = Self.actionable(error, action: "Leave the group")
+            return .unavailable(Self.describe(error))
         }
     }
 
+    private static func removalOutcome(status: Int, data: Data) -> SelfRemovalOutcome {
+        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let detail = (body?["detail"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if (200..<300).contains(status) { return .removed }
+        if status == 403, FleetCopy.isRemoval(detail) { return .removedEarlier(detail) }
+        return .refused(status, detail)
+    }
+
+    /// Remove a joined Mac from this controller's roster — the operator's own action, with the Hub
+    /// token. Removing a machine the operator can see is a decision with a consequence (the Mac may
+    /// not re-join until it is re-admitted), which is why the view confirms it first.
     func leaveNode(_ node: NativeFleetNode) async {
         guard let requestConnection = connectionID else { return }
         do {
             let _: EmptyResponse = try await sendEmpty(
                 ["api", "hub", "fleet", "nodes", node.id], method: "DELETE")
             guard connectionID == requestConnection else { return }
-            fleetNote = "Removed \(node.name) from this controller."
+            // A "Send here" pin on the Mac that just left can never be honoured, and the Hub would
+            // refuse every new job with a sentence about a machine that is no longer listed.
+            clearRoutingPinIfItsMachineLeft(justRemoved: node.id)
+            if fleetNote == nil {
+                fleetNote = "Removed \(node.name) from this controller. It cannot re-join until it "
+                    + "is re-admitted from here."
+            }
             await refreshFleetNodes()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Remove the node") } }
+    }
+
+    /// Un-evict a machine: allow it to join this controller again. Hub token only.
+    func readmitNode(_ node: NativeFleetRemovedNode) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let _: EmptyResponse = try await sendJSON(
+                ["api", "hub", "fleet", "nodes", node.id, "readmit"], method: "POST",
+                body: EmptyBody())
+            guard connectionID == requestConnection else { return }
+            fleetNote = "\(node.name) may join this controller again."
+            error = nil
+            await refreshFleetNodes()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Re-admit the node")
+            }
+        }
+    }
+
+    // MARK: Group operations (A3, A4) — the Hub token, on this Mac
+
+    /// **Rotate the group's Fleet token.** Mint a new one and push it to every joined Mac.
+    ///
+    /// This is the action that makes a leak undoable: the token is shown on every controller's
+    /// page, held by every member and by GatewayKH, and before the route existed one holder could
+    /// not be cut off without re-joining the whole fleet. It is confirmed before it runs because
+    /// every member — and GatewayKH — has to be given the new value afterwards, and its result is
+    /// reported per Mac: a partial push is never a success.
+    func rotateFleetToken() async {
+        guard !fleetOperationRunning, let requestConnection = connectionID else { return }
+        fleetOperationRunning = true
+        fleetOperation = nil
+        defer { fleetOperationRunning = false }
+        do {
+            let answer: NativeFleetSyncAnswer = try await sendHubJSON(
+                ["api", "hub", "fleet"], body: FleetTokenRequest(token: nil))
+            guard connectionID == requestConnection else { return }
+            let report = operationReport(kind: .rotation, target: nil, answer: answer)
+            fleetOperation = report
+            // The Hub has replaced its own Fleet token, so the app re-reads it before the page draws
+            // the value beside the Copy button.
+            onFleetCredentialChanged?()
+            // The new Fleet token is what the Connections page shows, so read it back rather than
+            // leaving the old value on screen beside a report about the new one.
+            await refreshConnection()
+            guard connectionID == requestConnection else { return }
+            note(report.isComplete ? .success : .failure, report.summary)
+            error = report.isComplete ? nil : report.summary
+        } catch {
+            guard connectionID == requestConnection else { return }
+            let message = Self.actionable(error, action: "Rotate the Fleet token")
+            note(.failure, message)
+            self.error = message
+        }
+    }
+
+    /// **Hand this group to a promoted node**, then retire this controller.
+    ///
+    /// The old controller performs it because it is the only party every node already trusts and
+    /// can reach: it pushes `{new controller, new token}` down the channel it already has and then
+    /// stops taking work. A Mac that is off cannot follow, and that is reported by name — the
+    /// fallback for those is SSH over Tailscale, never a silent success.
+    func handOverFleet(to address: String, token newToken: String) async {
+        guard !fleetOperationRunning, let requestConnection = connectionID else { return }
+        fleetOperationRunning = true
+        fleetOperation = nil
+        defer { fleetOperationRunning = false }
+        do {
+            let target = try Self.privateHTTPAddress(address)
+            guard let literal = Self.literalControllerAddress(target) else {
+                throw NativeAPIError.message("The new controller's address has to be a private or "
+                    + "Tailscale address, and it could not be resolved to one the Hub will store.")
+            }
+            let secret = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !secret.isEmpty else {
+                throw NativeAPIError.message("Enter the new controller's Fleet token.")
+            }
+            let answer: NativeFleetSyncAnswer = try await sendHubJSON(
+                ["api", "hub", "fleet", "handover"],
+                body: FleetHandoverRequest(controllerUrl: literal, token: secret))
+            guard connectionID == requestConnection else { return }
+            let report = operationReport(kind: .handover, target: literal, answer: answer)
+            fleetOperation = report
+            // This controller is retired by the handover, and its own settings say so: read them
+            // back so the page shows the retirement rather than the role it had a moment ago.
+            await refreshConnection()
+            guard connectionID == requestConnection else { return }
+            note(report.isComplete ? .success : .failure, report.summary)
+            error = report.isComplete ? nil : report.summary
+        } catch {
+            guard connectionID == requestConnection else { return }
+            let message = Self.actionable(error, action: "Hand the group over")
+            note(.failure, message)
+            self.error = message
+        }
+    }
+
+    /// Turn the Hub's per-machine answer into the report the page shows. Built from the answer
+    /// rather than from the request, so the page can never claim a Mac followed when it did not.
+    private func operationReport(kind: FleetOperationReport.Kind, target: String?,
+                                 answer: NativeFleetSyncAnswer) -> FleetOperationReport {
+        var followed: [String] = []
+        var unfinished: [String] = []
+        var outcomes: [String: String] = [:]
+        for (machine, row) in answer.machines.sorted(by: { $0.key < $1.key }) {
+            outcomes[machine] = row.outcome
+            if row.ok == true, row.status == "verified" {
+                followed.append(machine)
+            } else {
+                unfinished.append(machine)
+            }
+        }
+        return FleetOperationReport(kind: kind, target: answer.handedOverTo ?? target,
+                                    token: answer.token, total: answer.total,
+                                    verified: answer.verified, manual: answer.manual,
+                                    pending: answer.pending, followed: followed,
+                                    unfinished: unfinished, outcomes: outcomes)
+    }
+
+    /// The name of a machine in this controller's roster, for a result that must name Macs rather
+    /// than ids. Falls back to the id the Hub used, which is still a value the operator can match.
+    func fleetMachineName(_ machine: String) -> String {
+        fleetNodes?.nodes.first { $0.id.lowercased() == machine.lowercased() }?.name ?? machine
     }
 
     /// The address to offer a controller: one it can reach this Mac at.
@@ -5793,43 +6408,109 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// Read the Hub's own role and identity, plus the version it reports.
-    /// Ask the controller this Mac joined whether it is answering, and keep that answer visible.
+    /// Ask the controller this Mac joined whether it is answering — **with a credential**.
     ///
     /// The result of a join used to exist only as a banner at the top of the page, so an operator
     /// sitting at the join form had nothing to read: they had to scroll away from where they were
     /// working to find out whether they were connected. This is the standing answer, refreshed
     /// whenever the page is opened or a join or leave finishes.
+    ///
+    /// **`/api/health` is public, and that was the defect.** It answered 200 to a controller that
+    /// refused this Mac's credential, so after a controller replacement every node showed green
+    /// while the controller listed each one as `unauthorized` and refused to dispatch to it. The
+    /// read below is the same authenticated one the controller makes to a node
+    /// (`/api/hub/resources?local_only=true`), so the light reports what the dispatch path will
+    /// actually meet, and a refusal is said in its own words rather than as "not answering".
     func refreshControllerHealth() async {
         let address = controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.isEmpty else {
             controllerReachable = nil
-            controllerHealthNote = "Not joined to a controller."
+            controllerCredentialRefused = false
+            // A removed Mac has no controller left to read, and the sentence that explains why must
+            // not be replaced by the flat "not joined" a lifecycle refresh would otherwise write
+            // every two seconds.
+            if controllerRemoval == nil {
+                controllerHealthNote = "Not joined to a controller."
+            }
             return
         }
         guard let target = try? Self.privateHTTPAddress(address) else {
             controllerReachable = false
+            controllerCredentialRefused = false
             controllerHealthNote = "Joined to \(address), but that address cannot be used now."
             return
         }
-        var request = URLRequest(url: target.appendingPathComponent("api/health"))
+        var components = URLComponents(url: target, resolvingAgainstBaseURL: false)
+        components?.path = "/api/hub/resources"
+        components?.query = "local_only=true"
+        guard let url = components?.url else {
+            controllerReachable = false
+            controllerCredentialRefused = false
+            controllerHealthNote = "Joined to \(address), but that address cannot be used now."
+            return
+        }
+        var request = URLRequest(url: url)
         request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // The group Fleet token, because that is the credential this route checks on a node. A
+        // Mac that has none presents nothing and is told so by the controller's own 401.
+        if let token = fleetTokenCredential {
+            request.setValue(token, forHTTPHeaderField: "X-Hub-Token")
+        }
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-            let body = (String(data: data, encoding: .utf8) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
             if (200..<300).contains(http.statusCode) {
                 controllerReachable = true
-                controllerHealthNote = "Joined to \(address) and connected. \(body.prefix(140))"
+                controllerCredentialRefused = false
+                controllerHealthNote = "Joined to \(address) and connected. " + Self.hostFacts(data)
+            } else if http.statusCode == 401 || http.statusCode == 403 {
+                // The controller answered, so it is up: it refused *this Mac*. Saying "not
+                // answering" here sends the operator to the network for a credential problem.
+                controllerReachable = false
+                controllerCredentialRefused = true
+                let reason = Self.controllerRefusal(data)
+                controllerHealthNote = "Joined to \(address), but it refused this Mac's credential "
+                    + "(HTTP \(http.statusCode))" + (reason.isEmpty ? "." : ": \(reason)")
+                    + " This Mac is not dispatchable until it re-joins with the current Fleet token."
             } else {
                 controllerReachable = false
+                controllerCredentialRefused = false
                 controllerHealthNote = "Joined to \(address), but it answered HTTP \(http.statusCode)."
             }
         } catch {
             controllerReachable = false
+            controllerCredentialRefused = false
             controllerHealthNote = "Joined to \(address), but it is not answering now. "
                 + Self.describe(error)
         }
+    }
+
+    /// What the controller's own refusal said, when it sent a sentence with it.
+    private static func controllerRefusal(_ data: Data) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = object["detail"] as? String else { return "" }
+        return detail.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A short, honest description of the machine that answered: only what it published.
+    private static func hostFacts(_ data: Data) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "It answered the authenticated read."
+        }
+        var parts: [String] = []
+        if let host = object["host"] as? [String: Any] {
+            if let chip = host["chip"] as? String, !chip.isEmpty { parts.append(chip) }
+            if let memory = host["memory_gb"] as? Double {
+                parts.append(String(format: "%.0f GB memory", memory))
+            } else if let memory = host["total_memory_gb"] as? Double {
+                parts.append(String(format: "%.0f GB memory", memory))
+            }
+        }
+        if let version = object["version"] as? String, !version.isEmpty {
+            parts.append("Hub \(version)")
+        }
+        return parts.isEmpty ? "It answered the authenticated read." : parts.joined(separator: " · ")
     }
 
     func refreshConnection() async {
@@ -6211,6 +6892,49 @@ final class NativeWorkspaceStore: ObservableObject {
         return "\(token.prefix(4))\(String(repeating: "•", count: 8))\(token.suffix(4))"
     }
 
+    /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and
+    /// its own clock, which is the same Mac's clock in every case that matters here.
+    static func moment(_ seconds: Double, now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: Date(timeIntervalSince1970: seconds))
+    }
+
+    /// How long ago a stamp was, in words: "just now", "4 min ago", "3 h ago", "6 days ago".
+    ///
+    /// Nil means the Hub published no stamp at all, which is a different fact from "a long time
+    /// ago": a node that has never answered a probe has no `last_seen_at`, and the page says
+    /// "never seen" rather than inventing a date.
+    static func ago(_ seconds: Double?, now: Date = Date()) -> String? {
+        guard let seconds, seconds > 0 else { return nil }
+        let elapsed = now.timeIntervalSince1970 - seconds
+        guard elapsed >= 0 else { return "just now" }
+        switch elapsed {
+        case ..<45: return "just now"
+        case ..<3600: return "\(Int(elapsed / 60)) min ago"
+        case ..<86_400: return "\(Int(elapsed / 3600)) h ago"
+        default: return "\(Int(elapsed / 86_400)) day\(Int(elapsed / 86_400) == 1 ? "" : "s") ago"
+        }
+    }
+
+    /// Whether this Mac chooses where work runs — the decision behind "Send here".
+    ///
+    /// **Membership decides it, not the role string.** Joining a controller never sets the app's
+    /// role, so `role != "agent"` was true on a Mac that had joined somebody: the page offered a
+    /// pin the Hub then refused with "no machine named X is in this fleet". Holding a credential
+    /// this Mac did not mint is the fact that makes it a node, and a retired controller dispatches
+    /// nothing either.
+    static func canPinWork(role: String?, credentialOrigin: String?,
+                           handedOverTo: String?) -> Bool {
+        if credentialOrigin == "adopted" { return false }
+        if !(handedOverTo ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
+        guard let role else { return false }
+        return role != "agent"
+    }
+
     private static func releaseSummary(_ result: NativeMemoryChange) -> String {
         let held = result.results.filter { $0.result == "still_loaded" }
         if result.succeeded == 0 && held.isEmpty { return "No Studio had a model to release." }
@@ -6256,10 +6980,18 @@ final class NativeWorkspaceStore: ObservableObject {
     /// needs it, not the app: the app remembers the membership in its own preferences, so a
     /// reinstall or a second window would leave the Hub holding a borrowed credential with no
     /// idea whose it was, and no way to show this Mac the pool it is in.
-    private func adoptClusterCredential(_ token: String, controller: URL) async throws {
+    private func adoptClusterCredential(_ token: String, controller: URL,
+                                        nodeCredential: String?) async throws {
         var payload = ["token": token]
         if let address = Self.literalControllerAddress(controller) {
             payload["controller_url"] = address
+        }
+        // **This Mac's own node credential goes with the adoption.** The join answer carries it
+        // once, and only this Mac may keep it; handing it straight back here is what lets the local
+        // Hub present it on the reads it makes itself (A8) without the app ever having to know
+        // where the Hub keeps its state.
+        if let nodeCredential, !nodeCredential.isEmpty {
+            payload["node_credential"] = nodeCredential
         }
         let body = try JSONEncoder().encode(payload)
         var request = try makeRequest(["api", "hub", "fleet", "adopt"], method: "POST")
@@ -7632,6 +8364,14 @@ private struct ModelHealthRecheck: Encodable { let model: String; let studio: St
 private struct HubModelRecheck: Decodable { let ok: Bool }
 
 private struct RoleChange: Encodable { let role: String }
+/// `POST /api/hub/fleet` on this Mac with the Hub token: a rotation. `token` is omitted — the Hub
+/// mints the new value, so it never travels from the app.
+private struct FleetTokenRequest: Encodable { let token: String? }
+/// `POST /api/hub/fleet/handover`: the promoted node's address and its new Fleet token.
+private struct FleetHandoverRequest: Encodable {
+    let controllerUrl: String
+    let token: String
+}
 /// What the owner's app sends to `POST /api/hub/release/trust`. `publisherId` is a display label
 /// and is omitted when blank; the Hub stores null rather than inventing a name.
 private struct ReleaseTrustRequest: Encodable {
@@ -7652,6 +8392,19 @@ private struct JoinRequest: Encodable {
     /// What this Mac runs. The controller builds its dispatch targets from this, so a join
     /// without it would register a node that nothing can send work to.
     let studios: [JoinStudio]
+    /// This Mac's own node credential, when it has one, so a re-join of a row that already holds
+    /// a credential can prove it is the same machine. The header carries it too; the body copy is
+    /// what makes the request self-describing if a proxy ever drops the header.
+    let credential: String?
+}
+
+/// The controller's answer to a join.
+///
+/// `credential` is this Mac's own, minted for it alone, and it is returned **once**: it is never
+/// published on a read route, so a Mac that loses it has to be re-admitted rather than re-read.
+/// Absent from a controller older than per-node credentials; the join still stands.
+private struct JoinAnswer: Decodable {
+    let credential: String?
 }
 private struct JoinStudio: Encodable {
     let id: String

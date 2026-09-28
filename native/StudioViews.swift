@@ -475,6 +475,17 @@ struct StudioContent: View {
     /// The name being typed. Kept apart from the Hub's answer so the field does not fight the poll.
     @State private var machineNameDraft = ""
     @State private var controllerToken = ""
+    /// The role the operator picked in the picker but has not confirmed. The picker itself shows
+    /// the Hub's own answer, so a cancelled confirmation leaves the control where it was.
+    @State private var pendingRoleChange: String?
+    /// Leaving, removing a node and rotating the Fleet token are each one press away from something
+    /// that cannot be undone by pressing the same button again, so each is confirmed first.
+    @State private var confirmingLeave = false
+    @State private var confirmingRotation = false
+    @State private var pendingNodeRemoval: NativeFleetNode?
+    /// The new controller's address and token, typed before the handover runs.
+    @State private var handoverAddress = ""
+    @State private var handoverToken = ""
     /// 0 means all time; otherwise the window in hours.
     @State private var statisticsWindow = 0
     @State private var showingStorageEditor = false
@@ -4463,6 +4474,176 @@ struct StudioContent: View {
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.45)))
     }
 
+    /// The controller removed this Mac. Its own refusal is quoted, and the fix is named as being
+    /// somewhere else — because the operator cannot undo this here.
+    @ViewBuilder private func controllerRemovalBanner(_ removal: NativeWorkspaceStore.ControllerRemoval) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This Mac was removed from its group").font(.callout).fontWeight(.semibold)
+                    Text(FleetCopy.removalNotice(date: removal.date, address: removal.address))
+                        .font(.callout).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(removal.detail)
+                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !removal.clearedGroupCredential {
+                        Text("The local Hub did not confirm dropping the group's token, so start the local services and press Leave this group again to be sure it is gone.")
+                            .font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button("Dismiss") { workspace.dismissControllerRemoval() }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.45)))
+    }
+
+    /// A controller that has handed its group over keeps its history and refuses new work. Its own
+    /// Hub enforces that; this is the page saying so rather than leaving a retired Mac looking live.
+    @ViewBuilder private func retiredBanner(_ target: String, at moment: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.right.circle.fill").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Handed over to \(target)\(moment.map { " on \(NativeWorkspaceStore.moment($0))" } ?? "")")
+                        .font(.callout).fontWeight(.semibold).textSelection(.enabled)
+                    Text("This controller is retired: it keeps its job history and refuses new remote work, so nothing should be sent here. Remove it from GatewayKH and wipe or sell it.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.45)))
+    }
+
+    /// Rotating the Fleet token and handing the group over: the two operations that change what
+    /// every other Mac in the group trusts, so they are here beside the roster they act on.
+    @ViewBuilder private var fleetGroupOperations: some View {
+        let role = workspace.controllerIdentity?.settings.role
+        let adopted = workspace.controllerIdentity?.settings.fleetCredentialOrigin == "adopted"
+        let retired = !(workspace.controllerIdentity?.settings.handedOverTo ?? "").isEmpty
+        if role == "controller" && !adopted {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Group operations").font(.headline)
+                if retired {
+                    Text("This controller has handed its group over, so there is nothing left to rotate or hand over.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    HStack(alignment: .top) {
+                        Button("Rotate Fleet token…") { confirmingRotation = true }
+                            .disabled(!connected || workspace.fleetOperationRunning)
+                        Text("Mints a new Fleet token and pushes it to every joined Mac. Every member — and GatewayKH — has to be given the new value afterwards; a Mac that refuses the old credential needs the manual path.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Hand over to…").font(.callout).fontWeight(.medium)
+                        Text("Give this group to a Mac that is running as a controller (promote it first). This controller pushes the new head and the new Fleet token to every node it can reach, then retires itself: it keeps its history and stops taking work.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            TextField("New controller's address, e.g. 100.x.y.z:47873", text: $handoverAddress)
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 300)
+                            TextField("Its Fleet token", text: $handoverToken)
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                            Button(workspace.fleetOperationRunning ? "Handing over…" : "Hand over…") {
+                                Task {
+                                    await workspace.handOverFleet(to: handoverAddress,
+                                                                  token: handoverToken)
+                                }
+                            }
+                            .disabled(!connected || workspace.fleetOperationRunning
+                                      || handoverAddress.isEmpty || handoverToken.isEmpty)
+                        }
+                        .onChange(of: handoverAddress) { _, value in
+                            let cleaned = value.filter { !$0.isWhitespace }
+                            if cleaned != value { handoverAddress = cleaned }
+                        }
+                        .onChange(of: handoverToken) { _, value in
+                            let cleaned = value.filter { !$0.isWhitespace }
+                            if cleaned != value { handoverToken = cleaned }
+                        }
+                        Text("A node that is switched off cannot be told, and the fallback for it is SSH over Tailscale — gateway-kh/repository/docs/credential-rotation-decision.md. The result below names every Mac that did not follow.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if let report = workspace.fleetOperation {
+                    fleetOperationReportView(report)
+                }
+            }
+        } else if let report = workspace.fleetOperation {
+            // A Mac that is no longer a controller can still have run one of these a moment ago.
+            fleetOperationReportView(report)
+        }
+    }
+
+    /// The per-machine result of a rotation or a handover, by name.
+    @ViewBuilder private func fleetOperationReportView(_ report: FleetOperationReport) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(report.summary)
+                .font(.callout)
+                .foregroundStyle(report.isComplete ? Color.green : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            if let token = report.token, report.kind == .rotation {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("New Fleet token — give it to every member and to GatewayKH").font(.caption)
+                    HStack {
+                        Text(token).font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(token, forType: .string)
+                            connectionNote = "Fleet token copied"
+                        }
+                    }
+                }
+            }
+            if !report.followed.isEmpty {
+                Text("Followed: " + report.followed.map(workspace.fleetMachineName).joined(separator: ", "))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !report.unfinished.isEmpty {
+                Text("Did not follow: "
+                     + report.unfinished.map { machine in
+                         "\(workspace.fleetMachineName(machine)) — \(report.outcomes[machine] ?? "no answer")"
+                     }.joined(separator: "; ")
+                     + ". " + FleetCopy.handoverFallback)
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.padding(.vertical, 2)
+    }
+
+    /// What the operator is agreeing to, for each role. Written as one function so the picker and
+    /// the Promote button cannot describe the same change differently.
+    private func roleConfirmation(_ role: String) -> (title: String, message: String, action: String) {
+        switch role {
+        case "controller":
+            return ("Make this Mac a controller?",
+                    "This Mac stops following its controller (if it had one) and becomes the head of its own group. The Hub mints a new Fleet token for it — the one it held belonged to the group it was in — so every Mac that is to join this one needs that new token, and GatewayKH has to be given this Mac's address and the new Fleet token to send it work.",
+                    "Make it a Controller")
+        case "agent":
+            return ("Make this Mac a node?",
+                    "This Mac stops running its own group and takes work from a controller instead. It keeps creating locally, but it stops accepting customer jobs directly and reaches GatewayKH through its controller. Join a controller from this page afterwards.",
+                    "Make it a Node")
+        default:
+            return ("Run this Mac on its own?",
+                    "This Mac stops being a node: it drops the group's token, so its controller can no longer send it work, and it goes back to running on its own credential. The controller's roster still lists it until it is removed there or it leaves the group.",
+                    "Make it Standalone")
+        }
+    }
+
     private var controllerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Studio Hub & GatewayKH")
@@ -4493,6 +4674,18 @@ struct StudioContent: View {
             if let notice = workspace.connectionNotice {
                 connectionNoticeBanner(notice)
             }
+            // The controller removed this Mac, and that decision stands until it is re-admitted
+            // there. Shown above everything else on the page because it explains a state the
+            // operator did not ask for, and because the fix is not on this Mac.
+            if let removal = workspace.controllerRemoval {
+                controllerRemovalBanner(removal)
+            }
+            // A controller that has handed its group over keeps its history and takes no new work.
+            // Saying so here is what stops an operator reading a retired Mac as a working one.
+            if let handedOver = workspace.controllerIdentity?.settings.handedOverTo,
+               !handedOver.isEmpty {
+                retiredBanner(handedOver, at: workspace.controllerIdentity?.settings.handedOverAt)
+            }
             // "This Mac is a Not reporting" was what the operator read when the Hub had not
             // answered yet: the article was hard-coded beside a label that is sometimes a phrase.
             // Naming this Mac. The Hub has kept a label for it all along - `machine_name` is what
@@ -4518,13 +4711,29 @@ struct StudioContent: View {
                 machineNameDraft = value ?? ""
             }
 
+            // **The identity, beside the label that is not one.** `controller_id` is what a join
+            // registers and what the controller routes by, and it never changes when this Mac is
+            // renamed — so a Mac that was renamed away from its hostname is still the same node,
+            // and the operator can read the value that actually identifies it.
+            LabeledContent("Node identity", value: workspace.controllerIdentity?.settings.controllerId ?? "Not reporting")
+            Text("This is the id this Mac registers with a controller and is routed by. Renaming this Mac changes only the label above; this value stays the same, so a rename never re-registers a node.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             LabeledContent("This Mac is", value: roleTitle(workspace.controllerIdentity?.settings.role))
             LabeledContent("Group", value: groupStatus)
             Text(roleExplanation(workspace.controllerIdentity?.settings.role))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Picker("Role", selection: Binding(
                 get: { workspace.controllerIdentity?.settings.role ?? "standalone" },
-                set: { value in Task { await workspace.setRole(value) } }
+                set: { value in
+                    // A role change is an identity change, not a preference: becoming a controller
+                    // mints this Mac's own group credential and stops it being anybody's node, and
+                    // becoming a node ends the group this Mac runs. It is confirmed before it is
+                    // sent, and the confirmation says which of those it is.
+                    guard value != (workspace.controllerIdentity?.settings.role ?? "standalone") else { return }
+                    pendingRoleChange = value
+                }
             )) {
                 Text("Standalone").tag("standalone")
                 Text("Controller").tag("controller")
@@ -4532,6 +4741,18 @@ struct StudioContent: View {
             }
             .pickerStyle(.segmented).labelsHidden()
             .disabled(!connected || workspace.controllerIdentity == nil)
+            // Promoting a node by name, where the node is: the picker's "Controller" does the same
+            // thing, but the consequence (this Mac stops following its controller and mints its own
+            // group credential) is the part an operator needs before pressing it.
+            if workspace.controllerIdentity?.settings.fleetCredentialOrigin == "adopted" {
+                HStack(alignment: .top) {
+                    Button("Promote to controller…") { pendingRoleChange = "controller" }
+                        .disabled(!connected)
+                    Text("Stops this Mac following its controller and makes it the head of its own group, with a new Fleet token of its own. Macs that were nodes of the old controller are unaffected; any Mac that is to be sent work by this one joins it with the new token.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if let note = workspace.roleNote {
                 Text(note).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -4599,12 +4820,14 @@ struct StudioContent: View {
             // the group's credential off it, which is what a Mac being retired or sold needs.
             if workspace.controllerIdentity?.settings.fleetCredentialOrigin == "adopted" {
                 HStack(alignment: .top) {
-                    Button("Leave this group") { Task { await workspace.leaveGroup() } }
+                    Button("Leave this group…") { confirmingLeave = true }
                         .disabled(!connected)
                     Text("Stops this Mac using the group's token and returns it to running on its own. Do this before retiring or selling it.")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            fleetGroupOperations
             // The banner at the top of this page already carries the last actionable result, so
             // the plain note only appears when there is no banner (a quiet startup re-join).
             if workspace.connectionNotice == nil, let note = workspace.fleetNote {
@@ -4624,6 +4847,62 @@ struct StudioContent: View {
                 await workspace.refreshControllerHealth()
             }
         }
+        // **The three group actions that cannot be undone by pressing the same button again.**
+        // A role change re-mints this Mac's group credential, leaving a group drops the token a
+        // fleet is built on, removing a node is permanent until it is re-admitted, and a rotation
+        // invalidates the token every member and GatewayKH hold. Each one names its consequence
+        // before it is sent; the app never reports a partial result as success.
+        .confirmationDialog(
+            roleConfirmation(pendingRoleChange ?? "standalone").title,
+            isPresented: Binding(get: { pendingRoleChange != nil },
+                                 set: { if !$0 { pendingRoleChange = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingRoleChange) { role in
+                Button(roleConfirmation(role).action) {
+                    let chosen = role
+                    pendingRoleChange = nil
+                    Task { await workspace.setRole(chosen) }
+                }
+                Button("Cancel", role: .cancel) { pendingRoleChange = nil }
+            } message: { role in
+                Text(roleConfirmation(role).message)
+            }
+        .confirmationDialog(
+            "Leave this group?",
+            isPresented: $confirmingLeave,
+            titleVisibility: .visible) {
+                Button("Leave the Group", role: .destructive) {
+                    Task { await workspace.leaveGroup() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This Mac drops the group's token and runs on its own again, so its controller can no longer send it work. It also asks the controller to drop this Mac from its roster; if the controller is off, it still lists this Mac and has to be cleaned up there. Joining again needs the controller's current Fleet token.")
+            }
+        .confirmationDialog(
+            "Rotate the Fleet token?",
+            isPresented: $confirmingRotation,
+            titleVisibility: .visible) {
+                Button("Rotate the Token", role: .destructive) {
+                    Task { await workspace.rotateFleetToken() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("A new Fleet token is minted and pushed to every joined Mac. The old one stops working immediately. Every member and GatewayKH must be given the new value; any Mac that refuses the old credential cannot be told automatically and has to be moved by hand — SSH over Tailscale.")
+            }
+        .confirmationDialog(
+            "Remove \(pendingNodeRemoval?.name ?? "this node") from this controller?",
+            isPresented: Binding(get: { pendingNodeRemoval != nil },
+                                 set: { if !$0 { pendingNodeRemoval = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingNodeRemoval) { node in
+                Button("Remove \(node.name)", role: .destructive) {
+                    pendingNodeRemoval = nil
+                    Task { await workspace.leaveNode(node) }
+                }
+                Button("Cancel", role: .cancel) { pendingNodeRemoval = nil }
+            } message: { node in
+                Text("\(node.name) is removed from this controller's roster and its credential is revoked, so it cannot re-join on its own — not even after a restart. It stays removed until it is re-admitted from this page. Jobs it already finished stay in Jobs.")
+            }
     }
 
     /// Every Mac in the fleet, one row each: is it there, what can it run, how fast, how full.
@@ -4657,11 +4936,12 @@ struct StudioContent: View {
     }
 
     /// Whether this Mac chooses where work runs. A controller and a Mac on its own do; a Node does
-    /// not - its controller decides, and offering "Send here" on every row of a node's pool would
-    /// be offering a choice that is not this Mac's to make.
+    /// not. The decision itself lives in the store, where the contract suite can hold it to account.
     private var canPinWork: Bool {
-        guard let role = workspace.fleetOverview?.role else { return false }
-        return role != "agent"
+        NativeWorkspaceStore.canPinWork(
+            role: workspace.fleetOverview?.role,
+            credentialOrigin: workspace.controllerIdentity?.settings.fleetCredentialOrigin,
+            handedOverTo: workspace.controllerIdentity?.settings.handedOverTo)
     }
 
     /// Which pool this list is. The rows answer "how is each Mac doing", which is only half the
@@ -4776,6 +5056,11 @@ struct StudioContent: View {
     }
 
     /// What a controller has been joined by, with the state each node is actually in.
+    ///
+    /// Every fact below is published by the Hub and none of it used to be drawn: what the Mac is
+    /// (`role`), what it runs (`studios`), which build it is (`version`), when it joined, **when it
+    /// was last seen**, and whether it answered and refused this controller's credential. A row
+    /// with only a name and an address cannot tell a Mac that is off from one that is gone.
     @ViewBuilder private var joinedNodes: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -4798,31 +5083,161 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    Text("\(fleet.summary.reachable) of \(fleet.summary.total) reachable now.")
+                    Text(fleetSummaryLine(fleet))
                         .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     ForEach(fleet.nodes) { node in
-                        HStack(spacing: 10) {
-                            Image(systemName: node.isReachable ? "checkmark.circle.fill" : "exclamationmark.triangle")
-                                .foregroundStyle(node.isReachable ? Color.green : Color.orange)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(node.name).fontWeight(.medium)
-                                Text(node.address).font(.caption).foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                                if let detail = node.detail, !node.isReachable {
-                                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button("Remove") { Task { await workspace.leaveNode(node) } }
-                                .disabled(!connected)
-                        }.padding(.vertical, 4)
+                        joinedNodeRow(node)
                     }
+                }
+                if let removed = fleet.removed, !removed.isEmpty {
+                    removedNodes(removed)
                 }
             } else {
                 Text(connected ? "Joined nodes are unavailable in this build." : "Start local services to see joined nodes.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The counts the page has to publish, including the one that used to be invisible: a node that
+    /// answered and refused this controller's credential is neither reachable nor off.
+    private func fleetSummaryLine(_ fleet: NativeFleetInventory) -> String {
+        var parts = ["\(fleet.summary.reachable) of \(fleet.summary.total) reachable now"]
+        if let unauthorized = fleet.summary.unauthorized, unauthorized > 0 {
+            parts.append("\(unauthorized) refused this controller's credential")
+        }
+        if fleet.summary.error > 0 {
+            parts.append("\(fleet.summary.error) answered with an error")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private func joinedNodeRow(_ node: NativeFleetNode) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: nodeStateSymbol(node))
+                .foregroundStyle(nodeStateTint(node))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(node.name).fontWeight(.medium)
+                    if let role = node.role, !role.isEmpty {
+                        Text(role == "agent" ? "Node" : role.capitalized).font(.caption)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.secondary)
+                    }
+                    if let version = node.version, !version.isEmpty {
+                        Text(version).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(nodeFacts(node))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(node.address).font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                if let detail = node.detail, !node.isReachable {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if node.hasCredential == false {
+                    Text("No credential is held for this Mac, so it has to prove itself on its next join.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(nodeStateTitle(node)).font(.caption).foregroundStyle(nodeStateTint(node))
+                // "last seen" belongs beside the state: a Mac that is off and a Mac that was last
+                // heard from a month ago are different problems.
+                Text(nodeSeenLine(node)).font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Remove…") { pendingNodeRemoval = node }
+                .disabled(!connected)
+        }.padding(.vertical, 4)
+    }
+
+    /// The machines this controller has removed. Published rather than hidden, because the only way
+    /// to re-admit one used to be remembering its id.
+    @ViewBuilder private func removedNodes(_ removed: [NativeFleetRemovedNode]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            Text("Removed from this group").font(.headline)
+            Text("These Macs were removed here. They cannot re-join on their own — not even after a restart — until they are re-admitted.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(removed) { node in
+                HStack(spacing: 10) {
+                    Image(systemName: "minus.circle").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(node.name).fontWeight(.medium)
+                        Text(removedFacts(node)).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let address = node.address, !address.isEmpty {
+                            Text(address).font(.caption).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Spacer()
+                    Button("Re-admit") { Task { await workspace.readmitNode(node) } }
+                        .disabled(!connected)
+                }.padding(.vertical, 3)
+            }
+        }
+    }
+
+    private func removedFacts(_ node: NativeFleetRemovedNode) -> String {
+        var parts: [String] = []
+        parts.append(node.removedAt.map { "removed \(NativeWorkspaceStore.moment($0))" }
+                     ?? "removed on a date the Hub did not record")
+        if let by = node.removedBy, !by.isEmpty {
+            parts.append(by == "operator" ? "by this controller's operator" : "by the Mac itself")
+        }
+        if let role = node.role, !role.isEmpty { parts.append(role == "agent" ? "was a node" : role) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The state word, in the four values the Hub publishes. `unauthorized` is said in full,
+    /// because "unreachable" is what sent the operator to the network for a credential problem.
+    private func nodeStateTitle(_ node: NativeFleetNode) -> String {
+        switch node.state {
+        case "reachable": return "reachable"
+        case "unauthorized": return "credential refused"
+        case "error": return "error"
+        default: return "unreachable"
+        }
+    }
+
+    private func nodeStateSymbol(_ node: NativeFleetNode) -> String {
+        switch node.state {
+        case "reachable": return "checkmark.circle.fill"
+        case "unauthorized", "error": return "exclamationmark.triangle.fill"
+        default: return "exclamationmark.triangle"
+        }
+    }
+
+    private func nodeStateTint(_ node: NativeFleetNode) -> Color {
+        switch node.state {
+        case "reachable": return .green
+        case "unauthorized", "error": return .orange
+        default: return .secondary
+        }
+    }
+
+    /// "last seen 4 min ago", or the honest alternative when the Hub has no stamp for it.
+    private func nodeSeenLine(_ node: NativeFleetNode) -> String {
+        guard let seen = NativeWorkspaceStore.ago(node.lastSeenAt) else {
+            return node.isReachable ? "seen just now" : "never seen"
+        }
+        return "last seen \(seen)"
+    }
+
+    /// What the node is and what it runs, from the fields the Hub has always published.
+    private func nodeFacts(_ node: NativeFleetNode) -> String {
+        var parts: [String] = []
+        if let joined = node.joinedAt { parts.append("joined \(NativeWorkspaceStore.moment(joined))") }
+        let studios = (node.studios ?? []).map(\.display)
+        parts.append(studios.isEmpty ? "no studios reported" : studios.joined(separator: ", "))
+        return parts.joined(separator: " · ")
     }
 
     /// What a node should read where a controller reads its roster: whose group it is in, and how
@@ -4941,16 +5356,24 @@ struct StudioContent: View {
         return address.isEmpty ? "Joined to a controller" : "Joined to \(address)"
     }
 
-    /// Green when this Mac is joined and the controller answers, amber when it is joined but not
-    /// answering, grey when it is simply on its own. One dot, so the state is readable at a glance
-    /// without hunting for a sentence.
+    /// Green when this Mac is joined and the controller answers with a credential it accepts, amber
+    /// when it is joined but not answering or its credential was refused, grey when it is simply on
+    /// its own. One dot, so the state is readable at a glance without hunting for a sentence.
+    ///
+    /// **A refused credential is amber, never green.** The read behind this is authenticated, so a
+    /// controller that will not dispatch to this Mac cannot be shown as connected — which is what
+    /// `GET /api/health` did, because it answers 200 without a credential.
     private var connectionStateTint: Color {
+        if workspace.controllerRemoval != nil { return .red }
+        if workspace.controllerCredentialRefused { return .orange }
         guard let reachable = workspace.controllerReachable else { return .secondary }
         return reachable ? .green : .orange
     }
 
     private var connectionStateTitle: String {
+        if workspace.controllerRemoval != nil { return "Removed from the group" }
         guard let reachable = workspace.controllerReachable else { return "Not joined to a controller" }
+        if workspace.controllerCredentialRefused { return "Credential refused" }
         return reachable ? "Connected" : "Joined, but not answering"
     }
 

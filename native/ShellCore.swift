@@ -209,6 +209,10 @@ struct ShellConfiguration {
     /// The controller this Mac joined, so its services can re-join by themselves after a restart.
     /// Not a credential: after joining, this Mac's own fleet token *is* the controller's.
     var controllerAddress: String?
+    /// This Mac's own node credential, issued by that controller in the join answer and presented
+    /// on every call this Mac makes home. Stored with the membership and written 0600 — it is a
+    /// secret, and it is the only credential whose revocation is about this Mac alone (A8).
+    var nodeCredential: String?
     /// The controller's release-signing key, pinned the first time this Mac reads its identity.
     /// Kept with the membership: it is restored when the services start, and leaving the group
     /// clears it. A different key presented later is refused, never adopted silently.
@@ -567,6 +571,7 @@ struct ShellConfiguration {
                                                         listenHostAutomatic: listenHostAutomatic,
                                                         port: port,
                                                         controllerAddress: controllerAddress,
+                                                        nodeCredential: nodeCredential,
                                                         releasePublisherPublicKey: releasePublisherPublicKey,
                                                         releasePublisherFingerprint: releasePublisherFingerprint,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
@@ -603,6 +608,12 @@ struct ShellConfiguration {
         let port: Int?
         /// Absent for every Mac that has never joined a controller, which is most of them.
         let controllerAddress: String?
+        /// **This Mac's own node credential**, issued by the controller it joined and presented on
+        /// every call this Mac makes home (A8). It is what names this Mac alone: the group Fleet
+        /// token cannot be revoked from one member, so a Mac that is sold has to be cut off by its
+        /// own credential. Kept in this file, which is written 0600 in a 0700 directory, and beside
+        /// the membership it belongs to — leaving the group clears both.
+        let nodeCredential: String?
         /// The controller's pinned release-signing key. Absent until the first release read, and
         /// absent again after leaving the group.
         let releasePublisherPublicKey: String?
@@ -615,6 +626,7 @@ struct ShellConfiguration {
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
              listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
+             nodeCredential: String?,
              releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval],
@@ -627,6 +639,7 @@ struct ShellConfiguration {
             self.listenHostAutomatic = listenHostAutomatic
             self.port = port
             self.controllerAddress = controllerAddress
+            self.nodeCredential = nodeCredential
             self.releasePublisherPublicKey = releasePublisherPublicKey
             self.releasePublisherFingerprint = releasePublisherFingerprint
             self.recoveryMaxAttempts = recoveryMaxAttempts
@@ -650,6 +663,7 @@ struct ShellConfiguration {
             listenHostAutomatic = try values.decodeIfPresent(Bool.self, forKey: .listenHostAutomatic)
             port = try values.decodeIfPresent(Int.self, forKey: .port)
             controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
+            nodeCredential = try values.decodeIfPresent(String.self, forKey: .nodeCredential)
             releasePublisherPublicKey = try values.decodeIfPresent(String.self, forKey: .releasePublisherPublicKey)
             releasePublisherFingerprint = try values.decodeIfPresent(String.self, forKey: .releasePublisherFingerprint)
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)

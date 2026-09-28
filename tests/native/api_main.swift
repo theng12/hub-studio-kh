@@ -99,6 +99,70 @@ final class FixtureProtocol: URLProtocol {
     static var fleetCalls: [String] = []
     static var joinBody: [String: Any]?
     static var adoptBody: [String: Any]?
+    /// **This Mac's own node credential**, as the real controller issues it in the join answer: a
+    /// value for this one Mac, returned once, and presented on every later call home (A8).
+    static var issuedNodeCredential = "node-credential-abc123"
+    /// What the last join presented, and what it carried in the body, so the suite can prove the
+    /// credential is on the wire rather than only in a property.
+    static var lastJoinToken = ""
+    static var lastJoinBodyCredential: String?
+    /// The credential on the last authenticated controller read, and on the last removal request.
+    static var lastResourcesToken = ""
+    static var lastRemovalToken = ""
+    /// When set, the join answers 403 with this sentence — the removed-Mac refusal.
+    static var joinRemovalDetail: String?
+    /// How the controller answers this Mac removing itself. Nil is the real answer for a Mac holding
+    /// its own credential: **200**. A fixture that always answered 200 is why a 100%-broken "Leave
+    /// this group" survived this suite, so the status is a switch and the default is not a stub.
+    static var selfRemovalStatus: Int?
+    static var selfRemovalDetail: String?
+    /// What the *authenticated* controller read answers. 401/403 is a controller that will not
+    /// dispatch to this Mac, which is a different state from a Mac that is switched off.
+    static var resourcesStatus: Int?
+    /// The rotation/handover answer, and the bodies those routes were sent.
+    static var fleetSyncAnswer = Data(#"{"ok":true,"rotated":true,"token":"new-fleet-token-abcdefghijklmnop","total":2,"verified":1,"manual":1,"pending":0,"machines":{"studio-2":{"ok":true,"status":"verified","detail":"saved and verified"},"studio-3":{"ok":false,"status":"manual","detail":"peer rejected the current credential"}}}"#.utf8)
+    static var fleetSyncBodies: [[String: Any]] = []
+    static var readmitCalls: [String] = []
+    /// The controller this Mac handed over to, as `GET /api/hub/controller` then reports it.
+    static var handedOverTo: String?
+    /// When set, a join of an existing id that presents no credential — or only the group Fleet
+    /// token — is refused 400 exactly as the real controller refuses it (H12). Off by default
+    /// because the fixture cannot tell a first join from a re-join, and a first join is legal.
+    static var joinRequiresCredential = false
+    static func setJoinRequiresCredential(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }; joinRequiresCredential = value
+    }
+    /// When set, a join that presents exactly this credential is refused 401 — the credential a
+    /// re-admitted Mac still holds from before, which the controller no longer knows. Any other
+    /// join succeeds, which is what makes the one retry with the group token observable.
+    static var staleJoinCredential: String?
+    static func setStaleJoinCredential(_ value: String?) {
+        lock.lock(); defer { lock.unlock() }; staleJoinCredential = value
+    }
+    static func setSelfRemoval(_ status: Int?, detail: String? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        selfRemovalStatus = status
+        selfRemovalDetail = detail
+    }
+    static func setJoinRemoval(_ detail: String?) {
+        lock.lock(); defer { lock.unlock() }; joinRemovalDetail = detail
+    }
+    static func setResourcesStatus(_ status: Int?) {
+        lock.lock(); defer { lock.unlock() }; resourcesStatus = status
+    }
+    static func setFleetSyncAnswer(_ data: Data) {
+        lock.lock(); defer { lock.unlock() }; fleetSyncAnswer = data
+    }
+    static func setHandedOver(to value: String?) {
+        lock.lock(); defer { lock.unlock() }; handedOverTo = value
+    }
+    static func joinTokens() -> [String] { lock.lock(); defer { lock.unlock() }; return joinTokensList }
+    static var joinTokensList: [String] = []
+    static func removalTokens() -> [String] { lock.lock(); defer { lock.unlock() }; return removalTokensList }
+    static var removalTokensList: [String] = []
+    static func resourcesToken() -> String { lock.lock(); defer { lock.unlock() }; return lastResourcesToken }
+    static func syncBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return fleetSyncBodies }
+    static func readmits() -> [String] { lock.lock(); defer { lock.unlock() }; return readmitCalls }
     /// One job detail that cannot be read, so a refresh is exercised with a single failing
     /// sub-request - the case that used to blank the whole page and mark the Hub unreachable.
     static var failJobDetail = false
@@ -236,7 +300,11 @@ final class FixtureProtocol: URLProtocol {
     static func failNextIdentityRead() { lock.lock(); defer { lock.unlock() }; identityFailuresRemaining = 1 }
     static func resetFleetRequests() { lock.lock(); defer { lock.unlock() }; fleetCalls = [] }
     static func joinPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return joinBody }
+    static func joinBodyCredential() -> String? { lock.lock(); defer { lock.unlock() }; return lastJoinBodyCredential }
     static func adoptPayload() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return adoptBody }
+    /// The controller's own removal refusal, verbatim: the sentence the app must quote and take the
+    /// date out of. Kept as one value so a test cannot assert a wording the Hub does not use.
+    static let removalSentence = "this controller removed this Mac on 2026-09-28; re-admit it from Connections to join again"
     static func storageLimitsBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return storageLimits }
     static func setStoragePreviewRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; storagePreviewRejects = value }
     static func importedFolder() -> String? { lock.lock(); defer { lock.unlock() }; return modelImportBody?["source_folder"] as? String }
@@ -372,6 +440,62 @@ final class FixtureProtocol: URLProtocol {
                 // Exactly what the Hub answers, so this fixture cannot accept a path the real
                 // Hub refuses.
                 finish((404, "application/json", Data(#"{"detail":"unknown studio"}"#.utf8)))
+                return
+            }
+        }
+        // **Removal and re-admission, answered by host and by credential rather than stubbed.**
+        //
+        // The old fixture answered a flat 200 to `DELETE /api/hub/fleet/nodes/<any id>`, which is
+        // why a "Leave this group" that could never work passed this suite for as long as it did.
+        // The real Hub answers three different things, so this does too:
+        //   * the controller, this Mac's own id, this Mac's own node credential -> 200;
+        //   * the controller, a different id -> 403 ("only the Mac that holds it");
+        //   * the controller, a Mac that was already removed (a revoked credential) -> 401, and the
+        //     sentence `removed this Mac on <date>` only comes back on the join;
+        //   * this Mac's own Hub -> the operator removing a node from its own roster, 200.
+        if path.hasPrefix("/api/hub/fleet/nodes/") {
+            let remainder = String(path.dropFirst("/api/hub/fleet/nodes/".count))
+            let parts = remainder.split(separator: "/").map(String.init)
+            let offered = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            let isLocalHub = (request.url?.host ?? "") == "127.0.0.1"
+            if method == "DELETE", parts.count == 1 {
+                let nodeID = parts[0]
+                Self.lock.lock()
+                Self.fleetCalls.append("delete:\(nodeID)")
+                // Only the controller-side removals are recorded as self-removals: a removal made
+                // against this Mac's own Hub is the operator pruning his own roster.
+                if !isLocalHub { Self.removalTokensList.append(offered) }
+                let status = Self.selfRemovalStatus
+                let detail = Self.selfRemovalDetail
+                Self.lock.unlock()
+                if isLocalHub {
+                    // The operator's own roster: the Hub token owner may remove any node.
+                    if nodeID == "studio-3" { Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock() }
+                    finish((200, "application/json", Data(#"{"ok":true}"#.utf8)))
+                    return
+                }
+                guard nodeID == "controller-local" else {
+                    finish((403, "application/json", Data(#"{"detail":"a fleet credential may remove only the Mac that holds it. Removing '\#(nodeID)' from this controller is the owner's decision: use this controller's Hub token, or let that Mac leave from its own Connections page."}"#.utf8)))
+                    return
+                }
+                // The controller, this Mac's own id. A node credential that is no longer on the
+                // roster is refused 401 before the route runs; the group Fleet token cannot remove
+                // anything, which is the real answer and not something to paper over.
+                if offered != FixtureProtocol.issuedNodeCredential {
+                    finish((403, "application/json", Data(#"{"detail":"a fleet credential may remove only the Mac that holds it. Removing 'controller-local' from this controller is the owner's decision: use this controller's Hub token, or let that Mac leave from its own Connections page."}"#.utf8)))
+                    return
+                }
+                if let status {
+                    finish((status, "application/json", Data(#"{"detail":"\#(detail ?? "refused")"}"#.utf8)))
+                    return
+                }
+                Self.lock.lock(); Self.fleetCalls.append("dropped-from-controller"); Self.lock.unlock()
+                finish((200, "application/json", Data(#"{"ok":true,"removed":{"id":"controller-local"}}"#.utf8)))
+                return
+            }
+            if method == "POST", parts.count == 2, parts[1] == "readmit" {
+                Self.lock.lock(); Self.readmitCalls.append(parts[0]); Self.fleetCalls.append("readmit:\(parts[0])"); Self.lock.unlock()
+                finish((200, "application/json", Data(#"{"ok":true,"readmitted":{"id":"\#(parts[0])"}}"#.utf8)))
                 return
             }
         }
@@ -515,25 +639,57 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"workers":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"},{"id":"subtitle","modality":"transcription"}]}"#.utf8))
         case ("POST", "/api/hub/fleet/nodes"):
             let body = requestBody()
+            let offered = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
             Self.lock.lock()
             Self.fleetCalls.append("join")
             Self.joinBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lastJoinToken = offered
+            Self.joinTokensList.append(offered)
+            Self.lastJoinBodyCredential = Self.joinBody?["credential"] as? String
             let hold = Self.holdNextJoin
             if hold { Self.holdNextJoin = false; Self.heldJoinStarted = true }
             let reject = Self.joinRejectStatus
+            let removal = Self.joinRemovalDetail
+            let requiresCredential = Self.joinRequiresCredential
+            let issued = Self.issuedNodeCredential
+            let bodyCredential = Self.joinBody?["credential"] as? String
             Self.lock.unlock()
+            // **A row that already holds a credential cannot be taken over with the shared token.**
+            // The real controller refuses this 400 so two Macs cannot share one node id; a fixture
+            // that accepted it would let the app's re-join rot into a silent takeover.
+            if requiresCredential, offered != issued, bodyCredential != issued {
+                finish((400, "application/json", Data(#"{"detail":"this controller already has a machine called 'studio-mini' (Studio Mini). Two Macs cannot share one node id: rename this Mac in Connections, or remove the other one first."}"#.utf8)))
+                return
+            }
+            // A credential the controller no longer knows — a re-admitted Mac's old one — is
+            // refused 401 before the route runs, exactly as the real middleware refuses it.
+            if let stale = Self.staleJoinCredential, offered == stale {
+                finish((401, "application/json", Data(#"{"detail":"a credential that is neither this Mac's Hub token nor the Fleet token this Mac holds. The route requires this Mac's Hub token, or a Fleet token matching the one this Mac holds."}"#.utf8)))
+                return
+            }
+            // **A removed Mac is refused 403 with the controller's own sentence.** It is the one
+            // answer the app must treat as a decision rather than a failure, so the fixture serves
+            // it exactly as the Hub does — and only when a test asks for it.
+            if let removal {
+                finish((403, "application/json",
+                        Data(#"{"detail":"\#(removal)"}"#.utf8)))
+                return
+            }
             if let reject {
                 finish((reject, "application/json", Data(#"{"detail":"invalid fleet token"}"#.utf8)))
                 return
             }
+            // The credential comes back **once**, in this answer: that is the whole of A8, and a
+            // fixture that answered without it would let the app's re-join rot unnoticed.
+            let answer = Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"},"credential":"\#(issued)"}"#.utf8)
             if hold {
                 DispatchQueue.global().async { [self] in
                     _ = Self.releaseJoin.wait(timeout: .now() + 5)
-                    finish((201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8)))
+                    finish((201, "application/json", answer))
                 }
                 return
             }
-            result = (201, "application/json", Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"}}"#.utf8))
+            result = (201, "application/json", answer)
         case ("POST", "/api/hub/fleet/adopt"):
             let body = requestBody()
             Self.lock.lock()
@@ -549,14 +705,52 @@ final class FixtureProtocol: URLProtocol {
             Self.currentRole = "standalone"
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"left":true}"#.utf8))
-        case ("DELETE", "/api/hub/fleet/nodes/controller-local"):
-            // The controller is asked to drop this Mac while the borrowed token still works, so a
-            // Mac that leaves does not stay on the roster as a node that can never be reached.
-            Self.lock.lock(); Self.fleetCalls.append("dropped-from-controller"); Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
+        case ("GET", "/api/hub/resources"):
+            // **The authenticated read behind the connection light (H11).** `/api/health` needs no
+            // credential, so it answered 200 to a controller that refused this Mac — which is how
+            // 52 nodes showed green while the controller called every one `unauthorized`.
+            let offered = request.value(forHTTPHeaderField: "X-Hub-Token") ?? ""
+            Self.lock.lock()
+            Self.lastResourcesToken = offered
+            let status = Self.resourcesStatus
+            Self.lock.unlock()
+            if let status {
+                result = (status, "application/json",
+                          Data(#"{"detail":"this Mac's fleet credential was refused"}"#.utf8))
+            } else {
+                result = (200, "application/json", Data(#"{"host":{"chip":"Apple M4","memory_gb":16.0},"version":"0.4.0","source":"local"}"#.utf8))
+            }
+        case ("GET", "/api/health"):
+            result = (200, "application/json", Data(#"{"ok":true,"busy":false}"#.utf8))
+        case ("POST", "/api/hub/fleet"):
+            // The rotation, with the Hub token: the operator's own action on this Mac.
+            let body = requestBody()
+            Self.lock.lock()
+            Self.fleetCalls.append("rotate")
+            Self.fleetSyncBodies.append((try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:])
+            let answer = Self.fleetSyncAnswer
+            Self.lock.unlock()
+            result = (200, "application/json", answer)
+        case ("POST", "/api/hub/fleet/handover"):
+            let body = requestBody()
+            Self.lock.lock()
+            Self.fleetCalls.append("handover")
+            let parsed = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            Self.fleetSyncBodies.append(parsed)
+            var answer = (try? JSONSerialization.jsonObject(with: Self.fleetSyncAnswer)) as? [String: Any] ?? [:]
+            answer["handed_over_to"] = parsed["controller_url"]
+            answer["handed_over_at"] = 1_790_569_000.0
+            // The controller is retired by its own handover, so the identity route says so too.
+            Self.handedOverTo = parsed["controller_url"] as? String
+            Self.lock.unlock()
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: answer))
         case ("GET", "/api/hub/fleet/nodes"):
             Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","joined_at":1.0},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"joined_at":2.0}],"summary":{"total":2,"reachable":1,"unreachable":1,"error":0}}"#.utf8))
+            // Every field here is published by the real Hub and was decoded by nothing: `role`,
+            // `studios`, `version`, `joined_at`, `last_seen_at`, the credential's own dates, the
+            // `unauthorized` count and the evicted machines. A roster of name-and-address was what
+            // the page showed while all of it was on the wire.
+            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","role":"agent","studios":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"}],"joined_at":1750000000.0,"last_seen_at":1750003600.0,"credential_issued_at":1750000000.0,"has_credential":true},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"role":"agent","studios":[],"joined_at":1750000100.0,"last_seen_at":null,"credential_issued_at":1750000100.0,"has_credential":true},{"id":"studio-4","name":"Studio 4","address":"http://192.168.1.23:8080","state":"unauthorized","detail":"the node answered but rejected this controller's credential (HTTP 401) - re-join it with the current Fleet Token","version":"0.4.1","role":"agent","studios":[{"id":"image","modality":"image"}],"joined_at":1750000200.0,"last_seen_at":null,"credential_issued_at":1750000200.0,"has_credential":true}],"removed":[{"id":"sold-mac","name":"Sold Mac","address":"http://192.168.1.30:8080","removed_at":1790563000.0,"removed_by":"operator","role":"agent","studios":[{"id":"voice","modality":"voice"}],"joined_at":1740000000.0}],"summary":{"total":3,"reachable":1,"unreachable":1,"unauthorized":1,"error":0,"removed":1}}"#.utf8))
         case ("GET", "/studio/voice/api/voices"):
             Self.lock.lock()
             Self.voiceListCalls += 1
@@ -640,19 +834,22 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","role":"agent","address":null,"reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","role":"agent","address":"http://192.168.1.20:47873","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"role":"agent","controller":{"machine":"controller-mac","label":"Control Mac","role":"controller","address":"http://192.168.1.21:47873","state":"reachable","detail":null,"version":"0.4.0"},"roster_readable":true,"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
-        case ("DELETE", "/api/hub/fleet/nodes/studio-3"):
-            Self.lock.lock(); Self.fleetCalls.append("leave:studio-3"); Self.lock.unlock()
-            result = (200, "application/json", Data(#"{"ok":true}"#.utf8))
         case ("GET", "/api/hub/controller"):
             Self.lock.lock()
             let roleNow = Self.currentRole
             let originNow = Self.credentialOrigin
+            let handedOver = Self.handedOverTo
             let fail = Self.identityFailuresRemaining > 0
             if fail { Self.identityFailuresRemaining -= 1 }
             Self.lock.unlock()
+            // `handed_over_to`/`handed_over_at` are what say a controller is retired: it keeps its
+            // history and refuses remote work, so the page must not draw it as still taking jobs.
+            let handedFields = handedOver.map {
+                ",\"handed_over_to\":\"\($0)\",\"handed_over_at\":1790569000.0"
+            } ?? ",\"handed_over_to\":null,\"handed_over_at\":null"
             result = fail
                 ? (503, "application/json", Data(#"{"detail":"identity temporarily unavailable"}"#.utf8))
-                : (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\",\"fleet_credential_origin\":\"\(originNow)\"},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
+                : (200, "application/json", Data("{\"settings\":{\"version\":2,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"site_name\":\"This Mac\",\"controller_id\":\"controller-local\",\"database_mode\":\"off\",\"machine_name\":\"Studio Mini\",\"database_configured\":false,\"sqlite_authoritative\":true,\"global_authority\":\"genstudio\",\"migration_stage\":\"local\",\"fleet_credential_origin\":\"\(originNow)\"\(handedFields)},\"runtime\":{\"state\":\"idle\"},\"readiness\":{\"ready\":true,\"role\":\"\(roleNow)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\",\"migration_stage\":\"local\",\"sqlite_authoritative\":true,\"global_job_claiming\":false,\"global_authority\":\"genstudio\",\"reason\":null,\"telemetry_warning\":null},\"capacity\":{\"machines\":1,\"queue_depth\":0}}".utf8))
         case ("GET", "/api/version"):
             result = (200, "application/json", Data(#"{"version":"0.4.0","source":"studiohub-mac@06e893e1643bffbcbd162fae122e5a4d0f29e283"}"#.utf8))
         case ("GET", "/api/hub/memory/policy"):
@@ -1978,13 +2175,21 @@ struct NativeAPITests {
         FixtureProtocol.resetFleetRequests()
         store.storedMembership = NativeWorkspaceStore.FleetMembership(
             controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
-            boundHosts: LocalAddresses.current().map(\.address))
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: FixtureProtocol.issuedNodeCredential)
         await store.leaveGroup()
         require(FixtureProtocol.fleetRequests().contains("leave"),
                 "leaving must reach the Hub so it can mint its own credential: \(FixtureProtocol.fleetRequests())")
+        // **With its own credential, not the group token (A8).** A shared Fleet token identifies
+        // nobody, so the controller refuses every removal made with one — which is exactly the
+        // failure the old fixture's flat 200 hid.
+        require(FixtureProtocol.removalTokens().last == FixtureProtocol.issuedNodeCredential,
+                "leaving must present this Mac's own node credential, got: \(FixtureProtocol.removalTokens())")
         require(FixtureProtocol.fleetRequests().contains("dropped-from-controller"),
-                "leaving must ask the controller to drop this Mac while the old token still works: \(FixtureProtocol.fleetRequests())")
+                "leaving must ask the controller to drop this Mac with the credential it holds: \(FixtureProtocol.fleetRequests())")
         require(store.storedMembership == nil, "a Mac that left must not keep re-joining its old group")
+        require(store.nodeCredential == nil,
+                "leaving must take this Mac's own node credential off it too")
         require(store.controllerIdentity?.settings.fleetCredentialOrigin == "minted",
                 "the screen must show the Hub's answer, not the previous membership")
         require(store.fleetNote?.contains("left the group") == true,
@@ -2070,10 +2275,46 @@ struct NativeAPITests {
         // The fleet: a controller lists who joined, with the state each node is actually in.
         await store.refreshFleetNodes()
         require(FixtureProtocol.fleetRequests().contains("list"), "the joined nodes must be read from the Hub")
-        require(store.fleetNodes?.summary.total == 2, "every joined node must be listed")
+        require(store.fleetNodes?.summary.total == 3, "every joined node must be listed")
         require(store.fleetNodes?.nodes.first?.state == "reachable", "a reachable node must say so")
+        // **Every published field is decoded and drawn (M21/B4).** `role`, `studios`, `version`,
+        // `joined_at` and `last_seen_at` were on the wire and read by nothing, so the roster row was
+        // a name and an address.
+        let firstNode = store.fleetNodes?.nodes.first
+        require(firstNode?.role == "agent", "a node's part in the group must decode")
+        require(firstNode?.studios?.map(\.id) == ["image", "voice"],
+                "what a node runs must decode: \(String(describing: firstNode?.studios))")
+        require(firstNode?.version == "0.4.0", "which build a node runs must decode")
+        require(firstNode?.joinedAt == 1_750_000_000.0, "when a node joined must decode")
+        require(firstNode?.lastSeenAt == 1_750_003_600.0, "when a node was last seen must decode")
+        require(firstNode?.hasCredential == true,
+                "whether a credential is held must decode, so a pre-A8 row can say so")
         require(store.fleetNodes?.nodes.last?.isReachable == false,
                 "a node that was joined but has since gone must not read as available")
+        // A node that answered and refused this controller's credential is its own state, with its
+        // own count: folded into "unreachable", the operator goes looking at the network.
+        let unauthorized = store.fleetNodes?.nodes.last
+        require(unauthorized?.state == "unauthorized" && unauthorized?.isUnauthorized == true,
+                "a refused credential must decode as its own state")
+        require(store.fleetNodes?.summary.unauthorized == 1,
+                "the unauthorized count must decode, not just exist on the wire")
+        // The evicted machines are published so re-admitting one does not need its id remembered.
+        require(store.fleetNodes?.summary.removed == 1, "the removed count must decode")
+        require(store.fleetNodes?.removed?.first?.id == "sold-mac",
+                "every removed Mac must decode")
+        require(store.fleetNodes?.removed?.first?.removedBy == "operator",
+                "who removed a Mac must decode")
+        require(store.fleetNodes?.removed?.first?.removedAt == 1_790_563_000.0,
+                "when a Mac was removed must decode")
+        // `last seen` is the difference between a Mac that is off and one that is gone for a month.
+        require(NativeWorkspaceStore.ago(1_750_003_600.0, now: Date(timeIntervalSince1970: 1_750_003_660)) == "1 min ago",
+                "a last-seen stamp must be readable as an age")
+        require(NativeWorkspaceStore.ago(nil) == nil && NativeWorkspaceStore.ago(0) == nil,
+                "a Mac with no stamp must report none, never a date")
+        let muchLater = Date(timeIntervalSince1970: 1_900_000_000)
+        require(muchLater.timeIntervalSince1970 > 0
+                && NativeWorkspaceStore.ago(1_750_003_600, now: muchLater)?.hasSuffix("days ago") == true,
+                "a stamp from long ago must read in days")
         // The fleet overview: one row per Mac, with the facts that decide where work goes.
         require(store.fleetOverview?.summary.total == 2, "the overview must cover every machine")
         require(store.fleetOverview?.machines.first?.machine == "local", "this Mac is one of them")
@@ -2102,9 +2343,371 @@ struct NativeAPITests {
         require(store.fleetOverview?.machines.last?.address == "http://192.168.1.20:47873",
                 "a joined node's address must reach the row")
 
-        await store.leaveNode(store.fleetNodes!.nodes.last!)
+        // **"Send here" is not offered to a Mac that cannot choose.** Joining a controller never set
+        // the app's role, so `role != "agent"` was true on a Mac that had joined somebody, and the
+        // pin it then set was refused by the Hub with "no machine named X is in this fleet".
+        require(!NativeWorkspaceStore.canPinWork(role: "standalone", credentialOrigin: "adopted",
+                                                 handedOverTo: nil),
+                "a Mac that adopted someone else's credential is a node, whatever its role says")
+        require(!NativeWorkspaceStore.canPinWork(role: "agent", credentialOrigin: "minted",
+                                                 handedOverTo: nil),
+                "a Mac set as a Node does not choose where work runs")
+        require(!NativeWorkspaceStore.canPinWork(role: "controller", credentialOrigin: "minted",
+                                                 handedOverTo: "http://192.168.1.21:8080"),
+                "a retired controller is not dispatching anything")
+        require(NativeWorkspaceStore.canPinWork(role: "controller", credentialOrigin: "minted",
+                                                handedOverTo: nil),
+                "a controller chooses where work runs")
+        require(NativeWorkspaceStore.canPinWork(role: "standalone", credentialOrigin: nil,
+                                                handedOverTo: nil),
+                "a Mac on its own chooses where work runs")
+        require(!NativeWorkspaceStore.canPinWork(role: nil, credentialOrigin: nil, handedOverTo: nil),
+                "a Hub that has not answered yet is not a licence to pin work")
+
+        // **A pin whose machine left the fleet is cleared.** It used to be unclearable, and the Hub
+        // then refused every job with a sentence about a machine that is no longer listed.
+        store.routingPin = "machine:gone-mac"
+        await store.refreshFleetNodes()
+        require(store.routingPin == nil,
+                "a pin on a Mac that is no longer in the fleet must be cleared, got: \(store.routingPin ?? "nil")")
+        require(store.fleetNote?.contains("no longer in this fleet") == true,
+                "clearing a pin must say so, got: \(store.fleetNote ?? "nil")")
+        // A pin on a machine that is merely off is left alone: it is still in the fleet, and the
+        // pin is a promise about where work goes when it comes back.
+        store.routingPin = "machine:studio-3"
+        await store.refreshFleetNodes()
+        require(store.routingPin == "machine:studio-3",
+                "a pin on an unreachable Mac that is still in the fleet must survive")
+
+        // Removing the pinned Mac is the other way a pin loses its machine.
+        await store.leaveNode(store.fleetNodes!.nodes.first { $0.id == "studio-3" }!)
         require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
                 "removing a node must reach the Hub: \(FixtureProtocol.fleetRequests())")
+        require(store.routingPin == nil,
+                "removing the Mac a pin names must clear the pin, got: \(store.routingPin ?? "nil")")
+        // A pin on this Mac itself is not a machine that left.
+        store.routingPin = "machine:local"
+        await store.refreshFleetNodes()
+        require(store.routingPin == "machine:local", "a pin on this Mac is not a stale pin")
+        store.routingPin = nil
+
+        // **Re-admitting is the way back**, and it is the operator's action on the controller.
+        await store.readmitNode(store.fleetNodes!.removed!.first!)
+        require(FixtureProtocol.readmits() == ["sold-mac"],
+                "re-admitting must reach the Hub with the machine's id: \(FixtureProtocol.readmits())")
+        require(store.fleetNote?.contains("Sold Mac") == true,
+                "re-admitting needs a visible result, got: \(store.fleetNote ?? "nil")")
+
+        // ---------------------------------------------------------------------------------------
+        // A8/A2 — this Mac's own credential, a real eviction, and an honest "Leave this group".
+        // ---------------------------------------------------------------------------------------
+        let fleetStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await fleetStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                 dataDirectory: temporary.appendingPathComponent("node-credential"),
+                                 token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+
+        // The join answer carries this Mac's own credential. It has to be kept, handed to the Hub
+        // (which presents it on the reads it makes itself) and presented on every later call home.
+        FixtureProtocol.setSelfRemoval(nil)
+        await fleetStore.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                        boundHosts: LocalAddresses.current().map(\.address))
+        // From here the fixture refuses a re-join that presents no credential, exactly as the real
+        // controller refuses one (H12). The first join of a fresh id is legal, so this is turned on
+        // only after it.
+        FixtureProtocol.setJoinRequiresCredential(true)
+        require(fleetStore.nodeCredential == FixtureProtocol.issuedNodeCredential,
+                "the credential from the join answer must be kept: \(String(describing: fleetStore.nodeCredential))")
+        require(FixtureProtocol.adoptPayload()?["node_credential"] as? String == FixtureProtocol.issuedNodeCredential,
+                "the credential must be handed to the local Hub over adopt, got: \(String(describing: FixtureProtocol.adoptPayload()))")
+
+        // A re-join presents it — this is what makes a per-node eviction meaningful (A8), and what
+        // lets a Mac re-join after the group's Fleet token was rotated out from under it.
+        FixtureProtocol.resetFleetRequests()
+        await fleetStore.joinController(address: "192.168.1.21:8080", token: "rotated-fleet-token",
+                                        boundHosts: LocalAddresses.current().map(\.address))
+        require(FixtureProtocol.joinTokens().last == FixtureProtocol.issuedNodeCredential,
+                "a re-join must present this Mac's own credential, got: \(FixtureProtocol.joinTokens())")
+        require(FixtureProtocol.joinBodyCredential() == FixtureProtocol.issuedNodeCredential,
+                "the credential must also travel in the body, so the request proves itself")
+        require(FixtureProtocol.fleetRequests().filter { $0 == "join" }.count == 1,
+                "a re-join with a working credential must not be retried: \(FixtureProtocol.fleetRequests())")
+
+        // The group token alone no longer re-joins an id that already holds a credential: the
+        // controller refuses it 400, and the app must report the controller's own reason rather
+        // than retrying for ever.
+        let noCredentialStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await noCredentialStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                        dataDirectory: temporary.appendingPathComponent("no-credential"),
+                                        token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        await noCredentialStore.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                               boundHosts: LocalAddresses.current().map(\.address))
+        require(noCredentialStore.fleetNote?.contains("Two Macs cannot share one node id") == true,
+                "a takeover refusal must quote the controller, got: \(noCredentialStore.fleetNote ?? "nil")")
+        noCredentialStore.disconnect()
+        FixtureProtocol.setJoinRequiresCredential(false)
+
+        // **A re-admitted Mac still holds the credential from before**, which the controller no
+        // longer knows: the same 401 path, but with a working outcome after the retry. The fresh
+        // credential replaces the stale one, and the Mac is a member again.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.setStaleJoinCredential("old-node-credential")
+        FixtureProtocol.issuedNodeCredential = "fresh-node-credential-456"
+        let readmittedStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await readmittedStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                      dataDirectory: temporary.appendingPathComponent("readmitted"),
+                                      token: "native-test-token")
+        await readmittedStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: "old-node-credential"))
+        require(Array(FixtureProtocol.joinTokens().suffix(2)) == ["old-node-credential", "fleet-token-value"],
+                "a stale credential must be retried once with the group token: \(FixtureProtocol.joinTokens())")
+        require(readmittedStore.nodeCredential == "fresh-node-credential-456",
+                "the re-join must take the fresh credential: \(String(describing: readmittedStore.nodeCredential))")
+        require(readmittedStore.controllerRemoval == nil,
+                "a Mac that re-joined is not a Mac that was removed")
+        FixtureProtocol.setStaleJoinCredential(nil)
+        FixtureProtocol.issuedNodeCredential = "node-credential-abc123"
+        readmittedStore.disconnect()
+
+        // **A removal is terminal.** The controller answers 403 with its own sentence; the app must
+        // stop the re-join loop, drop the group credential this Mac holds, and say who removed it
+        // and when — with the date the controller gave, not the date this app read it.
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.setJoinRemoval(FixtureProtocol.removalSentence)
+        await fleetStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: FixtureProtocol.issuedNodeCredential))
+        let removal = fleetStore.controllerRemoval
+        require(removal != nil, "a 403 removal must be recorded")
+        require(removal?.date == "2026-09-28",
+                "the date must come from the controller's sentence, got: \(String(describing: removal?.date))")
+        require(removal?.clearedGroupCredential == true,
+                "removing must drop the group credential this Mac holds (the local leave): \(FixtureProtocol.fleetRequests())")
+        require(FixtureProtocol.fleetRequests().contains("leave"),
+                "a removed Mac must stop being a node locally: \(FixtureProtocol.fleetRequests())")
+        require(fleetStore.nodeCredential == nil,
+                "the revoked credential must not be kept")
+        require(fleetStore.storedMembership == nil,
+                "a removed Mac must not keep re-joining the controller that removed it")
+        // The sentence the page shows must name the date and where re-admitting happens.
+        require(FleetCopy.isRemoval(FixtureProtocol.removalSentence), "the removal sentence must be recognised")
+        let removalNotice = FleetCopy.removalNotice(date: removal?.date, address: "192.168.1.21:8080")
+        require(removalNotice.contains("removed this Mac on 2026-09-28"),
+                "the notice must say what happened and when: \(removalNotice)")
+        require(removalNotice.contains("Re-admitting it is a decision on that controller"),
+                "the notice must say re-admitting happens on the controller: \(removalNotice)")
+        require(removalNotice.contains("has stopped trying to re-join"),
+                "the notice must say the loop stopped: \(removalNotice)")
+        require(FleetCopy.removalDate(in: FixtureProtocol.removalSentence) == "2026-09-28",
+                "the date is read out of the controller's own words")
+        require(FleetCopy.removalDate(in: "refused for another reason") == nil,
+                "a refusal that is not a removal must not invent a date")
+        // The removal must survive a later lifecycle refresh: the loop is stopped, not merely
+        // interrupted, and the startup attempt is not allowed to start a new one.
+        FixtureProtocol.resetFleetRequests()
+        await fleetStore.refresh()
+        try? await Task.sleep(for: .milliseconds(150))
+        require(!FixtureProtocol.fleetRequests().contains("join"),
+                "a removed Mac re-joined after its removal: \(FixtureProtocol.fleetRequests())")
+        require(fleetStore.controllerRemoval != nil, "the removal notice must stay until dismissed")
+        fleetStore.dismissControllerRemoval()
+        require(fleetStore.controllerRemoval == nil, "the notice must be dismissible")
+        FixtureProtocol.setJoinRemoval(nil)
+        fleetStore.disconnect()
+
+        // **Leaving reports what the controller answered, not what the button hoped.** The old
+        // fixture answered a flat 200 to every removal, which is why an app that could never remove
+        // this Mac passed this suite.
+        let refusedLeaveStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await refusedLeaveStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                   dataDirectory: temporary.appendingPathComponent("leaving-node"),
+                                   token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        // 1. Its own credential is unknown to the controller (already revoked): 401, then the group
+        //    token is refused 403 because a shared token removes nothing. Both are reported.
+        FixtureProtocol.setSelfRemoval(401, detail: "this Mac's fleet credential was refused")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.removalTokensList = []
+        await refusedLeaveStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: FixtureProtocol.issuedNodeCredential))
+        await refusedLeaveStore.leaveGroup()
+        require(FixtureProtocol.removalTokens().count == 2,
+                "a refused credential must be retried once with the group token: \(FixtureProtocol.removalTokens())")
+        require(refusedLeaveStore.fleetNote?.contains("did not recognise this Mac's own credential") == true,
+                "a 401 on this Mac's own credential must say so: \(refusedLeaveStore.fleetNote ?? "nil")")
+        require(refusedLeaveStore.fleetNote?.contains("left the group") == true,
+                "leaving is still this Mac's decision: \(refusedLeaveStore.fleetNote ?? "nil")")
+        require(refusedLeaveStore.storedMembership == nil && refusedLeaveStore.nodeCredential == nil,
+                "leaving must take both credentials off this Mac")
+        // 2. A different refusal: the controller's own reason is quoted, and the page never says
+        //    the removal happened.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.setSelfRemoval(403, detail: "a fleet credential may remove only the Mac that holds it")
+        await refusedLeaveStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: FixtureProtocol.issuedNodeCredential))
+        await refusedLeaveStore.leaveGroup()
+        require(refusedLeaveStore.fleetNote?.contains("refused to remove this Mac") == true,
+                "a refusal must be reported as one: \(refusedLeaveStore.fleetNote ?? "nil")")
+        require(refusedLeaveStore.fleetNote?.contains("only the Mac that holds it") == true,
+                "the controller's own reason must be quoted verbatim: \(refusedLeaveStore.fleetNote ?? "nil")")
+        FixtureProtocol.setSelfRemoval(nil)
+        refusedLeaveStore.disconnect()
+
+        // The fixture's own fidelity, so the next test cannot be green by construction: the
+        // controller refuses a removal of a machine that is not the one asking.
+        var foreign = URLRequest(url: URL(string: "http://192.168.1.21:8080/api/hub/fleet/nodes/studio-9")!)
+        foreign.httpMethod = "DELETE"
+        foreign.setValue(FixtureProtocol.issuedNodeCredential, forHTTPHeaderField: "X-Hub-Token")
+        let foreignSession = URLSession(configuration: configuration)
+        if let (_, foreignResponse) = try? await foreignSession.data(for: foreign),
+           let status = (foreignResponse as? HTTPURLResponse)?.statusCode {
+            require(status == 403,
+                    "the fixture must refuse removing a different Mac with 403, got: \(status)")
+        } else {
+            require(false, "the fixture did not answer the foreign removal")
+        }
+        foreignSession.invalidateAndCancel()
+
+        // ---------------------------------------------------------------------------------------
+        // B2/H11 — the connection light asks with a credential, and a refusal is its own state.
+        // ---------------------------------------------------------------------------------------
+        let healthStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await healthStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                  dataDirectory: temporary.appendingPathComponent("health"),
+                                  token: "native-test-token")
+        healthStore.controllerAddress = "192.168.1.21:8080"
+        healthStore.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: [], nodeCredential: FixtureProtocol.issuedNodeCredential)
+        FixtureProtocol.setResourcesStatus(nil)
+        await healthStore.refreshControllerHealth()
+        require(healthStore.controllerReachable == true,
+                "an authenticated read that succeeds must read as connected")
+        require(!healthStore.controllerCredentialRefused, "a successful read is not a refusal")
+        require(FixtureProtocol.resourcesToken() == "fleet-token-value",
+                "the read must present the group credential this route checks, got: \(FixtureProtocol.resourcesToken())")
+        require(healthStore.controllerHealthNote?.contains("Apple M4") == true,
+                "the answer's own facts must be shown: \(healthStore.controllerHealthNote ?? "nil")")
+        // The controller is there and refuses this Mac: that is not "unreachable", and it is not
+        // green either. This is the state 52 nodes were missing.
+        FixtureProtocol.setResourcesStatus(401)
+        await healthStore.refreshControllerHealth()
+        require(healthStore.controllerReachable == false,
+                "a refused credential must not read as connected")
+        require(healthStore.controllerCredentialRefused,
+                "a refused credential must be its own state, not folded into unreachable")
+        require(healthStore.controllerHealthNote?.contains("refused this Mac's credential") == true,
+                "the refusal must be said in words: \(healthStore.controllerHealthNote ?? "nil")")
+        require(healthStore.controllerHealthNote?.contains("not dispatchable") == true,
+                "the consequence must be said: \(healthStore.controllerHealthNote ?? "nil")")
+        // The membership's token is a snapshot; a rotation this Mac did not perform replaces the
+        // Hub's own token without telling this app. The read asks for the live value, or a healthy
+        // Mac reads as refused after every rotation.
+        FixtureProtocol.setResourcesStatus(nil)
+        healthStore.fleetTokenProvider = { "live-fleet-token" }
+        await healthStore.refreshControllerHealth()
+        require(FixtureProtocol.resourcesToken() == "live-fleet-token",
+                "the read must present the Hub's current token, got: \(FixtureProtocol.resourcesToken())")
+        require(healthStore.controllerReachable == true && !healthStore.controllerCredentialRefused,
+                "a live credential that is accepted must read as connected")
+        healthStore.fleetTokenProvider = nil
+        // A controller that answers with something else is neither of those two states.
+        FixtureProtocol.setResourcesStatus(500)
+        await healthStore.refreshControllerHealth()
+        require(healthStore.controllerReachable == false && !healthStore.controllerCredentialRefused,
+                "an error is neither a refusal nor a live connection")
+        FixtureProtocol.setResourcesStatus(nil)
+        healthStore.disconnect()
+
+        // ---------------------------------------------------------------------------------------
+        // A4/A3 — rotation and handover report every Mac by name, and a partial result is never
+        // reported as success.
+        // ---------------------------------------------------------------------------------------
+        let groupStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await groupStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                 dataDirectory: temporary.appendingPathComponent("group-ops"),
+                                 token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("minted")
+        await groupStore.refreshFleetNodes()
+        FixtureProtocol.resetFleetRequests()
+        await groupStore.rotateFleetToken()
+        let rotation = groupStore.fleetOperation
+        require(rotation?.kind == .rotation, "a rotation must be reported as one")
+        require(rotation?.total == 2 && rotation?.verified == 1 && rotation?.manual == 1,
+                "every count must come from the Hub's answer: \(String(describing: rotation))")
+        require(rotation?.isComplete == false, "one Mac refused the old credential: this is not complete")
+        require(rotation?.followed == ["studio-2"] && rotation?.unfinished == ["studio-3"],
+                "the Macs must be named individually: \(String(describing: rotation))")
+        require(rotation?.outcomes["studio-3"] == "refused the old credential",
+                "the page must say *why* a Mac did not follow, not only that it did not: \(String(describing: rotation?.outcomes))")
+        require(rotation?.outcomes["studio-2"] == "followed", "a Mac that followed must say so")
+        require(rotation?.token == "new-fleet-token-abcdefghijklmnop",
+                "the new token must be shown so every member and GatewayKH can be given it")
+        require(rotation?.summary.contains("1 of 2 Macs followed") == true,
+                "the result must lead with what actually happened: \(rotation?.summary ?? "nil")")
+        require(rotation?.summary.contains("SSH over Tailscale") == true,
+                "the fallback for a Mac that did not follow must be named: \(rotation?.summary ?? "nil")")
+        require(rotation?.summary.contains("credential-rotation-decision.md") == true,
+                "the fallback must point at the runbook: \(rotation?.summary ?? "nil")")
+        require(groupStore.connectionNotice?.kind == .failure,
+                "a partial rotation must not be reported as success")
+        require(groupStore.fleetMachineName("studio-3") == "Studio 3",
+                "a machine id in the result must be shown as its name")
+        require(FixtureProtocol.fleetRequests().contains("rotate"),
+                "the rotation must go to this Mac's own Hub: \(FixtureProtocol.fleetRequests())")
+
+        // A handover carries the new controller's address and token, and retires this controller.
+        FixtureProtocol.resetFleetRequests()
+        await groupStore.handOverFleet(to: "192.168.1.21:8080", token: "new-controller-token-abcdefghijkl")
+        let handover = groupStore.fleetOperation
+        require(FixtureProtocol.fleetRequests().contains("handover"),
+                "the handover must reach the Hub: \(FixtureProtocol.fleetRequests())")
+        let handoverBody = FixtureProtocol.syncBodies().last
+        require(handoverBody?["controller_url"] as? String == "http://192.168.1.21:8080",
+                "the new controller's address must be sent as the Hub stores it, got: \(String(describing: handoverBody))")
+        require(handoverBody?["token"] as? String == "new-controller-token-abcdefghijkl",
+                "the new controller's token must be sent once, in this request")
+        require(handover?.kind == .handover && handover?.target == "http://192.168.1.21:8080",
+                "a handover must be reported as one, naming where the group went")
+        require(handover?.isComplete == false, "a Mac that did not follow means the handover is not complete")
+        require(groupStore.connectionNotice?.kind == .failure,
+                "a partial handover must never be reported as success")
+        // The controller is retired by its own handover: the Hub's answer says so, and the page
+        // must report it rather than showing a controller that still takes work.
+        await groupStore.refreshConnection()
+        require(groupStore.controllerIdentity?.settings.handedOverTo == "http://192.168.1.21:8080",
+                "a handed-over controller must report where the group went: \(String(describing: groupStore.controllerIdentity?.settings.handedOverTo))")
+        require(groupStore.controllerIdentity?.settings.handedOverAt != nil,
+                "a handed-over controller must report when")
+        require(!NativeWorkspaceStore.canPinWork(
+                    role: "controller", credentialOrigin: "minted",
+                    handedOverTo: groupStore.controllerIdentity?.settings.handedOverTo),
+                "a retired controller must not offer to take work")
+        FixtureProtocol.setHandedOver(to: nil)
+        groupStore.disconnect()
+
+        // The order of names and the shape of a complete answer.
+        require(FleetCopy.unfinishedNotice(total: 2, verified: 2, manual: 0, pending: 0) == nil,
+                "a complete result needs no warning")
+        require(FleetCopy.unfinishedNotice(total: 3, verified: 1, manual: 1, pending: 1)?
+                    .contains("1 refused the old credential") == true,
+                "a manual Mac must be counted in words")
+        require(FleetCopy.unfinishedNotice(total: 3, verified: 1, manual: 1, pending: 1)?
+                    .contains("1 could not be reached") == true,
+                "an unreachable Mac must be counted in words")
+        require(FleetCopy.handoverFallback.contains("SSH over Tailscale")
+                && FleetCopy.handoverFallback.contains("credential-rotation-decision.md"),
+                "the fallback names the mechanism and the runbook")
 
         // The address typed for a controller is checked before any credential is sent to it.
         for good in ["192.168.1.21:8080", "http://192.168.1.21:8080", "100.101.102.103:8080",

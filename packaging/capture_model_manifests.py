@@ -543,10 +543,17 @@ def preserve_declared_blocks(manifest: dict[str, Any],
     ``CHOICES`` remains the place to declare them for a package being captured for the first
     time, and a block supplied there wins; a block the shipped manifest carries and the spec does
     not restate survives unchanged instead of being silently dropped by ``--write``.
+
+    ``quantization`` and ``quantization_source`` are in the same class for the same reason. They
+    are read from the identifier the **publisher** chose — ``mlx-community/chatterbox-4bit``
+    states 4-bit in its own repo name — and a re-capture must not wipe a fact the owner's
+    standing rule requires on every model mention ("not 'Z-Image-Turbo' but 'Z-Image-Turbo 6B
+    MLX 4-bit'"). A package whose publisher states no precision keeps ``null`` **and** the
+    sentence saying so, because absence and "we did not look" must not publish the same value.
     """
     if not isinstance(previous, dict):
         return manifest
-    for key in ("subtitle", "default"):
+    for key in ("subtitle", "default", "quantization", "quantization_source"):
         if key not in manifest and key in previous:
             manifest[key] = previous[key]
     return manifest

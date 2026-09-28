@@ -140,3 +140,55 @@ class AggregateCatalogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSameWhisperWeightsArePublishedOnceTest(unittest.TestCase):
+    """M9 — two studios serve the same transcription weights on one Mac, and the fleet view
+    published the model twice for that machine (96 phantom machine-model rows in the Gateway).
+
+    Whisper is registered under the Subtitle studio *and* reached through the Voice studio's own
+    STT surface. The two copies also disagreed about the same Mac, which is worse than a
+    duplicate: a reader cannot tell which one is true.
+    """
+
+    def _assemble(self, studios: list[dict], per_studio_rows: list[list[dict]]) -> dict:
+        # The transcription path only: these studios are STT surfaces, and passing the same rows
+        # as the *catalog* results too would count each model twice through two different
+        # branches, which is a harness artefact rather than the defect under test.
+        return StudioMonitor._assemble_aggregate_catalog(
+            _FakeMonitor(studios),
+            [],
+            [{"available": True, "models": rows} for rows in per_studio_rows],
+        )
+
+    def test_one_row_per_machine_and_model(self) -> None:
+        subtitle = {"id": "subtitle", "modality": "transcription", "machine": "studio-1"}
+        voice = {"id": "voice", "modality": "voice", "machine": "studio-1"}
+        rows = [{"repo": "mlx-community/whisper-large-v3-turbo", "cached": True}]
+        catalog = self._assemble([subtitle, voice], [rows, rows])
+        self.assertEqual(len(catalog["models"]), 1,
+                         "one Mac offering one model publishes one row")
+        self.assertEqual(catalog["duplicate_rows_folded"], 1)
+        self.assertEqual(catalog["models"][0]["hub_studio"], "subtitle",
+                         "the first studio to claim the model keeps it")
+
+    def test_two_machines_still_publish_two_rows(self) -> None:
+        # The de-duplication is per machine: two Macs holding the same model are two rows, which
+        # is what the Gateway turns into "2 of M machines".
+        a = {"id": "subtitle", "modality": "transcription", "machine": "studio-1"}
+        b = {"id": "subtitle", "modality": "transcription", "machine": "studio-2"}
+        rows = [{"repo": "mlx-community/whisper-large-v3-turbo"}]
+        catalog = self._assemble([a, b], [rows, rows])
+        self.assertEqual(len(catalog["models"]), 2)
+        self.assertEqual(catalog["duplicate_rows_folded"], 0)
+
+    def test_a_different_model_from_a_second_studio_is_kept(self) -> None:
+        subtitle = {"id": "subtitle", "modality": "transcription", "machine": "studio-1"}
+        voice = {"id": "voice", "modality": "voice", "machine": "studio-1"}
+        catalog = self._assemble(
+            [subtitle, voice],
+            [[{"repo": "mlx-community/whisper-large-v3-turbo"}],
+             [{"repo": "mlx-community/parakeet-tdt-0.6b"}]],
+        )
+        self.assertEqual(len(catalog["models"]), 2)
+        self.assertEqual(catalog["duplicate_rows_folded"], 0)

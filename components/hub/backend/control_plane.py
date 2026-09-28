@@ -84,6 +84,13 @@ def defaults() -> dict:
         # machine is joining, which is the conservative reading: never rotate a credential that
         # might be the one its own nodes hold.
         "fleet_credential_origin": "minted",
+        # **Retirement after a handover.** When this controller hands its group to a promoted
+        # node it keeps its history and stops taking new work, and the only durable record of
+        # that decision is here: a Mac that answered "yes" to a dispatch request an hour after
+        # handing over would be serving two controllers at once. `accepts_customer_jobs` reads
+        # these, so the retirement is enforced by the same function every remote caller uses.
+        "handed_over_to": None,
+        "handed_over_at": None,
     }
 
 
@@ -198,6 +205,14 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
         if origin not in {"minted", "adopted"}:
             raise ValueError("fleet_credential_origin must be 'minted' or 'adopted'")
         updated["fleet_credential_origin"] = origin
+        # Carried like every other key in `defaults()`. The file's own comment above records what
+        # dropping one costs: joining wrote "adopted", nothing persisted it, and every reader was
+        # told "minted".
+        for key in ("handed_over_to", "handed_over_at"):
+            if key in values:
+                updated[key] = values[key]
+            else:
+                updated[key] = current.get(key)
         if updated["role"] not in ROLES:
             raise ValueError(f"role must be one of {sorted(ROLES)}")
         if updated["database_mode"] not in DATABASE_MODES:
@@ -231,8 +246,15 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
         previous_role = str(current.get("role") or "").lower()
         origin = str(current.get("fleet_credential_origin") or "minted").lower()
         if updated["role"] == "controller" and (previous_role == "agent" or origin == "adopted"):
+            from . import fleet_nodes
             from . import peers
             peers.set_fleet_token("")          # empty asks for a fresh one
+            # **And the borrowed node credential goes with the borrowed token.** Promotion is
+            # where a Mac stops being somebody's node and becomes its own controller: the
+            # credential its old controller issued is that controller's record, not this Mac's,
+            # and a promoted Mac that kept it would hold a working key into the group it just
+            # left. Same reasoning as the token rotation beside it, and the same moment.
+            fleet_nodes.set_node_credential(None)
             updated["fleet_credential_origin"] = "minted"
         # Which controller this Mac joined is a fact about whose credential it is holding, so it
         # lasts exactly as long as that credential does. It used to be cleared whenever the role was
@@ -264,8 +286,35 @@ def accepts_customer_jobs() -> bool:
     apply to the person sitting at the Mac: ``standalone`` asks
     ``auth.presented_owner_token`` alongside this and lets the owner's own credential through, so a
     Mac switched to a node can still generate from its own window. See the call sites.
+
+    **A handed-over controller is retired and refuses too.** It has told every Mac it owned to
+    report to a new head, and one that kept answering would put the same model on two controllers'
+    books. The owner then removes it from the Gateway and wipes or sells it (A3 step 4). Refusing
+    here — the one function every remote submission passes — is what makes "retired" a fact rather
+    than a label on a page.
     """
-    return load_settings()["role"] != "agent"
+    settings = load_settings()
+    if str(settings.get("handed_over_to") or "").strip():
+        return False
+    return settings["role"] != "agent"
+
+
+def refusal_for_remote_work() -> str:
+    """Why a remote caller was refused, in the two different words the two reasons need.
+
+    **Agent mode and retirement are not the same state and must not share a sentence.** A node
+    in agent mode is doing its job; a controller that has handed over is finished, and an
+    operator reading "this Hub is in agent mode" on a Mac he just retired would go looking at
+    the wrong setting. One function so the two call sites cannot drift apart.
+    """
+    settings = load_settings()
+    target = str(settings.get("handed_over_to") or "").strip()
+    if target:
+        return (f"This controller handed its group over to {target} and is retired: it keeps "
+                f"its history but takes no new work. Remove it from the Gateway and wipe or "
+                f"sell it.")
+    return ("This Hub is in agent mode, so a controller submits work here. This Mac's own app "
+            "can still run work locally with this Mac's Hub token.")
 
 
 def queue_shadow_job(kind: str, batch: dict) -> None:

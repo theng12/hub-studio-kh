@@ -11,10 +11,13 @@ next step and is not claimed here.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 from pathlib import Path
 import tempfile
 import time
@@ -45,30 +48,80 @@ PROBE_PATH = "/api/hub/resources?local_only=true"
 _CREDENTIAL_DETAIL = ("the node answered but rejected this controller's credential ({why}) - "
                       "re-join it with the current Fleet Token")
 
+#: Where **this Mac** keeps the credential its controller minted for it, when this Mac is a
+#: node. It is this Mac's own membership secret and never leaves it: a controller stores only
+#: the hash (see `join`), so revoking one machine cannot touch another.
+NODE_CREDENTIAL_FILE = DATA_DIR / ".node_credential"
+
+#: The sentence a removed Mac is refused with, by name and with the date. Kept as one string
+#: because three places say it — the join refusal, the roster read, and the node's own UI — and
+#: a reader who sees two different sentences cannot tell they are the same decision.
+REMOVED_DETAIL = ("this controller removed this Mac on {when}; re-admit it from Connections "
+                  "to join again")
+
 
 def store_path() -> Path:
     return DATA_DIR / FILE_NAME
 
 
-def _read() -> dict[str, dict[str, Any]]:
+def _empty() -> dict[str, Any]:
+    return {"version": 2, "nodes": {}, "removed": {}}
+
+
+def _document() -> dict[str, Any]:
+    """The whole file: the live roster **and** the machines this controller has removed.
+
+    The removed set is not bookkeeping. The owner removes machines to **sell** them, so a
+    removed Mac must never re-add itself, and a controller that forgets the removal the
+    moment the row is deleted cannot tell "never joined" from "evicted". Keeping both in one
+    file means one write keeps them consistent.
+    """
     try:
         value = json.loads(store_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return _empty()
     if not isinstance(value, dict):
-        return {}
-    return {key: row for key, row in value.items()
-            if isinstance(row, dict) and ID_PATTERN.fullmatch(str(key))}
+        return _empty()
+    if "nodes" in value or "removed" in value:
+        nodes = value.get("nodes") if isinstance(value.get("nodes"), dict) else {}
+        removed = value.get("removed") if isinstance(value.get("removed"), dict) else {}
+    else:
+        # The file used to be the roster itself: `{node_id: row}`. Read it as one rather than
+        # discarding a controller's whole fleet on the first read after an update.
+        nodes, removed = value, {}
+    clean_nodes = {key: row for key, row in nodes.items()
+                   if isinstance(row, dict) and ID_PATTERN.fullmatch(str(key))}
+    clean_removed = {key: row for key, row in removed.items()
+                     if isinstance(row, dict) and ID_PATTERN.fullmatch(str(key))}
+    return {"version": 2, "nodes": clean_nodes, "removed": clean_removed}
 
 
-def _write(nodes: dict[str, dict[str, Any]]) -> None:
+def _read() -> dict[str, dict[str, Any]]:
+    return _document()["nodes"]
+
+
+def _removed() -> dict[str, dict[str, Any]]:
+    return _document()["removed"]
+
+
+def removed() -> dict[str, dict[str, Any]]:
+    """The machines this controller has evicted, newest first."""
+    rows = _removed()
+    return dict(sorted(rows.items(), key=lambda item: item[1].get("removed_at") or 0,
+                       reverse=True))
+
+
+def _write(nodes: dict[str, dict[str, Any]],
+           removed_rows: dict[str, dict[str, Any]] | None = None) -> None:
     path = store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    document = {"version": 2, "nodes": nodes,
+                "removed": _removed() if removed_rows is None else removed_rows}
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
     temporary = Path(name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(nodes, handle, indent=2, sort_keys=True)
+            json.dump(document, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -76,6 +129,90 @@ def _write(nodes: dict[str, dict[str, Any]]) -> None:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+# -- this Mac's own node credential -----------------------------------------
+def node_credential() -> str | None:
+    """The credential this Mac was issued when it joined its controller, or `None`.
+
+    Held `0600` in this Mac's own data directory and presented on every call this Mac makes
+    *to* its controller. It is deliberately not the Fleet token: the Fleet token is the
+    group's shared enrolment secret, and a machine that is sold must not take a working
+    copy of the group's credential with it.
+    """
+    try:
+        if NODE_CREDENTIAL_FILE.exists():
+            os.chmod(NODE_CREDENTIAL_FILE, 0o600)
+            value = NODE_CREDENTIAL_FILE.read_text(encoding="utf-8").strip()
+            return value or None
+    except OSError:
+        return None
+    return None
+
+
+def set_node_credential(value: str | None) -> None:
+    """Store (or clear) this Mac's own node credential."""
+    text = (value or "").strip()
+    if not text:
+        NODE_CREDENTIAL_FILE.unlink(missing_ok=True)
+        return
+    NODE_CREDENTIAL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NODE_CREDENTIAL_FILE.write_text(text + "\n", encoding="utf-8")
+    os.chmod(NODE_CREDENTIAL_FILE, 0o600)
+
+
+def hash_credential(value: str) -> str:
+    """What the controller stores for a node's credential: its hash, never the value.
+
+    A controller that kept the plaintext could authenticate *as* the node, and a stolen
+    `fleet_nodes.json` would hand over every machine's credential at once. A plain SHA-256 is
+    right here where a password hash would not be: the value is 32 bytes of `secrets` entropy,
+    so there is no dictionary to run.
+    """
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _mint_credential() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def verify_node_credential(node_id: str, offered: str | None) -> bool:
+    """Whether `offered` is the credential this controller issued to `node_id`."""
+    row = _read().get(str(node_id or "").lower()) or {}
+    stored = str(row.get("credential_hash") or "")
+    if not stored or not offered:
+        return False
+    return hmac.compare_digest(stored, hash_credential(offered))
+
+
+def note_seen(node_ids: list[str]) -> float | None:
+    """Stamp `last_seen_at` for the nodes that just answered. Returns the stamp, or `None`.
+
+    Batched deliberately: `inventory()` probes every node on every fleet read, and a write
+    per node would turn one page refresh into fifty-three file rewrites. `last_seen_at` is
+    the answer to *"is this Mac switched off, or gone for a month?"* — B1, and M20 before
+    it: without it a machine that is off and a machine that was scrapped look the same.
+
+    The caller stamps the rows it is about to publish with the returned value, so the read
+    that *caused* the stamp is the read that reports it. Leaving the rows alone made the
+    field always one fleet read behind, which is the kind of number that looks live and is
+    not.
+    """
+    wanted = {str(node_id).lower() for node_id in node_ids if node_id}
+    if not wanted:
+        return None
+    nodes = _read()
+    now = time.time()
+    changed = False
+    for node_id in wanted:
+        row = nodes.get(node_id)
+        if row is None:
+            continue
+        row["last_seen_at"] = now
+        changed = True
+    if changed:
+        _write(nodes)
+    return now
 
 
 def validate_address(value: object) -> str:
@@ -151,40 +288,171 @@ def _studios(value: object) -> list[dict[str, str]]:
     return seen
 
 
-def join(payload: dict[str, Any]) -> dict[str, Any]:
-    """Record one node, or refresh what a rejoining node reports about itself."""
+class NodeRemovedError(ValueError):
+    """A join from a machine this controller has evicted.
+
+    Its own type because it is not a malformed request: the asking Mac is well formed, known
+    by name, and refused on purpose. The route answers 403 (not 400) and the node's app stops
+    its re-join loop on it instead of retrying every five minutes for ever.
+    """
+
+    def __init__(self, node_id: str, removed_at: float | None) -> None:
+        self.node_id = node_id
+        self.removed_at = removed_at
+        when = (time.strftime("%Y-%m-%d", time.localtime(removed_at))
+                if removed_at else "an unrecorded date")
+        super().__init__(REMOVED_DETAIL.format(when=when))
+
+
+def _proves_identity(node_id: str, payload: dict[str, Any],
+                     actor: dict[str, Any] | None,
+                     existing: dict[str, Any] | None = None) -> bool:
+    """Whether a re-join of an existing id comes from the machine that already holds it.
+
+    Four ways, and no fifth. The controller's **own operator** may re-add a machine
+    deliberately. The **node credential** — either the one the middleware already authenticated
+    (`actor`) or one offered in the body — proves the caller is that machine. And a row from
+    **before per-node credentials existed** has no hash, so a Fleet-token re-join may adopt it:
+    that is the no-flag-day half of A8, and it is deliberately one-shot — the join issues a
+    credential, so from the next join onwards the machine has to present it.
+
+    Anything else is a second Mac claiming an id that is already taken.
+    """
+    kind = str((actor or {}).get("kind") or "")
+    if kind == "hub":
+        return True
+    if kind == "node" and str((actor or {}).get("node_id") or "").lower() == node_id:
+        return True
+    if verify_node_credential(node_id, str(payload.get("credential") or "")):
+        return True
+    # A roster written by a build that had no per-node credentials. Adopting it is how an
+    # existing fleet upgrades without anyone touching a Mac; it cannot be used to take over a
+    # row that a credential already guards.
+    return bool(existing) and not existing.get("credential_hash")
+
+
+def join(payload: dict[str, Any], *,
+         actor: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Record one node, or refresh what a rejoining node reports about itself.
+
+    **Returns the machine's own credential, once.** The shared Fleet token enrols a Mac; it
+    does not authorise it for ever, because a token every member holds cannot be withdrawn
+    from one member. So the controller mints a credential for this node here, keeps only its
+    hash, and hands the value back in this answer for the node to store `0600`. Every later
+    node-originated call presents that credential instead.
+
+    **A removed machine is refused by name.** The owner removes Macs to sell them, so a
+    removal has to survive the machine's next start: `removed()` holds the id, and this
+    raises `NodeRemovedError` before anything is written. Re-admitting is a deliberate action
+    on the controller (`readmit`), not something the removed Mac can do for itself.
+
+    **Backwards compatible on purpose.** A node that joins with only the Fleet token still
+    works: it is issued its own credential on that first join, so the rollout needs no flag
+    day and no node has to be touched by hand.
+    """
     node_id = str(payload.get("node_id") or "").strip().lower()
     if not ID_PATTERN.fullmatch(node_id):
         raise ValueError("node_id must be lowercase letters, numbers, dots, dashes or underscores")
+    document = _document()
+    gone = document["removed"].get(node_id)
+    if gone is not None:
+        raise NodeRemovedError(node_id, gone.get("removed_at"))
     name = str(payload.get("name") or "").strip()
     if not 1 <= len(name) <= 120:
         raise ValueError("name must be between 1 and 120 characters")
     address = validate_address(payload.get("address"))
     studios = _studios(payload.get("studios"))
-    nodes = _read()
+    nodes = document["nodes"]
     if node_id not in nodes and len(nodes) >= MAX_NODES:
         raise ValueError(f"this controller already has {MAX_NODES} nodes")
     existing = nodes.get(node_id) or {}
+    # **A second Mac may not take over an existing node id silently.** `controller_id`
+    # defaults to `<hostname>-hub`, so two identically named Mac minis — or a re-imaged Mac —
+    # would otherwise share one roster row, one credential and one place in routing. A
+    # re-join that cannot prove it is the machine already on the roster has to be re-admitted
+    # by the operator first (H12, owner decision 9).
+    if existing and not _proves_identity(node_id, payload, actor, existing):
+        raise ValueError(
+            f"this controller already has a machine called '{node_id}' "
+            f"({existing.get('name') or 'unnamed'}). Two Macs cannot share one node id: "
+            f"rename this Mac in Connections, or remove the other one first.")
+    credential = _mint_credential()
+    now = time.time()
     nodes[node_id] = {
         "id": node_id,
         "name": name,
         "address": address,
         "role": "agent",
         "studios": studios,
-        "joined_at": existing.get("joined_at") or time.time(),
-        "updated_at": time.time(),
+        "joined_at": existing.get("joined_at") or now,
+        "updated_at": now,
+        # The first moment this controller heard from the Mac. `last_seen_at` is the last
+        # time it answered a probe, and is stamped by `note_seen`.
+        "last_seen_at": existing.get("last_seen_at") or now,
+        "credential_hash": hash_credential(credential),
+        "credential_issued_at": now,
     }
-    _write(nodes)
-    return dict(nodes[node_id])
+    _write(nodes, document["removed"])
+    # The plaintext is returned here and **nowhere else**: it is not written to the roster,
+    # not logged, and not published on any read route.
+    return {"node": dict(nodes[node_id]), "credential": credential}
 
 
 def leave(node_id: str) -> bool:
+    """Forget a node — the operator's own removal, with no eviction record.
+
+    Deliberately kept separate from `remove`. This is the old path and it is still what a
+    *re-admit then remove again* cycle uses internally; the route the operator presses goes
+    through `remove`, which is the one that makes the removal stick.
+    """
     nodes = _read()
     if node_id not in nodes:
         return False
     del nodes[node_id]
     _write(nodes)
     return True
+
+
+def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
+    """**Evict** a node: revoke its credential and remember the removal for good.
+
+    This is the difference between "removed" and "gone". Deleting the roster row alone left
+    the machine holding the group credential and re-joining on its next start (B3), and with
+    one shared Fleet token there was nothing to revoke (B2/A8). Both halves are here: the
+    row goes, the credential hash goes with it, and the id is recorded in `removed` so
+    `join` can refuse it by name for ever.
+    """
+    node_id = str(node_id or "").strip().lower()
+    document = _document()
+    row = document["nodes"].get(node_id)
+    if row is None:
+        return None
+    del document["nodes"][node_id]
+    document["removed"][node_id] = {
+        "id": node_id,
+        "name": row.get("name") or node_id,
+        "address": row.get("address"),
+        "removed_at": time.time(),
+        "removed_by": by,
+        # What the machine was, kept for the operator's benefit: a list of bare ids is not
+        # something a person can check against a shelf of Macs.
+        "role": row.get("role"),
+        "studios": row.get("studios") or [],
+        "joined_at": row.get("joined_at"),
+    }
+    _write(document["nodes"], document["removed"])
+    return dict(document["removed"][node_id])
+
+
+def readmit(node_id: str) -> dict[str, Any] | None:
+    """Undo an eviction, deliberately: the machine may join again from now on."""
+    node_id = str(node_id or "").strip().lower()
+    document = _document()
+    row = document["removed"].pop(node_id, None)
+    if row is None:
+        return None
+    _write(document["nodes"], document["removed"])
+    return dict(row)
 
 
 def remote_studios() -> list[dict[str, Any]]:
@@ -291,7 +559,13 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     # list a node's name and reachability but not what it is or what it can run. A controller
     # deciding where to send work needs both, and re-reading them from the node would mean the
     # roster depended on every node being awake.
-    row = {key: node.get(key) for key in ("id", "name", "address", "role", "studios", "joined_at")}
+    row = {key: node.get(key) for key in ("id", "name", "address", "role", "studios",
+                                          "joined_at", "last_seen_at", "updated_at")}
+    row["credential_issued_at"] = node.get("credential_issued_at")
+    # Whether this controller holds a credential for the machine, never the credential. A
+    # roster row with no hash is a row from before per-node credentials existed, and it reads
+    # as "the next join of this id has to prove itself" rather than as "trusted".
+    row["has_credential"] = bool(node.get("credential_hash"))
     snapshot = fresh_snapshot(str(node.get("id") or ""))
     if snapshot is not None:
         return _from_snapshot(row, snapshot)
@@ -346,6 +620,14 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     # used to cost one timeout per silent node: ten switched-off Macs turned the Fleet page into a
     # ten-timeout stall, which the app sees as the Hub not answering at all. Order is preserved.
     rows = list(await asyncio.gather(*(probe(nodes[node_id], client) for node_id in node_ids)))
+    # **Last seen.** One batched write for the machines that answered, so a page refresh is not
+    # one file rewrite per Mac — and so "switched off" and "gone a month" stop looking the same
+    # (M20/B1). The rows being published carry the same stamp, so this read reports it.
+    seen_at = note_seen([row["id"] for row in rows if row.get("state") == "reachable"])
+    if seen_at is not None:
+        for row in rows:
+            if row.get("state") == "reachable":
+                row["last_seen_at"] = seen_at
     # The role this Hub is actually in, not a constant.
     #
     # This was hardcoded to "controller", so a standalone Mac answered "controller" here while
@@ -360,12 +642,17 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
         # with no name on its head is a list of addresses rather than a pool.
         "machine": this_machine(),
         "nodes": rows,
+        # **The evicted machines, published rather than hidden.** The operator removes Macs to
+        # sell them, so the list has to survive the removal and be visible — otherwise the only
+        # way to re-admit one is to remember its id. Each row carries the date it was removed.
+        "removed": list(removed().values()),
         "summary": {
             "total": len(rows),
             "reachable": sum(row["state"] == "reachable" for row in rows),
             "unreachable": sum(row["state"] == "unreachable" for row in rows),
             "unauthorized": sum(row["state"] == "unauthorized" for row in rows),
             "error": sum(row["state"] == "error" for row in rows),
+            "removed": len(_removed()),
         },
     }
 
@@ -414,6 +701,11 @@ async def remote_inventory(address: str, token: str,
     Best-effort by design. A node whose controller is asleep is still a node, and it still has to
     render its own state, so an unreachable or refusing controller answers ``None`` here and the
     caller reports the group as unread rather than showing an empty one.
+
+    `token` is **this Mac's own node credential** when it has one, and the group Fleet token only
+    before the first join has been answered. Presenting the node credential is what makes an
+    eviction real: a sold Mac's copy is revoked on the controller, so this read stops working for
+    it and nothing else changes for its neighbours.
     """
     owned = client is None
     if owned:
@@ -432,6 +724,39 @@ async def remote_inventory(address: str, token: str,
     if not isinstance(body, dict) or not isinstance(body.get("nodes"), list):
         return None
     return body
+
+
+async def refusal_from(address: str, token: str,
+                       client: httpx.AsyncClient | None = None) -> dict[str, Any] | None:
+    """Why the controller refused this Mac, when it answered at all.
+
+    The roster read above collapses every failure into `None`, which is right for rendering a
+    group nobody can read and wrong for the one failure the operator has to act on: **this Mac
+    was removed**. The controller answers 403 with a sentence naming the date, and a node that
+    only showed "unreachable" would keep retrying for ever against a decision that was made
+    deliberately. One extra request, only on the failure path.
+    """
+    owned = client is None
+    if owned:
+        client = httpx.AsyncClient(follow_redirects=False)
+    try:
+        response = await client.get(f"{address}/api/hub/fleet/nodes", timeout=PROBE_TIMEOUT,
+                                    headers={"X-Hub-Token": token} if token else {})
+        if response.status_code not in (401, 403):
+            return None
+        try:
+            detail = str((response.json() or {}).get("detail") or "")
+        except ValueError:
+            detail = ""
+        if not detail:
+            return None
+        return {"status": response.status_code, "detail": detail,
+                "removed": "removed this Mac" in detail}
+    except (httpx.HTTPError, OSError, ValueError):
+        return None
+    finally:
+        if owned:
+            await client.aclose()
 
 
 def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
@@ -479,11 +804,19 @@ async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     if not member["member"]:
         # A controller's pool is exactly its roster. `readable` stays true: nothing failed.
         return result
-    remote = await remote_inventory(member["controller_url"], fleet_token() or "", client)
+    # This Mac's own credential when it has one; the shared Fleet token only before the first
+    # join has been answered.
+    credential = node_credential() or fleet_token() or ""
+    remote = await remote_inventory(member["controller_url"], credential, client)
     if remote is None:
         # The group is known but its head did not answer. The controller is still listed, as a
         # machine that is not answering, which is the difference between a broken node and an
         # empty group.
+        #
+        # **Unless it answered and refused us.** A removal is deliberate and permanent, and a
+        # node that renders it as "unreachable" keeps retrying for ever against a decision the
+        # operator already made. One more request, only on this path, to find out which it is.
+        result["refusal"] = await refusal_from(member["controller_url"], credential, client)
         result["readable"] = False
         result["controller"] = _member(await probe(
             {"id": "controller", "name": "Controller", "address": member["controller_url"]},

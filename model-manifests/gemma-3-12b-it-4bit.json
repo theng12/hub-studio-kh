@@ -153,5 +153,7 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/gemma-3-12b-it-4bit/tree/86cc6a8dedbc456dd0e4af01a9d09f396f77e558?recursive=true&expand=true&limit=100"
       }
     ]
-  }
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/gemma-3-12b-it-4bit"
 }

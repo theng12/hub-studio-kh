@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -200,32 +201,69 @@ class FleetNodeStoreTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_a_node_joins_with_an_address_and_can_leave(self) -> None:
-        node = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
-                                 "address": "http://192.168.1.21:8080"})
+        joined = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                                   "address": "http://192.168.1.21:8080"})
+        node = joined["node"]
         self.assertEqual(node["id"], "mac-mini-2")
         self.assertEqual(node["address"], "http://192.168.1.21:8080")
         self.assertTrue(node["joined_at"] > 0)
-        # The registry is on disk, so a controller restart keeps its nodes.
-        reloaded = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2 renamed",
-                                     "address": "http://192.168.1.21:8080"})
+        # **`join` returns a credential, and it is returned nowhere else.** The shared Fleet
+        # token enrols a Mac; it does not authorise it for ever, because a token every member
+        # holds cannot be withdrawn from one member (A8).
+        self.assertTrue(joined["credential"])
+        self.assertNotIn(joined["credential"],
+                         fleet_nodes.store_path().read_text(encoding="utf-8"),
+                         "the roster must store the hash, never the credential")
+        # The registry is on disk, so a controller restart keeps its nodes. A re-join proves
+        # it is the same machine by presenting the credential it was given.
+        second = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2 renamed",
+                                   "address": "http://192.168.1.21:8080",
+                                   "credential": joined["credential"]})
+        reloaded = second["node"]
         self.assertEqual(reloaded["joined_at"], node["joined_at"])
         self.assertEqual(reloaded["name"], "Studio 2 renamed")
         # A node that restarted reports a new address, and the controller has to take it: the
         # whole point of re-joining on start is that nothing else repairs the stored address, so a
         # controller dispatching to the old one fails with the node sitting there healthy.
         moved = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2 renamed",
-                                  "address": "http://192.168.1.21:47873"})
+                                  "address": "http://192.168.1.21:47873",
+                                  "credential": second["credential"]})["node"]
         self.assertEqual(moved["address"], "http://192.168.1.21:47873")
         self.assertEqual(moved["joined_at"], node["joined_at"], "a re-join must not restamp the join")
         self.assertGreaterEqual(moved["updated_at"], node["updated_at"])
         self.assertTrue(fleet_nodes.leave("mac-mini-2"))
         self.assertFalse(fleet_nodes.leave("mac-mini-2"))
 
+    def test_a_second_mac_cannot_take_over_an_existing_node_id(self) -> None:
+        """Two identically named Mac minis must not share one roster row (H12, decision 9).
+
+        `controller_id` defaults to `<hostname>-hub`, so before this a re-imaged Mac — or a
+        second machine with the same name — silently inherited the first one's row, credential
+        and place in routing. The owner's answer was to expose the id and refuse the takeover.
+        """
+        first = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                                  "address": "http://192.168.1.21:8080"})
+        with self.assertRaises(ValueError) as caught:
+            fleet_nodes.join({"node_id": "mac-mini-2", "name": "A different Mac",
+                              "address": "http://192.168.1.99:8080"})
+        self.assertIn("already has a machine called 'mac-mini-2'", str(caught.exception))
+        # The machine that really is mac-mini-2 gets in, and only it.
+        again = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                                  "address": "http://192.168.1.21:8080"},
+                                 actor={"kind": "node", "node_id": "mac-mini-2"})
+        self.assertTrue(again["credential"])
+        # The controller's own operator may always re-add a machine deliberately.
+        fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                          "address": "http://192.168.1.21:8080"},
+                         actor={"kind": "hub", "node_id": None})
+        self.assertEqual(fleet_nodes._read()["mac-mini-2"]["address"],
+                         "http://192.168.1.21:8080")
+
     def test_a_join_is_refused_rather_than_trusted(self) -> None:
         # An id is normalised to lower case, as this Hub already does for station and
         # controller ids, so the same node cannot join twice under two spellings.
         self.assertEqual(fleet_nodes.join({"node_id": "Mac-Mini-2", "name": "x",
-                                           "address": "http://192.168.1.21:8080"})["id"],
+                                           "address": "http://192.168.1.21:8080"})["node"]["id"],
                          "mac-mini-2")
         fleet_nodes.leave("mac-mini-2")
         for payload in (
@@ -272,7 +310,8 @@ class FleetNodeStoreTests(unittest.TestCase):
         # `unauthorized` is counted separately from `unreachable`: a node that answers and refuses
         # this controller is a credential problem, not a silent Mac (0.6.16).
         self.assertEqual(inventory["summary"],
-                         {"total": 2, "reachable": 1, "unreachable": 1, "unauthorized": 0, "error": 0})
+                         {"total": 2, "reachable": 1, "unreachable": 1, "unauthorized": 0,
+                          "error": 0, "removed": 0})
 
     def test_a_node_that_answers_nonsense_is_an_error_not_a_success(self) -> None:
         fleet_nodes.join({"node_id": "odd", "name": "Odd",
@@ -365,6 +404,151 @@ class FleetRoleTests(unittest.IsolatedAsyncioTestCase):
         row = await fleet_nodes.probe(node)
         self.assertEqual(row["role"], "agent")
         self.assertEqual(row["studios"], [{"id": "voice", "modality": "voice"}])
+
+
+
+
+
+class RemovalIsAnEvictionTest(unittest.TestCase):
+    """A6 the owner's decision B: a removed Mac must never come back on its own.
+
+    Deleting the roster row alone was not enough (B3): the machine still held the group
+    credential and re-joined on its next start, and with one shared Fleet token there was
+    nothing to revoke (B2). Per-node credentials (A8) are what make the removal real — the
+    controller keeps only a hash, so revoking one machine cannot touch another.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-fleet-remove-")
+        self.old_data = fleet_nodes.DATA_DIR
+        fleet_nodes.DATA_DIR = Path(self.temporary.name)
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        fleet_nodes.DATA_DIR = self.old_data
+        self.temporary.cleanup()
+
+    def _join(self, node_id: str, address: str = "http://192.168.1.21:8080") -> dict:
+        return fleet_nodes.join({"node_id": node_id, "name": node_id, "address": address})
+
+    def test_a_removed_node_is_refused_by_name_and_a_neighbour_still_works(self) -> None:
+        sold = self._join("sold-mac")
+        kept = self._join("kept-mac", "http://192.168.1.22:8080")
+        # The neighbour's credential authenticates ...
+        self.assertTrue(fleet_nodes.verify_node_credential("kept-mac", kept["credential"]))
+        removed = fleet_nodes.remove("sold-mac")
+        self.assertIsNotNone(removed)
+        self.assertEqual(removed["id"], "sold-mac")
+        self.assertGreater(removed["removed_at"], 0)
+        # ... the sold Mac's does not: revocation is the point.
+        self.assertFalse(fleet_nodes.verify_node_credential("sold-mac", sold["credential"]),
+                         "a removed Mac's credential must stop working")
+        self.assertTrue(fleet_nodes.verify_node_credential("kept-mac", kept["credential"]),
+                        "removing one Mac must not touch its neighbour")
+        # And the machine may not simply re-join, not even holding the group Fleet token.
+        with self.assertRaises(fleet_nodes.NodeRemovedError) as caught:
+            self._join("sold-mac")
+        self.assertIn("removed this Mac on", str(caught.exception))
+        self.assertIn("re-admit it from Connections", str(caught.exception))
+        self.assertEqual(fleet_nodes.removed()["sold-mac"]["name"], "sold-mac")
+
+    def test_a_removed_mac_stays_removed_across_a_reload(self) -> None:
+        # "It does not come back when the node restarts" also means the *controller* keeps the
+        # decision across its own restart: the record is in the file, not in memory.
+        self._join("sold-mac")
+        fleet_nodes.remove("sold-mac")
+        self.assertEqual(list(fleet_nodes.removed()), ["sold-mac"])
+        with self.assertRaises(fleet_nodes.NodeRemovedError):
+            self._join("sold-mac")
+
+    def test_re_admitting_is_a_deliberate_action_and_then_the_mac_may_join(self) -> None:
+        self._join("sold-mac")
+        fleet_nodes.remove("sold-mac")
+        with self.assertRaises(fleet_nodes.NodeRemovedError):
+            self._join("sold-mac")
+        self.assertIsNotNone(fleet_nodes.readmit("sold-mac"))
+        self.assertEqual(fleet_nodes.removed(), {})
+        again = self._join("sold-mac")
+        self.assertTrue(again["credential"], "a re-admitted Mac is issued a fresh credential")
+        self.assertTrue(fleet_nodes.verify_node_credential("sold-mac", again["credential"]))
+
+    def test_a_wiped_mac_holds_nothing_that_works(self) -> None:
+        # A wiped Mac has no credential at all. It can only re-join by being given the group
+        # Fleet token, and the controller still refuses it by name.
+        self._join("wiped-mac")
+        fleet_nodes.remove("wiped-mac")
+        with self.assertRaises(fleet_nodes.NodeRemovedError):
+            fleet_nodes.join({"node_id": "wiped-mac", "name": "Wiped",
+                              "address": "http://192.168.1.21:8080",
+                              "credential": ""})
+
+    def test_only_a_hash_of_a_credential_is_ever_stored(self) -> None:
+        joined = self._join("mac-mini-2")
+        stored = fleet_nodes._read()["mac-mini-2"]
+        self.assertNotIn("credential", stored)
+        self.assertEqual(stored["credential_hash"],
+                         fleet_nodes.hash_credential(joined["credential"]))
+        self.assertNotIn(joined["credential"], json.dumps(stored))
+        self.assertNotEqual(stored["credential_hash"], joined["credential"])
+
+    def test_last_seen_is_stamped_only_for_the_machines_that_answered(self) -> None:
+        # M20/B1: without this a Mac that is switched off and a Mac that was scrapped a month
+        # ago look the same. Stamped in one batched write, and never for a silent node.
+        fleet_nodes.join({"node_id": "here", "name": "Here",
+                          "address": "http://192.168.1.21:8080"})
+        fleet_nodes.join({"node_id": "gone", "name": "Gone",
+                          "address": "http://192.168.1.22:8080"})
+        before = {node_id: row["last_seen_at"] for node_id, row in fleet_nodes._read().items()}
+        time.sleep(0.02)
+        client = FakeClient({"http://192.168.1.21:8080": {"version": "0.4.0"}})
+        inventory = asyncio.run(fleet_nodes.inventory(client))
+        rows = {row["id"]: row for row in inventory["nodes"]}
+        self.assertGreater(rows["here"]["last_seen_at"], before["here"])
+        self.assertEqual(rows["gone"]["last_seen_at"], before["gone"],
+                         "a node that did not answer must not be stamped as seen")
+        self.assertEqual(fleet_nodes._read()["gone"]["last_seen_at"], before["gone"])
+
+    def test_the_roster_publishes_removed_machines_and_never_a_credential(self) -> None:
+        joined = self._join("sold-mac")
+        fleet_nodes.remove("sold-mac")
+        inventory = asyncio.run(fleet_nodes.inventory(FakeClient({})))
+        self.assertEqual(inventory["summary"]["removed"], 1)
+        self.assertEqual(inventory["removed"][0]["id"], "sold-mac")
+        blob = json.dumps(inventory)
+        self.assertNotIn(joined["credential"], blob)
+        self.assertNotIn("credential_hash", blob)
+
+
+class TheRegistryMigratesFromItsOldShapeTest(unittest.TestCase):
+    """A controller's existing roster must survive the update that adds credentials."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-fleet-migrate-")
+        self.old_data = fleet_nodes.DATA_DIR
+        fleet_nodes.DATA_DIR = Path(self.temporary.name)
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        fleet_nodes.DATA_DIR = self.old_data
+        self.temporary.cleanup()
+
+    def test_a_flat_roster_file_is_read_as_the_node_map(self) -> None:
+        fleet_nodes.store_path().write_text(json.dumps({
+            "mac-mini-2": {"id": "mac-mini-2", "name": "Studio 2",
+                           "address": "http://192.168.1.21:8080", "joined_at": 1.0},
+        }))
+        nodes = fleet_nodes._read()
+        self.assertEqual(list(nodes), ["mac-mini-2"])
+        self.assertEqual(fleet_nodes.removed(), {})
+        # A row from before credentials existed reads as "the next join must prove itself",
+        # not as "trusted".
+        self.assertFalse(nodes["mac-mini-2"].get("credential_hash"))
+        # And writing it back does not lose the node.
+        joined = fleet_nodes.join({"node_id": "mac-mini-2", "name": "Studio 2",
+                                   "address": "http://192.168.1.21:8080"},
+                                  actor={"kind": "hub", "node_id": None})
+        self.assertTrue(joined["credential"])
+        self.assertEqual(list(fleet_nodes._read()), ["mac-mini-2"])
 
 
 if __name__ == "__main__":

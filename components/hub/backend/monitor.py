@@ -1009,14 +1009,37 @@ class StudioMonitor:
         # a minimal stand-in monitor is not required to implement the query.
         stt_studios = transcription_studios(
             self.registry, getattr(self, "status", None))
+        # **One row per machine and model, because two studios really do serve the same weights.**
+        # Whisper is registered under the Subtitle studio *and* reached through the Voice studio's
+        # STT surface, so this loop published the same model twice for the same Mac — 96 phantom
+        # machine-model rows in the Gateway's fleet view, the two copies disagreeing about a Mac
+        # the owner has one of (audit M9). The de-duplication is keyed on
+        # `(machine, model identity)` and the first studio to claim a model keeps it; the count of
+        # rows folded away is published rather than silently dropped, because a page that hides
+        # rows without saying so is the same failure as one that invents them.
+        seen_transcription: dict[tuple[str, str], str] = {}
+        folded = 0
         for studio, availability in zip(stt_studios, transcription):
             if not availability:
                 continue
             sid = studio["id"]
+            machine = str(studio.get("machine", "local"))
             ready = bool(availability.get("available"))
             default_repo = availability.get("default_model")
             entries = availability.get("models") or []
             for model in entries:
+                identity = str(model.get("repo") or model.get("model_id")
+                               or model.get("id") or "").strip().lower()
+                key = (machine, identity)
+                if identity and key in seen_transcription:
+                    folded += 1
+                    log.debug(
+                        "fleet catalog: %s on %s is already published from the %s studio; "
+                        "not publishing the %s copy as well",
+                        identity, machine, seen_transcription[key], sid)
+                    continue
+                if identity:
+                    seen_transcription[key] = sid
                 annotated = dict(model)
                 annotated["hub_studio"] = sid
                 annotated["hub_modality"] = "transcription"
@@ -1034,7 +1057,10 @@ class StudioMonitor:
                 "transcription_ok": ready,
                 "transcription_models": len(entries),
             })
-        return {"models": models, "per_studio": per_studio, "total": len(models)}
+        return {"models": models, "per_studio": per_studio, "total": len(models),
+                # How many duplicate rows were folded, so the number is visible to the Gateway
+                # and to a reader rather than being an invisible subtraction (M9).
+                "duplicate_rows_folded": folded}
 
     def cached_aggregate_catalog(self) -> dict:
         """Merge the last observed catalog and transcription caches only.

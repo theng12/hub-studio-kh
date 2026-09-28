@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.6.92 — 2026-09-28 · A removed Mac stays removed, and a cluster follows its own promotion
+
+**Removal used to be bookkeeping, and the fleet treated it as one.** Deleting a node's row left the
+Mac holding the group's Fleet token and re-joining on its next start, so "removed" meant "removed
+until it reboots" — and with one shared token there was nothing to revoke, which is why the owner's
+*"i don't want it to rejoin back because i'm either planning to sell the machine or the machine is
+broken"* could not be honoured. Every node is now issued **its own credential at join**, stored
+hashed on the controller and `0600` on the Mac that holds it, and presented on every call that Mac
+makes home. Removal revokes it, records the removal by name and date, and refuses that id for ever
+with a sentence naming the date and where to undo it. Re-admitting is a deliberate action on the
+controller. A machine that was already joined before this release adopts its credential on its next
+join, so the rollout needs no flag day and no node is touched by hand.
+
+**"Leave this group" worked 0% of the time and reported success.** It sends
+`DELETE /api/hub/fleet/nodes/<its own id>` with the credential it holds, and the Fleet allowlist
+refused every such request with a 403 — so the app told the operator it had left *and* told him the
+controller still listed the Mac, which it did. The route now accepts a machine removing **itself**
+and nothing else: a shared group token identifies nobody, so a Fleet-token caller is still refused,
+while a node's own credential may remove exactly the row it owns. The two tests that pinned the old
+403 were updated deliberately, and the native fixture — which answered a stubbed 200, which is why
+this survived a green suite — now answers the real status.
+
+**A cluster now follows its own promotion with nobody touching a node.** Promotion used to mint a
+new Fleet token and leave every node holding a dead one, so replacing a controller meant typing an
+address and a token into each of thirteen Macs. The promoted node mints its **own** group credential
+— never the old controller's — and the **old controller**, while it is still running, is the party
+that hands over: it pushes `{new_controller_url, new_token}` to every Mac in its roster over the
+channel it already has, then retires itself (it keeps its history, stops accepting dispatch, and says
+in its own UI that it handed over to `<M>` on `<date>`). Nodes that could not be reached are named by
+name, with the honest limit stated rather than smoothed over: if the old controller is already dead
+there is no channel to the nodes, and that case is the runbook plus SSH over Tailscale.
+
+**And the Fleet token can be rotated at last.** `peers.sync_fleet_token` existed with no caller and
+no route while the token was shown in the clear on every controller's Connections page, held by every
+member, so a leak could not be undone. `POST /api/hub/fleet` with this Mac's Hub token mints a new one
+and pushes it to every node, verifying each write with the new credential before committing locally,
+and listing by name any Mac that needs the manual path.
+
+**The Fleet page can see who has joined.** `last_seen_at` is stamped for every node that answers a
+probe (batched into one write, so a page refresh is not fifty-three rewrites), the roster publishes the
+machines it has removed, and the joined-nodes rows carry `role`, `studios`, `version`, `joined_at` and
+whether the controller holds a credential for them. A node's green light is now an **authenticated**
+read, so after a controller swap it says *credential refused* rather than showing fifty-two Macs green
+while the controller calls every one unauthorized.
+
+**Two smaller truths, both found the same way.** The Hub published the same Whisper weights twice for
+one Mac — the Subtitle studio and the Voice studio's STT surface both serve them — which became 96
+phantom machine-model rows in the gateway's fleet view; one row per machine-and-model is published
+now, with the folded count published too rather than silently subtracted. And every one of the 30
+model manifests now states its **quantisation** with the sentence saying where it came from, because
+the owner's standing rule is that a model named without its quantisation cannot be checked against
+what he has actually run.
+
+**In the app:** a **node is told it was removed** and stops re-joining instead of retrying for ever; a
+node's own id is exposed; role changes, leaving and removal are confirmed; a "Send here" pin is
+cleared when its machine leaves; and "Send here" is hidden on a Mac that cannot dispatch to the pool.
+
 ## 0.6.91 — 2026-09-28 · The drive index now stamps itself
 
 **A hand-maintained answer to "which build is this?" has been wrong three times.** The ledger has it

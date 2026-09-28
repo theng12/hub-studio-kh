@@ -67,5 +67,7 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/pocket-tts-4bit/tree/59592598c532759d2b66a3d8905a612dcbe8419c?recursive=true&expand=true&limit=100"
       }
     ]
-  }
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/pocket-tts-4bit"
 }

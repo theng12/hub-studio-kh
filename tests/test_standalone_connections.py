@@ -15,6 +15,8 @@ from __future__ import annotations
 from hashlib import sha256
 import io
 import json
+import secrets
+import shutil
 import os
 from pathlib import Path
 import socket
@@ -2357,6 +2359,289 @@ class MultiAddressTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
             finally:
                 hub.stop()
+
+
+class LeavingAndRemovalAreRealTest(unittest.TestCase):
+    """A2 — "leave easily" and "simple node removal", both of which failed 100% before.
+
+    "Leave this group" sent `DELETE /api/hub/fleet/nodes/<own id>` with the Fleet credential and
+    was refused 403 by the allowlist, so the app reported success *and* told the operator the
+    controller still listed the Mac (B2). And a removal on the controller did not stick,
+    because the node still held the group credential and re-joined on its next start (B3).
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="studiohub-leave-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _controller(self, *, controller_id: str = "controller-mac",
+                    joined: list[dict] | None = None) -> "HubProcess":
+        hub = HubProcess(self.root, "controller", token=secrets.token_urlsafe(24),
+                         joined=joined or [])
+        # The controller's own identity, so "this Mac's own id" is a value the test knows.
+        (hub.data / "controller_settings.json").write_text(json.dumps({
+            "version": 2, "role": "controller", "site_id": "site-a", "site_name": "Site A",
+            "controller_id": controller_id, "database_mode": "off",
+            "parent_controller_url": None, "fleet_credential_origin": "minted",
+        }))
+        os.chmod(hub.data / "controller_settings.json", 0o600)
+        hub.start()
+        self.addCleanup(hub.stop)
+        return hub
+
+    def test_a_node_may_leave_by_removing_itself(self) -> None:
+        # **The controller's id and the node's id are deliberately different here.** The first
+        # version of this test gave them the same value, so it passed while the real check
+        # compared the path id against the *controller's* own identity — and a node leaving its
+        # controller was refused 403. Found by a live two-Hub probe, not by that test.
+        hub = self._controller(controller_id="controller-mac")
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        status, payload, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "studio-2", "name": "Studio 2", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        self.assertEqual(status, 201, payload)
+        # **The credential comes back once, and only here.**
+        credential = payload["credential"]
+        self.assertTrue(credential)
+        self.assertNotIn(credential,
+                         (hub.data / "fleet_nodes.json").read_text(encoding="utf-8"))
+        # The group Fleet token cannot remove anything: it identifies nobody, so there is no
+        # honest way to tell "this Mac is leaving" from "this Mac is evicting its neighbour".
+        status, _, _ = hub.request("/api/hub/fleet/nodes/studio-2", method="DELETE",
+                                   token=fleet)
+        self.assertEqual(status, 403)
+        # Leaving is this Mac's own decision: its own id, with the credential it was issued.
+        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-2", method="DELETE",
+                                      token=credential)
+        self.assertEqual(status, 200, body)
+        _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
+        self.assertEqual(listing["summary"]["total"], 0)
+
+    def test_a_node_may_not_remove_a_different_machine(self) -> None:
+        hub = self._controller(controller_id="studio-2")
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        hub.post_json("/api/hub/fleet/nodes",
+                      {"node_id": "studio-3", "name": "Studio 3",
+                       "address": "http://127.0.0.1:9"}, token=fleet)
+        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-3", method="DELETE",
+                                      token=fleet)
+        self.assertEqual(status, 403, body)
+        self.assertIn("only the Mac that holds it", str(body))
+        # The controller owner still may, because the roster is his.
+        status, _, _ = hub.request("/api/hub/fleet/nodes/studio-3", method="DELETE",
+                                   token=hub.token)
+        self.assertEqual(status, 200)
+
+    def test_a_removed_node_is_refused_by_name_and_can_be_re_admitted(self) -> None:
+        hub = self._controller()
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        hub.post_json("/api/hub/fleet/nodes",
+                      {"node_id": "sold-mac", "name": "Sold Mac",
+                       "address": "http://127.0.0.1:9"}, token=fleet)
+        status, _, _ = hub.request("/api/hub/fleet/nodes/sold-mac", method="DELETE",
+                                   token=hub.token)
+        self.assertEqual(status, 200)
+        # It does not come back on its own, even holding the group Fleet token — which is
+        # exactly what a Mac that was switched off during the removal would do on restart.
+        status, refused, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "sold-mac", "name": "Sold Mac", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        self.assertEqual(status, 403, refused)
+        self.assertIn("removed this Mac on", str(refused))
+        self.assertIn("re-admit it from Connections", str(refused))
+        # The removal is published, with the date, so the operator can act on it.
+        _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
+        self.assertEqual(listing["summary"]["removed"], 1)
+        self.assertEqual(listing["removed"][0]["id"], "sold-mac")
+        # Re-admitting is a deliberate owner action, and only then may it join again.
+        status, body, _ = hub.post_json("/api/hub/fleet/nodes/sold-mac/readmit", {},
+                                        token=hub.token)
+        self.assertEqual(status, 200, body)
+        status, again, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "sold-mac", "name": "Sold Mac", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        self.assertEqual(status, 201, again)
+        self.assertTrue(again.get("credential"), "a re-admitted Mac gets a fresh credential")
+
+    def test_a_removed_nodes_own_credential_stops_working(self) -> None:
+        hub = self._controller()
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        _, joined, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "sold-mac", "name": "Sold Mac", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        node_credential = joined["credential"]
+        # Its own credential authenticates the routes a node needs ...
+        status, _, _ = hub.request("/api/hub/fleet/nodes", token=node_credential)
+        self.assertEqual(status, 200)
+        # ... and cannot reach the routes the controller's own credential governs.
+        status, _, _ = hub.request("/api/hub/settings", token=node_credential)
+        self.assertEqual(status, 403)
+        hub.request("/api/hub/fleet/nodes/sold-mac", method="DELETE", token=hub.token)
+        status, _, _ = hub.request("/api/hub/fleet/nodes", token=node_credential)
+        self.assertEqual(status, 401, "a revoked node credential must stop authenticating")
+
+    def test_a_node_cannot_re_admit_itself(self) -> None:
+        hub = self._controller()
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        _, joined, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "sold-mac", "name": "Sold Mac", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        hub.request("/api/hub/fleet/nodes/sold-mac", method="DELETE", token=hub.token)
+        # A revoked credential is not a credential any more, so it is refused as unauthenticated
+        # (401) rather than as a valid-but-forbidden one. Either way it is refused, which is the
+        # property that matters: undoing an eviction is never the removed Mac's decision.
+        status, _, _ = hub.post_json("/api/hub/fleet/nodes/sold-mac/readmit", {},
+                                     token=joined["credential"])
+        self.assertIn(status, (401, 403))
+        # And the group Fleet token, which is still valid, is refused by the allowlist: re-admit is
+        # in neither credential's scope.
+        status, _, _ = hub.post_json("/api/hub/fleet/nodes/sold-mac/readmit", {}, token=fleet)
+        self.assertEqual(status, 403)
+        _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
+        self.assertEqual(listing["summary"]["removed"], 1, "it is still removed")
+
+
+class RotateAndHandOverTest(unittest.TestCase):
+    """A4 and A3 — the owner's decision A, proved between two real Hubs on this Mac.
+
+    `peers.sync_fleet_token` existed with **no caller and no route** (B5), and a promotion used
+    to mint a new Fleet token that left every node holding a dead credential — the only fix
+    being a human typing address and token into each of thirteen Macs (B4). These run a real
+    controller and a real node, so the numbers are the ones a rollout would produce.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="studiohub-handover-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _hub(self, name: str, *, controller_id: str | None = None,
+             role: str = "standalone") -> "HubProcess":
+        hub = HubProcess(self.root, name, token=secrets.token_urlsafe(24))
+        (hub.data / "controller_settings.json").write_text(json.dumps({
+            "version": 2, "role": role, "site_id": f"site-{name}", "site_name": name,
+            "controller_id": controller_id or f"{name}-hub", "database_mode": "off",
+            "parent_controller_url": None, "fleet_credential_origin": "minted",
+        }))
+        os.chmod(hub.data / "controller_settings.json", 0o600)
+        hub.start()
+        self.addCleanup(hub.stop)
+        return hub
+
+    def _join(self, controller: "HubProcess", node: "HubProcess",
+              node_id: str) -> dict:
+        fleet = (controller.data / ".fleet_token").read_text().strip()
+        address = node.base
+        # A node is in `remote_studios()` — and therefore in the push — only for the studios it
+        # reported at join. Saying it runs voice is what makes it a dispatchable peer.
+        status, payload, _ = controller.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": node_id, "name": node_id, "address": address,
+             "studios": [{"id": "voice", "modality": "voice"}]}, token=fleet)
+        self.assertEqual(status, 201, payload)
+        # The node adopts the controller's credential and records whose it is — the same call
+        # the controller makes when it rotates or hands over.
+        node_fleet = (node.data / ".fleet_token").read_text().strip()
+        response = urllib.request.Request(
+            f"{node.base}/api/hub/fleet", method="POST",
+            data=json.dumps({"token": fleet, "controller_url": address}).encode(),
+            headers={"Content-Type": "application/json", "X-Hub-Token": node_fleet})
+        with urllib.request.urlopen(response, timeout=15) as answer:
+            self.assertEqual(answer.status, 200)
+        return payload
+
+    def test_rotating_the_fleet_token_retires_the_old_one_on_every_node(self) -> None:
+        controller = self._hub("controller", role="controller")
+        node = self._hub("node-b")
+        self._join(controller, node, "node-b")
+        old = (controller.data / ".fleet_token").read_text().strip()
+
+        status, body, _ = controller.post_json("/api/hub/fleet", {}, token=controller.token)
+        self.assertEqual(status, 200, body)
+        self.assertTrue(body.get("rotated"))
+        self.assertEqual(body["total"], 1, "the one joined node is in the push")
+        self.assertEqual(body["verified"], 1, body)
+        new = body["token"]
+        self.assertNotEqual(new, old)
+        self.assertEqual((controller.data / ".fleet_token").read_text().strip(), new)
+        # The node holds the new credential and no longer accepts the old one.
+        self.assertEqual((node.data / ".fleet_token").read_text().strip(), new)
+        for token, expected in ((old, 401), (new, 200)):
+            request = urllib.request.Request(
+                f"{node.base}/api/hub/resources?local_only=true",
+                headers={"X-Hub-Token": token})
+            try:
+                with urllib.request.urlopen(request, timeout=15) as answer:
+                    self.assertEqual(answer.status, expected)
+            except urllib.error.HTTPError as exc:
+                self.assertEqual(exc.code, expected)
+
+    def test_handing_over_moves_every_node_and_retires_the_old_controller(self) -> None:
+        old_controller = self._hub("old-controller", role="controller")
+        new_controller = self._hub("new-controller", controller_id="promoted-node")
+        node = self._hub("node-b")
+        self._join(old_controller, node, "node-b")
+        new_token = (new_controller.data / ".fleet_token").read_text().strip()
+
+        status, body, _ = old_controller.post_json(
+            "/api/hub/fleet/handover",
+            {"controller_url": new_controller.base, "token": new_token},
+            token=old_controller.token)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["total"], 1, body)
+        self.assertEqual(body["verified"], 1,
+                         "every node must follow with no manual step: " + json.dumps(body))
+        self.assertEqual(body["handed_over_to"], new_controller.base)
+        # **The node followed.** It now reports to the new controller, holding its credential.
+        self.assertEqual((node.data / ".fleet_token").read_text().strip(), new_token)
+        settings = json.loads((node.data / "controller_settings.json").read_text())
+        self.assertEqual(settings["parent_controller_url"], new_controller.base)
+        self.assertEqual(settings["fleet_credential_origin"], "adopted")
+        # **The old controller is retired**, and says who it handed over to.
+        _, controller_state, _ = old_controller.request("/api/hub/controller",
+                                                        token=old_controller.token)
+        retired = controller_state["settings"]
+        self.assertEqual(retired["handed_over_to"], new_controller.base)
+        self.assertTrue(retired["handed_over_at"])
+        # Retired means it refuses new work rather than serving two controllers at once.
+        # "Retired" is a fact the Hub publishes, not a label: `accepting_customer_jobs` is what
+        # every remote submission path and the Gateway's routing read.
+        self.assertFalse(controller_state["capacity"]["accepting_customer_jobs"],
+                         "a handed-over controller must stop accepting dispatch")
+
+    def test_a_handover_names_the_nodes_that_could_not_be_reached(self) -> None:
+        # The honest limit: a Mac that is off cannot be moved automatically, and the answer
+        # must name it rather than reporting a clean success. Its fallback is SSH over Tailscale.
+        controller = self._hub("controller", role="controller")
+        fleet = (controller.data / ".fleet_token").read_text().strip()
+        controller.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "asleep-mac", "name": "Asleep", "address": "http://127.0.0.1:9",
+             "studios": [{"id": "voice", "modality": "voice"}]},
+            token=fleet)
+        status, body, _ = controller.post_json(
+            "/api/hub/fleet/handover",
+            {"controller_url": "http://127.0.0.1:47873",
+             "token": secrets.token_urlsafe(24)},
+            token=controller.token)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["verified"], 0)
+        self.assertEqual(list(body["machines"]), ["asleep-mac"])
+        self.assertFalse(body["machines"]["asleep-mac"]["ok"])
+        self.assertIn(body["machines"]["asleep-mac"]["status"],
+                      {"unreachable", "failed", "manual"})
+
+    def test_a_public_controller_address_is_refused_for_a_handover(self) -> None:
+        controller = self._hub("controller", role="controller")
+        status, body, _ = controller.post_json(
+            "/api/hub/fleet/handover",
+            {"controller_url": "http://93.184.216.34:47873", "token": secrets.token_urlsafe(24)},
+            token=controller.token)
+        self.assertEqual(status, 400, body)
 
 
 if __name__ == "__main__":

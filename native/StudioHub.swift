@@ -154,6 +154,24 @@ final class StudioController: ObservableObject {
         workspace.onControllerJoined = { [weak self] address in
             self?.rememberController(address)
         }
+        // This Mac's own node credential is a secret with the same lifetime as the membership, so it
+        // is written to the same preferences file — which `save()` writes 0600 in a 0700 directory —
+        // and cleared when this Mac leaves the group.
+        workspace.onNodeCredentialChanged = { [weak self] credential in
+            self?.rememberNodeCredential(credential)
+        }
+        // A rotation, or a leave that mints this Mac's own token, replaces the value the page shows
+        // beside the Copy button — so it is re-read from the Hub's state file rather than cached.
+        workspace.onFleetCredentialChanged = { [weak self] in
+            self?.readFleetToken()
+        }
+        // The live credential, read at the moment a controller read needs it. A rotation pushed to
+        // this Mac's Hub by its controller replaces the token without this app being told, and a
+        // stale value on an authenticated read would report a healthy Mac as refused.
+        workspace.fleetTokenProvider = { [weak self] in
+            self?.readFleetToken()
+            return self?.fleetToken
+        }
         // The pinned release key belongs with the membership the app already persists, and the
         // restart after a verified swap is the same path the restart notice uses.
         workspace.onReleasePublisherKeyChanged = { [weak self] key in
@@ -324,6 +342,7 @@ final class StudioController: ObservableObject {
                             controllerAddress: self.configuration.controllerAddress ?? "",
                             token: self.fleetToken,
                             boundHosts: self.configuration.listenHosts,
+                            nodeCredential: self.configuration.nodeCredential,
                             releasePublisherKey: self.pinnedReleasePublisherKey))
                         guard !Task.isCancelled, !self.stopping, process.isRunning,
                               self.worker === process else { return }
@@ -614,6 +633,17 @@ final class StudioController: ObservableObject {
     func rememberController(_ address: String?) {
         configuration.controllerAddress = address
         readFleetToken()
+        do { try configuration.save() } catch { failure = error.localizedDescription }
+    }
+
+    /// Persist this Mac's own node credential, or clear it when the membership ends.
+    ///
+    /// It is issued once, in the join answer, and never published again: a Mac that loses it has to
+    /// be re-admitted rather than re-read. So it is written with the membership it belongs to —
+    /// `ShellConfiguration.save()` writes the preferences file 0600 in a 0700 directory — and
+    /// cleared by the same actions that leave the group.
+    func rememberNodeCredential(_ credential: String?) {
+        configuration.nodeCredential = credential
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
 

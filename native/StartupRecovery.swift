@@ -131,3 +131,64 @@ struct RejoinRecovery {
         consecutive >= authFailureLimit && !alreadyAnnounced
     }
 }
+
+/// What this Mac says when its controller has removed it, and when the group moves.
+///
+/// These sentences are contracts rather than decoration, so they live here instead of inside a
+/// view: the removal notice has to name the date the *controller* stated and where re-admitting
+/// happens, the handover and rotation results have to name every Mac that did not follow, and the
+/// fallback for those is a written runbook. A `View` cannot be driven by the contract suite; this
+/// can.
+enum FleetCopy {
+    /// The sentence a removed Mac shows, from the controller's own refusal.
+    ///
+    /// Deliberately says three things and no more: who removed it and when (the date the
+    /// controller put in its refusal), that re-admitting is a decision on that controller, and
+    /// that this Mac has stopped — because the failure this replaces was a Mac that kept
+    /// re-joining every five minutes against a decision that had already been made.
+    static func removalNotice(date: String?, address: String) -> String {
+        let machine = address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "this Mac's controller" : "the controller at \(address)"
+        let when = date.map { " on \($0)" } ?? ""
+        return "\(machine.prefix(1).uppercased() + machine.dropFirst()) removed this Mac\(when). "
+            + "Re-admitting it is a decision on that controller: open its Connections page, "
+            + "use Re-admit, then join again from here. This Mac has stopped trying to re-join "
+            + "and no longer holds the group's credential."
+    }
+
+    /// The date out of the controller's refusal, which reads
+    /// `this controller removed this Mac on 2026-09-28; re-admit it from Connections to join again`.
+    ///
+    /// The date is taken from the controller's own words rather than from the moment this app read
+    /// them: it is the day the decision was made, and a Mac that was switched off for a fortnight
+    /// must not report the day it next started.
+    static func removalDate(in detail: String) -> String? {
+        guard let marker = detail.range(of: "removed this Mac on ") else { return nil }
+        let rest = detail[marker.upperBound...]
+        let date = rest.prefix { $0 != ";" && $0 != "." && !$0.isNewline }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return date.isEmpty ? nil : date
+    }
+
+    /// Whether a refusal is a removal rather than a credential this Mac could replace.
+    static func isRemoval(_ detail: String) -> Bool {
+        detail.contains("removed this Mac")
+    }
+
+    /// What an operator has to do about machines a rotation or handover could not reach.
+    ///
+    /// Named rather than implied: `manual` and `unreachable` are both "this Mac did not follow",
+    /// and neither can be fixed from this screen, so the sentence has to say where the fix lives.
+    static let handoverFallback = "Any Mac that did not follow has to be moved by hand: SSH over "
+        + "Tailscale, following gateway-kh/repository/docs/credential-rotation-decision.md."
+
+    /// The lead sentence of a rotation or handover result, or nil when every Mac followed.
+    static func unfinishedNotice(total: Int, verified: Int, manual: Int, pending: Int) -> String? {
+        guard manual > 0 || pending > 0 else { return nil }
+        let followed = "\(verified) of \(total) Mac\(total == 1 ? "" : "s") followed"
+        var needs: [String] = []
+        if manual > 0 { needs.append("\(manual) refused the old credential") }
+        if pending > 0 { needs.append("\(pending) could not be reached") }
+        return "\(followed.capitalized); \(needs.joined(separator: " and ")). " + handoverFallback
+    }
+}

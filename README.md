@@ -168,9 +168,15 @@ curl -s -H "X-Hub-Token: $HUB_TOKEN" http://127.0.0.1:<port>/api/hub/capabilitie
 ```
 
 Routing is unchanged: GatewayKH talks to a location controller, and joined nodes keep their existing
-enrolment and fleet credential. The Hub token and the fleet token are separate scopes and rotate
-independently; rotating one does not disturb the job ledger, and station/controller IDs stay stable
-when a node's address changes. `/api/health` and `/api/version` are public by design and carry no
+enrolment and fleet credential. The Hub token and the fleet token are separate scopes; **rotating the
+fleet token is an owner action with a route** — `POST /api/hub/fleet` with this Mac's Hub token mints
+a new one and pushes it to every joined node, verifying each write with the new credential before
+committing it locally, and naming by name any Mac that could not be reached (its fallback is SSH over
+Tailscale). The Hub token is this Mac's own operator key and is not pushed anywhere. A promotion to
+controller mints a **fresh** group credential rather than keeping the group's old one, which is why
+the cluster follows a handover instead of every node needing the new token typed in by hand.
+Rotating does not disturb the job ledger, and station/controller IDs stay stable when a node's
+address changes. `/api/health` and `/api/version` are public by design and carry no
 private state; everything else requires the credential.
 
 ### Measuring generation speed per machine

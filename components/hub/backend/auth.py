@@ -520,11 +520,16 @@ FLEET_ALLOWED = (
     # A clone reference travels with the job that uses it.
     ("POST", r"^/api/hub/voice-references$"),
     ("GET", r"^/api/hub/voice-references/[^/]+$"),
-    # A fleet member may introduce itself to a controller and see its siblings, but removing
-    # a node is the controller owner's decision.
+    # A fleet member may introduce itself to a controller and see its siblings. **It may also
+    # remove itself, and only itself** — the path id has to be the caller's own, checked in the
+    # route because an allowlist has no idea who is asking. That check is what makes "Leave this
+    # group" work: it used to be a flat 403, so the app reported success while the controller
+    # still listed the Mac (B2), and the operator had to walk to the controller and remove it
+    # again. Removing *another* machine is still the controller owner's decision.
     ("POST", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/overview$"),
+    ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
     # Remote app update: a controller mirrors a signed release and its nodes pull it. Publishing
     # is fleet-reachable because GatewayKH holds only the Fleet token; the signature made with the
     # key the owner installed via POST /api/hub/release/trust is what authorises the release.
@@ -535,6 +540,12 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/release/artifact$"),
     # The controller's publisher public key and fingerprint, so a joining node can pin it.
     ("GET", r"^/api/hub/release/identity$"),
+    # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
+    # statement — here is your new credential, and here is your new head — so they are one route.
+    # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub
+    # token to rotate. A node's own credential is deliberately not in `NODE_ALLOWED`: a leaf Mac
+    # must not re-point itself at a controller of its choosing.
+    ("POST", r"^/api/hub/fleet$"),
 )
 _FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
 
@@ -543,6 +554,80 @@ def fleet_path_allowed(method: str, path: str) -> bool:
     """Whether a fleet credential may use this route. Unknown routes are refused."""
     return any(method == allowed and pattern.match(path)
                for allowed, pattern in _FLEET_ALLOWED)
+
+
+#: What a **node's own credential** may do on its controller, which is much less than the group
+#: Fleet token. A node registers itself, reads the roster it belongs to, and may remove itself.
+#: Everything else the Fleet token can do — submitting work, reading jobs, pulling artifacts,
+#: publishing a release — belongs to the *controller* and the Gateway, and a leaf Mac has no
+#: business doing any of it. Revoking one machine has to mean something (A8): narrowing this
+#: list is what keeps a sold Mac from being a fleet-token holder by another name.
+NODE_ALLOWED = (
+    ("POST", r"^/api/hub/fleet/nodes$"),
+    ("GET", r"^/api/hub/fleet/nodes$"),
+    ("GET", r"^/api/hub/fleet/overview$"),
+    ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
+)
+_NODE_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in NODE_ALLOWED)
+
+
+def node_path_allowed(method: str, path: str) -> bool:
+    """Whether a *node credential* may use this route."""
+    return any(method == allowed and pattern.match(path)
+               for allowed, pattern in _NODE_ALLOWED)
+
+
+def node_origin_allowed(method: str, path: str) -> bool:
+    """Whether a request authenticated as a node may use this route.
+
+    The union of the two lists: a node credential is a fleet credential that can do less, and
+    every route a node credential may use is one the Fleet token may use too. Keeping the
+    check as a union means the node's *own* credential can never be refused a route the shared
+    token is allowed, which would break a node that upgraded to per-node credentials (A8).
+    """
+    return node_path_allowed(method, path) and fleet_path_allowed(method, path)
+
+
+def _fleet_actor(request: Request) -> dict[str, Any]:
+    """Who authenticated this request, in the one shape the routes check.
+
+    `kind` is `"hub"`, `"fleet"` or `"node"`; `node_id` is set only for a node credential. The
+    middleware writes it, and `self_removal_allowed` reads it — the allowlist cannot, because
+    an allowlist does not know who is asking.
+    """
+    return getattr(request.state, "fleet_actor", None) or {"kind": "hub", "node_id": None}
+
+
+def self_removal_allowed(request: Request, node_id: str, *, credential: str = "") -> bool:
+    """Whether this caller may remove `node_id` from this controller's roster.
+
+    Two callers may: **this Mac's own operator** (the Hub token — it owns the machine and the
+    roster), and **the machine itself**. Nobody else. This is the whole of A2's first half:
+    "Leave this group" sends exactly this request with the leaver's own id, so it must succeed,
+    while one Mac must not be able to evict another.
+
+    **Whose identity the path id is compared against is the whole subtlety.** On a node
+    credential the middleware already resolved *which* machine is asking (`actor["node_id"]`),
+    and that is the value to compare — the first version compared against
+    `fleet_nodes.this_machine()`, which on the controller answers the **controller's** own
+    controller_id. So a node leaving its controller was refused 403 for naming itself, and the
+    test that covered it passed only because its fixture happened to give the controller and
+    the node the same id. Found by a live two-Hub probe, not by that test.
+
+    A **Fleet-token** caller is deliberately *not* allowed to remove anything: a shared
+    credential identifies nobody, and there is no honest way to tell "this Mac is leaving" from
+    "this Mac is evicting its neighbour". A node presents the credential it was issued at join
+    (`A8`), so self-removal is always available to the machine that wants it.
+    """
+    actor = _fleet_actor(request)
+    if actor.get("kind") == "hub":
+        return True
+    asked = str(node_id or "").strip().lower()
+    if not asked:
+        return False
+    if actor.get("kind") == "node":
+        return asked == str(actor.get("node_id") or "").strip().lower()
+    return False
 
 
 def _this_machine_name() -> str:
@@ -632,6 +717,7 @@ def make_middleware(token: str):
         offered = presented_token(request)
         if offered is not None:
             if secrets.compare_digest(offered, token):
+                request.state.fleet_actor = {"kind": "hub", "node_id": None}
                 response = await call_next(request)
                 response.set_cookie(COOKIE_NAME, offered, httponly=True,
                                     samesite="strict")
@@ -639,6 +725,27 @@ def make_middleware(token: str):
                 if fleet:
                     response.set_cookie("kh_studio_token", fleet, httponly=True,
                                         samesite="strict")
+                return response
+            # **A node's own credential, checked before the shared token.** Every node is
+            # issued one at join (A8) and presents it on the calls it makes home. The order
+            # matters: if the shared token were tested first, a node whose credential had been
+            # revoked could still get in on the group credential it happens to hold, and
+            # "removed" would not mean anything.
+            actor = _node_actor(offered)
+            if actor is not None:
+                if not node_origin_allowed(request.method, request.url.path):
+                    return JSONResponse(
+                        {"detail": f"{request.method} {request.url.path} was refused by "
+                                   f"{_this_machine_name()}: a node's own credential lets it "
+                                   f"register, read the group it joined and remove itself. "
+                                   f"Sending work and reading another Mac's results needs the "
+                                   f"controller's Fleet token."},
+                        status_code=403,
+                    )
+                request.state.fleet_actor = actor
+                response = await call_next(request)
+                response.set_cookie(COOKIE_NAME, offered, httponly=True,
+                                    samesite="strict")
                 return response
             # Fleet token: lets a controller drive this Mac without holding the credential
             # that owns it. Deliberately narrower than the Hub token - it can send work and
@@ -653,6 +760,7 @@ def make_middleware(token: str):
                                    f"change this Mac's settings or delete its output."},
                         status_code=403,
                     )
+                request.state.fleet_actor = {"kind": "fleet", "node_id": None}
                 response = await call_next(request)
                 response.set_cookie(COOKIE_NAME, offered, httponly=True,
                                     samesite="strict")
@@ -664,3 +772,24 @@ def make_middleware(token: str):
             status_code=401,
         )
     return middleware
+
+
+def _node_actor(offered: str) -> dict[str, Any] | None:
+    """Which joined node this credential belongs to, or `None` if it belongs to none.
+
+    Scans the roster's hashes. There are at most `MAX_NODES` of them and the comparison is a
+    fixed-cost digest, so this stays cheap on the paths that use it — and it is the only way
+    to attribute a request to a machine when the credential is a bearer value rather than an
+    id. No match means the credential is not a node credential at all, and the caller falls
+    through to the shared Fleet token.
+    """
+    try:
+        from . import fleet_nodes
+    except Exception:  # noqa: BLE001 - an unimportable roster refuses, never permits
+        return None
+    digest = fleet_nodes.hash_credential(offered)
+    for node_id, row in fleet_nodes._read().items():
+        stored = str(row.get("credential_hash") or "")
+        if stored and secrets.compare_digest(stored, digest):
+            return {"kind": "node", "node_id": node_id}
+    return None

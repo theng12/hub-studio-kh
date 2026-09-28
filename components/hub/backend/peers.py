@@ -707,12 +707,19 @@ async def sync_owner_password(
 async def sync_fleet_token(
     registry: list[dict], client: httpx.AsyncClient, new_token: str,
     *, local_commit: Callable[[str], None] = set_fleet_token,
+    controller_url: str | None = None,
 ) -> dict:
     """Rotate connected peer Hubs from the current credential to ``new_token``.
 
     Each write is authenticated with the old token, then verified with the new
     one. The local token changes last so a partial failure remains recoverable
     and can be reported as a one-time manual save on that machine.
+
+    **`controller_url` is the same call doing the other half of its job.** A4 rotates the
+    credential in place; A3's handover moves every node to a *different* controller at the same
+    time, and both are "set this Mac's group membership". One route, one push, two callers — so a
+    handover passes a `local_commit` that does nothing (the retiring controller keeps its own
+    credential; it is not joining anyone) and a `controller_url` naming the new head.
     """
     old_token = fleet_token()
     machines = _remote_machines(registry)
@@ -721,10 +728,13 @@ async def sync_fleet_token(
         studio = studios[0]
         url = _peer_url(studio)
         headers = {"X-Hub-Token": old_token} if old_token else {}
+        body: dict[str, object] = {"token": new_token, "sync": False}
+        if controller_url:
+            body["controller_url"] = controller_url
         try:
             response = await client.post(
                 f"{url}/api/hub/fleet", headers=headers,
-                json={"token": new_token, "sync": False}, timeout=PEER_TIMEOUT_S)
+                json=body, timeout=PEER_TIMEOUT_S)
             if response.status_code in {401, 403}:
                 return machine, {"ok": False, "status": "manual",
                                  "detail": "peer rejected the current credential"}

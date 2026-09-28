@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -1427,6 +1428,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         value = str(body.get("token") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", value):
             raise HTTPException(400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
+        # **The node credential comes back with the adoption.** The join answer carries it once
+        # (A8) and only this Mac may keep it, so the app hands it straight back here and the Hub
+        # writes it 0600 where every node-originated call reads it from. Storing it from the app
+        # would mean the app had to know the Hub's data directory, which is the Hub's business.
+        node_credential = body.get("node_credential")
+        if node_credential is not None:
+            fleet.set_node_credential(str(node_credential))
         values: dict[str, Any] = {}
         # Which controller was joined, recorded with the credential it came from. Always written,
         # never left at its previous value: an adoption that does not name a controller leaves this
@@ -1464,8 +1472,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         a controller must not be able to un-join a node, because leaving is the Mac owner's
         decision and the local Hub token never leaves this machine.
         """
+        from .backend import fleet_nodes as fleet
         from .backend import peers
         peers.set_fleet_token("")
+        # **The credential the old controller issued goes too.** A Mac that is leaving — or being
+        # sold — must not keep a working key to the group it just left, and the app cannot delete
+        # it because the file is the Hub's own business (`0600`, in the Hub's data directory).
+        # Found by the native work: the app cleared its copy and the Hub's stayed, which is inert
+        # after leaving but is exactly the wrong thing to find on a Mac in someone else's hands.
+        fleet.set_node_credential(None)
         control_plane.save_settings({
             "fleet_credential_origin": "minted",
             "role": "standalone",
@@ -1474,25 +1489,179 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return {"ok": True, "left": True}
 
     @app.post("/api/hub/fleet/nodes", status_code=201)
-    async def fleet_join(body: dict[str, Any]) -> dict[str, Any]:
+    async def fleet_join(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        from .backend import auth as hub_auth
         from .backend import fleet_nodes as fleet
         try:
-            node = fleet.join(body)
+            joined = fleet.join(body, actor=hub_auth._fleet_actor(request))
+        except fleet.NodeRemovedError as exc:
+            # **403, not 400.** The asking Mac is well formed and known by name; it is refused
+            # on purpose, and the app stops its re-join loop on this status instead of retrying
+            # every five minutes for ever against a decision that was already made.
+            raise HTTPException(403, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         # A node that just joined has to enter this controller's dispatch registry now.
         # The registry is otherwise loaded once at startup, so without this the node was
         # listed as reachable but no work routed to it until the Hub was restarted.
         monitor.reload_registry()
-        return {"node": node}
+        # `credential` travels back to the joining Mac **once**, in this answer, and is never
+        # published on any read route. The caller stores it 0600 in its own data dir and
+        # presents it on every later call home (A8).
+        return joined
 
     @app.delete("/api/hub/fleet/nodes/{node_id}")
-    async def fleet_leave(node_id: str) -> dict[str, Any]:
+    async def fleet_leave(node_id: str, request: Request) -> dict[str, Any]:
+        """Remove a node from this controller — and make the removal stick.
+
+        Two callers, and the difference is who is asking (A2): this Mac's own operator with the
+        Hub token (any node), and a Mac removing **itself** with the Fleet or node credential it
+        holds. Before this the route refused every fleet credential outright, so "Leave this
+        group" reported success while the controller still listed the Mac — and a node removed
+        here re-joined on its next start, because nothing had been revoked (B2, B3).
+
+        Removal is an **eviction**: the node credential goes with the row and the id is recorded
+        as removed, so `join` refuses it by name until someone re-admits it deliberately.
+        """
+        from .backend import auth as hub_auth
         from .backend import fleet_nodes as fleet
-        if not fleet.leave(node_id):
+        offered = hub_auth.presented_token(request) or ""
+        actor = hub_auth._fleet_actor(request)
+        if not hub_auth.self_removal_allowed(request, node_id, credential=offered):
+            raise HTTPException(
+                403,
+                f"a fleet credential may remove only the Mac that holds it. Removing "
+                f"'{node_id}' from this controller is the owner's decision: use this "
+                f"controller's Hub token, or let that Mac leave from its own Connections page.")
+        removed = fleet.remove(node_id,
+                               by="operator" if actor.get("kind") == "hub" else str(node_id))
+        if removed is None:
             raise HTTPException(404, "unknown node")
         monitor.reload_registry()
-        return {"ok": True}
+        return {"ok": True, "removed": removed}
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/readmit")
+    async def fleet_readmit(node_id: str) -> dict[str, Any]:
+        """Undo an eviction: allow this id to join again.
+
+        Deliberately Hub-token only — it is in neither credential's allowlist. Re-admitting a
+        machine the owner removed is a decision about a Mac he may already have sold, and a
+        node must never be able to undo its own removal.
+        """
+        from .backend import fleet_nodes as fleet
+        row = fleet.readmit(node_id)
+        if row is None:
+            raise HTTPException(404, "that machine is not on this controller's removed list")
+        return {"ok": True, "readmitted": row}
+
+    @app.post("/api/hub/fleet")
+    async def fleet_membership(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        """**Set this Mac's group membership** — one route, two callers, two scopes.
+
+        *With this Mac's Hub token* (the operator, on the controller whose credential this is):
+        **rotate the Fleet token**. A4: the rotation code has existed in `peers.sync_fleet_token`
+        since before the audit with no caller and no route, while the token was shown in the clear
+        on every controller's Connections page, held by every member and by GatewayKH — so a leak
+        could not be undone. Minting here and pushing to every node is what makes it undoable.
+
+        *With the Fleet token* (a controller, pushing to a node): **adopt the group this Mac
+        belongs to** — the new credential and, for a handover, the new controller's address. This
+        is the write A3's promotion needs and A4's rotation needs; they are the same statement,
+        which is why they are the same route.
+
+        Deliberately **Hub-token or Fleet-token only**. A node's own credential is not in the
+        allowlist: a leaf Mac must not be able to re-point itself at a controller of its choosing,
+        and it must not be able to rotate the group credential either.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        from .backend import peers
+        actor = hub_auth._fleet_actor(request)
+        operator = actor.get("kind") == "hub"
+        value = str(body.get("token") or "").strip()
+        if value and not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", value):
+            raise HTTPException(
+                400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
+
+        if not operator:
+            # A controller is telling this Mac where its group is. Adopting records *which*
+            # controller, because the credential is only half of a membership: a Mac holding a
+            # token with nowhere to send it cannot name its own pool.
+            address = body.get("controller_url")
+            if address is not None and str(address).strip():
+                try:
+                    controller_url = fleet.validate_address(address)
+                except ValueError as exc:
+                    raise HTTPException(400, f"controller_url {exc}") from exc
+            else:
+                controller_url = control_plane.load_settings().get("parent_controller_url")
+            peers.set_fleet_token(value)
+            # The credential this Mac was issued by its previous controller is that
+            # controller's record, not the new one's: clearing it means the new controller
+            # issues its own on the next join, and the old one cannot be replayed.
+            fleet.set_node_credential(None)
+            control_plane.save_settings({
+                "fleet_credential_origin": "adopted",
+                "parent_controller_url": controller_url,
+                "role": "agent",
+            })
+            return {"ok": True, "adopted": True, "controller_url": controller_url}
+
+        # Rotate. The local credential changes only after every push has been attempted, so a
+        # partial failure leaves this controller working and names the Macs that need the
+        # fallback rather than locking the group out.
+        new_token = value or secrets.token_urlsafe(24)
+        registry = fleet.remote_studios()
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            result = await peers.sync_fleet_token(registry, client, new_token)
+        return {"ok": True, "rotated": True, "token": new_token, **result}
+
+    @app.post("/api/hub/fleet/handover")
+    async def fleet_handover(body: dict[str, Any]) -> dict[str, Any]:
+        """**Hand this group over to a promoted node, while every node can still be reached.**
+
+        The owner's decision A, and the reason the *old controller* performs the handover: it is
+        the only party every node already trusts and can reach. It pushes
+        `{new_controller_url, new_token}` down the channel it already has, so thirteen Macs follow
+        a promotion with **zero touches per node**, and then retires itself.
+
+        **The honest limit is in the answer, not only in a document.** If a node cannot be
+        reached, this says so by name: an automatic handover is impossible for a Mac that is off,
+        and the fallback is the runbook and SSH over Tailscale
+        (`gateway-kh/repository/docs/credential-rotation-decision.md`). `reachable: false` here is
+        an operator task, never a silent success.
+
+        Hub-token only, and deliberately so: a node must not be able to hand the group to a
+        controller of its choosing.
+        """
+        from .backend import fleet_nodes as fleet
+        from .backend import peers
+        address = body.get("controller_url")
+        try:
+            controller_url = fleet.validate_address(address)
+        except ValueError as exc:
+            raise HTTPException(400, f"controller_url {exc}") from exc
+        new_token = str(body.get("token") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", new_token):
+            raise HTTPException(
+                400, "a fleet token is 24 or more letters, numbers, dashes or underscores")
+        registry = fleet.remote_studios()
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            result = await peers.sync_fleet_token(
+                registry, client, new_token,
+                # **The retiring controller keeps its own credential.** It is not joining the new
+                # group; it is leaving. Rotating its own token here would break the one thing it
+                # still has to do — answer the operator while he removes it from the Gateway.
+                local_commit=lambda _token: None,
+                controller_url=controller_url,
+            )
+        control_plane.save_settings({
+            "handed_over_to": controller_url,
+            "handed_over_at": time.time(),
+        })
+        return {"ok": True, "handed_over_to": controller_url,
+                "handed_over_at": control_plane.load_settings().get("handed_over_at"),
+                **result}
 
     # ── remote app-update release (controller side) ────────────────────────
     # GatewayKH pushes a signed release; this Mac verifies and mirrors it, and
@@ -1804,8 +1973,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if (not control_plane.accepts_customer_jobs()
                 and not auth.presented_owner_token(request, token)):
             raise HTTPException(
-                409, "This Hub is in agent mode, so a controller submits work here. This Mac's "
-                     "own app can still run work locally with this Mac's Hub token.")
+                409, control_plane.refusal_for_remote_work())
         client_request_id = envelope.get("clientRequestId")
         replay = (next((batch for batch in broker.batches.values()
                        if batch.get("client_request_id") == client_request_id), None)
@@ -1980,8 +2148,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if (not control_plane.accepts_customer_jobs()
                 and not auth.presented_owner_token(request, token)):
             raise HTTPException(
-                409, "This Hub is in agent mode, so a controller submits work here. This Mac's "
-                     "own app can still run transcription locally with this Hub token.")
+                409, control_plane.refusal_for_remote_work())
         parsed, routing_error = routing_rule.parse(routing)
         if routing_error:
             raise HTTPException(400, routing_error)

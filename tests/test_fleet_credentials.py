@@ -98,7 +98,6 @@ class FleetPermissionTests(unittest.TestCase):
             ("PUT", "/api/hub/memory/policy"),
             ("POST", "/api/hub/memory/release"),
             # Membership: a fleet member may introduce itself, not evict others.
-            ("DELETE", "/api/hub/fleet/nodes/studio-2"),
             # Anything nobody has classified yet.
             ("POST", "/api/hub/there-is-no-such-route"),
             ("GET", "/api/hub/there-is-no-such-route"),
@@ -116,6 +115,14 @@ class FleetPermissionTests(unittest.TestCase):
             ("PATCH", "/studio/voice/api/settings"),
             ("PATCH", "/studio/voice/api/voices/voice-1/audio"),
             ("PATCH", "/studio/image/api/voices/voice-1"),
+            # **Removing a node left this list deliberately, in 0.6.92 (A2).** The
+            # allowlist refused every fleet credential outright, which made "Leave this
+            # group" a 100% failure: the app reported success while the controller still
+            # listed the Mac. The route is now reachable and the *self*-check lives in
+            # the handler (`auth.self_removal_allowed`), because an allowlist has no
+            # idea who is asking. **Removing a different machine is still refused** —
+            # `test_standalone_connections.LeavingAndRemovalAreRealTest` pins both
+            # halves against a running Hub.
         ):
             with self.subTest(method=method, path=path):
                 self.assertFalse(fleet_path_allowed(method, path),
@@ -133,9 +140,13 @@ class FleetPermissionTests(unittest.TestCase):
         # Reading the memory policy is useful for routing; changing it is not the controller's.
         self.assertTrue(fleet_path_allowed("GET", "/api/hub/memory/policy"))
         self.assertFalse(fleet_path_allowed("PUT", "/api/hub/memory/policy"))
-        # A node may list the fleet but not remove members.
+        # A node may list the fleet, and may *reach* the removal route — allowed here because
+        # the id it names is checked against the caller's own identity in the route, which this
+        # function cannot see. Pressing it about another Mac is still refused, one layer in.
         self.assertTrue(fleet_path_allowed("GET", "/api/hub/fleet/nodes"))
-        self.assertFalse(fleet_path_allowed("DELETE", "/api/hub/fleet/nodes/other"))
+        self.assertTrue(fleet_path_allowed("DELETE", "/api/hub/fleet/nodes/other"))
+        self.assertFalse(fleet_path_allowed("DELETE", "/api/hub/fleet/nodes/other/readmit"),
+                         "re-admitting a removed Mac is the owner's decision and stays out")
 
     def test_a_path_that_merely_starts_the_same_is_not_granted(self) -> None:
         # Prefix walking is the classic way an allowlist is defeated.

@@ -3,8 +3,12 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.91** (the drive index stamps itself; the kits are current, 2026-09-28).
+Last updated: **0.6.92** (the fleet work: per-node credentials and permanent eviction, promotion with a live handover, Fleet-token rotation, members and last-seen on the Connections page, quantisation on every manifest — 2026-09-28).
 
+> **0.6.92 — the fleet work has landed. Start with the `## 0.6.92` section below** (per-node
+> credentials so a removal sticks, promotion with a handover the cluster follows on its own, Fleet
+> token rotation, and the Connections page showing who has joined and when each Mac was last seen).
+>
 > **0.6.91 — the distribution kits are current, and their index documents can no longer drift.**
 >
 > **Every drive is at 0.6.91 and every verifier says PASS.** `verify-kit.sh` on each volume reports
@@ -1173,6 +1177,102 @@ in `native/StudioAPI.swift` (`blockReason` no longer returns the warning; the wo
 `FLUX.2 Klein 4B MLX 4-bit`. Native boundary/API/lifecycle suites and 14/14 Image tests
 pass. If a future change wants the tier to gate dispatch, it must do it in the worker or the
 Hub's admission — never in the app's `blockReason`.
+
+## 0.6.92 — the fleet work: removal that sticks, a cluster that follows its own promotion, and a token that can be rotated
+
+**Read this section before touching the fleet routes.** Everything below is in this release and
+measured; the receipts are in `qualification/` and the gateway's own receipts are in
+`gateway-kh/repository/qualification/`.
+
+### What changed, and why each one was load-bearing
+
+1. **Per-node credentials (A8).** Every join mints a credential for *that* node; the controller
+   stores only its SHA-256 in the roster row and returns the value once, in the join answer. The
+   node stores it `0600` (`<data>/.node_credential`) and presents it on every call home. The shared
+   Fleet token keeps exactly two jobs: **enrolment** and the controller↔Gateway direction. This is
+   what makes an eviction real, and it is the prerequisite of removal meaning anything.
+   **Backwards compatible:** a node that joins with only the Fleet token is issued its own
+   credential on that first join, so the rollout needs no flag day. `POST /api/hub/fleet/adopt`
+   accepts `node_credential` and writes it for the app.
+2. **Removal is an eviction (A2, the owner's decision B).** `remove()` drops the row *and* the
+   credential hash and records the id, name, address, date and who removed it in `fleet_nodes.json`.
+   `join()` refuses a removed id **by name** with *"this controller removed this Mac on <date>;
+   re-admit it from Connections to join again"* (`NodeRemovedError`, HTTP **403**). Re-admitting is
+   `POST /api/hub/fleet/nodes/<id>/readmit`, Hub-token only. The old two-step 403 is gone: a node
+   may remove **itself** with its own credential, and a Fleet-token caller may remove nothing
+   (a shared credential identifies nobody).
+3. **Promotion and handover (A3, the owner's decision A).** Promotion already minted a fresh group
+   credential; it now also clears the borrowed node credential. `POST /api/hub/fleet/handover`
+   (Hub token) takes `{controller_url, token}` and pushes the new head to every node over the
+   channel the controller already has, using `peers.sync_fleet_token` — which is the same mechanism
+   A4's rotation needs, so there is one push and two callers. The old controller records
+   `handed_over_to`/`handed_over_at` and **stops accepting dispatch**: `accepts_customer_jobs()`
+   returns false, every remote submission is refused with a sentence naming the new head, and
+   `refusal_for_remote_work()` is one function so the two submission routes cannot drift.
+   **The honest limit is in the answer, not only in a document:** a node that cannot be reached is
+   named in `machines`, `verified` counts what actually moved, and there is no silent success.
+4. **Rotate the Fleet token (A4).** `POST /api/hub/fleet` with this Mac's **Hub token** mints a new
+   token, pushes it to every node with `sync_fleet_token`, and verifies each write with the *new*
+   credential before committing locally; `manual` counts the Macs that need SSH over Tailscale.
+   The same route with the **Fleet token** is how a controller tells a node its group membership —
+   one route, two scopes, deliberately.
+5. **Members, last seen and honest lights (B1/B4/B2).** `last_seen_at` is stamped for every node
+   that answered a probe, in **one batched write** per fleet read (`note_seen` returns the stamp and
+   the caller sets it on the rows it is about to publish, so the read that caused the stamp reports
+   it). `inventory()` publishes `removed[]` and `summary.removed`, and every node row carries
+   `has_credential` and `credential_issued_at`. The node's health light is an authenticated read
+   that uses the **Fleet token** (the only credential `/api/hub/resources` accepts from a node), and
+   a refused credential reads differently from an unreachable Mac.
+6. **Whisper is published once per machine (M9).** The Subtitle studio and the Voice studio's STT
+   surface serve the same weights; the aggregate catalogue published both, which was 96 phantom
+   machine-model rows in the gateway's fleet view. De-duplicated on `(machine, model identity)`,
+   with `duplicate_rows_folded` published rather than silently subtracted.
+7. **Quantisation on every manifest (M14).** All 30 manifests carry `quantization` **and**
+   `quantization_source` — the value read from the identifier the publisher chose, or `null` with
+   the reason when no precision is stated. `capture_model_manifests.py` preserves both across a
+   re-capture, and `tests/test_model_manifest_catalog.py`'s frozen digests were refreshed because
+   the manifest content genuinely changed.
+8. **Documentation truths (C7).** `docs/gatewaykh-handoff-0.6.63.md` documented a **two-step** join
+   and omitted `POST /api/hub/fleet/adopt`, which is why a scripted enrolment produced Macs the
+   controller calls `unauthorized`; it now states all three steps and what the node must keep. The
+   README's "rotate independently" claim names the route that does it.
+9. **In the app (A2/B2/B4/H12/A3/A4/C6).** Removal is terminal in the UI: the re-join loop stops,
+   the group credential is dropped, and the page keeps the controller's own sentence. A node's own
+   `controller_id` is exposed. Role changes, leave and remove are confirmed. A "Send here" pin is
+   cleared when its machine leaves and hidden on a Mac that cannot dispatch to the pool. Promote,
+   Hand over and Rotate each report the Hub's per-Mac answer, and a partial result is never shown
+   as success.
+
+### New and changed routes (all additive)
+
+| Route | Credential | What it does |
+|---|---|---|
+| `POST /api/hub/fleet/nodes` | Hub, Fleet (enrolment) | Join. Returns `{"node", "credential"}`; **403 by name** for a removed id; refuses a silent takeover of an id that already holds a credential |
+| `DELETE /api/hub/fleet/nodes/<id>` | Hub (any id), node credential (own id only) | Remove. Hub-token removal is an **eviction**; self-removal is "leave this group" |
+| `POST /api/hub/fleet/nodes/<id>/readmit` | Hub only | Undo an eviction |
+| `POST /api/hub/fleet` | Hub (rotate) / Fleet (set membership) | One route, two scopes |
+| `POST /api/hub/fleet/handover` | Hub only | Push the new head to every node and retire this controller |
+| `POST /api/hub/fleet/adopt` | Hub only | Now also stores `node_credential` when the app hands it back |
+
+### Traps this release created or confirmed
+
+- **A revoked credential is `401`, not `403`.** After a removal the node's credential matches no
+  roster row, so it is simply not a credential any more. The app's re-join therefore presents its
+  own credential first and retries **once** with the Fleet token, which is the only way to hear the
+  removal sentence (403). Both statuses are deliberate.
+- **`fleet_nodes.json` changed shape** to `{"version": 2, "nodes": {...}, "removed": {...}}`. The
+  old flat `{node_id: row}` file is still read (and upgraded on the next write), so a controller
+  keeps its fleet across the update; a row from before credentials reads as "the next join must
+  prove itself", never as "trusted".
+- **Two tests were updated deliberately, not deleted.** `tests/test_fleet_credentials.py` pinned a
+  flat 403 on the removal route and `tests/test_standalone_connections.py` pinned the same refusal;
+  both encode the old decision, both now state the new one, and the route-level tests were rewritten
+  so the controller and the node have **different** ids — the first version gave them the same id,
+  which is why it was green while every real leave was refused.
+- **The native fixture answered a stubbed 200** for the removal call, which is why a 100%-broken
+  action survived its own suite. It now answers by host and credential and serves the removal
+  sentence where the real Hub serves it.
+
 
 ## Where things stand
 

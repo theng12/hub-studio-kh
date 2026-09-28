@@ -284,8 +284,22 @@ No new work needed, and here is the exact sequence for the install flow:
    owner-only by design — a remote caller cannot point a Mac at a controller.
 2. `POST /api/hub/fleet/nodes` on the **controller**, with the Fleet token. This one is
    fleet-reachable, so a node can introduce itself.
+3. `POST /api/hub/fleet/adopt` on the **node's own Hub**, with the node's **Hub token**, body
+   `{"token": "<the controller's Fleet token>", "controller_url": "http://<controller>:47873"}`.
+   **This step is not optional and it was missing here** (M22): a Mac that stops after step 2 is
+   listed on the controller as `unauthorized`, because every Hub mints its own fleet credential
+   and the controller will not send work to a Mac whose peer snapshot it cannot trust. A
+   scripted enrolment that skipped it produced exactly that.
 
-The app's own Join button is a UI over those two steps, not a separate mechanism.
+The app's own Join button is a UI over those three steps, not a separate mechanism.
+
+**What the controller returns, and what the node must keep.** Step 2's answer carries
+`{"node": {...}, "credential": "<this Mac's own>"}`. That credential is issued once, is stored
+hashed on the controller, and is what this Mac presents on every later call home — the shared
+Fleet token only enrols it. A scripted enrolment should hand it to step 3 as
+`"node_credential"` in the same adopt body, or write it `0600` to `<data>/.node_credential`,
+which is where the Hub reads it from. A Mac that loses it has to be re-admitted from the
+controller's Connections page.
 
 ### What we did not build — your ask 5, partly
 

@@ -81,5 +81,7 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-4bit/tree/dc9e5c187858da5f4a13dc4c247e297339216381?recursive=true&expand=true&limit=100"
       }
     ]
-  }
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/VoxCPM2-4bit"
 }

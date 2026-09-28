@@ -2,6 +2,44 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.92 — 2026-09-28
+
+### Removing a Mac now means it is gone
+
+When you remove a Mac from a group, it stays removed. It cannot re-join itself, not even after a
+restart, and the controller says so by name and date if it ever asks again. That matters because you
+remove machines to sell them: every Mac in a group now carries its **own** key rather than one shared
+key, so removing one machine takes that machine's key away and leaves everyone else's alone. If you
+change your mind, re-admit it from Connections and it can join again. Macs you already have joined
+keep working — each one picks up its own key the next time it joins.
+
+### Leaving a group actually works now
+
+*Leave this group* used to fail every single time — the controller refused it — while the app
+reported success and told you to go and remove the Mac by hand. It works now, and a Mac can only ever
+remove itself.
+
+### Replacing a controller no longer means visiting every Mac
+
+Promote one of the Macs to controller, then use **Hand over to…** on the old controller. Every node
+in the group is told where the new controller is, so **nobody has to touch the other Macs**. The old
+controller keeps its history, stops taking new work, and shows that it handed over and to whom. If a
+Mac was switched off at the time, it is named in the result so you know which one needs the manual
+route — and if the old controller is already dead, there is no way to tell the nodes automatically,
+which the app says plainly rather than failing quietly.
+
+### The Fleet token can be rotated
+
+The group's Fleet token could never be changed, even though it is shown on screen and held by every
+Mac — so a leak could not be undone. **Rotate Fleet token** mints a new one and hands it to every
+node, and names any Mac it could not reach.
+
+### You can see who has joined
+
+The Connections page now shows each joined Mac's role, studios, version, when it joined and when it
+was **last seen**, and it tells you when a controller is refusing a Mac's credential instead of
+showing a green light that means nothing.
+
 ## 0.6.91 — 2026-09-28
 
 ### The drive's version label writes itself now

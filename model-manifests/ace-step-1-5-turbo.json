@@ -355,5 +355,7 @@
         "https://huggingface.co/ACE-Step/Ace-Step1.5/resolve/19671f406d603126926c1b7e2adc169acbcade22/vae/diffusion_pytorch_model.safetensors"
       ]
     }
-  ]
+  ],
+  "quantization": null,
+  "quantization_source": "the publisher's model id states no quantisation (ACE-Step/Ace-Step1.5); this package is published unquantised or its precision is unstated"
 }
