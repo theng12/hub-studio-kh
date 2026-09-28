@@ -1,6 +1,6 @@
 # GatewayKH — the coordinator
 
-**Version 0.2.2.** Installer: `installers/gateway-kh-0.2.2-b1c0d8f-202609221617-arm64.dmg`
+**Version 0.2.67.** Installer: `installers/gateway-kh-0.2.67.dmg`
 
 ## What it is for
 
@@ -19,9 +19,13 @@ It does **not** generate anything, so it needs no GPU and very little memory. It
 on a small always-on Mac. It never talks to a Studio Hub **node** — only to controllers —
 and it cannot join or unjoin a Mac.
 
+> **The version and the installer filename below are stamped on the drive**, not read from this
+> file: `packaging/kit_stamp_index.py` rewrites both from the `.dmg` actually sitting in
+> `installers/`. What is written here only has to be sensible for a reader of the repository.
+
 ## Install
 
-1. Open `installers/gateway-kh-0.2.1-722e1f3-202609221240-arm64.dmg`.
+1. Open `installers/gateway-kh-0.2.67.dmg`.
 2. Drag **gateway-kh** into **Applications**.
 3. It is ad-hoc signed, so the first launch needs **right-click → Open**, or:
    `xattr -dr com.apple.quarantine /Applications/gateway-kh.app`

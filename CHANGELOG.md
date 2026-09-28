@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.95 — 2026-09-28 · The drive's instructions now describe the drive
+
+**0.6.94 stamped the index and stopped there, and the same defect was waiting four lines below it.**
+On the three drives prepared today the version *line* said Story Studio 1.4.235 — and the install
+step three lines down still said *"Open `Story Studio KH 1.4.219-arm64.dmg`"*, a file that had just
+been moved to `_trash`. The Gateway kit was worse: its `CHECKLIST.md`, `01-gateway-host.md` and
+`README.md` all named `gateway-kh-0.2.44.dmg`, and its tracked sources were older still — Story
+**1.4.219**, GatewayKH **0.2.2**. Anyone following those steps fails at step one.
+
+`packaging/kit_stamp_index.py` now rewrites **every backticked `*.dmg`** in an app's documents from
+the installer that is actually in its folder, plus the document's own `**Version x.y.z.**` sentence.
+The rule that identifies "this app's installer" cuts a filename **at its version** rather than at its
+first hyphen — the Gateway's is `gateway-kh-0.2.67.dmg` (hyphen inside the name) and Story's is
+`Story Studio KH 1.4.235-arm64.dmg` (version mid-name), and only cutting at the version handles both
+without knowing which app it is looking at. A document may still mention another app's DMG, or a
+checksum file, without being touched.
+
+**And the copy step now runs the app you installed.** Both the launcher and the helper searched for
+`Studio Hub.app` **beside themselves first**, so a Mac that had just run step 1 still executed the
+interpreter from the kit's bundle on the removable drive and read *its* manifests. That is slower,
+breaks if the drive is unplugged mid-copy, and leaves two different answers to "which app is this?"
+— the launcher's and the helper's. Both now prefer `/Applications`, then `~/Applications`, then the
+kit's copy as the fallback for a Mac with nothing installed; the launcher passes the bundle it chose
+to the helper as `STUDIOHUB_APP_ROOT`, so the interpreter and the manifests come from one bundle or
+the change fails loudly.
+
+**That last fix exposed a hole in the tests, which is worth recording.** Six of them went red the
+moment the order changed, because they built a fixture bundle and the helper had been finding the
+owner's **real** `/Applications/Studio Hub.app` all along — reading thirty manifests from this Mac
+against a fixture's library. A test coupled to a live install is not a test; they set
+`STUDIOHUB_APP_ROOT` now.
+
 ## 0.6.94 — 2026-09-28 · The kit index names the versions the drive actually carries
 
 **Preparing the three drives for this round turned up the same defect a fourth time.** The kit's

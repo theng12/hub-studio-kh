@@ -34,11 +34,18 @@ for spot in "$HERE/Technical/copy_models_for_this_mac.py" "$HERE/copy_models_for
 done
 
 PY=""
+# **The installed app first, the copy in this kit last.** It used to be the other way round, so a
+# Mac that had just run step 1 still executed the interpreter inside the *kit's* bundle — from a
+# removable drive, which is slower, breaks if the drive is unplugged mid-copy, and puts a second
+# copy of "Studio Hub" in front of macOS when the one that matters is the installed one. The kit's
+# copy stays as the fallback for the one case it is for: this step on a Mac where the app is not
+# installed yet.
+#
 # The bundle's name deliberately carries no version (`packaging/stage_voice.py` installs it as
 # "Studio Hub.app"), so there is no pinned name to fall back to: a version-pinned candidate could
 # only ever be dead weight, or worse, an older copy left beside a newer one.
-for app in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app" \
-           "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
+for app in "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app" \
+           "$HERE/Studio Hub.app" "$KIT/Studio Hub.app"; do
   if [ -x "$app/Contents/Resources/runtimes/voice/bin/python3" ]; then
     PY="$app/Contents/Resources/runtimes/voice/bin/python3"; break
   fi
@@ -61,4 +68,8 @@ if [ -z "$PY" ]; then
   exit 1
 fi
 
-exec "$PY" "$HELPER"
+# The helper picks the app bundle itself, and it must pick the same one this launcher took the
+# interpreter from — otherwise the manifests it reads and the runtime that runs them come from two
+# different bundles. Passing it explicitly is what makes the two answers one answer.
+APP_ROOT="${PY%/Contents/Resources/runtimes/voice/bin/python3}"
+STUDIOHUB_APP_ROOT="$APP_ROOT" exec "$PY" "$HELPER"

@@ -477,9 +477,23 @@ def main() -> int:
     # The staged bundle deliberately carries no version in its name (`packaging/stage_voice.py`),
     # so there is no version to pin: a pinned fallback would only ever be dead weight or, worse,
     # find an old copy left beside a new one.
-    for candidate in (kit / "Studio Hub.app",
-                      Path("/Applications/Studio Hub.app"),
-                      Path.home() / "Applications/Studio Hub.app"):
+    # **The installed app first, the kit's copy last** — the manifests that decide what fits this
+    # Mac must be the ones the app that will run them actually reads, not the ones on a removable
+    # drive that may be an update ahead, or behind.
+    #
+    # `STUDIOHUB_APP_ROOT` is honoured first and exists for two reasons: the launcher can hand the
+    # helper the exact bundle it picked for the interpreter, so the two cannot choose differently,
+    # and a test can point it at a fixture. **Without it these tests read the owner's real
+    # `/Applications/Studio Hub.app`** — they did, silently, and started failing the moment the
+    # search order changed, which is what a test coupled to a live install does.
+    override = os.environ.get("STUDIOHUB_APP_ROOT", "").strip()
+    candidates = []
+    if override:
+        candidates.append(Path(override))
+    candidates += [Path("/Applications/Studio Hub.app"),
+                   Path.home() / "Applications/Studio Hub.app",
+                   kit / "Studio Hub.app"]
+    for candidate in candidates:
         if (candidate / "Contents/Resources/model-manifests").is_dir():
             app_root = candidate
             break

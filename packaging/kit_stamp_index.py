@@ -25,6 +25,15 @@ It also copies the kit's own `README.md` over the drive-root copy when one exist
 were the same 130-line document at different ages — the root one dated 2026-09-26 and naming Story
 **1.4.219** while the kit beside it carried 1.4.234 — which is what a second copy with no check
 looks like after a few releases.
+
+**And it rewrites the installer filenames in the instructions, which is the defect that followed.**
+Stamping the version *line* was not enough: the same documents say *"Open
+`Story Studio KH 1.4.219-arm64.dmg`"* further down, because that filename was copied in by hand and
+nothing derived it. On the three drives prepared on 2026-09-28 those steps pointed at installers
+that had just been moved to `_trash` — an operator following the checklist would fail at step one.
+So every backticked `*.dmg` in the kit's own text documents is rewritten from the installer that is
+actually in that app's folder. A document that names a file beside it should be told that file's
+name, not remember one.
 """
 from __future__ import annotations
 
@@ -94,6 +103,13 @@ def stamp(drive: Path) -> int:
         else:
             print(f"GatewayKH     -> {gateway_version}   ({gateway.name})")
 
+    if not problems:
+        # A separate count: `problems` is the list of *reasons it refused*, and a folder it could
+        # not stamp belongs in it as a reason, not as a number added to a list.
+        unstampable = stamp_documents(drive)
+        if unstampable:
+            problems.append(f"{unstampable} app folder(s) had no installer to read")
+
     if problems:
         # **Nothing is written when anything is unclear.** A half-stamped index is worse than the
         # stale one it replaced, because it looks current.
@@ -111,6 +127,101 @@ def stamp(drive: Path) -> int:
         shutil.copyfile(index, root_copy)
         print(f"refreshed the drive-root copy: {root_copy}")
     return 0
+
+
+    raise SystemExit(stamp(Path(sys.argv[1])))
+
+#: The text documents inside an app's kit folder that name its installer.
+DOC_SUFFIXES = (".md", ".txt", ".command", ".sh")
+#: A backticked installer path. Deliberately narrow: a whole-token match inside backticks, ending
+#: in `.dmg`, so prose about "the DMG" is never touched.
+BACKTICKED_DMG = re.compile(r"`([^`\n]*?)([A-Za-z0-9][A-Za-z0-9 ._+-]*?\.dmg)`")
+#: The document's own version sentence — `**Version 1.4.219.**`. Rewritten here too, so one script
+#: is responsible for the whole claim rather than leaving this line to whichever release step
+#: happened to run: measured on the 2026-09-28 drives, the top line had been stamped while a step
+#: three lines below still said `Story Studio KH 1.4.219-arm64.dmg`.
+VERSION_SENTENCE = re.compile(r"\*\*Version \d+\.\d+\.\d+\.\*\*")
+
+
+def rewrite_installer_names(folder: Path, installer: Path, *, prefix: str = "") -> int:
+    """Point every backticked `*.dmg` in this folder's documents at `installer`.
+
+    `prefix` is the path the documents use for the installer when it is not beside them — the
+    Gateway kit keeps its DMG in `installers/`, so its instructions say `installers/<name>`.
+
+    Only the **basename** is replaced, and only for a backticked token that already looks like this
+    app's installer (its first component before the version matches). That keeps a document free to
+    mention another app's DMG, or a checksum file, without this rewriting it.
+    """
+    target = f"{prefix}{installer.name}"
+
+    def family(name: str) -> str:
+        """Everything in a filename **before its version** — the part that names the app.
+
+        Not `split("-")[0]`: the Gateway's installer is `gateway-kh-0.2.67.dmg`, where the first
+        hyphen is inside the name, while Story's is `Story Studio KH 1.4.235-arm64.dmg`, where the
+        version sits mid-name and the hyphen comes after it. Cutting at the version handles both,
+        and it is the only rule that does not have to know which app it is looking at.
+        """
+        match = VERSION.search(name)
+        return (name[:match.start()] if match else name).strip().lower()
+
+    wanted = family(installer.name)
+    changed = 0
+    for path in sorted(folder.rglob("*")):
+        if path.is_dir() or path.suffix not in DOC_SUFFIXES:
+            continue
+        # Never rewrite inside the model library or a nested app bundle.
+        if ".app/" in str(path) or path.name.startswith("."):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        def _one(match: re.Match[str]) -> str:
+            nonlocal changed
+            directory, name = match.group(1), match.group(2)
+            if family(name) != wanted or name == target:
+                return match.group(0)
+            # The old text's own directory is kept when it had one (`installers/`), so the
+            # document keeps pointing at the same place relative to itself.
+            keep = directory if directory else prefix
+            changed += 1
+            return f"`{keep}{installer.name}`"
+
+        new_text = BACKTICKED_DMG.sub(_one, text)
+        # The version sentence, from the same installer — only in a document that is *about* this
+        # app, which is the folder this function was handed.
+        stated = VERSION.search(installer.name)
+        if stated is not None:
+            stamped = VERSION_SENTENCE.sub(f"**Version {stated.group(1)}.**", new_text)
+            if stamped != new_text:
+                changed += 1
+                new_text = stamped
+        if new_text != text:
+            path.write_text(new_text, encoding="utf-8")
+            print(f"   rewrote installer name(s) in {path.relative_to(folder)}")
+    return changed
+
+
+def stamp_documents(drive: Path) -> int:
+    """Rewrite the installer names in each app's instructions, from what is on the drive."""
+    kit = drive / "Video Generation Kit"
+    problems = 0
+    story, _ = newest_installer(kit / "Story Studio")
+    if story is not None:
+        rewrite_installer_names(kit / "Story Studio", story)
+    else:
+        problems += 1
+    gateway, _ = newest_installer(kit / "GatewayKH" / "installers")
+    if gateway is not None:
+        # The Gateway kit is the one that keeps its DMG in a subfolder, so its documents say
+        # `installers/<name>` — and its own folder is the root of those documents.
+        rewrite_installer_names(kit / "GatewayKH", gateway, prefix="installers/")
+    else:
+        problems += 1
+    return problems
 
 
 if __name__ == "__main__":

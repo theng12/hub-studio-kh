@@ -1,6 +1,6 @@
 # Story Studio KH — where you work
 
-**Version 1.4.219.** Installer: `Story Studio KH 1.4.219-arm64.dmg`
+**Version 1.4.235.** Installer: `Story Studio KH 1.4.235-arm64.dmg`
 
 ## What it is for
 
@@ -18,9 +18,13 @@ packs, thumbnail recipes, fonts and metadata formulas that extend what it can pr
 It does **not** run any AI model itself and does not hold a list of models. Everything
 that needs a model goes to GatewayKH.
 
+> **The version and the installer filename below are stamped on the drive**, not read from this
+> file: `packaging/kit_stamp_index.py` rewrites both from the `.dmg` actually sitting in the folder
+> beside this one. What is written here only has to be sensible for a reader of the repository.
+
 ## Install
 
-1. Open `Story Studio KH 1.4.219-arm64.dmg`.
+1. Open `Story Studio KH 1.4.235-arm64.dmg`.
 2. Drag **Story Studio KH** into **Applications**.
 3. It is ad-hoc signed, so clear the quarantine once:
    `xattr -cr "/Applications/Story Studio KH.app"`

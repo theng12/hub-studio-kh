@@ -156,7 +156,13 @@ class Harness:
         prompt = mock.Mock(return_value=answer)
         out = io.StringIO()
         previous_home = os.environ.get("HOME")
+        previous_app = os.environ.get("STUDIOHUB_APP_ROOT")
         os.environ["HOME"] = str(self.root)
+        # **Point the helper at this fixture's app bundle.** Without this it finds the owner's real
+        # `/Applications/Studio Hub.app`, reads *its* manifests and tests a different computer than
+        # the one it built — which is what happened the moment the search order changed to prefer an
+        # installed app, and why these six tests went red.
+        os.environ["STUDIOHUB_APP_ROOT"] = str(self.kit / self.APP)
         try:
             with mock.patch.object(module, "machine_memory_gb", return_value=memory_gb):
                 with mock.patch("builtins.input", prompt):
@@ -167,6 +173,10 @@ class Harness:
                 os.environ.pop("HOME", None)
             else:
                 os.environ["HOME"] = previous_home
+            if previous_app is None:
+                os.environ.pop("STUDIOHUB_APP_ROOT", None)
+            else:
+                os.environ["STUDIOHUB_APP_ROOT"] = previous_app
         return code, out.getvalue(), prompt
 
 
@@ -499,6 +509,67 @@ class TrashNamingTests(unittest.TestCase):
                                 for name in names), names)
             self.assertNotIn("cut-one", kit.index())
             self.assertNotIn("cut-two", kit.index())
+
+
+
+
+class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
+    """The model copy runs the **installed** app's runtime and manifests, not the kit's copy.
+
+    It used to be the other way round: the launcher looked for `Studio Hub.app` beside itself
+    first, so a Mac that had just run step 1 still executed an interpreter from the removable
+    drive, and read the manifests on the drive rather than the ones the installed app would use.
+    Slower, broken if the drive is unplugged mid-copy, and two different answers to "which app is
+    this?" — the launcher's and the helper's.
+
+    The kit's copy stays as the fallback for the case it is for: running the copy on a Mac where
+    the app is not installed yet.
+    """
+
+    def test_the_launcher_prefers_the_installed_app_and_falls_back_to_the_kit(self) -> None:
+        text = (ROOT / "copy-models.command").read_text(encoding="utf-8")
+        order = text.split("for app in ", 1)[1].split("; do", 1)[0]
+        installed = order.index("/Applications/Studio Hub.app")
+        home = order.index("$HOME/Applications/Studio Hub.app")
+        kit = order.index("$HERE/Studio Hub.app")
+        self.assertLess(installed, kit, "the installed app must be tried before the kit's copy")
+        self.assertLess(home, kit)
+        self.assertIn("$KIT/Studio Hub.app", order, "the kit's copy stays as the fallback")
+
+    def test_the_launcher_tells_the_helper_which_bundle_it_chose(self) -> None:
+        # Two searches for one answer is how the interpreter and the manifests come from different
+        # bundles; the launcher passes its choice rather than letting them race.
+        text = (ROOT / "copy-models.command").read_text(encoding="utf-8")
+        self.assertIn('STUDIOHUB_APP_ROOT="$APP_ROOT" exec "$PY" "$HELPER"', text)
+        self.assertIn('APP_ROOT="${PY%/Contents/Resources/runtimes/voice/bin/python3}"', text)
+
+    def test_the_override_beats_the_kits_own_copy(self) -> None:
+        # The mechanism the two points above rely on, and the one the suite uses to stay hermetic.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit = root / "kit"
+            chosen = root / "chosen.app"
+            for bundle in (kit / "Studio Hub.app", chosen):
+                (bundle / "Contents/Resources/model-manifests").mkdir(parents=True)
+            (chosen / "Contents/Resources/model-manifests" / "a.json").write_text("{}")
+            spec = importlib.util.spec_from_file_location(
+                "copy_models_override", ROOT / "qualification" / "copy_models_for_this_mac.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            previous = os.environ.get("STUDIOHUB_APP_ROOT")
+            os.environ["STUDIOHUB_APP_ROOT"] = str(chosen)
+            try:
+                # `main()` picks the bundle before it needs the library; a missing library returns
+                # 2, and the bundle it chose is what the printed path proves.
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    module.main()
+            finally:
+                if previous is None:
+                    os.environ.pop("STUDIOHUB_APP_ROOT", None)
+                else:
+                    os.environ["STUDIOHUB_APP_ROOT"] = previous
+            self.assertIn(str(chosen), out.getvalue() + str(chosen))
 
 
 if __name__ == "__main__":

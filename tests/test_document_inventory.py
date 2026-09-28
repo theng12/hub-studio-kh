@@ -248,6 +248,38 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         self.assertEqual((kit / "README.md").read_text(encoding="utf-8"),
                          (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
 
+    def test_the_instructions_in_the_body_are_rewritten_too(self) -> None:
+        """Stamping the version *line* was not enough — the same document says "Open `…dmg`".
+
+        On the three drives prepared on 2026-09-28 those steps pointed at installers that had just
+        been moved to `_trash`: an operator following the checklist failed at step one. The
+        filename was copied in by hand and nothing derived it.
+        """
+        kit = self._kit()
+        (kit / "Story Studio" / "README.md").write_text(
+            "# Story Studio\n\n**Version 1.4.219.** Installer: `Story Studio KH 1.4.219-arm64.dmg`\n"
+            "\n## Install\n\n1. Open `Story Studio KH 1.4.219-arm64.dmg`.\n", encoding="utf-8")
+        (kit / "GatewayKH" / "README.md").write_text(
+            "1. Open `installers/gateway-kh-0.2.2-b1c0d8f-202609221617-arm64.dmg`.\n",
+            encoding="utf-8")
+        self.assertEqual(self.stamp.stamp(self.drive), 0)
+        story = (kit / "Story Studio" / "README.md").read_text(encoding="utf-8")
+        gateway = (kit / "GatewayKH" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("`Story Studio KH 9.9.9-arm64.dmg`", story)
+        self.assertNotIn("1.4.219", story)
+        # The Gateway's installer lives in `installers/`, so the rewritten path keeps that prefix.
+        self.assertIn("`installers/gateway-kh-8.8.8.dmg`", gateway)
+
+    def test_another_apps_installer_is_not_rewritten(self) -> None:
+        # A document is free to mention a different app's DMG, or a checksum file.
+        kit = self._kit()
+        (kit / "Story Studio" / "README.md").write_text(
+            "See also `GatewayKH/installers/gateway-kh-0.2.2.dmg` and `SHA256.txt`.\n",
+            encoding="utf-8")
+        self.stamp.stamp(self.drive)
+        text = (kit / "Story Studio" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("gateway-kh-0.2.2.dmg", text)
+
     def test_the_newest_installer_wins(self) -> None:
         kit = self._kit()
         (kit / "Story Studio" / "Story Studio KH 9.9.10-arm64.dmg").write_bytes(b"dmg")

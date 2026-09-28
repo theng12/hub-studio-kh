@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.95 — 2026-09-28
+
+### The drive's instructions now match the drive
+
+The sheet that says which build a drive carries was fixed in 0.6.94 — but the install steps a few
+lines below still told you to open the *previous* installer, by name, one that had just been moved
+to `_trash`. Every filename in those instructions is read from the installer actually sitting in the
+folder now, so the steps and the files cannot disagree.
+
+### "2 — Copy the models" uses the app you installed
+
+It used to run the copy using the copy of Studio Hub **on the drive**, which is slower and stops if
+you unplug the drive while it works. It uses the app in your Applications folder now, and falls back
+to the drive's copy only if you have not installed it yet.
+
 ## 0.6.94 — 2026-09-28
 
 ### The sheet on the drive can no longer name the wrong versions

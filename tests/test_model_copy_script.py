@@ -238,7 +238,13 @@ class EndToEndTests(unittest.TestCase):
 
         argv = sys.argv
         home = os.environ.get("HOME")
+        app_root = os.environ.get("STUDIOHUB_APP_ROOT")
         os.environ["HOME"] = str(root)          # the script writes to ~/StudioHubModels
+        # **Point the helper at this fixture's app bundle.** It prefers an *installed*
+        # `/Applications/Studio Hub.app` now, and without this it read the owner's real thirty
+        # manifests against this fixture's library — every model came back "not on this SSD". The
+        # sibling suite (`test_copy_models_for_this_mac.py`) had the same hole and the same fix.
+        os.environ["STUDIOHUB_APP_ROOT"] = str(kit / self.APP)
         sys.argv = ["copy_models_for_this_mac.py"]
         out = io.StringIO()
         try:
@@ -248,6 +254,10 @@ class EndToEndTests(unittest.TestCase):
         finally:
             sys.argv = argv
             os.environ["HOME"] = home
+            if app_root is None:
+                os.environ.pop("STUDIOHUB_APP_ROOT", None)
+            else:
+                os.environ["STUDIOHUB_APP_ROOT"] = app_root
         return code, out.getvalue()
 
     def _receipt(self, destination: Path, package_id: str):
