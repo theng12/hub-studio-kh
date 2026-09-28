@@ -2,6 +2,36 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.100 — 2026-09-28
+
+### The video test would have failed on your 16 GB Mac for the wrong reason
+
+The test looks for the model in your home folder as well as on the drive, and it was looking under
+the **wrong name**. It knew the older spelling — the one with dots, from a manual download — and not
+the name the app actually installs. So on a 16 GB Mac where step 2 had just put the model in place
+correctly, the test would have said *"the model is not on this Mac"* and stopped. It now knows both
+names, and the app's own spelling is checked first.
+
+### Installing Studio Hub left it switched off
+
+The install step quits Studio Hub so it can replace it — and then never started it again. This was
+harmless-looking and wasn't: until you opened it, your Gateway showed every Studio Hub location
+unreachable and every model list on every Mac came up empty. It starts the app again now, and waits
+until the Hub is genuinely answering before saying it is done.
+
+### The chat lane streams, measured
+
+Chat replies now have a recorded end-to-end streaming run through the Hub, not just an assumption:
+real word-by-word output, a proper finish, token counts. **Nobody has typed into the chat page
+itself yet** — that is still yours to try, and it is the last thing on the chat list.
+
+### Cleanup worth knowing about
+
+Two SSD copies of the LTX video model were **cut short** (a 1.9 GB file where it should be 9.9 GB) in
+each drive's plain model archive. Both now hold the complete file, copied from the checked copy on
+the same drive. A stale half-downloaded duplicate in your own home folder was moved to
+`~/StudioHubModels/_trash/` rather than deleted.
+
 ## 0.6.99 — 2026-09-28
 
 ### The video test is now on every SSD, and it was pointing at a broken copy

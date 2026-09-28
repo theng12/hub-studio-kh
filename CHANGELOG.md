@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.6.100 — 2026-09-28 · The recorded-open list had three items on it that were already done, and the video harness would have refused on the Mac it exists for
+
+Finishing what rounds 18–20 recorded. Three things, and the first is the one that would have cost
+the owner a trip.
+
+**1. `RUN-16GB-LTX-VIDEO.command` would have refused on a 16 GB node — the machine it exists for.**
+
+Its home-folder candidate list named **only the legacy spelling**: `~/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx`
+(upstream's dots, flat, no revision folder). The app, the kit's copy step and the worker all use the
+**package id** instead — `ltx-2-3-22b-ram-12gb-mlx`, installed as `<library>/<package_id>/<revision>/model`.
+So on a node where step 2 had just installed the model *correctly*, the script found nothing and
+would have stopped with *"the model is not on this Mac"*.
+
+Measured on this Mac, both spellings present: the package-id copy is **18,674,268 KiB and complete**,
+the legacy dot-form is **10,760,852 KiB and partial**. Both are listed now, package-id first, in both
+the revision-folder and flat shapes. **Proved with the drive removed from the candidate list** — the
+exact node case: the old list answers *"Every copy of the model on this Mac is unfinished"* while the
+new one resolves `…/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f…/model (18G)` and runs.
+
+**2. `install_local.sh` stopped Studio Hub and never started it again.**
+
+Measured after the 0.6.97 install: the Hub was down and nothing answered on 47873 until it was
+opened by hand. A release that ends there looks finished and is not — the Gateway reports every
+Studio Hub location unreachable, every model picker on the fleet empties, and each drive's installer
+talks to a machine that is not there. It now relaunches and **waits for `hub-ready.json`**, which the
+Hub service writes once it is actually serving, so it cannot report success for a process that is
+merely running. Guarded on the real install target like the stop half, so a temp-path install still
+starts nothing; a Hub that will not come up says so rather than exiting 0 in silence.
+
+**3. The install guards were collected by nothing.** `tests/test_install_local.py` was written
+pytest-style — the only such file in `tests/` — while the release gate is
+`python3 -m unittest discover`. Measured: **the gate collected 0 tests from it**, and its two tests
+(which exist because an install once left `/Applications/Studio Hub.app` with no `Info.plist`) passed
+only when pytest was run by hand. Ported to `unittest`: **3 tests now, all collected**, including a
+new one asserting the relaunch sits inside the real-target guard — proved to fail when it does not.
+
+**And the recorded-open list itself was three-quarters stale.** The appendix below the numbered list
+said voice publishes no below-tier warning ("two missing links, not one"), that FLUX.2 Klein 4B MLX
+4-bit's `79.34 s` traced to nothing, and that chat's memory tier is unmeasured. All three were
+already done: voice's three links exist (`catalog.py:1582`, `StudioAPI.swift:7576`,
+`StudioViews.swift:2297`), FLUX was closed on 2026-09-26 as **105.943 s** with a guard, and chat's
+tier was closed at 0.6.69 — **which the same file says, forty lines above.** Two lists of the same
+thing in one file, disagreeing, and nothing compared them.
+
+**Chat's streaming half is now measured** rather than assumed: `POST /api/hub/chat/completions` with
+`stream: true` returns real SSE deltas from `mlx-community/Qwen3.5-9B-4bit`, a terminal chunk with
+`finish_reason: "stop"` and usage, and `[DONE]` — 0.514 s of generation. **The acceptance half is
+still the owner's** — nobody has typed into the packaged page — and the handoff now says plainly not
+to record the lane as accepted on the strength of the HTTP result.
+
+**Data repaired, nothing deleted.** ATLAS's and ORICO's model-archive copy of LTX-2.3 22B had the
+same truncated `transformer-distilled.safetensors` (1.86 GB against 9.97 GB); both now carry the
+complete file copied from the verified kit library **on the same drive**. And this Mac's legacy
+dot-form partial went to `~/StudioHubModels/_trash/` — a 10.26 GiB hand-download the harness and the
+worker both had reason to pick up and neither should.
+
 ## 0.6.99 — 2026-09-28 · The video harness was on every drive, and our own cleanup took it off
 
 **Two defects, found by doing the thing the handoff said had never been done: running

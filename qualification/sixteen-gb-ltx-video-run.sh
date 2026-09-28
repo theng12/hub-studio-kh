@@ -110,6 +110,16 @@ echo "          $("$RUNTIME" -c 'import mlx.core as mx; print("mlx", mx.__versio
 #    and it is complete on all four drives. So that path is tried **first**, and an incomplete
 #    candidate is now **ineligible** rather than chosen-then-warned-about: a truncated pack cannot
 #    load, so running it only produces a misleading error.
+#
+# 3. ***Two spellings of the same package, and the home folder only knew the wrong one.*** The app,
+#    the kit's copy step and the worker all use the **package id** — `ltx-2-3-22b-ram-12gb-mlx` — and
+#    install it as `<library>/<package_id>/<revision>/model`. A hand-download used the upstream
+#    spelling with dots, `ltx-2.3-22b-ram-12gb-mlx`, flat, with no revision folder. This list named
+#    **only the dot form**, so on the Mac this script exists for — a 16 GB node where step 2 has just
+#    installed the model properly — it would have found *nothing* and refused, after the trip. Both
+#    spellings are listed now, package-id first, and both the revision-folder and flat shapes.
+#    Measured on this Mac: the package-id copy is **18,674,268 KiB and complete**; the legacy dot-form
+#    is **10,760,852 KiB and partial**, which is why order and the eligibility rule both matter here.
 COMPLETE_KB=18674324
 FLOOR_KB=$((COMPLETE_KB * 90 / 100))
 MODEL_DIR=""
@@ -119,6 +129,8 @@ for cand in \
     "$HERE/ltx-2.3-22b-ram-12gb-mlx" \
     /Volumes/KH-STUDIO-*/"Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx"/*/model \
     /Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx \
+    "$HOME/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx"/*/model \
+    "$HOME/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx" \
     "$HOME/StudioHubModels/ltx-2.3-22b-ram-12gb-mlx"
 do
     [ -n "$cand" ] && [ -d "$cand" ] || continue

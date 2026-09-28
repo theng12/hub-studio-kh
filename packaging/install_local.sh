@@ -126,3 +126,34 @@ PY
 
 rm -f "$DATA/hub-ready.json" "$DATA/hub/music-ready.json"
 echo "== installed $STAGED_VERSION / $INSTALLED_BUILD"
+
+# **An install stopped Studio Hub and never started it again, so "installed" was not "running".**
+# Measured 2026-09-28: after installing 0.6.97 the Hub was down and nothing answered on 47873 until
+# it was opened by hand. The cost is not the missing window — it is everything that reads this Mac's
+# Hub: the Gateway reports every Studio Hub location unreachable, every model picker on the fleet
+# empties, and each drive's installer talks to a machine that is not there. A release that ends in
+# that state looks finished and is not.
+#
+# Only for the real install target, for the same reason the stop above is: an install into a temp
+# path must not start an app, which is also what keeps the guard tests from launching anything.
+if [ "$TARGET" = "/Applications/Studio Hub.app" ]; then
+  echo "== starting Studio Hub"
+  open -a "$TARGET" >/dev/null 2>&1 || true
+  # Wait for the **Hub**, not for the app bundle: `hub-ready.json` is written by the Hub service once
+  # it is actually serving, so this cannot report success for a process that is merely running.
+  READY="$DATA/hub-ready.json"
+  for _ in $(seq 1 30); do
+    [ -f "$READY" ] && break
+    sleep 2
+  done
+  if [ -f "$READY" ]; then
+    echo "== Hub is serving (hub-ready.json present)"
+  else
+    # Deliberately not a failure: the install *did* succeed — the bundle is verified above — and a
+    # Hub that will not start has its own reason, which the app's log states better than this script
+    # can guess at. Saying so beats exiting 0 in silence.
+    echo "== WARNING: Studio Hub was installed but its Hub did not come up within 60 s."
+    echo "   Nothing reads this Mac's Hub until it does: the Gateway shows every Studio Hub location"
+    echo "   unreachable and the model pickers are empty. Check the app's log."
+  fi
+fi

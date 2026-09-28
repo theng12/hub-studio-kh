@@ -1606,42 +1606,68 @@ of what was found rather than as a statement of what is open. Closed since, each
    build you are running"*. This item was the reverse — **a shipped, live, offered feature written
    down as unbuilt**, which is just as costly, because it sends the next session to build what
    already exists and tells the owner his video lane is missing when it is not.
-3. **Chat's packaged page has still never been typed into by a human**, and streaming end-to-end
-   through the Hub remains unexercised. That is an acceptance question, not a measurement.
+3. **Chat's packaged page — the measurement half is now done; the acceptance half is the owner's.**
+   **Streaming end to end through the Hub was unexercised and now is not.** Measured 2026-09-28
+   against the live Hub at 0.6.99 / `9b65a4f`: `POST /api/hub/chat/completions` with `stream: true`
+   returns real SSE chunks — incremental `delta.content` (`"the"`, `" chat"`, `" lane"`, `" works"`),
+   `model: mlx-community/Qwen3.5-9B-4bit`, a terminal chunk carrying `finish_reason: "stop"` **and**
+   `usage {prompt_tokens: 20, completion_tokens: 4, total_tokens: 24}`, `studio_hub.elapsed_seconds:
+   0.514`, then `[DONE]` — in 9.2 s wall including the model load. One chat worker live: `chat`
+   service, version 0.6.99, online and ready, one slot.
+   **What is still true is the other half, and it is not a measurement:** nobody has *typed into* the
+   packaged Chat page. Streaming is exercised over HTTP; the page's own render of those deltas —
+   cursor, scroll behaviour, a stop button mid-stream, what it shows on a dropped connection — is an
+   **acceptance question for the owner**, and no test in this tree answers it. Do not record the lane
+   as accepted on the strength of the HTTP result above.
 4. **Nothing in the product refuses on memory tier** — a decision, not a measurement, and it matches
    the image precedent of warning rather than refusing.
 
 ---
 
-- **Voice publishes no below-tier warning, and there are two missing links, not one.** Its catalog
-  row publishes `min_unified_memory_gb` (a real qualification tier) but no `memory_warning`
-  sentence; the Audio `NativeModel(…)` in `combineModels` passes no `memoryWarning`; and the Audio
-  page has no render site. Subtitle's fix in this release is the template for all three. It cannot
-  fire on this fleet today — the copy step skips any voice model above the machine's tier, so a
-  below-tier voice model is never installed to be warned about — which is why it is recorded rather
-  than built.
-- **FLUX.2 Klein 4B MLX 4-bit's `79.34 s` lane-contract runtime traces to nothing.** Z-Image's pair
-  was reconciled in this release (185.61 s → the sourced 166 s); FLUX's number has no probe file
-  either and nobody has yet found the run it came from. Either produce the record or drop the row,
-  the way two Voice numbers were dropped in 0.6.61.
-- **The model-exposure approval surface cannot be used, for any modality.** No chat file publishes
-  a `genstudio_candidate` block, so `model_exposure.candidate_summary` returns `None` for a chat
-  row; and separately `monitor.candidate_models()`, `model_exposure.approve()` and `.revoke()` have
-  **no caller anywhere** in this tree. So there is no route or UI by which the owner approves a
-  model for the gateway. The chat model is visible in `GET /api/hub/capabilities` as a direct
-  observable (`chat.completion`, audit and exposure `null`). Whether this is needed depends on
-  which path GatewayKH actually uses — see the handoff doc.
-- **Chat's memory tier is still unmeasured** (16 GB first, then one 8 GB; a 24 GB Mac is not tier
-  evidence), harness ready in `qualification/README-chat-tiers.md`. 0.6.63 changed the default so a
-  16 GB+ Mac holds the model, which makes the first reply fast and every later one faster — but the
-  tier measurement is what turns "warn on 8 GB" into a qualified tier or a documented exclusion.
-  **It is on every kit drive now** (`Technical/chat-tier-run.sh`, and a double-clickable
-  `Technical/RUN-CHAT-TIER.command` beside it), because the two Macs that have to run it are the
-  ones the drives travel to, and it previously lived only in this repo — so the instruction "run
-  `chat-tier-run.sh`" pointed at a file the machine did not have. **A `.sh` is not double-clickable
-  on macOS**: Finder has no application bound to it, so a double-click opens TextEdit and looks
-  broken. The `.command` wrapper is the fix, and it is the convention the drive already used for
-  `install_app.command` and `verify-this-app.command`.
+## Appendix — items recorded rather than built
+
+> **Audited 2026-09-28 at 0.6.99, and three of the first four were already done.** This appendix is
+> the second open-item list in this file, and it had drifted the same way the first one did: entries
+> stayed here after the work landed, so a reader was told to build what existed. Each claim below is
+> corrected against the code, with the check that settles it.
+>
+> **And the file contradicted itself.** The list above says *"Chat's memory tier — closed (SH-6,
+> 0.6.69). Measured on three 16 GB Macs"* while this appendix said *"Chat's memory tier is still
+> unmeasured."* Both cannot be true, and nothing compared them, because they are two lists in one
+> file. **Two lists of the same thing is one list too many** — the numbered list is the one that gets
+> re-read, so this appendix is now history and corrections, not a to-do.
+
+- ~~**Voice publishes no below-tier warning, and there are two missing links, not one.**~~
+  **WRONG — all three links are built.** Verified 2026-09-28:
+  `components/voice/app/backend/catalog.py:1582` publishes
+  `"memory_warning": fit.get("hint") if fit and fit.get("state") == "risky" else None`; the Audio
+  branch of `combineModels` passes `memoryWarning: item.memoryWarning` (`native/StudioAPI.swift:7537`
+  for `blockReason`, `:7576` for the model); and the Audio page renders it
+  (`native/StudioViews.swift:2297`, `if let warning = selectedAudioModel?.memoryWarning`) — the same
+  render site all six modalities use. **It still cannot fire on this fleet**, which is the part of
+  the original note that was right and the reason it was easy to leave here: the copy step skips any
+  model above the machine's tier, so no below-tier voice model is installed to be warned about.
+- ~~**FLUX.2 Klein 4B MLX 4-bit's `79.34 s` lane-contract runtime traces to nothing.**~~
+  **CLOSED 2026-09-26 (SH-4).** The number was never in the tree; the stored run of that exact scene
+  is **105.943 s**, in `qualification/st03-image-real-inference.md` and as
+  `worker_terminal.duration_seconds` in `evidence/st03-image-real-inference.jsonl` (job `af4913b2`),
+  and the host was corrected to *"Apple M4, 16 GiB RAM"* — a measurement on the tier the fleet runs
+  rather than on the one machine. Guarded by
+  `tests/test_image_loading_mode.py::test_every_published_runtime_is_found_in_the_record_it_names`,
+  which opens the file each row names. Re-verified 2026-09-28: `79.34` appears nowhere in the tree
+  outside vendored libraries. See `docs/cross-project-open-items.md:191`.
+- **The model-exposure approval surface cannot be used, for any modality.** ✅ **Still true
+  (re-verified 2026-09-28).** No production file publishes a `genstudio_candidate` block — the only
+  references are in tests — and `monitor.candidate_models()`, `model_exposure.approve()` and
+  `.revoke()` have **0 callers**. So there is no route or UI by which the owner approves a model for
+  the gateway. The chat model is visible in `GET /api/hub/capabilities` as a direct observable
+  (`chat.completion`, audit and exposure `null`). Whether this is needed depends on which path
+  GatewayKH actually uses.
+- ~~**Chat's memory tier is still unmeasured.**~~ **CLOSED (SH-6, 0.6.69)** — measured on three
+  16 GB Macs, 8 GB excluded by the owner's decision, and the harness refuses it immediately. The
+  entry above had it right and this one had it wrong. The rest of the note still stands and is why
+  the tooling is on the drives: `Technical/chat-tier-run.sh` plus the double-clickable
+  `Technical/RUN-CHAT-TIER.command`, because Finder has no application bound to a `.sh`.
 - **The 8 GB Z-Image-Turbo run is now more valuable, not less.** The copy step carries the model on
   8 GB Macs from `CARRY_BELOW_TIER` in `qualification/copy_models_for_this_mac.py` — "the owner
   asked to try it there", explicitly *not* the proof table. One command,
