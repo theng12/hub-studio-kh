@@ -4364,6 +4364,43 @@ struct StudioContent: View {
 
     private var hubCredential: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // **One token to copy, and it is this one.** The two tokens are not peers and this
+            // screen used to draw them as if they were: both rows identical, both with a copy
+            // button, and the operator left to work out which to paste. He then read the Hub token
+            // off the *joining* Mac, pasted it, and could not tell why it failed — which is the
+            // failure this ordering and these headings exist to prevent. The token a joining Mac
+            // needs is this one, so it is first, it says what to do with it, and the other one is
+            // labelled as what it is: private.
+            //
+            // The two values stay distinct, and that is deliberate — see the note further down and
+            // `tests/test_peer_path_contract.py::FleetCredentialWiringTests`. Merging the secrets
+            // would give every node (and the Gateway) authority to administer every Mac.
+            Text("Give this out").font(.headline)
+            LabeledContent("Fleet token") {
+                Text(revealedToken ? (studio.fleetToken ?? "Unavailable")
+                                   : (studio.fleetToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
+                    .textSelection(.enabled).multilineTextAlignment(.trailing)
+                    .font(.system(.body, design: .monospaced))
+            }
+            HStack {
+                Button("Copy Fleet Token") {
+                    if let token = studio.fleetToken {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(token, forType: .string)
+                        connectionNote = "Fleet token copied"
+                    }
+                }.disabled(studio.fleetToken == nil)
+                Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller. **This is the only token you hand out.**")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, and read the model and fleet lists.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
+            // Two values, and the difference is the safety property: the Fleet token above is what
+            // a joining Mac adopts and what this Mac then presents back to it. Handing a node the
+            // Hub token instead would give every node's owner full authority over this Mac.
             LabeledContent("Hub token") {
                 Text(revealedToken ? (studio.connectionToken ?? "Unavailable")
                                    : (studio.connectionToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
@@ -4382,36 +4419,9 @@ struct StudioContent: View {
                 }.disabled(studio.connectionToken == nil)
                 if let connectionNote { Text(connectionNote).font(.callout).foregroundStyle(.secondary) }
             }
-            Text("This Mac's own key. It is for you, on this Mac, and it never leaves it. Use it to change settings, install or remove models, delete output, and manage shared voices.")
+            Text("Keep this one. It is this Mac's own key — for you, on this Mac — and it never leaves it. Use it to change settings, install or remove models, delete output, and manage shared voices.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("Do not give it out. Anyone who holds it can do everything on this Mac. GatewayKH needs it only if it will manage shared voices here — to send work, give out the Fleet token below instead.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            // Two values, and the difference is the safety property: this one is what a joining Mac
-            // adopts and what this Mac then presents back to it. Handing a node the Hub token
-            // instead would give every node's owner full authority over this Mac.
-            Divider()
-            LabeledContent("Fleet token") {
-                Text(revealedToken ? (studio.fleetToken ?? "Unavailable")
-                                   : (studio.fleetToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
-                    .textSelection(.enabled).multilineTextAlignment(.trailing)
-                    .font(.system(.body, design: .monospaced))
-            }
-            HStack {
-                Button("Copy Fleet Token") {
-                    if let token = studio.fleetToken {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(token, forType: .string)
-                        connectionNote = "Fleet token copied"
-                    }
-                }.disabled(studio.fleetToken == nil)
-                Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, and read the model and fleet lists.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("In short: the Hub token is this Mac's key, the Fleet token is the work badge for the group. Send work with the Fleet token; keep the Hub token to yourself.")
+            Text("Do not give it out. Anyone who holds it can do everything on this Mac. GatewayKH needs it only if it will manage shared voices here — to send work, give it the Fleet token above instead.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -5277,8 +5287,10 @@ struct StudioContent: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(connectionStateTint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-            Text("Enter the controller's address and its Fleet token — not its Hub token. On the controller Mac, open Connections and copy the Fleet token from there.")
+            Text("Enter the controller's address and its Fleet token — the one that Mac marks “Give this out”. On the controller, open Connections and copy it from there.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("There is only one token to hand out, so there is nothing to choose between. (The Hub token on that same page is the controller's own key: a Mac keeps a copy of whatever it is given, so keep that one to yourself.)")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("The address is the controller's Tailscale or LAN address; the port is optional and assumed to be 47873. `http://` is optional too.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("This Mac registers with the controller and adopts that token, so the controller can send it work. The controller then reports whether this Mac is reachable.")

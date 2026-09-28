@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.102 — 2026-09-28 · One token to copy, and the screen says which
+
+**The owner asked to merge the two tokens into one: *"can we just make it use only 1 token? do we really need both?"* — then chose the version that keeps the safety property: *"one token to copy — merge the story, keep the secrets."***
+
+**Why the values stay separate, in the code's own words.** `peers.fleet_token` already said it:
+
+> *"A packaged Hub owns a fleet credential of its own, **distinct from its Hub token. The separation is the point** … it is also the whole reason a node's owner cannot administer the controller that owns them."*
+
+And the Connections page already told the operator: *"A Mac that holds this token still cannot administer this Mac."* Merging the **secrets** would end that — the Gateway and every one of 50 nodes would hold a credential that can change any Mac's settings, install or remove its models, delete its output and evict machines. The sharper cost is operational: revoking one sold Mac is one click today, because its own credential dies with its row; with a shared token it becomes a fleet-wide rotation that needs every Mac reachable.
+
+**So the *story* is merged instead, which is what actually cost him time.** The screen drew the two as peers — two rows, two copy buttons, no statement of which to use — and the join form's only instruction named the thing **not** to use (*"not its Hub token"*). He read a token off the joining Mac, pasted it, and the controller refused it with a message that made his token look wrong.
+
+- **The token to hand out is first, and it says so.** The Connections page leads with **“Give this out”** and the Fleet token, then the Hub token below a rule under **“Keep this one.”** A single sentence carries the instruction: *"This is the only token you hand out."*
+- **The join form names what to use, not what to avoid.** *"…its Fleet token — the one that Mac marks “Give this out”. On the controller, open Connections and copy it from there."* The `— not its Hub token` clause is gone.
+- The old closing line (*"the Hub token is this Mac's key, the Fleet token is the work badge for the group"*) is removed rather than reworded: it existed to explain a choice the operator should never have been asked to make.
+
+**No value changed, and the Gateway needs nothing.** This is the two tokens explained properly, not merged — so `gateway-kh` keeps using the Fleet token exactly as it does, and no Mac has to be re-enrolled for it. The security property in `tests/test_peer_path_contract.py::FleetCredentialWiringTests` is untouched and still asserted.
+
+Three tests pin the framing so it cannot drift back: the token to hand out comes **first**, the screen says **“Give this out”**, and the join form no longer contains `not its Hub token`. Proved to fail on the old wording.
+
 ## 0.6.101 — 2026-09-28 · The Join button never sent the token you typed
 
 **Found in the field, on the owner's first real node.** A healthy node (0.6.100, six workers up) joining a healthy controller, with that controller's own Fleet token pasted into the box, refused every single time:

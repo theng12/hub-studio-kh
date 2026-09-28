@@ -2,6 +2,29 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.102 — 2026-09-28
+
+### There is one token to give out, and the screen now says which
+
+You asked to merge the two tokens. The part that was actually costing you time was not the two
+values — it was that **nothing told you which one to use**. Connections showed both the same way,
+each with its own copy button, and the Join box only said *"not its Hub token"*, which names the one
+to avoid instead of the one to take.
+
+Now Connections leads with **“Give this out”** and the Fleet token — that is the one for GatewayKH and
+for every Mac that joins — and the Hub token sits below a line under **“Keep this one.”** The Join box
+says to copy the token marked *“Give this out”*, and nothing else to choose between.
+
+**Why I did not make them the same secret**, since you should know what you decided: the token you
+hand out deliberately cannot administer the Mac you handed it to. If it were the same as your private
+key, then GatewayKH and all fifty nodes would each hold a key that can change any Mac's settings,
+remove its models and throw machines out of the group. And removing a Mac you have sold would stop
+being one click — it would mean changing the token on every Mac you kept, which needs them all
+switched on.
+
+Nothing about the tokens themselves changed, so **GatewayKH needs no update** and no Mac needs
+re-joining for this.
+
 ## 0.6.101 — 2026-09-28
 
 ### Joining a controller now uses the token you type

@@ -617,6 +617,39 @@ class FleetCredentialWiringTests(unittest.TestCase):
         join = source[source.index("private var joinController"):]
         self.assertIn("Fleet token", join, "the join form must ask for the token it needs")
 
+    def test_the_screen_shows_ONE_token_to_hand_out_and_says_which(self) -> None:
+        """**One token to copy.** The owner hit this in the field: two rows, both with a copy
+        button, and no statement of which to use — so he read a token off the *joining* Mac, pasted
+        it, and could not tell why the controller refused it. The tokens are not peers; the one a
+        joining Mac needs comes first and says what to do with it.
+
+        The values stay separate on purpose (see the class docstring). This is about the screen
+        telling the operator the truth about which one leaves the Mac.
+        """
+        source = (NATIVE / "StudioViews.swift").read_text()
+        credential = source[source.index("private var hubCredential"):]
+        credential = credential[:credential.index("private var controllerSection")]
+
+        self.assertIn("Give this out", credential,
+                      "the screen must say, in words, which token is the one to hand out")
+        self.assertLess(credential.index("Copy Fleet Token"), credential.index("Copy Hub Token"),
+                        "the token to hand out comes first; the two are not peers")
+        self.assertIn("Keep this one", credential,
+                      "the Hub token must be labelled as the one to keep")
+
+    def test_the_join_form_no_longer_asks_the_operator_to_choose(self) -> None:
+        """`not its Hub token` was the phrase that made it read as two options.
+
+        It was also the whole instruction, and it named the thing he must NOT use rather than the
+        thing he must. The form now names the token to copy and the marker the controller puts on it.
+        """
+        source = (NATIVE / "StudioViews.swift").read_text()
+        join = source[source.index("private var joinController"):]
+        self.assertIn("Give this out", join,
+                      "the join form must point at the marker the controller uses")
+        self.assertNotIn("not its Hub token", join,
+                         "the form must name what to use, not only what to avoid")
+
     def test_the_fleet_credential_is_read_from_its_own_file(self) -> None:
         """Two tokens means two files, and reading the wrong one is invisible until a node joins."""
         hub = (NATIVE / "StudioHub.swift").read_text()
