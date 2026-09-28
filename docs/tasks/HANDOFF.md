@@ -1420,12 +1420,16 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
    ```
 
    **Corrected 2026-09-28.** This line showed only `--image-runtime` and `--music-runtime`, so
-   following it produced a bundle with **no Video lane at all** — the three flags above were passed
-   by hand every time and nothing recorded them. The staged 0.6.96
-   `release-manifest.json` is what proves it: its `components.video` carries
-   `lance_runtime_sha256` and `yue2_runtime_sha256` beside the LTX runtime, none of which exist
-   unless those flags are given. **Check that manifest after staging** — a missing
-   `components.video` is the whole defect, and it is one `json.load` away from being visible.
+   following it would have produced a bundle with **no Video lane at all** — the three flags above
+   were passed by hand every time and nothing recorded them. Checked against the code rather than
+   assumed: `_stage_video` opens with `if context['video_runtime'] is None: return None`, and the
+   manifest is assembled by iterating the component table and keeping only the stagers that returned
+   a record — so no `--video-runtime` means no `components.video`, no `components/video` source, no
+   `video_worker.py` and no `runtimes/video`. The staged 0.6.96 `release-manifest.json` is what proves
+   the three flags *were* passed: its `components.video` carries `lance_runtime_sha256` and
+   `yue2_runtime_sha256` beside the LTX runtime, none of which exist unless those flags are given.
+   **Check that manifest after staging** — a missing `components.video` is the whole defect, and it
+   is one `json.load` away from being visible.
 4. Install: `bash packaging/install_local.sh ".build/StudioHub-<n>/Studio Hub.app"`.
    It verifies what landed. **Never** `cp` a bundle into `/Applications` by hand, and never
    chain a swap with `|| true` — that is how a stale app went unnoticed for three releases.
