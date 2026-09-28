@@ -2449,6 +2449,69 @@ struct NativeAPITests {
         noCredentialStore.disconnect()
         FixtureProtocol.setJoinRequiresCredential(false)
 
+        // ---------------------------------------------------------------------------------------
+        // 0.6.101 — the Join button sends what the operator typed.
+        //
+        // The owner, in the field: a healthy node and a healthy controller, the controller's own
+        // Fleet token pasted into the box, and every press refused with *"a credential that is
+        // neither this Mac's Hub token nor the Fleet token this Mac holds … the two Macs hold
+        // different Fleet tokens."* Both tokens were correct and both worked when used directly —
+        // because the app never sent the one he typed.
+        //
+        // `nodeOriginCredential` prefers what this Mac already holds: its own node credential, else
+        // the group token it stored. That is right for the startup re-join loop, where the Mac is
+        // re-announcing itself. It is wrong for the Join button, and the retry that was supposed to
+        // save it was gated on `heldNodeCredential` — which a Mac holding a stored *group* token and
+        // no per-node credential (every row from before A8, i.e. every Mac being re-joined here)
+        // does not have. So the typed token never left the Mac.
+        //
+        // This is exactly that state: a stored group token, no node credential, operator presses
+        // Join. Before the fix the wire carried `token-from-an-earlier-group`; it must now carry the
+        // typed value.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        let typedStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await typedStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                 dataDirectory: temporary.appendingPathComponent("typed-token"),
+                                 token: "native-test-token")
+        typedStore.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.9:47873",
+            token: "token-from-an-earlier-group",
+            boundHosts: LocalAddresses.current().map(\.address))
+        require(typedStore.nodeCredential == nil,
+                "this fixture is only the failing case while there is no per-node credential")
+        await typedStore.joinController(address: "192.168.1.21:8080", token: "the-typed-fleet-token",
+                                        boundHosts: LocalAddresses.current().map(\.address))
+        // `.last`, not `.first`: the fixture's join list is the whole suite's history, so the
+        // attempt this block just made is the newest one.
+        require(FixtureProtocol.joinTokens().last == "the-typed-fleet-token",
+                "the Join button must put what the operator typed on the wire, got: "
+                + "\(FixtureProtocol.joinTokens())")
+        typedStore.disconnect()
+
+        // **And a Mac that holds its own node credential still presents it**, even when the
+        // operator typed something else. That credential is the one value that names this Mac
+        // alone, so it is what survives a group-wide Fleet-token rotation — the property the first
+        // version of this fix broke, and the reason the existing "a re-join must present this
+        // Mac's own credential" assertion above went red. The typed token is still tried, but only
+        // as the single retry.
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        let holderStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await holderStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                  dataDirectory: temporary.appendingPathComponent("holder-token"),
+                                  token: "native-test-token")
+        holderStore.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080",
+            token: "an-old-group-token",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: "this-macs-own-node-credential")
+        await holderStore.joinController(address: "192.168.1.21:8080", token: "the-typed-fleet-token",
+                                         boundHosts: LocalAddresses.current().map(\.address))
+        require(FixtureProtocol.joinTokens().last == "this-macs-own-node-credential",
+                "a Mac holding its own node credential must present it, not the typed group token; "
+                + "that credential is what survives a rotation. got: \(FixtureProtocol.joinTokens())")
+        holderStore.disconnect()
         // **A re-admitted Mac still holds the credential from before**, which the controller no
         // longer knows: the same 401 path, but with a working outcome after the retry. The fresh
         // credential replaces the stale one, and the Mac is a member again.

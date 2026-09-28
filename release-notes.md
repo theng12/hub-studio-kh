@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.101 — 2026-09-28
+
+### Joining a controller now uses the token you type
+
+When you joined a Mac to a controller and typed the controller's Fleet token, the app **sent an old
+token it was holding instead**, and never sent yours. The controller refused it, correctly, and the
+message blamed the token you had just pasted — which was right. That is why neither the Hub token nor
+the Fleet token appeared to work: neither was ever sent.
+
+It happened on any Mac that had ever been part of a group before, which is every Mac you are
+re-joining. The Join button now sends what is in the box. A Mac that already holds its **own** node
+credential still presents that first — it is the one value that survives rotating the group token —
+so re-joining after a rotation keeps working exactly as it did.
+
+If you were blocked joining a controller, this is the fix. It needs to be on both Macs: update the
+controller and the node.
+
 ## 0.6.100 — 2026-09-28
 
 ### The video test would have failed on your 16 GB Mac for the wrong reason

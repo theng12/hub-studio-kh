@@ -5637,8 +5637,43 @@ final class NativeWorkspaceStore: ObservableObject {
                     credential: heldNodeCredential))
                 return attempt
             }
-            /// The credential this Mac presents first. Its own, unless it has never been issued one.
-            let own = nodeOriginCredential ?? secret
+            /// **Two credentials, and which one goes first depends on which it is.**
+            ///
+            /// A Mac's **own node credential** always goes first. It names this Mac alone, so it is
+            /// the value that survives a group-wide Fleet-token rotation, and a re-join presenting
+            /// it is correct whether a person pressed Join or the startup loop is re-announcing
+            /// this Mac. `tests/native/api_main.swift` pins that: a re-join after a rotation must
+            /// present the node credential, not the rotated group token.
+            ///
+            /// A stored **group token** has no such privilege. It is just the last group credential
+            /// this Mac was given, and it goes stale the moment it joins a different controller.
+            /// `nodeOriginCredential` treated it as if it outranked the operator — so the **Join
+            /// button**, whose screen says *"Enter the controller's address and its Fleet token"*,
+            /// sent the stored token instead and never sent the typed one. The controller answered
+            /// 401, and the retry could not save it: the retry was gated on `heldNodeCredential`,
+            /// which a Mac holding a stored group token and **no** node credential does not have.
+            /// That is not an edge case — it is every row written before per-node credentials
+            /// existed, which is every Mac the owner is re-joining. Measured in the field on a
+            /// healthy node (0.6.100, role already `agent` from an earlier group): joining a
+            /// healthy controller with that controller's correct Fleet token failed every time with
+            /// *"the two Macs hold different Fleet tokens"*.
+            ///
+            /// So: the node credential first, always; otherwise what the operator typed, when the
+            /// operator is the one asking (`startupAttemptID == nil` is the Join button; the loop
+            /// always passes one); otherwise the stored token.
+            let operatorInitiated = startupAttemptID == nil
+            let storedGroupToken = storedMembership?.token?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let own: String
+            if let held = heldNodeCredential {
+                own = held
+            } else if operatorInitiated, !secret.isEmpty {
+                own = secret
+            } else if let storedGroupToken, !storedGroupToken.isEmpty {
+                own = storedGroupToken
+            } else {
+                own = secret
+            }
             var (data, response) = try await session.data(for: try request(presenting: own))
             guard connectionID == requestConnection,
                   startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
@@ -5647,20 +5682,37 @@ final class NativeWorkspaceStore: ObservableObject {
             }
             // **A revoked credential answers 401, and a 401 says nothing about why.** The removal
             // sentence is only served to a request the controller will authenticate at all, so a
-            // 401 on this Mac's own credential is retried exactly once with the group Fleet token.
-            // One retry, two cases: a Mac the controller has **removed** hears a decision that was
-            // already made instead of retrying for ever against a bare 401, and a Mac that was
-            // **re-admitted** — whose row therefore holds no credential — is let back in and issued
-            // a fresh one.
-            if http.statusCode == 401, let ownCredential = heldNodeCredential,
-               own == ownCredential, secret != ownCredential {
-                (data, response) = try await session.data(for: try request(presenting: secret))
-                guard connectionID == requestConnection,
-                      startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
-                guard let retried = response as? HTTPURLResponse else {
-                    throw NativeAPIError.message("The controller returned no response.")
+            // 401 is answered with the *other* credential this Mac holds, exactly once — one retry,
+            // then the answer stands. Three cases: a Mac the controller has **removed** hears a
+            // decision that was already made instead of retrying for ever against a bare 401; a Mac
+            // that was **re-admitted** (its row holds no credential) is let back in and issued a
+            // fresh one; and the operator's typed token gets its turn even when this Mac was
+            // holding something else — and the held credential gets its turn when what he typed no
+            // longer works.
+            if http.statusCode == 401 {
+                // The retry presents the **other** credential, never the same value a second time.
+                // `heldNodeCredential ?? secret` was wrong here: when the held credential is what
+                // just failed, that expression offers it again and the retry is skipped — which is
+                // the re-admitted-Mac case, where the node's own credential is stale and the group
+                // token is the one that gets it back in. `tests/native/api_main.swift` failed on
+                // exactly that ("a stale credential must be retried once with the group token").
+                let alternative: String
+                if let held = heldNodeCredential, held == own {
+                    alternative = secret
+                } else if let held = heldNodeCredential {
+                    alternative = held
+                } else {
+                    alternative = secret
                 }
-                http = retried
+                if !alternative.isEmpty, alternative != own {
+                    (data, response) = try await session.data(for: try request(presenting: alternative))
+                    guard connectionID == requestConnection,
+                          startupAttemptID == nil || startupMembershipAttemptID == startupAttemptID else { return false }
+                    guard let retried = response as? HTTPURLResponse else {
+                        throw NativeAPIError.message("The controller returned no response.")
+                    }
+                    http = retried
+                }
             }
             guard (200..<300).contains(http.statusCode) else {
                 lastJoinAuthStatus = (http.statusCode == 401 || http.statusCode == 403)

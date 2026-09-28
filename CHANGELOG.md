@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.101 — 2026-09-28 · The Join button never sent the token you typed
+
+**Found in the field, on the owner's first real node.** A healthy node (0.6.100, six workers up) joining a healthy controller, with that controller's own Fleet token pasted into the box, refused every single time:
+
+> *Join the controller failed. … a credential that is neither this Mac's Hub token nor the Fleet token this Mac holds. … If the caller presented a Fleet token, the two Macs hold different Fleet tokens.*
+
+Both tokens were correct, and both worked when used directly against the controller — a real join with each returned **201**. **The app was not sending the one he typed.**
+
+`joinController` chose its first credential with
+
+```swift
+let own = nodeOriginCredential ?? secret
+```
+
+and `nodeOriginCredential` returns what this Mac **already holds** — its own node credential first, else the group token it stored — falling back to what the operator typed only if it holds nothing at all. That order is right for the **startup re-join loop**, where the Mac is re-announcing itself and nobody typed anything. It is wrong for the **Join button**, whose own screen says *"Enter the controller's address and its Fleet token"*.
+
+And the retry that should have rescued it could not: it was gated on `heldNodeCredential`, which a Mac holding a stored **group** token and **no** per-node credential does not have — the state of every row written before per-node credentials existed, which is every Mac the owner is re-joining. So the one control an operator has for correcting a membership did nothing, and the page blamed his token for a request that never carried it.
+
+- **A Mac's own node credential still goes first, always.** It names this Mac alone, so it is the value that survives a group-wide Fleet-token rotation, and a re-join presenting it is correct whether a person pressed Join or the loop is running. An existing assertion pins that — and it caught the first version of this fix, which had the operator's token outranking it.
+- **A stored group token has no such privilege.** It is only the last group credential this Mac was given, and it goes stale the moment it joins a different controller. So when the operator is the one asking (`startupAttemptID == nil`; the loop always passes one), what he typed goes first.
+- **The retry presents the *other* credential, once.** The first version computed it as `heldNodeCredential ?? secret`, which offers the same value a second time when the held one is what failed — the re-admitted-Mac case, where the group token is the one that gets it back in. A second pre-existing assertion caught that.
+
+**Proved by putting the old line back**: the native suite fails with the wire carrying `token-from-an-earlier-group` — the stale value — where the typed token should be, and passes with the fix. Both halves are pinned in `tests/native/api_main.swift`, alongside the assertions that predate them.
+
+**What this means for the rollout:** this is the control every node uses to join, and it was unusable for any Mac that had ever been in a group. It has to reach the drives before the fleet can be enrolled.
+
 ## 0.6.100 — 2026-09-28 · The recorded-open list had three items on it that were already done, and the video harness would have refused on the Mac it exists for
 
 Finishing what rounds 18–20 recorded. Three things, and the first is the one that would have cost
