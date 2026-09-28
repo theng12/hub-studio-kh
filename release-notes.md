@@ -8,9 +8,11 @@ Written to be read by the person using the app. Newest first.
 
 Two things were wrong with the video test you would run on a 16 GB Mac.
 
-**It was on none of your drives.** It existed, it was documented, and every SSD's Technical folder
-had the 8 GB Z-Image test and the chat-tier test and nothing for video. So there was no way to run
-the one test that decides whether video is a fleet feature. It is on all four drives now.
+**It was on none of your drives.** It had been put on all four on 27 September, and then our own
+drive-cleanup step removed it the next morning — because the list of files a drive is supposed to
+carry never learned about it. Every SSD's Technical folder was left with the 8 GB Z-Image test and
+the chat-tier test and nothing for video. It is in that list now, so it will be kept and refreshed
+like the others instead of quietly cleaned away.
 
 **And the copy it picked was truncated.** The test looked for the model in a second model folder at
 the top of each drive — a leftover that nothing checks. On two drives the biggest file in that folder

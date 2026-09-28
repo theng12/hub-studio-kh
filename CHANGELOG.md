@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.99 — 2026-09-28 · The video harness shipped on no drive, and the one it was pointed at held a truncated model
+## 0.6.99 — 2026-09-28 · The video harness was on every drive, and our own cleanup took it off
 
 **Two defects, found by doing the thing the handoff said had never been done: running
 `RUN-16GB-LTX-VIDEO.command` end to end.** It failed, 24 seconds in, with
@@ -28,12 +28,18 @@ reason not to select it. **The complete copy is on all four drives**, inside the
   it produces a misleading error and wastes the trip — the script now refuses (exit 3) and names the
   first incomplete copy it rejected. An explicit `STUDIOHUB_LTX_MODEL` is still honoured, loudly,
   because that is an operator naming a copy on purpose.
-- **And the harness is on the drives at all now.** It was written, documented in
-  `README-video-hardware-test.md`, and shipped **nowhere**: every kit's `Technical/` folder carried
-  the 8 GB Z-Image and Chat-tier commands and nothing for video, so the owner could not run the test
-  that decides whether video is a fleet feature — while the LTX pack sat complete on all four drives.
-  `RUN-16GB-LTX-VIDEO.command`, its runner, `ltx-video-measure.py`, `RUN-LTX-VIDEO-WORKER.command`,
-  `ltx-video-worker-run.py` and the README are now part of the kit's managed set.
+- **And the harness is on the drives at all now — it had been, and our own cleanup took it off.**
+  The six files are dated **Sep 27 01:22** in every drive's `_trash/Technical-retired/`, moved there
+  on **Sep 28 03:34–03:53** by the managed-set prune that `prepare-kit.sh` runs on every
+  preparation, because they were never added to `MANAGED`. So the drives carried the video test for a
+  day, then every `Technical/` folder held the 8 GB Z-Image and Chat-tier commands and nothing for
+  video — while the LTX pack sat complete on all four.
+  **The mechanism is the finding, not the file.** The prune is right to exist — a folder that only
+  grows is a folder nobody can read, and one stale copy of a script is how an operator runs the wrong
+  one — but **a file placed on a drive by hand is silently retired by the next preparation**, and
+  nothing requires whatever put it there to register it. `RUN-16GB-LTX-VIDEO.command`, its runner,
+  `ltx-video-measure.py`, `RUN-LTX-VIDEO-WORKER.command`, `ltx-video-worker-run.py` and the README
+  are now in `MANAGED` beside the other harnesses, so they are refreshed rather than pruned.
 
 **What the run proved, on this 32 GB Mac.** With the complete copy selected, the harness goes all the
 way through: it resolves the app's own bundled Python 3.11 video runtime with no setup, loads the
