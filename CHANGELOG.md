@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.98 — 2026-09-28 · The video lane was written down as unbuilt while it was live, offered and already making files
+
+**Asked what was wrong with the Hub's video lane, the honest answer was "nothing, and this file
+said otherwise."** The handoff's open-items list was headed *"as of 0.6.71"* — **twenty-six releases
+stale** — and its video entry read:
+
+> *Nothing about it is shipped: no worker, no manifest, no `lane_contract`. … a 7,200 s deadline …
+> correct, and unbacked until the worker exists.*
+
+**Every clause was false, and three of them had been false for a while.** Checked against the
+running system rather than against another document:
+
+| The claim | What the live Hub answers |
+|---|---|
+| no worker | `studio_type: video`, `studio_version: 0.6.97`, `online: true`, `ready: true`, serving `video.generation`. `COMPONENT_WORKERS['video'] = _video_spec` spawns it from the release manifest. |
+| no manifest | four ship, all published as `modality: video` |
+| no `lane_contract` | LTX publishes operation `video.generation`, **eight** parameters and **two measured runtimes**; Lance publishes seven |
+| the deadline is unbacked | 298.5 s (97 frames, 704×448) and 351.628 s (49 frames, 1024×576), each with its receipt, `measured_on: 32 GiB M2 Max` |
+| it will not appear as an offer | the Gateway publishes `studio-hub::baa-ai/LTX-2.3-22B-RAM-12GB-MLX`, `available: true`, no blockers, modes `image-to-video` + `text-to-video` |
+| never run end to end | 13 jobs in the worker's own store. The 11 failures are **one 35-minute debugging window** on 09-26 22:33–23:08; the two runs after it **both succeeded** (1,639,307 B in 378.0 s, 381,087 B in 110.3 s) and both `.mp4` files are on disk. |
+
+**This is `AGENTS.md`'s own rule, inverted, and the inversion is the lesson.** The rule warns that
+*"implemented"* is not *"in the build you are running"*. This was the reverse — **a shipped, live,
+offered feature written down as unbuilt** — and it is just as expensive: it sends the next session to
+build what already exists, and it told the owner his video lane was missing when it was not.
+
+The list now carries the measurements and the **real** remaining gaps, which are narrower:
+
+- **The 16 GB tier is unmeasured, and it is the tier that matters.** Every LTX number is
+  `measured_on: 32 GiB M2 Max`, while ~50 of the owner's ~53 Macs are 16 GB or below.
+- **The harness that would settle it is on no drive.** `qualification/RUN-16GB-LTX-VIDEO.command`
+  exists here; the kits' `Technical/` folders carry `RUN-8GB-Z-IMAGE.command` and
+  `RUN-CHAT-TIER.command` and nothing for video — so the owner cannot run the test from a drive even
+  though the LTX pack is on every one of them.
+- **Lance is the genuinely unbuilt engine**, and the code says so in its own comment.
+- **Two successful runs is thin evidence**, not a reliability claim.
+
+The heading carries the version it was written against, and now says when it was last re-read. **A
+status list nobody re-reads is a status list that lies**, and the version in its own heading is the
+cheapest way to notice.
+
 ## 0.6.97 — 2026-09-28 · The check that keeps the drive's index honest was refusing to run, and saying so in a way that read like success
 
 **Every drive's index page has been stamped by hand-copied numbers for as long as the stamper has

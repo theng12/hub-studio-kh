@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.98 — 2026-09-28
+
+### Your video lane already works — our notes said it didn't
+
+You asked what was wrong with the Hub's video lane. The answer is nothing, and the paperwork was
+wrong. The video worker has been live all along: it is running right now, it offers **LTX-2.3 22B**
+for both text-to-video and image-to-video, and your Gateway is already showing it to Story Studio
+with nothing blocked. It has made real video files — the last two runs both succeeded.
+
+What our notes described as "no worker, no manifest, no contract" was a status list written many
+releases ago and never re-read. It is corrected now, with the measurements.
+
+What is genuinely left is one thing that matters to you: **every video test has been on the 32 GB
+Mac Studio.** Nobody has run it on a 16 GB Mac — and that is most of your fleet. The test harness
+for it exists but was never put on the SSDs, so there is currently no way to run it from a drive.
+That is the next honest step for video, not building the lane.
+
 ## 0.6.97 — 2026-09-28
 
 ### The drive's front page now really does check itself

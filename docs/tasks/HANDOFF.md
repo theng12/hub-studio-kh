@@ -1535,7 +1535,14 @@ of what was found rather than as a statement of what is open. Closed since, each
   with low-RAM mandatory, floor moved 16 → 8, and the entry moved to `PROVEN_SMALLER`.
 - **ST-13's re-stage** — closed by the 0.6.59 refresh, and the prune has nothing left to do.
 
-### What is actually open, as of 0.6.71
+### What is actually open, as of 0.6.97
+
+> **Re-read and corrected 2026-09-28 at 0.6.97.** This list was headed *"as of 0.6.71"* while the
+> release was **0.6.97** — twenty-six releases later — and item 2 had gone from stale to **false**:
+> it described the video lane as entirely unbuilt while the lane was live, published, offered by the
+> Gateway and already producing files. See item 2 for the measurements and for what is genuinely
+> still open. **A status list nobody re-reads is a status list that lies**, and the version in its
+> own heading is the cheapest way to notice.
 
 1. ~~**The app half of stall visibility.**~~ **CLOSED 2026-09-26 (0.6.71).** The Hub published
    `stalled_seconds` on the job rows and the fleet machine rows (`03ea173`) and the app read none of
@@ -1544,12 +1551,41 @@ of what was found rather than as a statement of what is open. Closed since, each
    4 min 12 s — still held, not cancelled"* — and `tests/test_stall_visibility.py` pins all three
    together, because any one alone looks like it works. **Advisory only**, per `stall.py`'s own rule
    that a stall is surfaced and never acted on destructively.
-2. **The video lane.** Nothing about it is shipped: no worker, no manifest, no `lane_contract`. The
-   LTX runtime works (`.build/ltx-2-mlx`, 12 pipelines) and `qualification/RUN-16GB-LTX-VIDEO.command`
-   is built but **has never been run end to end**. 0.6.70 already publishes a **7,200 s** video
-   deadline and a `DURABLE_ASYNC` retry class for it — correct, and unbacked until the worker exists.
-   **`DURABLE_ASYNC` is a requirement on that worker**: it must acknowledge the job before the result
-   exists.
+2. **The video lane — CORRECTED 2026-09-28, and the correction is the finding.** This item read
+   *"Nothing about it is shipped: no worker, no manifest, no `lane_contract` … a 7,200 s deadline
+   that is unbacked until the worker exists."* **Every clause of that was false when it was
+   written, and had been for some time.** It was checked against the running system rather than
+   against another document:
+
+   | The claim | What the live Hub and Gateway answer (0.6.97, 2026-09-28) |
+   |---|---|
+   | no worker | **`video` worker is live** — `studio_type: video`, `studio_version: 0.6.97`, `online: true`, `ready: true`, serving `video.generation`, 1 slot. `COMPONENT_WORKERS['video'] = _video_spec` spawns it from the release manifest, and the 0.6.97 bundle carries `components.video`. |
+   | no manifest | **Four video manifests ship** (`ltx-2-3-22b-ram-12gb-mlx`, `gemma-3-12b-it-4bit` its text encoder, `lance-3b-video-bf16`, `lance-3b-processor-qwen2-5-vl`), and `/api/hub/model-packages` publishes all four as `modality: video`. |
+   | no `lane_contract` | **Both generation models publish one.** LTX: operation `video.generation`, eight parameters, `deadline_seconds: 7200.0`, and **two measured runtimes**. Lance: seven parameters, same deadline, none measured. |
+   | the deadline is unbacked | **It is backed by measurement.** `runtime_seconds.measured` carries **298.5 s** (image-to-video, 97 frames, 704×448, seed 42) and **351.628 s** (1024×576, 49 frames), both with their receipt paths, `measured_on: 32 GiB M2 Max (Mac14,13), mlx 0.32.2`. |
+   | it "won't appear as an offer" | **It is offered end to end.** The Gateway publishes `studio-hub::baa-ai/LTX-2.3-22B-RAM-12GB-MLX` with `modality: video`, `operation: video.generation`, `available: true`, `activation_blockers: []`, modes `image-to-video` + `text-to-video`, `generates_audio: true`. Story has the `motion` surface for `media-type="video"`. |
+   | never run end to end | **It has run.** The worker's own `video/jobs.json` holds **13 jobs** — and the 11 failures are all inside one 35-minute debugging window on 09-26 22:33–23:08 (`[METAL] Command buffer execution failed`, `ffmpeg not found on PATH`, `ffmpeg encode_single_frame failed`). **The two runs after that window both succeeded**: 09-26 23:36 → 1,639,307 bytes in 378.0 s, and 09-27 01:25 → 381,087 bytes in 110.3 s. Both `.mp4` files are in the worker's `video/outputs/`. |
+
+   **What is actually still open about video is narrower and more useful than "nothing is built":**
+
+   - **The 16 GB tier is unmeasured, and it is the tier that matters.** Every LTX measurement is
+     `measured_on: 32 GiB M2 Max`. The owner's fleet is ~53 machines and **50 of them are 16 GB or
+     below**, so the one number the rollout needs is the one nobody has. This is the same open item
+     as ledger VIDEO-6, and it has not moved.
+   - **The harness that would settle it is not on the drives.** `qualification/RUN-16GB-LTX-VIDEO.command`
+     exists in this repository and is in **no** kit's `Technical/` folder — those carry
+     `RUN-8GB-Z-IMAGE.command` and `RUN-CHAT-TIER.command` and nothing for video. So the owner
+     cannot run the 16 GB video test from a drive even though the LTX pack is on every drive.
+   - **Lance is the genuinely unbuilt engine**, and the code says so: `_ENGINE_ROUTE`'s own comment
+     reads *"`video-lance` names the lance-mlx source runner it cannot yet"*, its two packages resolve
+     to no files in a library, and its `lane_contract` carries no measured runtime.
+   - **Two successful runs is thin evidence**, not a reliability claim. Nothing has run since
+     09-27 01:25.
+
+   The lesson is the project's own, inverted: `AGENTS.md` warns that *"implemented"* is not *"in the
+   build you are running"*. This item was the reverse — **a shipped, live, offered feature written
+   down as unbuilt**, which is just as costly, because it sends the next session to build what
+   already exists and tells the owner his video lane is missing when it is not.
 3. **Chat's packaged page has still never been typed into by a human**, and streaming end-to-end
    through the Hub remains unexercised. That is an acceptance question, not a measurement.
 4. **Nothing in the product refuses on memory tier** — a decision, not a measurement, and it matches
