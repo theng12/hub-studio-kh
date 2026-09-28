@@ -22,9 +22,15 @@ Last updated: **0.6.92** (the fleet work: per-node credentials and permanent evi
 > | KH-STUDIO-ORICO | 0.6.91 | 28 / 30 | 118.8 GB (108.2 GB checked) | `0.6.91 · 92d7642` | not shipped |
 > | KH-STUDIO-UGREEN | 0.6.91 | 28 / 30 | 118.8 GB (108.2 GB checked) | `0.6.91 · 92d7642` | not shipped |
 >
-> **Lance is on NOVA only, deliberately.** The owner is not pursuing it and asked for it to be kept
-> rather than removed; copying 15.6 GB to three more drives buys nothing, and those manifests say
-> "not shipped", which is true and is what the app offers as a download.
+> **Lance: corrected 2026-09-28.** This said *"Lance is on NOVA only, deliberately … those manifests
+> say 'not shipped', which is true."* **That was wrong, and the bytes say so.** Both Lance packages
+> were physically on **all four** drives; on ATLAS, ORICO and UGREEN the processor's
+> `model/config.json` was **1301 bytes where the manifest records 1373**, so verification refused it
+> every time and the video pack could not be adopted either (it names the processor as a companion).
+> NOVA carried the corrected file. So `28/30` was not a shipping decision — it was **a stale file
+> failing verification, written up as a choice**, which is worse than either. All four drives now
+> carry the corrected bytes, and the kit index, the drive's own index and `release_kit.py`'s manifest
+> all agree on **30 of 30, `models_not_shipped: []`, no problems, 115.3 GiB**.
 >
 > **Three defects were found by preparing the drives, and all three are fixed at their cause:**
 >

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.96 — 2026-09-28 · A drive that looked deliberately lighter was carrying a file that could not verify
+
+**The owner asked why NOVA had 30 packages and the other three had 28, and whether they could be made
+the same. The recorded answer was wrong.** The handoff said *"Lance is on NOVA only, deliberately …
+those manifests say 'not shipped', which is true"*. Both Lance packages were in fact on **all four**
+drives — and on ATLAS, ORICO and UGREEN the processor's `model/config.json` was **1301 bytes where
+the manifest records 1373**, so `verify_installed` refused it every time, and refused the video pack
+with it because that pack names the processor as a companion. NOVA carried the corrected file, dated
+2026-09-27; the other three still had the 6 August copy.
+
+**So `28/30` was not a decision. It was a stale file failing verification, written up as a
+trade-off** — which is worse than either, because it reads as intentional and stops anyone looking.
+The three drives' own indexes simply omitted the package, and the omission was explained rather than
+investigated.
+
+All four drives now carry the corrected bytes and the same set: **30 of 30 packages,
+`models_not_shipped: []`, `problems: []`, 115.3 GiB, 295 model files each**, each drive's verifier
+PASS, and the kit manifest regenerated from each drive. The only remaining difference between the
+four is `.DS_Store` (4/10/4/4), which the app ignores.
+
+**Two habits this re-learns.** *Present is not correct*: the first version of the copy script
+skipped any folder that already existed, which is precisely how the stale file survived three
+preparations — the script now replaces and says so. And *a claim about what a drive carries has to be
+read off the drive*: "not shipped" was a note about intent, and it was published as a fact about
+bytes.
+
 ## 0.6.95 — 2026-09-28 · The drive's instructions now describe the drive
 
 **0.6.94 stamped the index and stopped there, and the same defect was waiting four lines below it.**

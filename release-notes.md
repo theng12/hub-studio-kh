@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.96 — 2026-09-28
+
+### All four drives now carry the same 30 models
+
+Three of the four drives were missing the Lance video model — or so the paperwork said. In fact all
+four had it, and three had an **older copy of one small config file** that failed its integrity
+check, taking the video model down with it. That is why those drives reported 28 of 30 models. The
+correct file is on every drive now and all four report the same 30, verified on each.
+
 ## 0.6.95 — 2026-09-28
 
 ### The drive's instructions now match the drive
