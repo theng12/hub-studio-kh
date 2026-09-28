@@ -55,10 +55,18 @@
       "gemma_model_id": "mlx-community/gemma-3-12b-it-4bit",
       "low_memory": true,
       "low_ram_streaming": false
-    }
+    },
+    "quantization_loader": "pack_generate.py:_patch_pipeline_quantization"
   },
   "result": {
-    "status": "running"
+    "status": "ok",
+    "failure": null,
+    "wall_seconds": 332.265,
+    "peak_metal_bytes": 14163863586,
+    "peak_metal_gb": 13.19,
+    "output": "/build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205236/generated.mp4",
+    "output_bytes": 1800551,
+    "swap_at_end": "total = 2048.00M  used = 377.19M  free = 1670.81M  (encrypted)"
   },
-  "finished_at": "2026-09-28T20:52:37+0700"
+  "finished_at": "2026-09-28T20:58:10+0700"
 }

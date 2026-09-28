@@ -20,4 +20,38 @@ warning: no transformer config (embedded_config.json / config.json) found in /Vo
 two-stage half-res snaps dims to multiples of 64; output will be 704x448 (requested 704x480). Use --single-stage for exact dims.
 [estimate] denoising: 8 steps x 1 passes over 1001 video + 101 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
 Denoising:   0%|          | 0/8 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 28 s remaining (12.6 s/forward) (first step includes warm-up)
-Denoising:   0%|          | 0/8 [00:12<?, ?it/s]Denoising:  12%|█▎        | 1/8 [00:12<01:28, 12.61s/it]
+Denoising:   0%|          | 0/8 [00:12<?, ?it/s]Denoising:  12%|█▎        | 1/8 [00:12<01:28, 12.61s/it]                                                        [estimate] denoising: ~1 min 20 s remaining (13.3 s/forward) (refined)
+Denoising:  12%|█▎        | 1/8 [00:25<01:28, 12.61s/it]Denoising:  25%|██▌       | 2/8 [00:25<01:18, 13.04s/it]Denoising:  38%|███▊      | 3/8 [00:40<01:07, 13.50s/it]Denoising:  50%|█████     | 4/8 [00:54<00:55, 13.80s/it]Denoising:  62%|██████▎   | 5/8 [01:09<00:42, 14.31s/it]Denoising:  75%|███████▌  | 6/8 [01:25<00:29, 14.91s/it]Denoising:  88%|████████▊ | 7/8 [01:41<00:15, 15.33s/it]Denoising: 100%|██████████| 8/8 [01:57<00:00, 15.55s/it]Denoising: 100%|██████████| 8/8 [01:57<00:00, 14.72s/it]
+[estimate] denoising: 3 steps x 1 passes over 4004 video + 101 audio tokens = 3 forwards (cost follows total clip length, not the regenerated window)
+Denoising:   0%|          | 0/3 [00:00<?, ?it/s]                                                [estimate] denoising: ~1 min 58 s remaining (59.0 s/forward) (first step includes warm-up)
+Denoising:   0%|          | 0/3 [00:59<?, ?it/s]Denoising:  33%|███▎      | 1/3 [00:59<01:58, 59.04s/it]                                                        [estimate] denoising: ~48 s remaining (47.9 s/forward) (refined)
+Denoising:  33%|███▎      | 1/3 [01:46<01:58, 59.04s/it]Denoising:  67%|██████▋   | 2/3 [01:46<00:52, 52.47s/it]Denoising: 100%|██████████| 3/3 [02:34<00:00, 50.11s/it]Denoising: 100%|██████████| 3/3 [02:34<00:00, 51.40s/it]
+[Loading decoders (VAE + audio + vocoder)] ...
+[Loading decoders (VAE + audio + vocoder)] done in 0.1s
+[Decoding video + audio + muxing] ...
+[vae-decode tiling] frames=64/16 est. 15.0 GB budget=16.0 GB
+[vae-decode tiling] peak Metal memory 13.19 GB
+[Decoding video + audio + muxing] done in 19.3s
+
+DONE in 332.3s — /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205236/generated.mp4 (1.8 MB)
+peak MLX Metal allocation: 13.19 GB (Metal only — this is NOT the process footprint)
+swap at end: total = 2048.00M  used = 377.19M  free = 1670.81M  (encrypted)
+record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205236/measurement.json
+      333.17 real         9.49 user        23.93 sys
+         10250469376  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1743215  page reclaims
+                1446  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  22  messages sent
+                  62  messages received
+                   0  signals received
+               17706  voluntary context switches
+              149017  involuntary context switches
+        202214557898  instructions retired
+         81612041809  cycles elapsed
+         16393217120  peak memory footprint
