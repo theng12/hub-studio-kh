@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.108 — 2026-09-29 · A node that had joined came up saying it had not
+
+**The owner, on a second Mac in the group:** *"i was just connecting and adding nodes but it doesn't
+show properly. like i already connected but when i go to check with a fresh, it still doesn't show.
+and also sometime it shows not joined a controller. but at the bottom it shows i already joined as a
+node."*
+
+**Two lines on one screen, contradicting each other, and both were reading a different property for
+the same fact.** The standing line reads the *credential* — `fleetCredentialOrigin == "adopted"` —
+and correctly said "Joined to a controller". The health note reads the *address*, found it empty, and
+said "Not joined to a controller." The dot went grey, and the Connections page had no address to
+check, which is why a fresh look showed nothing about the controller at all.
+
+**The omission is one line, on the startup restore path.** `adoptStartupMembership` copied the saved
+address into `storedMembership` — which is what the re-join loop reads, and the re-join was working
+perfectly the whole time — but never published it to `controllerAddress`, the property the screen
+reads. The app saves the address on join (`onControllerJoined` → `configuration.controllerAddress`,
+persisted in `ShellCore`), loads it at launch, and passes it in; only the last step was missing.
+
+**This is the second time this same function has hidden a state the UI needed.** Its own comment
+already records the first: the launch called `rejoinControllerIfNeeded()` before anything had fetched
+the identity, so the guard saw nil and every Mac returned silently. Same function, same shape — a
+restore that moved state into the machinery and forgot the screen — which is why the fix publishes
+the address and the test asserts the two agree.
+
+**The test that proves it had to avoid the obvious trap.** The first version asserted the published
+address after a restore that *also* joined successfully, and a successful join publishes the address
+from the join target — the same string — so the defect was invisible behind it. It passed with the
+fix removed. The assertion now runs on a restore that produces **no join** (the identity read fails
+first, which is the realistic case on a node that boots before its controller), and uses a
+**different** address from the previous block, so a merely stale value fails too. With the fix
+reverted it fails with `got: 192.168.1.21:8080` — the previous address, which is precisely what a
+node was showing: a membership that was fine, behind a screen that still said otherwise.
+
+`native/build.sh` green. **Gate: 1512 tests, OK (11 skipped).**
+
 ## 0.6.107 — 2026-09-29 · The long-form joiner levels, and Breeze TTS 2 4-bit ships
 
 Two things the owner asked for in one release, because Breeze is the reason the first one finally

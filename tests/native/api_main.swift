@@ -2061,18 +2061,38 @@ struct NativeAPITests {
                 "a node must re-join its controller on start: \(FixtureProtocol.fleetRequests())")
         require(store.fleetNote?.contains("Joined") == true,
                 "a re-join needs a visible result, got: \(store.fleetNote ?? "nil")")
-
-        // The startup identity/version pair can be briefly unavailable while the Hub finishes
-        // coming up. The regular two-second lifecycle refresh must retry the pending membership;
-        // otherwise this Mac stays detached until the operator restarts or joins by hand.
+        // **The screen and the re-join loop must read the same address.** They are two properties —
+        // `controllerAddress` is what `groupStatus` and `refreshControllerHealth` read, while
+        // `storedMembership.controllerAddress` drives the re-join — and the startup path published
+        // only the second. A node whose re-join was working perfectly therefore came up saying
+        // "Joined to a controller" in one line and "Not joined to a controller" in the next, with a
+        // grey dot and a Connections page that had no address to check at all. The owner reported
+        // exactly that from a second Mac. Asserted as *agreement* between the two, so fixing one
+        // and not the other still fails.
+        // **The screen and the re-join loop must read the same address**, and this is asserted on a
+        // restore that produces **no join** — because that is the only way to see the restore path
+        // at all. The assertion above it cannot catch this: a successful join publishes the address
+        // from the join target, which here is the same string, so the defect is invisible behind
+        // it. That is exactly how it reached the owner: on a Mac whose controller was reachable the
+        // two agreed by luck, and on the Mac where the identity read came back late they did not.
+        //
+        // The address differs from the previous block on purpose, so a published value that is
+        // simply *stale* fails here too.
         FixtureProtocol.setCredentialOrigin("adopted")
         FixtureProtocol.resetFleetRequests()
         FixtureProtocol.failNextIdentityRead()
         await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
-            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            controllerAddress: "192.168.1.99:8080", token: "fleet-token-value",
             boundHosts: LocalAddresses.current().map(\.address)))
         require(!FixtureProtocol.fleetRequests().contains("join"),
                 "a failed identity read must not guess that this Mac is a node")
+        // The two properties the UI reads: the standing line and the health note. Both must agree
+        // with the membership the app restored, or the screen contradicts itself — "Joined to a
+        // controller" beside "Not joined to a controller", with a grey dot and no address for the
+        // Connections page to check.
+        require(store.controllerAddress == "192.168.1.99:8080",
+                "a restored membership must publish its address to the screen, got: "
+                    + "\(store.controllerAddress.isEmpty ? "empty" : store.controllerAddress)")
         await store.refresh()
         let recoveredJoin = await eventually {
             FixtureProtocol.fleetRequests().filter { $0 == "join" }.count == 1

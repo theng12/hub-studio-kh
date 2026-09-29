@@ -6069,6 +6069,22 @@ final class NativeWorkspaceStore: ObservableObject {
         invalidateStartupMembershipAttempt()
         cancelMembershipRejoin()
         storedMembership = membership
+        // **The address the screen reads is not the address the re-join loop reads, and this path
+        // only ever set the second one.** `storedMembership.controllerAddress` drives the re-join,
+        // while `controllerAddress` is what `groupStatus` and `refreshControllerHealth` read — and
+        // nothing here published it. So a node that had joined, and whose re-join loop was working
+        // perfectly, came up saying two contradictory things at once: the standing line read the
+        // *credential* (`fleetCredentialOrigin == "adopted"`) and said "Joined to a controller",
+        // while the health note read the *empty address* and said "Not joined to a controller."
+        // The dot went grey and the Connections page, having no address to check, showed nothing
+        // about the controller at all. The owner reported exactly that, on a second Mac: *"it shows
+        // not joined a controller. but at the bottom it shows i already joined as a node."*
+        //
+        // It is the same oversight this function was already written to fix once — the comment
+        // above records the launch calling `rejoinControllerIfNeeded()` before anything had fetched
+        // the identity — so the address is published here as well as stored, and a test asserts the
+        // two agree rather than that one of them is right.
+        controllerAddress = membership.controllerAddress
         // The pinned release key travels with the membership: restore it before any release is
         // read, so the first read verifies against the key pinned at the last join.
         releasePublisherKey = membership.releasePublisherKey

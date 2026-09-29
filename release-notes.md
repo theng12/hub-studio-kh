@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.108 — 2026-09-29
+
+### A Mac that joined no longer says it hasn't
+
+This is the one you spotted on the other computer: **"not joined a controller" at the top while the
+bottom of the same screen said you had joined as a node.**
+
+Both lines were reading the same fact from two different places. The bottom line reads your Mac's
+**credential**, which was correct — you had joined. The line above it reads the **controller's
+address**, which came back empty, so it said you had not. As a result the dot went grey and the
+Connections page had no address to check, which is why looking again showed nothing about your
+controller even though the connection was real.
+
+**Your Mac was genuinely joined the whole time.** The re-join was working; only the part that tells
+the screen was missing, and it was missing on every restart — so a node that had joined would look
+detached until you joined again by hand.
+
+Now the address is restored to the screen along with the rest of the membership, so the badge, the
+line, the dot and the Connections page all say the same thing. If your controller is off you will
+see that it is off, which is different from not being joined — and it will say which.
+
+## 0.6.107 — 2026-09-29
 ## 0.6.107 — 2026-09-29
 
 ### Breeze TTS 2 is here — and it's the one you picked
