@@ -43,16 +43,25 @@ if [ -w /Applications ]; then NEEDS_ADMIN=0; fi
 
 echo "  This will replace any Studio Hub already installed."
 echo
-printf "  Install into Applications (needs your password)? [Y/n] "
-read answer || answer=""
-case "$answer" in
-  n|N)
-    TARGET="$HOME/Applications"
-    NEEDS_ADMIN=0
-    mkdir -p "$TARGET"
-    echo "  Installing into your own Applications folder instead - no password needed."
-    ;;
-esac
+# **Unattended when another script is driving.** Two of this file's three stops are for a person
+# who double-clicked it: which Applications folder to use, and reading the result before the window
+# closes. `Update this Mac.command` runs this as the first of two steps and has already said what
+# it is doing, so both stops would be a hang with nobody at the keyboard. The answer it would have
+# given is the default — this Mac's /Applications — so that is what it gets.
+if [ "${STUDIOHUB_UNATTENDED:-}" = "1" ]; then
+  echo "  Installing into Applications."
+else
+  printf "  Install into Applications (needs your password)? [Y/n] "
+  read answer || answer=""
+  case "$answer" in
+    n|N)
+      TARGET="$HOME/Applications"
+      NEEDS_ADMIN=0
+      mkdir -p "$TARGET"
+      echo "  Installing into your own Applications folder instead - no password needed."
+      ;;
+  esac
+fi
 
 echo
 echo "  Copying... (this takes a few seconds)"
@@ -133,5 +142,9 @@ echo "  Running this file again replaces the installed copy with the one in this
 echo "  how an update is applied. Your models, settings and output are not touched."
 echo "  If anything looks wrong later, 'Technical/verify-kit.sh' checks this kit is complete."
 echo
-echo "  Press Return to close."
-read _ || true
+# The closing pause is for a person reading the result. When `Update this Mac.command` is driving,
+# the next step follows immediately and Return never comes.
+if [ "${STUDIOHUB_UNATTENDED:-}" != "1" ]; then
+  echo "  Press Return to close."
+  read _ || true
+fi

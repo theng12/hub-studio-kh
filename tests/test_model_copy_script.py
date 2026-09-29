@@ -466,7 +466,7 @@ class LauncherTests(unittest.TestCase):
     to working from either place, and to naming the files the owner actually sees.
     """
 
-    LAUNCHERS = ("copy-models.command", "install_app.command")
+    LAUNCHERS = ("copy-models.command", "install_app.command", "Update this Mac.command")
 
     def test_each_launcher_is_a_valid_shell_script(self):
         for name in self.LAUNCHERS:
@@ -511,6 +511,7 @@ class LauncherTests(unittest.TestCase):
         if not kit.is_dir():
             self.skipTest("the SSD is not mounted on this machine")
         for relative in ("1 - Install the app.command", "2 - Copy the models.command",
+                         "Update this Mac.command",
                          "Technical/copy-models.command", "Technical/install_app.command",
                          "Technical/copy_models_for_this_mac.py"):
             self.assertTrue((kit / relative).is_file(), f"missing on the drive: {relative}")
@@ -667,3 +668,87 @@ class VoiceCopyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheUpdateCommandSkipsAnUnchangedAppTest(unittest.TestCase):
+    """`Update this Mac.command` runs the other two in order — and skips the app copy when it can.
+
+    **The owner asked the question that found this:** *"what if the app is current and i'm only
+    adding the model weight, will we still copy the app and replace it? i mean it's a waste of time
+    still."* It was. `1 - Install the app.command` copied the whole bundle on every run — quit the
+    app, copy about 5 GB, delete the old one, move the new one in — with nothing comparing the two
+    builds first. On a fleet where most Macs are already current, that is most of the work for none
+    of the result.
+
+    The assertions below are about the two ways this goes wrong: skipping when it should install,
+    and the two launchers being run beside each other instead of one after the other.
+    """
+
+    def setUp(self):
+        self.text = (ROOT / "Update this Mac.command").read_text()
+
+    def test_it_compares_the_two_builds_before_copying_anything(self):
+        self.assertIn("release-manifest.json", self.text,
+                      "the update does not read either build's identity, so it cannot skip")
+        self.assertIn("implementation_commit", self.text,
+                      "comparing the version alone would skip a rebuild of the same version")
+        self.assertIn("SKIP_APP=1", self.text, "there is no skip path at all")
+
+    def test_the_identity_is_read_without_a_python_interpreter(self):
+        # The interpreter this would otherwise borrow lives *inside the app being replaced*, which
+        # is the one thing that may not be there while the comparison is being made.
+        self.assertIn("/usr/bin/plutil", self.text)
+        self.assertNotIn("python3", self.text.split("identity()")[1].split("}")[0],
+                         "the comparison depends on an interpreter from inside the app it replaces")
+
+    def test_an_unknown_identity_installs_rather_than_skips(self):
+        # Fail open on *doing the work*: a Mac with no app, an unreadable manifest or a missing
+        # field must be installed, never assumed current. A skip is only ever the result of both
+        # identities being present and equal.
+        condition = self.text[self.text.index("if [ -n \"$KIT_ID\""):]
+        condition = condition[:condition.index("\n")]
+        self.assertIn('[ -n "$KIT_ID" ]', condition,
+                      "an empty kit identity could be compared and match an empty installed one")
+
+    def test_the_two_steps_run_in_order_never_beside_each_other(self):
+        """Step 1 replaces /Applications/Studio Hub.app; step 2 executes code from inside it."""
+        install = self.text.index("1 - Install the app.command")
+        models = self.text.index("2 - Copy the models.command")
+        # Both are *mentioned* in the header comment; the runs are the lines that invoke them.
+        run_install = self.text.index('/bin/sh "$HERE/1 - Install the app.command"')
+        run_models = self.text.index('/bin/sh "$HERE/2 - Copy the models.command"')
+        self.assertLess(run_install, run_models,
+                        "the model copy must run after the app it takes its interpreter from")
+        self.assertLess(install, models, "the header describes the steps out of order")
+        for line in self.text.splitlines():
+            if "/bin/sh" in line and ".command" in line:
+                self.assertNotIn("&", line,
+                                 "a launcher started in the background runs beside the other one")
+
+    def test_the_app_step_is_told_to_run_unattended(self):
+        # Two of install_app's stops are for a person: the Applications question and the closing
+        # "Press Return". With nobody at the keyboard they are a hang, not a confirmation.
+        self.assertIn("STUDIOHUB_UNATTENDED=1", self.text)
+        install = (ROOT / "install_app.command").read_text()
+        self.assertIn("STUDIOHUB_UNATTENDED", install,
+                      "install_app does not know it is being driven by another script")
+        self.assertIn("STUDIOHUB_ASSUME_YES=1", self.text)
+        helper = (ROOT / "qualification" / "copy_models_for_this_mac.py").read_text()
+        self.assertIn("STUDIOHUB_ASSUME_YES", helper,
+                      "the model copy would still stop for a Return that never comes")
+
+    def test_it_says_which_of_the_two_it_is_doing(self):
+        # A silent skip is indistinguishable from a failed install: the operator sees "updating"
+        # and then no mention of the app at all.
+        self.assertIn("already this exact build", self.text)
+
+    def test_the_kit_ships_it(self):
+        prepare = (ROOT / ".build" / "prepare-kit.sh").read_text()
+        self.assertIn('cp -f "$ROOT/Update this Mac.command"', prepare,
+                      "the command exists but never reaches a drive")
+        # The chmod is written with line continuations, so the assertion joins them first rather
+        # than pinning one line's punctuation — what matters is that the name is in that command.
+        joined = prepare.replace("\\\n", " ")
+        chmod = [line for line in joined.splitlines() if line.startswith("chmod +x")]
+        self.assertTrue(any("Update this Mac.command" in line for line in chmod),
+                        "a command that is not executable cannot be double-clicked")

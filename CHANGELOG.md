@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.110 — 2026-09-29 · One command to update a Mac, and it skips the app copy when it can
+
+**The owner, on updating a fleet:** *"what if the app is current and i'm only adding the model
+weight, will we still copy the app and replace it? i mean it's a waste of time still. or that's
+already properly guarded?"*
+
+**It was not guarded at all.** `1 - Install the app.command` copied the whole bundle on **every**
+run — quit the app, copy ~5 GB to a staging folder, delete the installed copy, move the new one in —
+with nothing comparing the two builds first. On a fleet where most Macs are already current, that is
+most of the work for none of the result, and it is the part that needs an administrator password.
+
+**`Update this Mac.command`** runs the two steps in order:
+1. Reads each bundle's own `release-manifest.json` — **version *and* `implementation_commit`** — and
+   **skips the copy when they match**, saying so.
+2. Otherwise installs the app, then copies the models. No `Press Return` between them.
+
+**Version alone would not do.** Two builds can share `0.6.110` and differ, which is exactly what a
+rebuild of the same release is; the commit is what makes the comparison mean "this build", and a
+test stubs the commit read out to prove the guard fails without it.
+
+**The identity is read with `plutil`, not Python** — deliberately, because the interpreter this
+would otherwise borrow lives *inside the app being replaced*, which is the one thing that may not
+be there while the comparison is being made. And an unreadable or missing manifest **installs**
+rather than skips: a skip is only ever the result of both identities being present and equal.
+
+**Why the two steps cannot run beside each other** — the other half of the question he asked. `1`
+replaces `/Applications/Studio Hub.app`; `2` runs its helper with the Python from inside that same
+app. Started together, `2` would either find no app and fall back to the copy on the drive — which
+fails if the drive is unplugged — or keep running from files `1` has just deleted. So this runs them
+in order and waits. **The waiting is the feature**, and a test asserts neither is started in the
+background.
+
+**Two launchers learned to be driven.** `install_app.command` stops twice for a person — which
+Applications folder, and reading the result — and honours `STUDIOHUB_UNATTENDED=1` to skip both. The
+model copy's *"press Return to start"* is answered by `STUDIOHUB_ASSUME_YES=1`, an explicit variable
+rather than a piped newline, because a pipe would also answer any *future* prompt added there,
+silently. Running either file on its own is unchanged and still asks.
+
+Both numbered commands remain, unchanged in behaviour, for when a step needs looking at alone.
+`12 tests` in `tests/test_model_copy_script.py`, one **proved to fail** with a version-only
+comparison. **Gate: 1519 tests, OK (11 skipped).**
+
 ## 0.6.109 — 2026-09-29 · A controller that booted before its network was unreachable, and looked fine
 
 **The owner, after a power cut:** *"the controller is headless. It was off then it turned it self

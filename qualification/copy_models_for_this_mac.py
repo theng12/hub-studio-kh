@@ -643,11 +643,22 @@ def main() -> int:
     else:
         # A prune on its own still has to reach this prompt: it moves GB the operator may not
         # expect to lose, and "nothing to copy" used to return before ever asking.
-        answer = input(
-            "  Press Return to start, or type n and press Return to stop: ").strip().lower()
-        if answer == "n":
-            print("  Nothing was copied or moved.")
-            return 0
+        #
+        # **`STUDIOHUB_ASSUME_YES` is how the unified update answers this for you.** The prompt is
+        # for a person who double-clicked this file and should know that gigabytes are about to
+        # move; when `Update this Mac.command` runs this as one of two steps it has already said
+        # what it is doing, and a second stop with nobody at the keyboard is a hang rather than a
+        # confirmation. It is deliberately an explicit variable rather than a piped newline: a pipe
+        # would answer any *future* prompt added here as well, silently.
+        if os.environ.get("STUDIOHUB_ASSUME_YES", "").strip() == "1":
+            print("  Updating, as asked. (Run '2 - Copy the models.command' directly to be asked "
+                  "first.)")
+        else:
+            answer = input(
+                "  Press Return to start, or type n and press Return to stop: ").strip().lower()
+            if answer == "n":
+                print("  Nothing was copied or moved.")
+                return 0
 
     # Carry the verified record across, so models that are already current keep proving
     # themselves without hashing 29 GB again. The app's own state folder must exist before any

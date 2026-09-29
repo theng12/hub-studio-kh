@@ -2,6 +2,31 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.110 — 2026-09-29
+
+### One file to update a Mac, and it stops copying the app when it doesn't need to
+
+You asked whether it still copies the whole app when the app is already current, just to add a
+model. **It did — every time.** About 5 GB copied, the old one deleted, the new one moved in, plus
+the password prompt, for a Mac that already had that exact build.
+
+There is now **`Update this Mac.command`** on the kit. Double-click it and it:
+
+- **Compares the two builds first.** If this Mac already has the exact build the kit carries, it
+  says so and **skips the copy** — that's the slow part, and there's nothing to gain from it.
+- Otherwise installs the app, **then** copies the models, one after the other, without asking you to
+  press Return in between.
+- If it did have to install, it tells you which it is doing, so a skip never looks like a failure.
+
+**Don't start `1` and `2` at the same time**, though — one file is still the answer there. `1`
+replaces the app, and `2` runs using the app it just replaced, so started together `2` would either
+find no app or work from files that are being deleted underneath it. The new file does them in the
+right order and waits, which is the part that makes it safe.
+
+`1 - Install the app` and `2 - Copy the models` are still there and unchanged, for when you want to
+look at one step on its own.
+
+## 0.6.109 — 2026-09-29
 ## 0.6.109 — 2026-09-29
 
 ### The controller no longer comes up unreachable after a restart
