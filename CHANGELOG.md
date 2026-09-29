@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.106 — 2026-09-29 · A clip that will not play now says why, and names the Mac that has it
+
+**The owner, asked whether the Hub should keep its own copy of every finished artifact so a result
+stays readable when its worker goes offline:**
+
+> *"No not at all. no need to copy. just give a proper clear reason why it can't be played. 502 is no
+> proper reason. it must be understandable from a glance. so i know why it didn't play."*
+
+So the behaviour is unchanged and the **explanation** is the fix. That is the right split: copying
+every output to the controller would put a second full copy of every render on every machine in the
+fleet, against a written decision (`backend/job_storage.py`: *"Image and voice generation artifacts
+live on the worker Macs"*), to avoid a sentence.
+
+**What he was reading was `Local engine HTTP 502: worker artifact could not be read`.** Two things
+were wrong with it and the status code was the smaller one. "502" names the layer that failed rather
+than the cause; and "worker artifact" names a component he has never seen — there is no worker
+artifact anywhere in what he uses, there is a clip and there is the Mac that made it. Only the Hub
+knows which Mac holds a result, so the Hub's own `detail` is now the message and it says the three
+things a person needs: **what** happened, **which Mac**, and **what fixes it**.
+
+`standalone.artifact_unavailable_reason` tells the two causes apart, because their fixes differ:
+
+- **A worker missing from the roster** is a Mac that is switched off or disconnected —
+  *"This result was made on studio-2 and is stored on that Mac's disk rather than in the Hub, so it
+  can only be played while studio-2 is running and connected — and it is not running or not
+  connected to this Hub right now. Start that Mac, or wake it, and play this again."*
+- **A worker still registered that does not answer** is one that is running and unhealthy, and the
+  same sentence says "not answering this Hub" instead.
+
+A single-Mac install has no machine name and gets the local form, pointing at this app's own
+services. The third refusal on that route — a stored reference that does not match the worker's
+origin — is deliberately **left as an internal error**: it is a Hub-side integrity failure the
+operator neither caused nor can act on, and dressing it in "start that Mac" would send them to
+restart a machine that is running perfectly well.
+
+**The app half.** `validateResponse` used to prefix every refusal with `Local engine HTTP N:`. It now
+shows the Hub's sentence first and appends the code — `"…play this again. (HTTP 503)"` — because the
+code is what makes a report diagnosable and a sentence the operator reads first costs nothing.
+Removing it entirely broke `a real failure must carry the engine's own answer`, which was right to
+complain: the fix was the order, not the absence.
+
+`tests/test_artifact_failure_reason.py` (11 tests) pins both halves: the sentence names the Mac, the
+machine falls back to the `role@machine` studio id when the item does not state one, the reason
+carries no status code and is a sentence, all three refusal points on the route are as described,
+and the app shows the Hub's `detail` with the code after it. `native/build.sh` green.
+
 ## 0.6.105 — 2026-09-29 · The reveal button refused without saying why, and macOS never showed the tooltip
 
 **0.6.104 made Show in Folder work. This makes it explain itself.** Both halves were the same report

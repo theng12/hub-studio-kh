@@ -8140,8 +8140,26 @@ final class NativeWorkspaceStore: ObservableObject {
             if http.statusCode == 422, let reasons = Self.refusalDetail(data), !reasons.isEmpty {
                 throw NativeAPIError.refusals(reasons)
             }
-            let detail = Self.errorDetail(data) ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-            throw NativeAPIError.message("Local engine HTTP \(http.statusCode): \(detail)")
+            // The Hub's own `detail` is shown as the message, with the status code **after** it
+            // rather than in front of it.
+            //
+            // It used to read "Local engine HTTP 502: worker artifact could not be read", which the
+            // owner rejected on sight: *"502 is no proper reason. it must be understandable from a
+            // glance. so i know why it didn't play."* He is right, and the sentence behind the code
+            // was no better, naming a component ("worker artifact") he has never seen. Only the Hub
+            // knows which Mac holds a result and why it cannot reach it, so **its `detail` is the
+            // explanation** and the app delivers it unedited.
+            //
+            // The code is kept and moved to the end, not dropped: it is what makes a report
+            // diagnosable, and a sentence the operator reads first costs nothing. A localised
+            // status string is the fallback for a refusal that arrives with no body at all.
+            if let detail = Self.errorDetail(data), !detail.isEmpty {
+                throw NativeAPIError.message("\(detail) (HTTP \(http.statusCode))")
+            }
+            throw NativeAPIError.message(
+                "The local engine refused this request: "
+                + HTTPURLResponse.localizedString(forStatusCode: http.statusCode).lowercased()
+                + " (HTTP \(http.statusCode)).")
         }
     }
 

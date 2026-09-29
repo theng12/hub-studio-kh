@@ -455,6 +455,42 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
     }
 
 
+def artifact_unavailable_reason(item: dict[str, Any], why: str) -> str:
+    """Why a finished result cannot be served, as a sentence the operator can act on.
+
+    The owner, on a clip that would not play and on the 502 behind it: *"just give a proper clear
+    reason why it can't be played. 502 is no proper reason. it must be understandable from a
+    glance. so i know why it didn't play."* He is right, and the status code was the smallest part
+    of what was wrong.
+
+    A finished result is not stored in the Hub. It sits on the Mac that generated it — a written
+    decision, not a defect (`backend/job_storage.py`: *"Image and voice generation artifacts live on
+    the worker Macs"*) — and the Hub serves it by proxying to that Mac. So the fact the operator
+    needs is **which Mac**, and the action available is to start or reconnect it. "502" says
+    neither, and "worker artifact could not be read" names a component they have never seen.
+
+    The two causes are told apart because their fixes differ: a worker missing from the roster is a
+    Mac that is off or disconnected, while a worker still registered that does not answer is one
+    that is running and unhealthy. `why` carries the distinction and this turns it into the
+    sentence.
+    """
+    studio = str(item.get("studio") or "").strip()
+    machine = str(item.get("machine") or "").strip()
+    if not machine and "@" in studio:
+        machine = studio.split("@", 1)[1]
+    role = studio.split("@", 1)[0] or "worker"
+    if machine in ("", "local"):
+        return (
+            f"This result was made by the local {role} engine and is stored on this Mac rather than "
+            f"in the Hub, and that engine is {why}. Start Studio Hub's services and play it again."
+        )
+    return (
+        f"This result was made on {machine} and is stored on that Mac's disk rather than in the "
+        f"Hub, so it can only be played while {machine} is running and connected — and it is {why} "
+        "right now. Start that Mac, or wake it, and play this again."
+    )
+
+
 def _summary(batch: dict[str, Any]) -> dict[str, Any]:
     return {**broker.batch_summary(batch), "items": [
         broker.public_item(batch, item) for item in batch["items"]
@@ -2172,7 +2208,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "artifact is not available")
         worker = next((row for row in monitor.registry if row["id"] == item.get("studio")), None)
         if worker is None:
-            raise HTTPException(503, "artifact worker is unavailable")
+            raise HTTPException(503, artifact_unavailable_reason(
+                item, "not running or not connected to this Hub"))
         suffix = broker.MODALITY.get(batch.get("modality"), (None, None, None))[2]
         expected = f"/api/generate/jobs/{item.get('studio_job_id')}/{suffix}"
         parsed = urlsplit(str(artifact_url))
@@ -2191,13 +2228,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if (not suffix or not same_origin or parsed.query or parsed.fragment or parsed.path != expected):
             # Never follow a worker-supplied URL outside its private origin or
             # attach the worker credential to an arbitrary location.
+            #
+            # This one stays internal: it is a Hub-side integrity refusal, not something the
+            # operator caused or can act on, and naming the worker's address to them would be
+            # noise. It says so rather than borrowing the "could not be read" sentence above, which
+            # would send them to restart a Mac that is running perfectly well.
             raise HTTPException(502, "worker artifact reference is invalid")
         release_reader = output_storage.acquire_reader(batch_id=batch_id, item_index=item_index)
         try:
             client, response = await open_worker_artifact(worker, expected)
         except httpx.HTTPError as exc:
             release_reader()
-            raise HTTPException(502, "worker artifact could not be read") from exc
+            raise HTTPException(503, artifact_unavailable_reason(
+                dict(item, machine=item.get("machine") or worker.get("machine")),
+                "not answering this Hub")) from exc
 
         async def close_stream() -> None:
             await response.aclose()

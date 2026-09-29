@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.106 — 2026-09-29
+
+### A clip that will not play now tells you why, and which Mac has it
+
+You asked what happens when a finished clip will not play, and said "502" is not an answer. You are
+right, and it is not the answer you get any more.
+
+The reason is not a fault in the clip. A finished result is kept **on the Mac that made it**, not
+inside Studio Hub — the Hub only fetches it from that Mac when you press play. So if that Mac is off,
+asleep or disconnected, there is nothing to fetch. Studio Hub now says exactly that, and names the
+machine:
+
+> *"This result was made on studio-2 and is stored on that Mac's disk rather than in the Hub, so it
+> can only be played while studio-2 is running and connected — and it is not running or not connected
+> to this Hub right now. Start that Mac, or wake it, and play this again."*
+
+If the Mac is on but its engine is not answering, it says that instead, because the thing to try is
+different. And on a single-Mac setup it points at this app's own services rather than at another
+computer.
+
+We did **not** change where results are kept, per your answer — no copies, just a clear reason.
+
 ## 0.6.105 — 2026-09-29
 
 ### Show in Folder now tells you why when it can't
