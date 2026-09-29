@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.6.111 — 2026-09-30 · A Mac that is reserved on the far side is a wait, not a verdict
+
+**Reported from the Gateway:** a batch submitted with `routing: "pool"` failed its *first* item,
+terminally —
+
+```json
+{"item_index": 0, "code": "WORKER_TERMINAL_ERROR",
+ "message": "HTTP 409: local is reserved for other work on this Mac"}
+```
+
+— while the rest of the pool sat idle. The owner's question was the right one: **"should the work
+get queued instead of failing outright?"** Yes, and now it does.
+
+**It was a classification error, not a scheduling error.** `_eligible_studios` already refuses to
+hand an item to a machine in `busy_machines()` — that filter was never the problem. But
+`busy_machines()` is **this Hub's own lease table only**, and a *peer's* reservation can never be in
+it: the controller's row for a node uses `machine` = **node id** (`fleet_nodes.py:498`), the serving
+node's own worker row uses `machine="local"` (`packaging/hub_worker.py:344`), and the peer publishes
+**no busy fact** — `/api/hub/resources` carries host and per-studio up/down only. So the 409 at the
+door is the **first** place the controller can learn a peer is reserved. Pre-filtering it is
+impossible today without a new published field.
+
+**The same condition was two different things.** Inside one Hub, a lease is a *skip*. Over the peer
+surface it was a *terminal failure*. A transient lease was reported as a verdict — and with every
+machine busy, every item in the batch died on its first 409.
+
+**Two fixes, and the second is why the first was invisible.**
+
+1. `_worker_http_error` read the code only from *inside* `detail` (the worker's shape:
+   `{"detail": {"code": …}}`). The peer surface puts it *beside* it — `standalone._peer_refusal_response`
+   writes `{"detail": "<reason>", "code": "MACHINE_BUSY"}` — so **every peer refusal arrived
+   untyped** and landed as `WORKER_TERMINAL_ERROR` naming no cause at all. It now reads both shapes.
+2. `MACHINE_BUSY` gets a **deferral** branch: `state="queued"`, `retry_at` +30 s, the machine avoided
+   for 90 s so the pool offers the work elsewhere, and `tries -= 1`. **The refusal arrives before
+   this item's worker saw the request**, so no attempt is spent and no duplicate is possible.
+
+**The code is required, not just the 409.** A 409 is also how a peer names an operator decision no
+other Mac can fix — `MODEL_PAUSED`, `MACHINE_DISABLED`, `STUDIO_DISABLED` — and those stay
+**terminal**. Retrying those elsewhere cannot help, so they must not be laundered into a wait.
+
+**The peer side is untouched.** `409 MACHINE_BUSY` is the pinned wire contract
+(`tests/test_studio_proxy.py:366-403`); what changed is that this Hub now waits instead of dying.
+
+**Also fixed, and it was going to get much more visible:** when every eligible machine is inside a
+temporary avoid window, the dispatcher wrote *"Waiting for a Voice Studio where the selected shared
+voice is synchronized"* — **for any modality**. `_shared_voice_allows_studio` returns `True` for every
+non-voice modality, so for an image batch the avoid window is the *only* thing that can reach that
+line. The note now distinguishes the two waits and names the machine when it is an avoid window.
+Shipping the deferral without this would have made a wrong sentence the ordinary outcome of every
+pool dispatch.
+
+**Verification.** Gate: `unittest discover -s tests -p 'test_*.py'` → **1519 tests, OK (12 skipped),
+606 s, exit 0**. The new cases in `tests/hub_regression/cases/test_pool_peer_machine_busy.py` are
+**mutant-proved four ways**, each failing with a clean assertion rather than an error: reverting
+`broker.py` to `HEAD` (2 failed — `error` vs `queued`, and `WORKER_TERMINAL_ERROR` vs
+`MODEL_PAUSED`), disabling only the code-read (2 failed), removing only the deferral branch
+(1 failed, reproducing the reported message verbatim), and restoring only the old voice-only note
+(1 failed, reproducing the misleading sentence verbatim).
+
+**A second red test was found and was *not* mine.** The gate's first run failed
+`test_the_kit_ships_it`: it pinned the literal `chmod +x` in `prepare-kit.sh`, which was
+deliberately changed to `chmod 755` in 0.6.110 (`+x` adds the execute bit to whatever mode the file
+arrived with, so a source written 600 landed on a drive as 711 beside 755 neighbours). **The script
+was right and the test was stale**, introduced by the previous release and left red. The assertion
+now checks the property it was written to protect — that the mode grants its owner execute — and was
+**proved to fail** when the mode is mutated to 644.
+
 ## 0.6.110 — 2026-09-29 · One command to update a Mac, and it skips the app copy when it can
 
 **The owner, on updating a fleet:** *"what if the app is current and i'm only adding the model

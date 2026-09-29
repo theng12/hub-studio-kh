@@ -749,6 +749,18 @@ class TheUpdateCommandSkipsAnUnchangedAppTest(unittest.TestCase):
         # The chmod is written with line continuations, so the assertion joins them first rather
         # than pinning one line's punctuation — what matters is that the name is in that command.
         joined = prepare.replace("\\\n", " ")
-        chmod = [line for line in joined.splitlines() if line.startswith("chmod +x")]
-        self.assertTrue(any("Update this Mac.command" in line for line in chmod),
-                        "a command that is not executable cannot be double-clicked")
+        lines = [line for line in joined.splitlines()
+                 if "Update this Mac.command" in line and line.startswith("chmod ")]
+        self.assertTrue(lines, "a command that is not executable cannot be double-clicked")
+        # `chmod +x` is not the only spelling, and pinning it turned this test red for a
+        # deliberate reason: the launcher trio is chmod'd `755`, because `+x` adds the execute
+        # bit to whatever mode the file arrived with, so a source written 600 landed on a drive
+        # as 711 beside 755 neighbours. The property worth keeping is the one in the assertion
+        # message — the operator must be able to double-click it — so assert the mode grants its
+        # owner execute, whichever way it is spelled.
+        for line in lines:
+            mode = line.split()[1]
+            if mode.startswith("+"):
+                continue
+            self.assertEqual(int(mode, 8) & 0o100, 0o100,
+                             f"chmod {mode} does not make it executable for its owner")

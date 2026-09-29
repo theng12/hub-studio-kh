@@ -3,7 +3,93 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.109** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
+Last updated: **0.6.111** (a Mac reserved on the far side is a wait, not a verdict; 2026-09-30).
+
+> **0.6.111 — a peer that says "I'm busy" was a verdict, not a wait.**
+>
+> **Reported from the Gateway**, a `routing: "pool"` batch failing its *first* item terminally while
+> the rest of the pool sat idle: `{"item_index": 0, "code": "WORKER_TERMINAL_ERROR", "message":
+> "HTTP 409: local is reserved for other work on this Mac"}`. The owner asked the right question —
+> *"should the work get queued instead of failing outright?"* — and the answer was yes.
+>
+> **This is a classification bug, and the distinction matters for anyone reading the diff later.**
+> `_eligible_studios` already filters `busy_machines()`; that filter was never the problem. But
+> `busy_machines()` is **this Hub's own lease table only**, and a peer's reservation cannot appear in
+> it — the controller's row for a node uses `machine` = **node id** (`fleet_nodes.py:498`), the
+> serving node's worker row uses `machine="local"` (`packaging/hub_worker.py:344`), and
+> `/api/hub/resources` publishes host + per-studio up/down with **no busy fact at all**. So the 409
+> at the door is the *first* place the controller can learn it, and a pre-selection filter is
+> impossible today without publishing a new field. **Do not go looking for the missing filter; it is
+> not missing, it is unreachable.**
+>
+> The same condition was a **skip** inside one Hub and a **terminal failure** over the peer surface.
+> A transient lease was reported as a verdict.
+>
+> **Two defects, and the second hid the first.** `_worker_http_error` read the code only from
+> *inside* `detail` (the worker nests it: `{"detail": {"code": …}}`), while `standalone._peer_refusal_response`
+> puts it *beside* it — so **every peer refusal arrived untyped** and published as
+> `WORKER_TERMINAL_ERROR` with no nameable cause. Then `MACHINE_BUSY` got a deferral: `state="queued"`,
+> `retry_at` +30 s (`MACHINE_RESERVED_RETRY_S`, its own constant so a memory-wait retune cannot
+> silently retune it), machine avoided 90 s, `tries -= 1` — **safe because the refusal arrives before
+> this item's worker saw the request**, so no attempt is spent and no duplicate is possible.
+>
+> ⚠ **`MODEL_PAUSED` / `MACHINE_DISABLED` / `STUDIO_DISABLED` stay terminal on purpose.** A 409 is
+> also how a peer names an operator decision no other Mac can fix. Deferring those would launder a
+> decision into a wait and retry it forever. The **code** is required, not the status.
+>
+> **The peer side is deliberately untouched** — `409 MACHINE_BUSY` is the pinned wire contract
+> (`tests/test_studio_proxy.py:366-403`).
+>
+> **Shipped alongside it:** the avoid-window note. When every eligible machine is avoided, the
+> dispatcher wrote *"Waiting for a Voice Studio where the selected shared voice is synchronized"*
+> **for any modality** — `_shared_voice_allows_studio` returns `True` for every non-voice modality,
+> so for an image batch the avoid window is the *only* thing that can reach that line. This was
+> flagged as a wart to leave alone; **it was fixed instead, because shipping the deferral makes that
+> branch the ordinary outcome of every pool dispatch** and a wrong sentence in the common path is a
+> defect, not a cosmetic one. `_no_candidate_note` now separates the two waits.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1519 tests, OK (12 skipped), 606 s, exit 0.**
+> The **first** run was red on `test_the_kit_ships_it`, and it was **not** this change — it was
+> **left red by 0.6.110**. The test pinned the literal `chmod +x` in `.build/prepare-kit.sh`, which
+> that release deliberately changed to `chmod 755` (with a comment giving the reason: `+x` adds the
+> execute bit to whatever mode the file arrived with, so a source written 600 landed on a drive as
+> 711 beside its 755 neighbours). **The script was right; the test was stale.** It now asserts the
+> property it was written for — that the mode grants its owner execute — and was **proved to fail**
+> with the mode mutated to 644. ⚠ If a release ever leaves the gate red, read *which* test before
+> assuming the working tree caused it; `prepare-kit.sh` is gitignored, so `git status` cannot show
+> you that file.
+>
+> `tests/hub_regression/cases/test_pool_peer_machine_busy.py` is **mutant-proved four ways**, every
+> one failing on a clean assertion rather than an error: revert to `HEAD` (2 failed, `error` vs
+> `queued` and `WORKER_TERMINAL_ERROR` vs `MODEL_PAUSED`), code-read disabled (2 failed), deferral
+> removed (1 failed, reproducing the reported message verbatim), old voice-only note restored
+> (1 failed, reproducing the misleading sentence verbatim).
+>
+> **The "87 s" is settled — and the standing hypothesis was wrong.** Read from the **controller's
+> own record**, not from the Gateway's summary: gateway job `a96453ad-feb6-4da3-b925-4f3863afa3f2` →
+> Hub batch **`1cedcc2431`**, on provider `studio-hub-9701220bf30f` = **`studio-mac-1200-m4-24-256`**
+> (`100.114.4.52:47873`). ⚠ **That is not the 1500 controller** — check the roster before naming a
+> machine; the recovered thumbnail in `_orchestra` came from a *different* Hub and a different job.
+> Measured: `created_at` 18:40:36.712 → `finished_at` 18:40:48.184 = **11.47 s**, and the item's own
+> `execution_started_at` 18:40:36.922 → terminal 18:40:48.184 = **11.26 s**. **There is no 87 s in
+> this batch**; `duration_s` and `runtime_s` are both **0.01**, because the work was refused at the
+> door and nothing was generated.
+>
+> The item finished on **`studio-mac-1202-m2-8-256-hub:image`** — a *joined peer*, which is exactly the
+> case this fix covers, and the message says *"local is reserved"* because the **serving** node names
+> itself `local` (`hub_worker.py:344`), confirming the root cause above from the far side.
+>
+> **`tries = 2`, and the retryable path is why — which kills the old hypothesis.** The item was
+> dispatched twice (`tries` increments per dispatch, `broker.py:3238`); attempt 1 failed retryably and
+> attempt 2 met the 409. The previous note guessed *"a prior retryable failure set a 90 s avoid-window
+> and the item retried into the reservation."* **It cannot have: the retryable branch
+> (`broker.py:4042-4046`) re-queues after `RETRY_DELAYS_S[0]` = 3 s and never touches
+> `avoid_machines` at all** — that key is absent from the item in the stored record. Only the
+> failed-worker branch sets an avoid window. Do not re-chase that lead.
+>
+> **What is still not explained:** why ~11 s elapsed between the first dispatch and the retry, when
+> the retry delay is 3 s and the worker's own measured duration is 0.01 s. That gap is the
+> dispatcher/peer round trip, not a reservation, and it is not a defect on its own.
 
 > **0.6.109 — a controller that booted before its network was unreachable, and looked fine.**
 >

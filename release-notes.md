@@ -2,6 +2,55 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.111 — 2026-09-30
+
+### A busy Mac now makes your work wait, instead of failing
+
+You asked the right question about a job that died:
+
+> *Should the work get queued instead of failing outright?*
+
+**Yes. That's what it does now.** If a Mac in your pool is reserved by something else at the moment
+your work arrives, the job no longer **fails**. It **waits**, and then it runs — on that Mac if it
+frees up, or on a different free Mac if another one opens first.
+
+Before this, the first thing that happened was a failure, and it happened even when the rest of the
+pool was sitting idle:
+
+```
+WORKER_TERMINAL_ERROR — HTTP 409: local is reserved for other work on this Mac
+```
+
+The waiting is deliberate. A reservation is temporary by nature — the work holding it finishes, or it
+expires — so it's a wait, not a rejection. **No attempt is used up by waiting**, and nothing is
+generated twice.
+
+### Two things are still genuine failures, and still fail loudly
+
+Some refusals aren't temporary, and we won't pretend they are:
+
+| What the Mac said | What happens |
+| --- | --- |
+| The **model is paused** | Fails — retrying elsewhere won't fix a decision someone made |
+| The **Mac or Studio is switched off** | Fails — same reason |
+
+Those stay as errors, with the reason attached.
+
+### The waiting message now tells you what's actually happening
+
+While your work waits for a free Mac, the Hub used to say:
+
+> *"Waiting for a Voice Studio where the selected shared voice is synchronized"*
+
+**— even for an image or video job.** It now says it's waiting for a free machine, and why that
+machine isn't available (reserved by other work, or very recently failed). The Voice message still
+appears where it belongs: a voice clone that really isn't synchronized yet.
+
+### Nothing changed about the Mac at the other end
+
+The refusal itself — the `409` that says *"this Mac is busy"* — is unchanged and stays that way.
+This is a different Hub learning to **wait** instead of **give up**. Your other Macs need nothing.
+
 ## 0.6.110 — 2026-09-29
 
 ### One file to update a Mac, and it stops copying the app when it doesn't need to

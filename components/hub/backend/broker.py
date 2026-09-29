@@ -232,6 +232,11 @@ RECOVERY_WINDOW_S = 120.0  # cover a full slow M1 generation after a dropped con
 RETRY_DELAYS_S = (3.0, 10.0)
 INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
+# A Mac another queue has reserved is not free *yet*, which is the same kind of wait as a
+# memory block and a different one to tune: it keeps its own interval rather than borrowing
+# CAPACITY_RETRY_S, so changing how long a memory wait sleeps cannot silently retune how often
+# a controller re-offers work to a busy peer.
+MACHINE_RESERVED_RETRY_S = 30.0
 HANDOFF_RETRY_S = 15.0
 FAILED_WORKER_AVOID_S = 90.0
 MACHINE_FAILURE_THRESHOLD = 2
@@ -822,6 +827,23 @@ def _is_transport_failure(exc: BaseException, message: str) -> bool:
         "connection refused", "server disconnected", "remote protocol error",
         "timed out", "timeout", "network is unreachable", "broken pipe",
     ))
+
+
+def _is_machine_reservation_refusal(exc: BaseException) -> bool:
+    """Whether this failure is a Mac in the pool that is reserved right now.
+
+    `standalone._peer_admission_refusal` applies the *serving* Mac's own lease before its
+    worker sees a peer request, and answers ``409 {"detail": ..., "code": "MACHINE_BUSY"}``
+    while the lease is held. That is the condition the Hub's own scheduler treats as a skip
+    through `busy_machines()` - a lease is transient by construction, because the work
+    holding it finishes or its TTL expires - so an item that meets it must wait, not fail.
+
+    The code is required, not just the status. A 409 is also how a peer names an operator
+    decision no other Mac can fix (a disabled machine or Studio, a paused model), and those
+    must stay terminal.
+    """
+    return (getattr(exc, "status_code", None) == 409
+            and str(getattr(exc, "error_code", "") or "") == "MACHINE_BUSY")
 
 
 def _item_allows_studio(item: dict, studio: dict, now: float) -> bool:
@@ -2961,6 +2983,27 @@ def _version_tuple(value: object) -> tuple[int, int, int] | None:
     return tuple(map(int, match.groups())) if match else None
 
 
+def _no_candidate_note(batch: dict, queued: list[dict], studio: dict) -> str:
+    """Why this studio took no item this pass, in the operator's words.
+
+    Two different waits end at the same line and used to share one sentence. An
+    item held back because its shared voice is not synchronized on this Mac, and
+    an item held back because this Mac is inside a temporary avoid window - a
+    reservation another queue holds, or a recent failure - are unrelated, and
+    only the first one is about Voice. `_shared_voice_allows_studio` returns True
+    for every non-voice modality, so for an image batch *only* the avoid window
+    can reach this point, and it was still reported as "Waiting for a Voice
+    Studio". That was a latent wording bug; the MACHINE_BUSY deferral makes the
+    avoid window the ordinary outcome of a pool dispatch, so it has to be named
+    for what it is.
+    """
+    if any(not _shared_voice_allows_studio(batch, item, studio) for item in queued):
+        return ("Waiting for a Voice Studio where the selected "
+                "shared voice is synchronized")
+    return ("Waiting for a free machine: every eligible one is temporarily "
+            "avoided (reserved by other work, or recently failed)")
+
+
 def _supports_genstudio_voice_evidence(batch: dict, studio: dict) -> bool:
     """Keep customer jobs off workers that cannot report immutable revisions."""
     if (
@@ -3125,10 +3168,7 @@ async def _dispatch_loop():
                         None,
                     )
                     if compatible_index is None:
-                        b["governor_note"] = (
-                            "Waiting for a Voice Studio where the selected "
-                            "shared voice is synchronized"
-                        )
+                        b["governor_note"] = _no_candidate_note(b, queued, studio)
                         continue
                     # ── model-aware dispatch (heterogeneous machines) ──
                     # A studio only gets work for models it actually has. This
@@ -3231,15 +3271,30 @@ async def _dispatch_loop():
 
 
 def _worker_http_error(response) -> RuntimeError:
+    """One refusal from a worker or a peer Hub, classified.
+
+    Two producers answer with a code, and they put it in different places. A worker nests it
+    inside ``detail`` (``{"detail": {"code": ..., "detail": ...}}``); the peer surface puts it
+    beside it (``{"detail": "<reason>", "code": "MACHINE_BUSY"}`` -
+    `standalone._peer_refusal_response`). Reading only the nested shape left every peer refusal
+    untyped, so a reservation arrived as a bare 409 and its item was published as
+    `WORKER_TERMINAL_ERROR` with no cause the operator or the scheduler could act on.
+    """
+    payload: object = None
     try:
-        detail = (response.json().get("detail")
-                  if "json" in response.headers.get("content-type", "")
-                  else response.text)
+        if "json" in response.headers.get("content-type", ""):
+            payload = response.json()
+        detail = payload.get("detail") if isinstance(payload, dict) else response.text
     except (AttributeError, ValueError):
         detail = response.text or "worker request failed"
     error = RuntimeError(f"HTTP {response.status_code}: {detail}")
     error.status_code = response.status_code
-    error.error_code = detail.get("error_code") or detail.get("code") if isinstance(detail, dict) else None
+    if isinstance(detail, dict):
+        error.error_code = detail.get("error_code") or detail.get("code")
+    elif isinstance(payload, dict):
+        error.error_code = payload.get("code") or payload.get("error_code")
+    else:
+        error.error_code = None
     error.model_unavailable = _model_file_failure(str(detail), error.error_code)
     error.retryable = (error.model_unavailable or response.status_code in {408, 425, 429}
                        or response.status_code >= 500)
@@ -3651,6 +3706,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 item["error_code"] = "MODEL_FILES_UNAVAILABLE"
                 _mark_model_failure(studio, b["model"], None,
                                     "MODEL_FILES_UNAVAILABLE", str(rejection))
+            elif getattr(rejection, "error_code", None):
+                # Record what the refusal called itself. Without it a typed answer - a
+                # reservation, a paused model, a disabled machine - reached the item as the
+                # generic WORKER_TERMINAL_ERROR, and the deferral below had nothing to key on.
+                item["error_code"] = _sanitize_public_error_code(rejection.error_code)
             raise rejection
         if b["modality"] == "voice":
             job = _voice_job_from_response(r)
@@ -3931,6 +3991,26 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item["error"] = f"waiting for capacity: {message}"
             item["retry_at"] = now + (3.0 if handoff["released"] else CAPACITY_RETRY_S)
             item.setdefault("capacity_wait_started_at", now)
+            item.setdefault("avoid_machines", {})[
+                studio.get("machine", "local")
+            ] = now + FAILED_WORKER_AVOID_S
+        elif _is_machine_reservation_refusal(e) and not b["cancelled"]:
+            # Another queue holds the Mac the pool chose. That answer arrives before this
+            # item's worker saw the request, so nothing was submitted and no attempt was
+            # spent: keep the item queued, and take the reserved Mac out of the next
+            # selection so the dispatcher offers it to a free machine in the pool - or to
+            # this one again once the lease is released. This is the peer's `busy_machines()`
+            # skip, which is a skip in `_eligible_studios` and used to be a terminal failure
+            # here: the Gateway reported a `pool` batch dying as item 0 with
+            # `HTTP 409: local is reserved for other work on this Mac` while the rest of the
+            # pool was idle, and that path is reproduced in
+            # `tests/hub_regression/cases/test_pool_peer_machine_busy.py`. The machine is
+            # healthy and working, so it is never marked failed; the batch's own lease,
+            # cancellation and the stall detector stay the bounds on how long this waits.
+            item["tries"] = max(0, int(item.get("tries") or 0) - 1)
+            item["state"] = "queued"
+            item["error"] = f"waiting for a free machine: {message}"
+            item["retry_at"] = now + MACHINE_RESERVED_RETRY_S
             item.setdefault("avoid_machines", {})[
                 studio.get("machine", "local")
             ] = now + FAILED_WORKER_AVOID_S
