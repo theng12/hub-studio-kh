@@ -3,8 +3,37 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.107** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
+Last updated: **0.6.108** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
 
+> **0.6.108 — a node that had joined came up saying it had not.**
+>
+> **The owner, on a second Mac:** *"it shows not joined a controller. but at the bottom it shows i
+> already joined as a node."* Two lines on one screen, each reading a **different property** for the
+> same fact. The standing line reads the credential (`fleetCredentialOrigin == "adopted"`) and
+> correctly said "Joined to a controller"; the health note reads the **address**, found it empty, and
+> said "Not joined to a controller." The dot went grey and the Connections page had no address to
+> check, which is why a fresh look showed nothing about the controller at all.
+>
+> **The omission is one line.** `adoptStartupMembership` copies the saved address into
+> `storedMembership` — what the **re-join loop** reads, and the re-join was working the whole time —
+> but never published it to `controllerAddress`, the property the **screen** reads. The app saves the
+> address on join (`onControllerJoined` → `configuration.controllerAddress`, persisted in
+> `ShellCore`), loads it at launch and passes it in; only the last step was missing, on every
+> restart.
+>
+> **Second time this function has hidden state the UI needed.** Its own comment records the first
+> (the launch called `rejoinControllerIfNeeded()` before anything had fetched the identity). Same
+> function, same shape — a restore that moved state into the machinery and forgot the screen.
+>
+> ⚠ **The test had to dodge a trap worth remembering.** Its first version asserted the published
+> address after a restore that *also* joined successfully — and a successful join publishes the
+> address from the **join target**, the same string, so the defect was invisible behind it and the
+> test **passed with the fix removed**. It now runs on a restore that produces **no join** (the
+> identity read fails first, the realistic case on a node booting before its controller) and uses a
+> **different** address from the previous block, so a merely stale value fails too. With the fix
+> reverted it fails with `got: 192.168.1.21:8080` — the previous address, exactly what the owner was
+> seeing. **An assertion placed after the thing that would mask it is not an assertion.**
+>
 > **0.6.107 — the joiner levels, and Breeze ships.**
 >
 > **The joiner had no loudness matching for any family.** On Breeze's own 14 sections of a
