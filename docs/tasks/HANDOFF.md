@@ -3,7 +3,33 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.104** (four defects on one screen — a dead Show in Folder, no row dividers, a transport that moved the list, and no generation date — each one a thing written once per panel; 2026-09-29).
+Last updated: **0.6.105** (the reveal button refused without saying why, and macOS never shows a tooltip on a disabled control; 2026-09-29).
+
+> **0.6.105 — Show in Folder explained itself in a place macOS never displays.**
+>
+> 0.6.104 made the button *work*. This makes it *say why* when it cannot. It was
+> `.disabled(!job.canRevealArtifact)` with the reason in a `.help` tooltip — and **macOS does not
+> show a tooltip for a disabled control**, so the button declined in exactly the one situation where
+> it had something to say, and said it nowhere on screen.
+>
+> Always clickable now; a refused reveal reports through `fileActionError` (the workspace banner
+> every other file action uses) with two different sentences for two different causes: **no path
+> published** means the job ran on another Mac, and **a path with no file behind it** means the file
+> was moved or cleaned up. The old single sentence called both "not a file on this Mac", which is
+> wrong for a local file that was deleted.
+>
+> Gate 1478 tests / 11 skipped. `native/build.sh` green. **The two behavioural tests were proved to
+> fail with the old disabled button restored** — a test that has never been red is a test nobody has
+> checked.
+>
+> **Still open, and it is a decision rather than a bug:** the artifact lives on the Mac that made it
+> and the Hub only proxies it (`standalone.open_worker_artifact` → `peers.studio_request`), so a job
+> becomes unreadable when its worker is offline. The stale-address half is **already fixed** — the
+> route re-resolves the worker's current origin at request time — so what remains is genuinely "that
+> Mac is off". And the Hub not keeping a copy is **deliberate**: `job_storage.py` says *"Image and
+> voice generation artifacts live on the worker Macs"* in its own docstring. Changing it means
+> copying every output to the controller on every machine in the fleet, so it is put to the owner as
+> a decision. **Do not do it quietly.**
 
 > **0.6.104 — four things the job rows were missing, and every one of them was the same mistake.**
 >
