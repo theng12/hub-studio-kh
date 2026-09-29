@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.105 — 2026-09-29 · The reveal button refused without saying why, and macOS never showed the tooltip
+
+**0.6.104 made Show in Folder work. This makes it explain itself.** Both halves were the same report
+— *"even on this machine, i can't click show in finder too"* — and only the first was a bug in the
+data.
+
+`revealButton` was `.disabled(!job.canRevealArtifact)` with its explanation in a `.help` tooltip:
+*"This result is not a file on this Mac, so there is no folder to show."* **macOS does not show a
+tooltip for a disabled control.** So the button declined in exactly the one situation where it had
+something to say, and said it nowhere — a grey control with no explanation on screen, which is the
+state this project keeps having to fix.
+
+The button is always clickable now. Where the file is here, Finder selects it. Where it is not, the
+row reports why through the workspace banner, which is where every other file action in the app
+reports — and it says which of two different things went wrong:
+
+- **No path published** — the Hub only records a path for a job this Mac produced, so this means the
+  job ran on another Mac. The message names that and points at the Mac that has the file.
+- **A path with no file behind it** — the file has been moved, renamed or cleaned up since. This is
+  a different fact, and the old sentence got it wrong: it called a local file that had been deleted
+  "not a file on this Mac".
+
+Also new `NativeJob.revealUnavailableReason`, and four tests in `tests/test_local_artifact_reveal.py`
+(17 in the file now) pinning that the button carries no `.disabled`, that a refused reveal reaches
+`fileActionError` rather than a tooltip, and that the two causes stay distinguishable. The two
+behavioural ones were proved to fail with the old disabled button restored.
+
+`native/build.sh` green.
+
 ## 0.6.104 — 2026-09-29 · The four things the job rows were missing
 
 **The owner, from screenshots of his own Audio and Jobs pages:** *"the audio scrubber is appearing and

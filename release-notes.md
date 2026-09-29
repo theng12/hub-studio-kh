@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.105 — 2026-09-29
+
+### Show in Folder now tells you why when it can't
+
+The button works now — but it was still going grey and saying nothing about it. Its explanation was
+in a tooltip, and macOS doesn't show a tooltip on a greyed-out button, so there was nowhere on
+screen to read the reason.
+
+It is always clickable now. If the file is on this Mac, Finder opens with it selected. If it isn't,
+Studio Hub says so at the top of the page, and it tells you which of two things happened:
+
+- **The clip was made on another Mac** — so there is no file for it here. It names the Mac that has it.
+- **The file has been moved or cleaned up** — it says the file is no longer where it was recorded.
+
+Before, both of those got the same sentence, and that sentence was wrong for the second one.
+
 ## 0.6.104 — 2026-09-29
 
 ### Show in Folder works now — it never could

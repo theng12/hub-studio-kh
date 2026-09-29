@@ -30,6 +30,7 @@ from components.hub.backend import broker
 
 ROOT = Path(__file__).resolve().parents[1]
 SWIFT = ROOT / "native" / "StudioAPI.swift"
+VIEWS = ROOT / "native" / "StudioViews.swift"
 
 _PATH = "/Users/someone/Library/Application Support/StudioHub/media/clip-1.wav"
 
@@ -161,6 +162,50 @@ class TheAppIsReadyToReceiveItTest(unittest.TestCase):
         self.assertIsNotNone(reveal, "revealArtifact is gone")
         assert reveal is not None
         self.assertIn("activateFileViewerSelecting", reveal.group(0))
+
+
+class TheReasonIsOnScreenTest(unittest.TestCase):
+    """*"the reason isn't visible to you anywhere — which I'd call a real gap."*
+
+    The button was `disabled(...)` with its explanation in a `.help` tooltip, and **macOS does not
+    show a tooltip for a disabled control**. So the one situation the button refuses in was the one
+    situation it explained in nothing, and the owner read a grey button as a broken one. A control
+    that declines silently is the state this project keeps having to fix.
+    """
+
+    def setUp(self) -> None:
+        self.swift = SWIFT.read_text(encoding="utf-8")
+        self.views = VIEWS.read_text(encoding="utf-8")
+
+    def test_the_button_is_never_disabled(self) -> None:
+        button = re.search(r"private func revealButton\(.*?\n    \}", self.views, re.S)
+        self.assertIsNotNone(button, "revealButton is gone")
+        assert button is not None
+        self.assertNotIn(".disabled", button.group(0),
+                         "the reveal button refuses silently again — a disabled control's tooltip "
+                         "is never shown, so its reason is invisible")
+
+    def test_a_refused_reveal_says_why_on_screen(self) -> None:
+        button = re.search(r"private func revealButton\(.*?\n    \}", self.views, re.S)
+        assert button is not None
+        self.assertIn("revealUnavailableReason", button.group(0),
+                      "a reveal that cannot happen must report its reason")
+        self.assertIn("fileActionError", button.group(0),
+                      "the reason must go to the workspace banner, which is where every other "
+                      "file action reports — a print or a tooltip is not visible to the operator")
+
+    def test_the_two_causes_are_told_apart(self) -> None:
+        # No path means the job ran on another Mac. A path with no file behind it means the file
+        # moved. The old single sentence said "not a file on this Mac" for both, which is wrong for
+        # a local file that was cleaned up.
+        reason = re.search(r"var revealUnavailableReason: String \{.*?\n    \}", self.swift, re.S)
+        self.assertIsNotNone(reason, "revealUnavailableReason is gone")
+        assert reason is not None
+        body = reason.group(0)
+        self.assertIn("artifactPath, !artifactPath.isEmpty", body,
+                      "the two causes must be distinguished by whether a path was published")
+        self.assertIn("another Mac", body, "the remote case must say so in full")
+        self.assertIn("no longer at", body, "the moved-or-cleaned-up case must say so in full")
 
 
 if __name__ == "__main__":

@@ -1561,18 +1561,26 @@ struct StudioContent: View {
         }
     }
 
-    /// Point Finder at the file the job produced.
+    /// Point Finder at the file the job produced, or say why it cannot be pointed there.
     ///
-    /// Disabled — with the reason in its tooltip — when the artifact is not on this Mac, because a
-    /// button that opens an empty Finder window is worse than one that says why it cannot.
+    /// This button used to be *disabled* whenever the artifact was not a file on this Mac, with the
+    /// reason tucked into a `.help` tooltip — and macOS does not show a tooltip for a disabled
+    /// control. So the reason was visible nowhere, and the owner read the grey button as broken:
+    /// *"even on this machine, i can't click show in finder too."* A control that refuses without
+    /// saying why is the state this project keeps having to fix.
+    ///
+    /// It is always clickable now. Where the file is here, Finder selects it; where it is not — a
+    /// job that ran on another Mac, or one whose file has since been cleaned up — the row says so,
+    /// through the same banner every other file action reports through.
     @ViewBuilder
     private func revealButton(_ job: NativeJob) -> some View {
-        Button("Show in Folder") { workspace.revealArtifact(job) }
-            .disabled(!job.canRevealArtifact)
-            .help(job.canRevealArtifact
-                  ? "Reveal \(job.artifactPath ?? "") in Finder"
-                  : "This result is not a file on this Mac, so there is no folder to show.")
-            .rowAction()
+        Button("Show in Folder") {
+            if !workspace.revealArtifact(job) { fileActionError = job.revealUnavailableReason }
+        }
+        .help(job.canRevealArtifact
+              ? "Reveal \(job.artifactPath ?? "") in Finder"
+              : job.revealUnavailableReason)
+        .rowAction()
     }
 
     private func imageJobRow(_ job: NativeJob) -> some View {

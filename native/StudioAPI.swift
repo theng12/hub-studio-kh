@@ -1954,6 +1954,25 @@ struct NativeJob: Identifiable, Equatable {
         return FileManager.default.fileExists(atPath: artifactPath)
     }
 
+    /// Why Finder cannot be pointed at this job's file, said in full.
+    ///
+    /// Two different situations produce an unavailable reveal and they need different answers. The
+    /// Hub publishes a path **only** for a job this Mac produced, so a missing path means the job
+    /// ran elsewhere; a path that is present with no file behind it means the file has been moved
+    /// or cleaned up since. The old fixed sentence — *"This result is not a file on this Mac"* —
+    /// lived in a `.help` tooltip on a **disabled** button, and macOS never shows a tooltip for a
+    /// disabled control, so the owner read a greyed-out button with the reason visible nowhere:
+    /// *"even on this machine, i can't click show in finder too."* It is reported through the
+    /// workspace banner now, where every other file action reports.
+    var revealUnavailableReason: String {
+        guard let artifactPath, !artifactPath.isEmpty else {
+            return "This result was made on another Mac, so there is no file for it on this one. "
+                + "Open Studio Hub on that Mac to show it, or Save a copy while it is online."
+        }
+        return "The file this job produced is no longer at \(artifactPath) — it has been moved, "
+            + "renamed or cleaned up since it was made."
+    }
+
     /// When this job was generated, as a person reads it — nil when the Hub stamped no time.
     ///
     /// Every row said what made a clip and how long it took, but never *when*. Both job lists run
