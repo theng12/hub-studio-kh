@@ -3,7 +3,60 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.105** (the reveal button refused without saying why, and macOS never shows a tooltip on a disabled control; 2026-09-29).
+Last updated: **0.6.107** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
+
+> **0.6.107 — the joiner levels, and Breeze ships.**
+>
+> **The joiner had no loudness matching for any family.** On Breeze's own 14 sections of a
+> 1,227-word script the integrated loudness spans **4.9 LU** (−30.0 to −25.0 LUFS). The obvious fix
+> was measured and **rejected**: one linear gain per section narrowed the span only **4.9 → 4.3 LU**,
+> because the quiet sections are exactly the ones with tall peaks (crest factor 18.4–22.7 dB), so the
+> ceiling capped their gain and the step survived. FFmpeg's EBU R128 `loudnorm` per section brings the
+> same material to **1.5 LU** and produces **−17.50 LUFS / −1.42 dBTP — identical to the sample the
+> owner approved.** That is what ships, with the rejected measurement recorded beside the constants
+> in `long_form_policy.py` so nobody re-derives it. Per family via `catalog.FAMILIES`
+> (`section_loudness_target_lufs`, `_true_peak_ceiling_dbtp`, `_loudness_range_lu`; `None` opts out).
+>
+> ⚠ **The pass is length-preserving — measured ratio 1.000 at 50 ms, 200 ms and 1 s — and both
+> guards on that are load-bearing.** `loudnorm` writes a **0-frame file** for a pathologically short
+> input rather than failing, and the first version accepted it on rate and channel count alone, so a
+> section's audio was silently replaced by nothing. It was caught by the *existing*
+> `test_qwen_clone_join_preserves_segment_audio_and_pause` (30 samples expected, 10 returned). An
+> empty-file **and** a length guard now abandon levelling for the whole join rather than mixing
+> levelled and unlevelled sections. Missing FFmpeg joins unlevelled and says so.
+>
+> **Breeze TTS 2 4-bit (MLX) ships**: `mlx-community/Breeze-TTS-2-mlx-4bit` at revision `3a06d26b`
+> (12 files / 3,042,440,328 bytes), a `design_clone_or_direct` resolver, the `MLX_AUDIO_FAMILIES`
+> entry, and **the 0.60 s join pause the owner chose by ear**. 16 GB floor — RSS held flat at
+> ~3.3 GB but the kernel peak-footprint reading ranged 5.41–23.93 GB and was never settled, so the
+> claim is the tier that is not at risk. **It refuses a transcript-less voice rather than
+> substituting a placeholder**: Breeze conditions its clone prompt on `f"{speaker}{ref_text}"`, so
+> Pocket TTS's `"."` fallback would not degrade the clone, it would condition it on the wrong words.
+>
+> **The voice runtime moved 0.4.7 → 0.5.7**, and it was audited and then **rendered** before the pin
+> moved — this is the mflux shape, where a runtime swap shipped unnoticed for five releases. Every
+> call the worker makes is byte-identical, no dependency floor rises, **769 voice tests pass
+> identically**, and a 16-render A/B on the one family with a real change (**Qwen3-TTS clone
+> sampler**: 64-token repetition window; EOS no longer restored after top-k/top-p filtering) found
+> **16/16 terminating by EOS and 16/16 accepted** by the project's own Whisper gate. The audio is
+> genuinely different (same-seed cross-version waveform correlation ≈ 0); the shipped **sectioned**
+> path is where the delta is smallest, 1–3 tokens.
+>
+> ⚠ **Two residual risks, stated rather than buried.** The **1.7B Base was not measured** — no real
+> copy exists on this disk, only dangling symlinks onto `/Volumes/KH-STUDIO-ATLAS` — and it is a
+> different talker with a different budget, so these results **do not transfer to it**. And the rare
+> EOS-failure tail did not reproduce in **either** version, so it is bounded (≤1 in 5 single-shot,
+> ≤1 in 3 sectioned per arm at 95%) without being resolved. The pin is one line either way:
+> `2c9461f5…` **is** v0.4.7, `94c77162…` is v0.5.7.
+>
+> **The regenerated lock changed nothing but the pin** (`uv pip compile`, same constraints).
+> `research/st01-runtime-contracts.json` records the lock's SHA-256 for both voice entries and was
+> updated — a gate caught it, which is the gate working.
+>
+> Gate **1512 tests, OK (11 skipped)**, 613 s. `native/build.sh` green. **Verified in the installed
+> bundle, not the checkout**: `/Applications/Studio Hub.app` is 0.6.107 / `3dc006a`, its voice
+> runtime reports `mlx-audio 0.5.7`, `breeze_tts` imports from it, and the family and manifest are
+> installed.
 
 > **0.6.105 — Show in Folder explained itself in a place macOS never displays.**
 >
