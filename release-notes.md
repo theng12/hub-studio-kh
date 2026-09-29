@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.103 — 2026-09-29
+
+### Every studio's "Recent" list now scrolls to everything
+
+The small list beside each generator — Recent images, Recent audio, and the same on Music, Video and
+Subtitle — stopped at five items and would not move. It looked like it was refusing to scroll; in
+fact it was only ever given five things to show, so there was nothing below to reach. Every one of
+those panels now lists your whole history and scrolls normally.
+
 ## 0.6.102 — 2026-09-28
 
 ### There is one token to give out, and the screen now says which

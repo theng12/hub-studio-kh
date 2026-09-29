@@ -1380,7 +1380,7 @@ struct StudioContent: View {
                     if let job = previewImageJob { Text(job.text).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     Divider()
                     HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.imageJobs.prefix(5)) { imageJobRow($0) } } }
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.imageJobs) { imageJobRow($0) } } }
                         .frame(minHeight: 80, maxHeight: 150)
                 }
                 .padding(.leading, 20)
@@ -1665,7 +1665,7 @@ struct StudioContent: View {
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.musicJobs.prefix(5)) { musicJobRow($0) }
+                                ForEach(workspace.musicJobs) { musicJobRow($0) }
                             }
                         }
                         .frame(minHeight: 80, maxHeight: 170)
@@ -2037,7 +2037,7 @@ struct StudioContent: View {
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.videoJobs.prefix(5)) { job in videoJobRow(job) }
+                                ForEach(workspace.videoJobs) { job in videoJobRow(job) }
                             }
                         }
                     }
@@ -2423,7 +2423,7 @@ struct StudioContent: View {
                             } else {
                                 ScrollView {
                                     LazyVStack(alignment: .leading, spacing: 12) {
-                                        ForEach(workspace.audioJobs.prefix(5)) { jobRow($0, compact: true) }
+                                        ForEach(workspace.audioJobs) { jobRow($0, compact: true) }
                                     }
                                 }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2876,7 +2876,7 @@ struct StudioContent: View {
                         // for the very same job.
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.subtitleJobs.prefix(5)) { job in subtitleJobRow(job) }
+                                ForEach(workspace.subtitleJobs) { job in subtitleJobRow(job) }
                             }
                         }
                         .frame(minHeight: 60, maxHeight: 170)

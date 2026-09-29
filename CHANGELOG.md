@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.103 — 2026-09-29 · Every studio's "Recent" list was capped at five, so it could not scroll
+
+**The owner, with a screenshot:** *"audio generation tab only shows a few and i can't scroll it about.
+like there's more stuff but it's stuck there. and i think the same goes to the other generators as
+well."*
+
+Both halves were right. Each studio page wrapped its list in a `ScrollView` and then handed that
+scroll view `.prefix(5)` — so five rows were all it ever had. **A list capped at five cannot be
+scrolled by definition**, and the panel read as *refusing* to move rather than as having nothing more
+to show. The same five-line mistake was in **Image, Music, Video, Audio and Subtitle**; the cap was
+copied along with the layout, which is why he saw it on more than one page.
+
+Nothing explained the 5. It reads as "recent", but a recent list is one the reader can scroll past —
+this was a ceiling, and it hid his own history behind a scroll view that had nothing to scroll.
+
+Five caps removed. `tests/test_recent_job_lists.py` pins it by shape rather than by count: no studio
+list may pass a fixed slice of its jobs, each must still render its list (the other way to pass is to
+stop showing it), and there must be at least as many scroll views as lists. Proved to fail with the
+cap restored.
+
 ## 0.6.102 — 2026-09-28 · One token to copy, and the screen says which
 
 **The owner asked to merge the two tokens into one: *"can we just make it use only 1 token? do we really need both?"* — then chose the version that keeps the safety property: *"one token to copy — merge the story, keep the secrets."***
