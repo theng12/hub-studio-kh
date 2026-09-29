@@ -109,6 +109,34 @@ require(wildcardConfig.unavailableListenAddresses(assigned: []).isEmpty,
 require(wildcardConfig.bindableListenHost(assigned: []) == "0.0.0.0",
         "the wildcard must survive the bindable filter")
 
+// **A headless Mac that boots before its network comes up is the case this exists for.**
+//
+// The read above is a single instant, and at boot every chosen address is usually *not up yet*
+// rather than gone. The owner's power cut put his controller in exactly that state: the app is a
+// login item, so it started while Ethernet was negotiating and Tailscale had not come up, bound
+// itself to loopback, and then answered its own health check and wrote its ready file while **no
+// node could reach it at all**. He fixed it by stopping and starting the services by hand — which
+// was simply the same read taken a minute later.
+//
+// So the missing set is remembered and re-checked. Asserted in both directions, because the defect
+// was not "the address is missing" — that was answered correctly — it was treating a temporary
+// absence as permanent.
+require(ShellConfiguration.arrivedAddresses(
+            missing: ["192.168.99.99"], assigned: ["127.0.0.1"]) == [],
+        "an address that is still missing has not arrived")
+require(ShellConfiguration.arrivedAddresses(
+            missing: ["192.168.99.99"], assigned: ["127.0.0.1", "192.168.99.99"]) == ["192.168.99.99"],
+        "an address that has appeared since the start must be noticed, or the Hub stays on "
+            + "loopback until somebody restarts it by hand")
+require(ShellConfiguration.arrivedAddresses(
+            missing: ["192.168.99.99", "100.64.0.1"], assigned: ["100.64.0.1"]) == ["100.64.0.1"],
+        "one address arriving is enough to restart, and the other must not be reported as arrived")
+require(ShellConfiguration.arrivedAddresses(
+            missing: ["192.168.99.99"], assigned: ["192.168.99.99", "192.168.99.99"]) == ["192.168.99.99"],
+        "a duplicated interface entry must not make one address look like two")
+require(ShellConfiguration.arrivedAddresses(missing: [], assigned: []).isEmpty,
+        "a Hub that started with every address it wanted has nothing to wait for")
+
 var noAutomaticRecovery = restoredConfig
 try noAutomaticRecovery.setRecoveryPolicy(maxAttempts: 0, backoffSeconds: [1])
 require(noAutomaticRecovery.recoveryMaxAttempts == 0, "zero recovery attempts must persist as disabled")

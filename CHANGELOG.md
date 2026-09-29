@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.109 — 2026-09-29 · A controller that booted before its network was unreachable, and looked fine
+
+**The owner, after a power cut:** *"the controller is headless. It was off then it turned it self
+back on with the restart and the backend thing. But I tried to connect to it from the node. It
+doesn't work I think the ip was blocked. I fiddled around for a bit then I just just stop server and
+then start server again. Only then the node can be connect… I have to restart it every time there's
+a new node. this is a terrible bug."*
+
+**Nothing was blocked — there is no IP blocking anywhere in the Hub, no lockout and no rate limit,
+and no per-IP state at all.** What happened is worse and simpler. `bindableListenHost()` reads this
+Mac's addresses **once, at the instant the services start**, and treats a chosen address that is not
+there as one this Mac *no longer has*, dropping it and binding whatever remains — **loopback, if
+nothing else is left**. On a headless Mac after a power cut that instant is the worst one available:
+the app is a login item, so it starts while Ethernet is still negotiating, DHCP is unanswered and
+Tailscale has not come up.
+
+The Hub then came up on `127.0.0.1`, **answered its own health check, wrote its ready file, and
+reported "Local services ready"** — while being reachable by no node on the network at all. That is
+the whole defect: a service that is healthy by every measure it publishes and unreachable by the only
+measure that matters. His manual stop/start was not superstition, it was the same read taken a minute
+later, after the network had arrived.
+
+**The second symptom is the same cause.** A controller bound to loopback cannot probe its nodes, so
+they showed offline until he restarted it — *"after I've connected the machines, it's still shown
+offline, until I click restart or sth."* One cause, both symptoms.
+
+Two changes:
+
+- **A missing address is remembered, not accepted.** `addressesMissingAtStart` keeps the set, and the
+  three-second supervisor loop restarts the services the moment one of them appears. The spawn clears
+  the set, so a Hub the operator has *deliberately* narrowed is restarted at most once, never in a
+  loop. Nothing narrows permanently and he does not have to know any of this.
+- **The note stops saying something untrue.** It read *"This Mac no longer has 192.168.1.21"* — a
+  statement of fact from a single reading, and the wrong fact. It now says the Mac does not have the
+  address **yet**, that this is usual for a minute after a restart, and that the services will restart
+  by themselves when it appears.
+
+`ShellConfiguration.arrivedAddresses` is the decision, extracted pure with injectable addresses so the
+case that matters — a headless boot where the address turns up a minute later — is tested without
+waiting for a network. Five assertions in `tests/native/main.swift`, and one of them was **proved to
+fail** with the comparison stubbed out.
+
+`native/build.sh` green. **Gate: 1512 tests, OK (11 skipped).**
+
 ## 0.6.108 — 2026-09-29 · A node that had joined came up saying it had not
 
 **The owner, on a second Mac in the group:** *"i was just connecting and adding nodes but it doesn't

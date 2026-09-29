@@ -439,6 +439,25 @@ struct ShellConfiguration {
         return kept.isEmpty ? "127.0.0.1" : kept.joined(separator: ",")
     }
 
+    /// Which of the addresses this Mac was missing at start it has since acquired.
+    ///
+    /// The distinction this exists for: at boot a chosen address is usually **not up yet** rather
+    /// than gone, and one reading cannot tell the two apart. The app used to treat the first reading
+    /// as final, which on a headless Mac that boots before its network binds the Hub to loopback —
+    /// healthy, answering its own health check, and reachable by no node at all, until somebody
+    /// stopped and started the services by hand. So the missing set is kept and re-checked, and this
+    /// answers "has it arrived?" without a second copy of the comparison.
+    ///
+    /// Pure, and `assigned` is injectable, so the case that matters — a headless boot where the
+    /// address turns up a minute later — is testable without waiting for a network.
+    static func arrivedAddresses(
+        missing: [String],
+        assigned: [String] = LocalAddresses.current().map(\.address)
+    ) -> [String] {
+        let present = Set(assigned)
+        return missing.filter(present.contains)
+    }
+
     /// Every entry must be an IPv4 address or the wildcard. Refusing anything else keeps a
     /// typo from silently widening what can reach this Mac.
     static func requireBindableHost(_ host: String) throws {

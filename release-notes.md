@@ -2,6 +2,39 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.109 — 2026-09-29
+
+### The controller no longer comes up unreachable after a restart
+
+This is the one you called a terrible bug, and you were right. Two things you saw were the same
+fault.
+
+**Nothing blocked your IP** — there is no blocking, no lockout and no rate limit anywhere in Studio
+Hub. What happened is that the Hub reads this Mac's network addresses **once**, at the moment it
+starts. After a power cut a headless Mac starts its login items *before* the network is up, so its
+own address is not there yet — and Studio Hub read that as "this Mac no longer has that address" and
+started on loopback only.
+
+On loopback the Hub answers its own health check perfectly. It said **"Local services ready"** while
+no machine on the network could reach it. That is why clicking stop and then start fixed it, and why
+it seemed like luck: by then the network was up, and the same reading came back with the address in
+it.
+
+**The offline nodes were the same fault.** A controller listening only on loopback cannot check on
+its nodes either, so they showed offline — not because they were, but because it could not ask.
+
+Now:
+
+- **The Hub remembers which addresses were missing and restarts itself the moment one appears.** You
+  do not have to stop and start anything, and it does not narrow permanently.
+- **The message tells the truth.** It used to say this Mac *no longer has* that address, as a fact,
+  from one reading. It now says it does not have it **yet**, that this is normal for a minute after a
+  restart, and that the services will restart on their own once it arrives.
+
+If you ever do see it, the honest reading is: **the controller is up, and it is not reachable from
+the network yet** — not that a node did something wrong and not that an address is banned.
+
+## 0.6.108 — 2026-09-29
 ## 0.6.108 — 2026-09-29
 
 ### A Mac that joined no longer says it hasn't

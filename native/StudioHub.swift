@@ -85,6 +85,12 @@ final class StudioController: ObservableObject {
     private var worker: Process?
     private var logHandle: FileHandle?
     private var pollTask: Task<Void, Never>?
+    /// Addresses the operator chose that this Mac did not have at the moment the services were
+    /// started. Stored rather than merely reported, because the supervisor below acts on it: a
+    /// headless Mac that boots before its network comes up binds loopback only and is then
+    /// unreachable from every node, and the fix is to restart once the address exists. Empty in
+    /// the ordinary case, which is why nothing here costs a running Hub anything.
+    private var addressesMissingAtStart: [String] = []
     private var restartTask: Task<Void, Never>?
     private var forceStopTask: Task<Void, Never>?
     private var startLadder = ServiceStartLadder()
@@ -284,10 +290,28 @@ final class StudioController: ObservableObject {
             // Mac actually has and name the ones it does not.
             let unavailable = configuration.unavailableListenAddresses()
             let listenHost = configuration.bindableListenHost()
+            // **"Not up yet" is not "no longer has", and at boot that difference is everything.**
+            //
+            // This read is a single instant, and on a headless Mac after a power cut it is the
+            // worst instant available: the app is a login item, so it starts while Ethernet is
+            // still negotiating, DHCP is unanswered and Tailscale has not come up. Every address
+            // the operator chose is then *absent*, not gone — and the fallback binds the Hub to
+            // loopback, where it answers its own health check, writes its ready file and looks
+            // perfectly healthy while **no node on the network can reach it at all**. The owner hit
+            // exactly that: *"the power cut, the controller is headless… I tried to connect to it
+            // from the node. It doesn't work… I just stop server and then start server again. Only
+            // then the node can be connect."* The manual stop/start was not superstition — it was
+            // the same read taken after the network had arrived.
+            //
+            // So a missing address is remembered rather than accepted, and the supervisor restarts
+            // the services the moment it appears. Nothing narrows permanently, and the operator
+            // does not have to know any of this.
+            addressesMissingAtStart = unavailable
             if !unavailable.isEmpty {
-                fleetNote = "This Mac no longer has \(unavailable.joined(separator: ", ")). "
-                    + "Services are starting on the remaining addresses. Update them under "
-                    + "Connections if this Mac should serve other machines."
+                fleetNote = "Waiting to serve \(unavailable.joined(separator: ", ")) — this Mac does "
+                    + "not have \(unavailable.count == 1 ? "that address" : "those addresses") yet, "
+                    + "which is usual for a minute after a restart. Services are starting on the "
+                    + "remaining addresses and will restart by themselves once it appears."
             }
             process.arguments = ShellConfiguration.serviceArguments(
                 dataDirectory: configuration.dataDirectory, modelsDirectory: models,
@@ -361,6 +385,27 @@ final class StudioController: ObservableObject {
                                       self.worker === process else { return }
                                 if self.healthySince == nil { self.healthySince = self.now() }
                                 self.status = health["busy"] as? Bool == true ? "Local services working" : "Local services ready"
+                                // **A Hub that came up without the operator's addresses is
+                                // reachable by nobody, however healthy it looks.** It answers this
+                                // very health check on loopback, so nothing above can tell the
+                                // difference. Now that the network has had time to arrive, restart
+                                // once so the services bind what the operator chose.
+                                //
+                                // One restart, only while `addressesMissingAtStart` is non-empty,
+                                // and the spawn clears it — so a Hub that is deliberately serving a
+                                // narrowed address set (the operator changed them on purpose) is
+                                // restarted at most once, not in a loop.
+                                if !self.addressesMissingAtStart.isEmpty {
+                                    let arrived = ShellConfiguration.arrivedAddresses(
+                                        missing: self.addressesMissingAtStart)
+                                    if !arrived.isEmpty {
+                                        self.addressesMissingAtStart = []
+                                        self.fleetNote = "This Mac has \(arrived.joined(separator: ", ")) now, "
+                                            + "so the services are restarting to serve it."
+                                        self.restartServices()
+                                        return
+                                    }
+                                }
                             } catch {
                                 guard !Task.isCancelled, !self.stopping, process.isRunning,
                                       self.worker === process else { return }
