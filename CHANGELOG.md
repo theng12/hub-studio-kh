@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.112 — 2026-09-30 · Two corrections 0.6.111 shipped, both found by auditing it
+
+Both of these are in 0.6.111's own footprint. Neither changes a shipped behaviour; one closes a
+hole in a guard, the other stops a comment claiming a guarantee the code does not provide.
+
+**The repaired kit test still had the hole it was written to close.** `0.6.111` correctly stopped
+pinning the literal `chmod +x` — `prepare-kit.sh` deliberately uses `755` — but the repair waved
+through *any* mode beginning with `+`:
+
+```python
+if mode.startswith("+"):
+    continue        # `chmod +r` passed a test whose message says the operator must run the file
+```
+
+`chmod +r "Update this Mac.command"` would have passed, on a file the operator then cannot
+double-click. The mode is now parsed rather than pattern-matched: numeric modes are checked by the
+owner-execute bit, and symbolic clauses are resolved (who the clause addresses, `+`/`-`/`=`, and
+whether `x`/`X` is among the permissions). `a` counts as addressing the owner, `g` and `o` do not.
+Pinned by a table of 21 spellings and **proved** by mutating the script to `644` and to `+r` — both
+now fail with the reason named.
+
+**The deferral comment named a bound that is not one.** 0.6.111's `MACHINE_BUSY` branch closed with
+*"the batch's own lease, cancellation and the stall detector stay the bounds on how long this
+waits."* The stall detector is the one thing it names that is **explicitly non-destructive** —
+`broker.py:1641` says *"Visible, never destructive: nothing is cancelled on the strength of this"*,
+and `capacity_wait_started_at`, which 0.6.111's own capacity branch writes, is read nowhere in the
+tree.
+
+The comment now says what is true: **nothing in the broker bounds this wait.** `tries` is restored on
+every refusal so the `MAX_TRIES` ladder cannot end it, and cancellation is the operator's — the same
+unbounded-queue semantics as the capacity wait directly above, and the same thing the owner asked
+for (*"should the work get queued instead of failing outright?"*). It is a queue with no clock, not
+a wait with a deadline, and the comment now says so instead of implying otherwise.
+
+**Why this shipped at all:** 0.6.111 was audited independently, from the artefacts rather than from
+its own summary. Both defects are in things that audit added or repaired, and both are the same
+class the project keeps paying for — a guard that reads as stricter than it is, and a comment that
+reads as a guarantee the code never made.
+
 ## 0.6.111 — 2026-09-30 · A Mac that is reserved on the far side is a wait, not a verdict
 
 **Reported from the Gateway:** a batch submitted with `routing: "pool"` failed its *first* item,

@@ -2,6 +2,32 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.112 — 2026-09-30
+
+### Nothing changes for you in this one — it fixes two things 0.6.111 got wrong
+
+**You do not need to do anything differently.** This release has no new behaviour and nothing to
+learn. It corrects two mistakes inside 0.6.111, both found by going back over that release rather
+than by anything going wrong in use.
+
+**One was a check that looked stronger than it was.** The test that makes sure the update file on
+each drive is actually runnable had been loosened to accept any `chmod` starting with `+`. That
+meant `chmod +r` — which makes the file readable, not runnable — would have passed a test whose
+whole purpose is to catch a file you cannot double-click. It now works out the permission properly
+instead of matching the first character. The drive file itself was correct the whole time; only the
+check was weak.
+
+**The other was a comment that promised more than the code delivers.** The note explaining how long
+a job waits for a busy Mac claimed the stall detector was one of the limits on that wait. It is not
+— the stall detector is deliberately there to *show* you a quiet job, never to cancel one. The
+comment now says plainly what is true: **a job waiting for a busy machine waits until that machine
+frees up or you cancel it**, exactly as it did before. Nothing about the waiting changed; the
+description of it was just wrong.
+
+**Why bother shipping this?** Because a check that quietly accepts the wrong thing, and a comment
+that describes a safety net that is not there, both get trusted later. You asked for the full cycle
+on every change, and this is that.
+
 ## 0.6.111 — 2026-09-30
 
 ### A busy Mac now makes your work wait, instead of failing

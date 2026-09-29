@@ -4005,8 +4005,17 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # `HTTP 409: local is reserved for other work on this Mac` while the rest of the
             # pool was idle, and that path is reproduced in
             # `tests/hub_regression/cases/test_pool_peer_machine_busy.py`. The machine is
-            # healthy and working, so it is never marked failed; the batch's own lease,
-            # cancellation and the stall detector stay the bounds on how long this waits.
+            # healthy and working, so it is never marked failed.
+            #
+            # **Nothing here bounds the wait, and that is deliberate.** `tries` is restored on
+            # every refusal so the MAX_TRIES ladder cannot end it; the stall detector only
+            # *reports* (`stalled` is documented "visible, never destructive", and
+            # `capacity_wait_started_at` is written but read nowhere); so a machine that never
+            # frees up holds the item until the operator cancels. That is the same unbounded
+            # semantics as the capacity wait directly above, and it is what the owner asked
+            # for — "should the work get queued instead of failing outright?" — but it is a
+            # queue with no clock, not a wait with a deadline, and a later reader should not
+            # assume otherwise.
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             item["state"] = "queued"
             item["error"] = f"waiting for a free machine: {message}"

@@ -3,7 +3,38 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.111** (a Mac reserved on the far side is a wait, not a verdict; 2026-09-30).
+Last updated: **0.6.112** (two corrections 0.6.111 shipped, both found by auditing it; 2026-09-30).
+
+> **0.6.112 — 0.6.111 was audited independently, and the audit found two defects in 0.6.111's own
+> footprint.** Neither changes shipped behaviour; one closes a hole in a guard, the other stops a
+> comment claiming a guarantee the code does not provide. **Read this before trusting either.**
+>
+> **1. The repaired kit test still had the hole it was written to close.** 0.6.111 rightly stopped
+> pinning the literal `chmod +x`, but the repair accepted *any* mode beginning with `+` —
+> `chmod +r "Update this Mac.command"` passed a test whose message says the operator must be able to
+> run it. The mode is now **parsed**: numeric by the owner-execute bit, symbolic by resolving who the
+> clause addresses, its `+`/`-`/`=` operator, and whether `x`/`X` is in the permissions. **`a`
+> addresses the owner; `g` and `o` do not** — my first cut got that wrong and returned `False` for
+> `a+x`, which is why the helper is pinned by a 21-spelling table rather than one example.
+> ⚠ **Write a helper and you must table-test it; a single example would have shipped that bug.**
+>
+> **2. The `MACHINE_BUSY` comment named a bound that is not one.** It closed with *"the batch's own
+> lease, cancellation and the stall detector stay the bounds on how long this waits."* The stall
+> detector is **explicitly non-destructive** — `broker.py:1641`, *"Visible, never destructive:
+> nothing is cancelled on the strength of this"* — and `capacity_wait_started_at`, written by the
+> capacity branch directly above, is **read nowhere in the tree**.
+>
+> ⚠ **The honest fact, now in the comment:** nothing in the broker bounds a `MACHINE_BUSY` deferral.
+> `tries` is restored on every refusal, so the `MAX_TRIES` ladder cannot end it; cancellation is the
+> operator's. It is a **queue with no clock, not a wait with a deadline** — the same unbounded
+> semantics the capacity wait has always had, and what the owner asked for (*"should the work get
+> queued instead of failing outright?"*). Do not "fix" it with a timeout without asking: a bound
+> would turn a long reservation back into the failure this release exists to remove.
+>
+> **Both were mutant-proved:** the script mutated to `644` and to `+r` both fail the guard with the
+> mode named; `a+x`/`g+x`/`o+x`/`u=rw` are all pinned by the table.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1519 tests, OK (12 skipped), 613 s, exit 0.**
 
 > **0.6.111 — a peer that says "I'm busy" was a verdict, not a wait.**
 >

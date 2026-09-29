@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -18,6 +19,33 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _mode_grants_owner_execute(mode: str) -> bool:
+    """Whether one `chmod` mode token leaves the file's owner able to run it.
+
+    `755` is what the kit uses and is checked by its bits. A symbolic mode is a legitimate
+    way to write the same thing and is not pinned by spelling — but it is *checked*, and
+    that is the point: `+r` also starts with `+`, so a wave-through on a leading `+` would
+    let a file the operator cannot double-click pass a test whose own message says exactly
+    that. The owner is the one who has to run it, so an `o`-only clause does not count.
+    """
+    if mode[:1].isdigit():
+        return int(mode, 8) & 0o100 == 0o100
+    grants = False
+    for who, op, perms in re.findall(r"([ugoa]*)([+\-=])([rwxXst]*)", mode):
+        if who and "u" not in who and "a" not in who:
+            continue  # a clause that does not address the owner (`g`, `o`; `a` does)
+        has_x = "x" in perms or "X" in perms
+        if op == "-":
+            grants = grants and not has_x
+        elif op == "=":
+            grants = has_x
+        elif has_x:
+            grants = True
+    return grants
+
+
 _spec = importlib.util.spec_from_file_location(
     "copy_models_for_this_mac", ROOT / "qualification" / "copy_models_for_this_mac.py")
 COPY = importlib.util.module_from_spec(_spec)
@@ -760,7 +788,5 @@ class TheUpdateCommandSkipsAnUnchangedAppTest(unittest.TestCase):
         # owner execute, whichever way it is spelled.
         for line in lines:
             mode = line.split()[1]
-            if mode.startswith("+"):
-                continue
-            self.assertEqual(int(mode, 8) & 0o100, 0o100,
-                             f"chmod {mode} does not make it executable for its owner")
+            self.assertTrue(_mode_grants_owner_execute(mode),
+                            f"chmod {mode} does not make it executable for its owner")
