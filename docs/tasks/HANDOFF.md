@@ -3,7 +3,53 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.97** (the drive index stamper was never running: it resolved a relative path and refused on every drive, while the rows stayed right by luck — 2026-09-28).
+Last updated: **0.6.104** (four defects on one screen — a dead Show in Folder, no row dividers, a transport that moved the list, and no generation date — each one a thing written once per panel; 2026-09-29).
+
+> **0.6.104 — four things the job rows were missing, and every one of them was the same mistake.**
+>
+> The owner sent screenshots of his own Audio and Jobs pages: *"the audio scrubber is appearing and
+> disappearing … it shouldn't move the list"*, *"i think we should have a divider or a line between
+> them — they all in the same black background"*, *"even on this machine, i can't click show in finder
+> too"*, and *"there's is no generation date so i don't know when each of them was generated on."*
+>
+> **Four reports, one cause: a thing written once per panel or once per row builder.** Five panels
+> each hand-rolled their own `ScrollView { LazyVStack(spacing: 12) { ForEach } }`; six row builders
+> each hand-wrote the same "status · model" `HStack`. So a fix had to be made in five places and a
+> new fact had to be added in six — and the date was added in none.
+>
+> 1. **Show in Folder was disabled on every row of every machine, including his own.**
+>    `public_item` dropped `artifact_path` from every item it published, so `canRevealArtifact` read
+>    nil, the `fileExists` check was never reached, and the button was dead everywhere. The rule the
+>    strip came from is real and is kept — another Mac's path names a file on that Mac — so
+>    `local_artifact_path` publishes the path only when `peers.is_local_studio` says the producing
+>    worker is this one. `worker_artifact_url` and `worker_accepted_params` stay withheld.
+> 2. **One `RecentRows`** draws the row and then the `Divider()`, the way the Jobs page always had.
+> 3. **The transport is always on screen**, takes an optional job, and is inert with a stated reason
+>    until something is loaded — so pressing Play no longer pushes the list down.
+> 4. **One `jobMetaLine`** renders `generatedAtLabel`, which is `batch.created_at` through the same
+>    `moment(_:)` the fleet pages use. `moment` is `nonisolated` now: it is a pure function, and a
+>    value type has to be able to date itself.
+>
+> **The tests were rewritten from membership to shape, and that is the durable part.**
+> `test_generation_time.py`, `test_jobs_tabs.py` and `test_chat_token_speed.py` each asserted
+> `job.generationSuffix` *once per row style* — "six rows, six occurrences". That is a test that
+> passes for as long as nobody adds a row and has to be hand-edited for every new fact, which is
+> exactly how the date reached no row at all. They now assert one call site and six rows drawing it.
+> `test_recent_job_lists.py` went 3 → 14 tests; new `test_local_artifact_reveal.py` (14) pins both
+> halves of the path contract; four checks were added to `tests/native/api_main.swift`.
+>
+> **Gate: 1475 tests, OK (11 skipped), 612 s, exit 0. `native/build.sh` green.**
+>
+> ⚠ **Run the gate with `.build/hub-gate/bin/python`, not `.build/hub-tests/bin/python`.** The
+> handoff named the command and not the interpreter, and the wrong venv produced **24
+> `ModuleNotFoundError` errors in `test_chat_worker` (no `mlx_lm`) and three espeak failures** —
+> 32 red tests that were all one wrong `python`. `.build/hub-gate` has both pieces. This is the same
+> class as a stale drive index: a full gate run, read as a product failure, that was the harness.
+>
+> **0.6.101, 0.6.102 and 0.6.103 shipped without this file being updated** — the Join button sending
+> the typed token, the one-token screen, and the five-capped studio lists. Their record is
+> `CHANGELOG.md` and `release-notes.md`; this line is the correction, not a substitute.
+>
 
 > **0.6.97 — the check that keeps each drive's front page honest was refusing to run, and saying so
 > in a message that read like a path.**
