@@ -130,6 +130,18 @@ class Family:
     section_note: str = ""
     # "family_policy" (measured or engine-derived) or "conservative_default".
     section_origin: str = "family_policy"
+    # The integrated loudness every rendered section is brought to before the long-form join, in
+    # LUFS, or None to join the sections at exactly the level the engine returned them. Per family
+    # because it is a delivery decision about that lane's output, and because an engine that already
+    # levels its own sections should be able to say so rather than be re-levelled to fix nothing.
+    # The defaults are the policy's own constants rather than literals repeated here: the joiner
+    # reads this entry, so a second copy of the number is a second number that can disagree.
+    section_loudness_target_lufs: Optional[float] = (
+        long_form_policy.SECTION_LOUDNESS_TARGET_LUFS)
+    # The true-peak ceiling the levelling pass may not cross.
+    section_true_peak_ceiling_dbtp: float = long_form_policy.SECTION_TRUE_PEAK_CEILING_DBTP
+    # The loudness range the pass may leave inside one section.
+    section_loudness_range_lu: float = long_form_policy.SECTION_LOUDNESS_RANGE_LU
     # The engine's own input limit where it has one: past this the engine stops
     # working rather than degrading, so no audit or caller may raise the budget.
     section_hard_cap_characters: Optional[int] = None
@@ -537,6 +549,43 @@ FAMILIES: dict[str, Family] = {
             soft_max_chars=None,
             chunking="auto-split",
             note="Long scripts are split privately into conservative sentence-safe sections, rendered with the same reference or preset voice, and joined into one final file.",
+        ),
+    ),
+    "breeze-tts": Family(
+        id="breeze-tts",
+        label="Breeze TTS 2 (MLX 4-bit)",
+        engine=ENGINE_MLX_AUDIO,
+        # mlx-audio is the only inference dependency and it is a hard floor, not a preference:
+        # `breeze_tts` first ships in mlx-audio 0.5.7, so a runtime on 0.4.7 has no such module at
+        # all. `generation.diagnostics()` reads this tuple, which is what turns "the model is
+        # installed" into "this Mac cannot run it on this runtime" instead of an ImportError inside
+        # a job.
+        requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
+        section_max_characters=long_form_policy.BREEZE_TTS_SECTION_MAX_CHARACTERS,
+        join_pause_seconds=long_form_policy.BREEZE_TTS_JOIN_PAUSE_SECONDS,
+        section_note=(
+            "Breeze segments itself, one section per paragraph, and was measured doing it: 14 "
+            "sections of 325 to 575 characters from a 1,227-word script, every one a verbatim "
+            "continuation in order. Sections are joined at 600 ms, the pause the owner chose by ear "
+            "from three cuts of the same render, and levelled to one loudness before the join."
+        ),
+        lane_parameters=("voice_design_prompt", "normalize_text"),
+        summary=(
+            "A 4-bit MLX text-to-speech model that designs a voice from a written description, "
+            "clones one from a reference clip and its transcript, or takes a direction for how a "
+            "line should be read — including inline vocal events such as (sigh) and (laugh), which "
+            "it performs rather than reads aloud. 24 kHz mono output. English and Chinese."
+        ),
+        how_to_use=(
+            "Describe the voice you want and it designs one, or pick a reference voice from your "
+            "Voices library to clone it, or write how the line should be read. Long scripts are "
+            "split privately into paragraph-sized sections, rendered with the same voice, levelled "
+            "to one loudness and joined into a single file at a 600 ms pause."
+        ),
+        text_guidance=TextGuidance(
+            soft_max_chars=None,
+            chunking="auto-split",
+            note="Long scripts are split privately into paragraph-sized sections (about 500 characters), rendered with the same voice or design, matched to one loudness, and joined into one final file at a 600 ms pause.",
         ),
     ),
 }
@@ -1102,6 +1151,63 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("weak", "24 kHz output is narrower than the 44.1–48 kHz families"),
             ("weak", "4-bit quantization: expect slightly less fidelity than Kyutai's unquantized checkpoint"),
             ("avoid", "Khmer or other non-English narration — use the Khmer VITS families instead"),
+        ),
+    ),
+    # ──────────── Breeze TTS 2 (MLX 4-bit) ────────────
+    # Qualified 2026-09-29 on this project's staging Mac, in a throwaway venv, then listened to by
+    # the owner: *"it's a good tts and i love it's quality."* Voice design from a written
+    # description, cloning from a clip plus its transcript, direction, and inline vocal events such
+    # as (sigh) — measured at 100% word match through a Whisper round trip for design, clone and
+    # direction, and 93.8% for vocal events where the only "missing" words were the two event tags
+    # themselves, which the engine performed rather than read aloud.
+    ModelEntry(
+        repo="mlx-community/Breeze-TTS-2-mlx-4bit",
+        label="Breeze TTS 2 4-bit (MLX)",
+        family="breeze-tts",
+        # 2,325,487,160 B of weights plus tokenizer, configs and the audio tokenizer: 2.9 GB on
+        # disk as measured on the four distribution drives. The weights' own SHA-256 is identical
+        # on all four.
+        size_gb=2.9,
+        gated=False,
+        # 16 GB is the floor this catalogue claims, and it is the honest one rather than the
+        # flattering one. Two measurements disagree and only one of them is settled:
+        #   [M] resident set size held flat at ~3.3 GB in every mode, which fits 8 GB;
+        #   [M] the kernel's peak footprint reading ranged 5.41 to 23.93 GB across runs and was
+        #       never pinned down, because the samplers could not see the real process.
+        # Until that second number is settled, 8 GB is a plausible fit and not a demonstrated one,
+        # so the claim is the tier that is not at risk. 16 GB is also where 50 of the owner's ~53
+        # machines sit.
+        min_unified_memory_gb=16,
+        recommended_hardware=(
+            "16 GB or more. Measured ~3.3 GB resident in every mode; the kernel peak footprint "
+            "reading was unsettled between 5.41 and 23.93 GB, so 16 GB is claimed rather than 8."
+        ),
+        capabilities=("tts", "voice-cloning", "expressive", "multilingual"),
+        best_for=(
+            "Designing a voice from a written description, cloning one from a short reference "
+            "clip and its transcript, or directing how a line is read — including inline vocal "
+            "events such as (sigh) and (laugh), which it performs instead of reading aloud. "
+            "24 kHz mono. English and Chinese."
+        ),
+        sample_rate_hz=24000,
+        languages=("en", "zh"),
+        language_support=LanguageSupport(
+            input_selection="none",
+            enumeration_status="exact",
+            codes=("en", "zh"),
+            runtime_enforced=True,
+        ),
+        ignore_patterns=("README.md", ".gitattributes", "_samples"),
+        use_cases=(
+            ("good", "Voice design — describe the voice in words and it makes one, with no reference clip at all"),
+            ("good", "Cloning from a short reference clip, measured at 100% word match through a Whisper round trip"),
+            ("good", "Long scripts — it segments itself one section per paragraph and was measured across 14 of them with no drift, no truncation and no repetition"),
+            ("good", "Inline vocal events: (sigh), (laugh) and similar are performed rather than narrated"),
+            ("weak", "English and Chinese only — it cannot speak Khmer; use the Khmer VITS families for that"),
+            ("weak", "2.9 GB on disk and the heaviest voice package here after the 3B families"),
+            ("weak", "Slower than it looks: measured 0.27x realtime, so about 19.8 minutes of generation per 1,000 words"),
+            ("weak", "Needs the mlx-audio 0.5.7 runtime; an older voice runtime has no breeze_tts module at all"),
+            ("avoid", "An 8 GB Mac until the peak-footprint question is settled — the resident size fits, the kernel peak did not"),
         ),
     ),
 )

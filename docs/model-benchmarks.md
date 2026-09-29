@@ -42,6 +42,7 @@ may still run there, and one at or below may still not (see the peak-memory note
 | s3tokenizerv2 *(supporting files)* | MLX (speech) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | VoxCPM2 4-bit (MLX) — recommended | MLX (speech) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Qwen3-TTS 1.7B Base — quality voice cloning (MLX 4-bit) | MLX (speech) | 12 GB (recommended 16 GB) | no | yes | yes | yes |
+| Breeze TTS 2 4-bit (MLX) | MLX (speech) | 16 GB | no | yes | yes | yes |
 | VoxCPM2 8-bit (MLX) — balanced | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | VoxCPM2 bf16 (MLX) — full precision | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | Fish Audio S2 Pro 5B 8-bit (MLX) — fleet candidate | MLX (speech) | 24 GB | no | no | yes | yes |
@@ -105,12 +106,12 @@ than a curated one:
 
 ## What is NOT measured
 
-22 of 30 packages have no run behind them — their floor is
+23 of 31 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`ace-step-1-5-turbo`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`ace-step-1-5-turbo`, `breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -141,4 +142,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 30 manifests, 8 recorded readings and 5 voice runtime rows.
+Generated from 31 manifests, 8 recorded readings and 5 voice runtime rows.

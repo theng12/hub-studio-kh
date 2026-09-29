@@ -105,6 +105,8 @@
     "recommended_unified_memory_gb": 16,
     "status": "unqualified"
   },
+  "quantization": "bf16",
+  "quantization_source": "the publisher's model id states it: mlx-community/OmniVoice-bfloat16",
   "revision": "6119f7072580cc30c3cbdf496269216b03ad9742",
   "schema_version": 1,
   "source": {
@@ -126,7 +128,5 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/OmniVoice-bfloat16/tree/6119f7072580cc30c3cbdf496269216b03ad9742?recursive=true&expand=true&limit=100"
       }
     ]
-  },
-  "quantization": "bf16",
-  "quantization_source": "the publisher's model id states it: mlx-community/OmniVoice-bfloat16"
+  }
 }

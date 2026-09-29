@@ -24,6 +24,8 @@
     "recommended_unified_memory_gb": 8,
     "status": "unqualified"
   },
+  "quantization": null,
+  "quantization_source": "the publisher's model id states no quantisation (kyutai/pocket-tts-without-voice-cloning); this package is published unquantised or its precision is unstated",
   "revision": "d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3",
   "schema_version": 1,
   "source": {
@@ -45,7 +47,5 @@
         "tree_api_url": "https://huggingface.co/api/models/kyutai/pocket-tts-without-voice-cloning/tree/d4fdd22ae8c8e1cb3634e150ebeff1dab2d16df3?recursive=true&expand=true&limit=100"
       }
     ]
-  },
-  "quantization": null,
-  "quantization_source": "the publisher's model id states no quantisation (kyutai/pocket-tts-without-voice-cloning); this package is published unquantised or its precision is unstated"
+  }
 }

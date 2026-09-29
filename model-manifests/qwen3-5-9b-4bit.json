@@ -114,6 +114,8 @@
     "recommended_unified_memory_gb": 16,
     "status": "qualified"
   },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/Qwen3.5-9B-4bit",
   "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
   "schema_version": 1,
   "source": {
@@ -135,7 +137,5 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3.5-9B-4bit/tree/8b2b98c00a6b4d291155e4890773ca8f769aee53?recursive=true&expand=true&limit=100"
       }
     ]
-  },
-  "quantization": "MLX 4-bit",
-  "quantization_source": "the publisher's model id states it: mlx-community/Qwen3.5-9B-4bit"
+  }
 }

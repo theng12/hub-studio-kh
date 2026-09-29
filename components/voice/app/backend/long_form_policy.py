@@ -16,6 +16,33 @@ QWEN_CLONE_JOIN_PAUSE_SECONDS = 0.18
 OMNIVOICE_JOIN_PAUSE_SECONDS = 0.30
 OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS = 0.60
 OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS = 0.18
+# ── matching section loudness before the join ────────────────────────────────
+# A long script is rendered as independent sections and the engine has no idea what level the
+# section before it came out at. Measured on Breeze TTS 2 4-bit: across the 14 sections of one
+# 1,227-word script the integrated loudness spans **5.0 LU** (−30.0 to −25.0 LUFS), which the ear
+# hears as the narrator stepping back from the microphone at every paragraph and forward again at
+# the next. The join itself was already right — correct pause, correct order, no drift — so this was
+# never a joining fault. It is the absence of a levelling pass, and the joiner never had one for any
+# family, so every long-form family rendered through it has been delivering whatever level its
+# engine happened to produce.
+#
+# The target is speech-programme loudness rather than a peak: −16 LUFS integrated, which is the
+# figure the owner's approved Breeze samples were cut at, so a joined render and the sample he
+# listened to are the same delivery. The ceiling is **true peak**, not sample peak.
+#
+# **Why this is FFmpeg's `loudnorm` and not one linear gain per section.** Measured on the real
+# segments: their loudness spans 4.9 LU, but so does their *crest factor* (18.4 to 22.7 dB), so the
+# gain each section can take before its peak reaches the ceiling is what actually decides its final
+# level. Applying `min(target − I, ceiling − TP)` — the obvious linear answer — narrowed the span
+# only from **4.9 LU to 4.3 LU**: the gain was capped on every quiet section and the step survived.
+# `loudnorm` brought the same 14 sections to a **1.5 LU** span at −1.5 dBTP, which is the measurement
+# the owner heard and approved. So the pass is `loudnorm`, per section, and the numbers here are its
+# parameters rather than a gain this code computes.
+SECTION_LOUDNESS_TARGET_LUFS = -16.0
+SECTION_TRUE_PEAK_CEILING_DBTP = -1.5
+# Loudness range, in LU: how much level variation within one section `loudnorm` is allowed to leave.
+# 11 is the EBU R128 default and the value the approved samples were made with.
+SECTION_LOUDNESS_RANGE_LU = 11.0
 # The measured section budgets. Each number is named here with the evidence that
 # produced it, and *assigned* to the family it belongs to on that family's entry
 # in `catalog.FAMILIES` - the registry is where a consumer reads it, so adding a
@@ -71,6 +98,23 @@ VOXCPM_SECTION_MAX_CHARACTERS = 400
 # sets 288, and raising it past 288 measurably loses words.
 OMNIVOICE_SECTION_MAX_CHARACTERS = 288
 FISH_AUDIO_SECTION_MAX_CHARACTERS = 300
+# Breeze TTS 2 segments itself, and it segments *correctly*: given a 1,227-word, 6,463-character
+# script it produced one section per paragraph — **14 sections of 325 to 575 characters, mean 449** —
+# and a Whisper round trip found every one a verbatim continuation in order, with no truncation, no
+# drift and no repetition (measured 2026-09-29). So this material states the range the engine was
+# actually handed and handled.
+#
+# 500 sits inside that measured range rather than at its edge: above the mean, below the longest
+# section Breeze was given, and identical to the budget Chatterbox already uses, so it adds no new
+# number to the codebase's vocabulary. It is a *delivery* budget and not the engine's limit —
+# nothing measured says Breeze stops working past 575.
+BREEZE_TTS_SECTION_MAX_CHARACTERS = 500
+# The join pause the owner chose by ear from three cuts of the same 1,200-word Aiden render —
+# 0.30 s, 0.45 s and 0.60 s — on 2026-09-29: *"i've listened, the 0.60s pause is the best one."*
+# It is also the value OmniVoice already uses for a paragraph boundary, so it is inside the range
+# this project ships rather than a new one. Recorded before it was wired, on purpose: the number is
+# the owner's, not a re-measurement by whoever adopted the family.
+BREEZE_TTS_JOIN_PAUSE_SECONDS = 0.60
 # ── families with no measurement of their own ────────────────────────────────
 # A family without a policy used to fall out of `_runtime_default` as None, and the caller read
 # "None" as "send the whole script in one call". That is how the gateway came to see an engine
@@ -170,6 +214,15 @@ class LongFormPolicy:
     hard_cap_characters: Optional[int] = None
     # "family_policy" (measured or engine-derived for this family) or "conservative_default".
     origin: str = "family_policy"
+    # The integrated loudness every section is brought to before joining, in LUFS, or None to join
+    # the sections at exactly the level the engine returned them. Per family, because it is a
+    # delivery decision about that lane's output, and a family whose engine already levels its
+    # sections can say so instead of being re-levelled to fix nothing.
+    section_loudness_target_lufs: Optional[float] = SECTION_LOUDNESS_TARGET_LUFS
+    # The true-peak ceiling the levelling pass may not cross. See SECTION_LOUDNESS_TARGET_LUFS.
+    section_true_peak_ceiling_dbtp: float = SECTION_TRUE_PEAK_CEILING_DBTP
+    # The loudness range the pass may leave inside one section. See SECTION_LOUDNESS_TARGET_LUFS.
+    section_loudness_range_lu: float = SECTION_LOUDNESS_RANGE_LU
 
     def serialize(self, *, source: str = "runtime_default") -> dict:
         payload = asdict(self)
@@ -233,6 +286,9 @@ def _runtime_default(family: str, repo: str) -> "LongFormPolicy":
         note=entry.section_note,
         hard_cap_characters=entry.section_hard_cap_characters,
         origin=entry.section_origin,
+        section_loudness_target_lufs=entry.section_loudness_target_lufs,
+        section_true_peak_ceiling_dbtp=entry.section_true_peak_ceiling_dbtp,
+        section_loudness_range_lu=entry.section_loudness_range_lu,
     )
     name = repo.rsplit("/", 1)[-1].lower()
     for refinement in entry.section_refinements:
@@ -247,6 +303,9 @@ def _runtime_default(family: str, repo: str) -> "LongFormPolicy":
                 note=refinement.note or policy.note,
                 hard_cap_characters=policy.hard_cap_characters,
                 origin=policy.origin,
+                section_loudness_target_lufs=policy.section_loudness_target_lufs,
+                section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
+                section_loudness_range_lu=policy.section_loudness_range_lu,
             )
     return policy
 
@@ -303,6 +362,9 @@ def policy_for(
             hard_cap_characters=policy.hard_cap_characters,
             origin=policy.origin,
             note="The model's audited Auto section size applies. " + policy.note,
+            section_loudness_target_lufs=policy.section_loudness_target_lufs,
+            section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
+            section_loudness_range_lu=policy.section_loudness_range_lu,
         )
         return _published_policy(policy, family, source="model_audit")
 
@@ -323,6 +385,9 @@ def policy_for(
                 "The exact model audit overrides the family default. "
                 + policy.note
             ),
+            section_loudness_target_lufs=policy.section_loudness_target_lufs,
+            section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
+            section_loudness_range_lu=policy.section_loudness_range_lu,
         )
         source = "model_audit"
     return _published_policy(policy, family, source=source)

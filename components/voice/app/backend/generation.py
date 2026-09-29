@@ -587,6 +587,21 @@ MLX_AUDIO_FAMILIES: dict[str, dict] = {
         "mode": "voice_or_clone",
         "label": "Pocket TTS (MLX)",
     },
+    "breeze-tts": {
+        # Breeze TTS 2 4-bit. One `generate(text, voice, instruct, ref_audio, ref_text, …)` covers
+        # all three of its forms: a reference clip clones, an `instruct` describes or directs the
+        # reading, and `voice` names a preset. Measured 2026-09-29 at 100% word match through a
+        # Whisper round trip for design, clone and direction.
+        #
+        # `split_pattern` is deliberately NOT overridden. Its default is "\n", and that is exactly
+        # the behaviour that was measured: handed a 14-paragraph script, Breeze produced 14
+        # sections — one per paragraph — each a verbatim continuation in order. Forcing one engine
+        # chunk to stop it splitting would throw away the segmentation it already gets right.
+        "default_sample_rate": 24000,
+        "uses_cfg": False,
+        "mode": "design_clone_or_direct",
+        "label": "Breeze TTS 2 (MLX 4-bit)",
+    },
 }
 
 
@@ -865,11 +880,165 @@ def _production_join_pauses_s(text: str, chunks: list[str], speed: float) -> lis
     return pauses
 
 
+# The levelling pass is FFmpeg's EBU R128 `loudnorm`, per section. `long_form_policy` carries the
+# measurement that chose it over a per-section linear gain: the sections' crest factors decide how
+# much gain each one can take, so the obvious linear answer narrowed the span only 4.9 → 4.3 LU,
+# while this brings the same material to 1.5 LU. The filter string is built from the family's policy
+# so a family can state a different target, ceiling or range without editing this function.
+def _loudnorm_filter(target_lufs: float, ceiling_dbtp: float, range_lu: float) -> str:
+    return (f"loudnorm=I={target_lufs:g}:TP={ceiling_dbtp:g}:LRA={range_lu:g}")
+
+
+# The sample format each of `soundfile`'s subtypes maps to, so a levelled section comes back in the
+# same container the engine produced rather than being silently converted to 16-bit.
+_PCM_CODEC_FOR_SUBTYPE = {
+    "PCM_16": "pcm_s16le", "PCM_24": "pcm_s24le", "PCM_32": "pcm_s32le",
+    "FLOAT": "pcm_f32le", "DOUBLE": "pcm_f64le",
+}
+# A levelled section is the same audio decoded and re-encoded, so it cannot legitimately take longer
+# than the render that produced it. This is a wedge guard, not a performance budget.
+_LOUDNORM_TIMEOUT_S = 600
+
+
+def _level_one_section(path: Path, destination: Path, *, sample_rate: int, channels: int,
+                       subtype: str, target_lufs: float, ceiling_dbtp: float,
+                       range_lu: float) -> bool:
+    """Write `path` to `destination` at the target loudness. False when it could not be done.
+
+    False is not an error: every failure here — no FFmpeg, a crash, a timeout — degrades to joining
+    the section at the level the engine returned, which is exactly what this joiner did before
+    levelling existed. A levelling pass that cannot run must never fail a job that has already spent
+    twenty minutes generating.
+    """
+    ffmpeg = _find_ffmpeg_executable()
+    if ffmpeg is None:
+        return False
+    try:
+        completed = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-nostats", "-y", "-i", str(path),
+             "-af", _loudnorm_filter(target_lufs, ceiling_dbtp, range_lu),
+             "-ar", str(sample_rate), "-ac", str(channels),
+             "-c:a", _PCM_CODEC_FOR_SUBTYPE.get(subtype, "pcm_s16le"),
+             str(destination)],
+            capture_output=True, text=True, timeout=_LOUDNORM_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0 and destination.is_file()
+
+
+def _levelled_sections(segment_paths: list[Path], output_path: Path, family: str,
+                       repo: str, sample_rate: int, channels: int,
+                       subtype: str,
+                       cancel_event: threading.Event | None = None) -> tuple[list[Path], bool]:
+    """The sections to join, and whether they are levelled copies that the caller must clean up.
+
+    Returns the originals and False when the family has opted out (`target` is None), when there is
+    only one section (nothing to match it against, and re-levelling it would change the delivery for
+    no measured reason), or when FFmpeg is unavailable — each with its reason stated, because a
+    silent fallback is how a levelling pass ships for five releases without levelling anything.
+    """
+    policy = long_form_policy.policy_for(family, repo) or {}
+    target = policy.get("section_loudness_target_lufs",
+                        long_form_policy.SECTION_LOUDNESS_TARGET_LUFS)
+    if target is None:
+        return list(segment_paths), False
+    if len(segment_paths) < 2:
+        return list(segment_paths), False
+    if _find_ffmpeg_executable() is None:
+        print(
+            f"[gen] {family} long-form sections are joined without loudness matching: FFmpeg is "
+            "not available in this runtime, and it is what measures the level. Sections of a long "
+            "script can differ audibly in level when this happens.",
+            flush=True,
+        )
+        return list(segment_paths), False
+    ceiling = float(policy.get("section_true_peak_ceiling_dbtp",
+                               long_form_policy.SECTION_TRUE_PEAK_CEILING_DBTP))
+    range_lu = float(policy.get("section_loudness_range_lu",
+                                long_form_policy.SECTION_LOUDNESS_RANGE_LU))
+    token = uuid.uuid4().hex
+    levelled: list[Path] = []
+
+    def abandon(reason: str) -> tuple[list[Path], bool]:
+        """Drop every copy written so far and join the originals: the pre-levelling behaviour."""
+        for written in levelled:
+            written.unlink(missing_ok=True)
+        print(reason, flush=True)
+        return list(segment_paths), False
+
+    for index, path in enumerate(segment_paths):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("long-form join cancelled")
+        destination = output_path.parent / f".{output_path.name}.{token}.{index:04d}.levelled.wav"
+        if not _level_one_section(path, destination, sample_rate=sample_rate, channels=channels,
+                                  subtype=subtype, target_lufs=float(target),
+                                  ceiling_dbtp=ceiling, range_lu=range_lu):
+            return abandon(
+                f"[gen] {family} section {index + 1} of {len(segment_paths)} could not be levelled, "
+                "so this long-form result joins its sections at the levels the engine returned.")
+        # A levelled section must come back the same shape **and the same length**. Both halves are
+        # load-bearing, and the second one was missing:
+        #
+        #   * **The empty case is a real defect this caught.** Given a 10-sample input, `loudnorm`
+        #     writes a **0-frame** file rather than failing. The first version accepted it on rate
+        #     and channel count alone, so a section's audio was silently replaced by nothing:
+        #     `test_qwen_clone_join_preserves_segment_audio_and_pause` joined two sections and got
+        #     back only the pause — ten samples of silence where thirty were due.
+        #   * **The length check is not paranoia.** `loudnorm` is exactly length-preserving —
+        #     measured ratio 1.000 at 50 ms, 200 ms and 1 s — so a section whose length moved is a
+        #     section the pass failed on.
+        #
+        # Either failure abandons levelling for the whole join rather than mixing levelled and
+        # unlevelled sections, which would put a new level step where the fixed one was.
+        info = _safe_audio_info(destination)
+        expected = _safe_audio_info(path)
+        empty = info is None or info.frames <= 0
+        if (empty or expected is None
+                or info.samplerate != sample_rate or info.channels != channels
+                or abs(info.frames - expected.frames) > max(2, round(expected.frames * 0.01))):
+            destination.unlink(missing_ok=True)
+            return abandon(
+                f"[gen] {family} section {index + 1} came back from loudness matching as "
+                f"{'an empty file' if empty else 'a differently sized one'}, so the sections are "
+                "joined at the levels the engine returned.")
+        levelled.append(destination)
+    print(
+        f"[gen] {family} long-form sections levelled to {float(target):g} LUFS "
+        f"(true peak {ceiling:g} dBTP) before the join: {len(levelled)} sections",
+        flush=True,
+    )
+    return levelled, True
+
+
+def _safe_audio_info(path: Path):
+    """`soundfile.info` for a file that may not be readable, or None instead of raising."""
+    import soundfile as sf
+    try:
+        return sf.info(str(path))
+    except Exception:
+        return None
+
+
 def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
                          family: str, pause_s: float = _LONG_FORM_JOIN_PAUSE_S,
                          pause_sequence_s: Optional[list[float]] = None,
-                         cancel_event: threading.Event | None = None) -> None:
-    """Validate and atomically stream independently synthesized WAV sections."""
+                         cancel_event: threading.Event | None = None,
+                         repo: str = "") -> None:
+    """Validate, level, and atomically stream independently synthesized WAV sections.
+
+    A long script is rendered as independent sections, and nothing told the engine what level the
+    section before it came out at. Measured on Breeze TTS 2 4-bit, the 14 sections of one
+    1,227-word script span **4.9 LU** of integrated loudness (−30.0 to −25.0 LUFS): the narrator
+    audibly steps back from the microphone at each paragraph and forward again at the next. The join
+    was already correct — right pause, right order, no drift — so it was never a joining fault. It
+    was the absence of a levelling pass, and this joiner had none for any family.
+
+    Each section is now brought to its family's `section_loudness_target_lufs` before it is written
+    into the join. `_levelled_sections` holds the decision and its fallbacks; the level itself is
+    measured by FFmpeg rather than assumed, and the pass chosen is the one the owner's approved
+    samples were made with.
+    """
     if not segment_paths:
         raise ValueError(f"No {family} audio segments were generated")
     import numpy as np
@@ -894,6 +1063,9 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
     if pause_sequence_s is not None and len(pause_sequence_s) != len(segment_paths) - 1:
         raise ValueError("Long-form pause sequence must match the section boundaries")
     pauses = pause_sequence_s or [pause_s] * (len(segment_paths) - 1)
+    levelled, are_copies = _levelled_sections(segment_paths, output_path, family, repo,
+                                              sample_rate, channels, first_info.subtype,
+                                              cancel_event=cancel_event)
     joining_path = output_path.parent / (
         f".{output_path.name}.{uuid.uuid4().hex}.joining"
     )
@@ -906,7 +1078,7 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
             format="WAV",
             subtype=first_info.subtype,
         ) as destination:
-            for index, path in enumerate(segment_paths):
+            for index, path in enumerate(levelled):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("long-form join cancelled")
                 with sf.SoundFile(str(path), mode="r") as source:
@@ -930,6 +1102,13 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
         os.replace(joining_path, output_path)
     finally:
         joining_path.unlink(missing_ok=True)
+        # The levelled copies are working files for one join and are never a result: leaving them
+        # would put a second full copy of every long-form render in the output directory.
+        if are_copies:
+            for written in levelled:
+                written.unlink(missing_ok=True)
+
+
 
 
 def _join_qwen_clone_wavs(segment_paths: list[Path], output_path: Path,
@@ -2865,6 +3044,7 @@ class GenerationManager:
             _join_long_form_wavs(
                 segment_paths, output_path, model.family,
                 pause_s=_long_form_join_pause_s(model.family, model.repo),
+                repo=model.repo,
                 pause_sequence_s=(
                     _production_join_pauses_s(
                         text, chunks, float(job.params.get("speed") or 1.0),
@@ -3288,6 +3468,7 @@ class GenerationManager:
             output_path,
             family,
             pause_s=_long_form_join_pause_s(family, model_repo),
+            repo=model_repo,
             pause_sequence_s=(
                 _production_join_pauses_s(
                     str(gen_kwargs.get("text") or ""),
@@ -3341,6 +3522,8 @@ class GenerationManager:
             return self._mlx_kwargs_clone_with_intensity(model_entry, params, gen_kwargs, voices_module)
         if mode == "voice_or_clone":
             return self._mlx_kwargs_voice_or_clone(params, gen_kwargs, voices_module)
+        if mode == "design_clone_or_direct":
+            return self._mlx_kwargs_design_clone_or_direct(params, gen_kwargs, voices_module)
         if mode == "omnivoice":
             return self._mlx_kwargs_omnivoice(params, gen_kwargs, voices_module)
         if mode == "fish_audio":
@@ -3653,6 +3836,50 @@ class GenerationManager:
             return f"voice={voice}"
 
         # The engine's own default preset voice is used when neither is given.
+        return "zero-shot"
+
+    def _mlx_kwargs_design_clone_or_direct(self, params, gen_kwargs, voices_module) -> str:
+        """Breeze TTS 2: a reference clip clones, an `instruct` designs or directs, a preset speaks.
+
+        All three are the same engine call — `generate(text, voice, instruct, ref_audio, ref_text)`
+        — so this is one resolver rather than three. Precedence follows what the engine itself does
+        and what a reference means in this app: **a reference clip wins**, because the operator
+        chose a voice and a design prompt beside it is a description of *that* voice rather than a
+        request for a different one. With no reference, an instruction is the voice: Breeze designs
+        one from a description, or takes a direction for how the line is read. With neither, the
+        engine's own default voice is used, and that is a real mode it was measured in.
+        """
+        voice_id = (params.get("voice_library_id") or "").strip() or None
+        if voice_id or params.get("_reference_audio_path"):
+            # No fallback transcript here, unlike Pocket TTS. Breeze builds its clone prompt from
+            # the reference *transcript* — `f"{speaker}{ref_text}"` goes to the text encoder beside
+            # the encoded reference audio — and raises "Breeze voice cloning requires ref_text with
+            # ref_audio" without one. A placeholder like "." is therefore not a degraded clone, it
+            # is a clone conditioned on the wrong words. Where a transcript is genuinely missing,
+            # the honest answer is to say so and name the one thing that fixes it, rather than
+            # render a voice that will not resemble the reference and be read as a model failure.
+            self._inject_voice_clone(voice_id or "", params, gen_kwargs, voices_module,
+                                     fallback_transcript="")
+            if not str(gen_kwargs.get("ref_text") or "").strip():
+                raise ValueError(
+                    "Breeze TTS 2 clones a voice from a reference clip **and its exact "
+                    "transcript**, and this voice has no transcript saved. Add the transcript on "
+                    "the Voices page, or choose a voice that has one."
+                )
+            return f"clone (voice={voice_id or 'private-reference'})"
+
+        instruct = (params.get("voice_design_prompt") or params.get("instruct") or "").strip()
+        if instruct:
+            # One key, because Breeze reads one: it does not separate "design a voice" from
+            # "direct this line", and inventing a distinction the engine does not make would be a
+            # control that silently does nothing.
+            gen_kwargs["instruct"] = instruct
+            return f"design/direction ({len(instruct)} char prompt)"
+
+        voice = (params.get("voice") or params.get("preset_speaker") or "").strip()
+        if voice:
+            gen_kwargs["voice"] = voice
+            return f"voice={voice}"
         return "zero-shot"
 
     def _inject_voice_clone(self, voice_id: str, params: dict, gen_kwargs: dict,

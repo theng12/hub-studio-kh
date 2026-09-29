@@ -301,6 +301,12 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # sentencepiece model and the preset voices are 8 embeddings / 4,334,272 bytes. All
             # three come from the publisher's own tree at the pinned revisions.
             "pocket-tts-4bit": "64244e1c45d964e903983097cb61a59c0a7a4ae326380b7268e059303cd4d373",
+            # Breeze TTS 2 4-bit, captured 2026-09-29 at revision 3a06d26b: 12 files /
+            # 3,042,440,328 bytes. Twelve rather than the publisher's 16 because the capture
+            # excludes `.gitattributes`, the publisher's `README.md` and a demo video — none of
+            # which is inference data. `LICENSE` and `NOTICE` are kept: a pack's licence travels
+            # with it.
+            "breeze-tts-2-mlx-4bit": "34c94035fdeffa72f8dd6be7351b8d3acd29a07a02e850df324771735a25b2df",
             "pocket-tts-tokenizer": "24fc05ee633df4219c1bec5480742b1ff5c7d067eb42af4ceba0aa8e547692cd",
             "pocket-tts-preset-voices": "b5c804a1ab6346c1f975690c61ac563c6ff3ad862e44012f1bb52097c571a2c7",
             # ── Video: the LTX pack, its text encoder, and Lance ──

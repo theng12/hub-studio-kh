@@ -2,6 +2,56 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.107 — 2026-09-29
+
+### Breeze TTS 2 is here — and it's the one you picked
+
+You asked for it shipped, so it is. **Breeze TTS 2 4-bit (MLX)** is now a voice model in the Audio
+page. It designs a voice from a description you write, clones one from a saved voice, takes a
+direction for how a line should be read, and performs things like `(sigh)` and `(laugh)` instead of
+reading them out. 24 kHz, English and Chinese.
+
+It joins long scripts at **0.60 s** — the pause you chose by ear — and it is the reason the next
+item got fixed.
+
+**One thing to know about cloning with it:** Breeze needs the reference clip **and its exact
+transcript**. If you pick a saved voice that has no transcript, it will say so and point you at the
+Voices page rather than quietly producing a voice that doesn't match. That's deliberate — a guessed
+transcript would make the clone wrong, not just worse.
+
+It wants **16 GB**. The memory it uses while running is small, but one measurement of its peak never
+settled, so the floor is the honest one rather than the flattering one.
+
+### Long scripts no longer step up and down in volume
+
+This is a real fix to every voice model, not just Breeze.
+
+A long script is made in sections, one after another, and nothing was telling each section what
+level the one before it came out at. On your own 1,200-word Aiden render the sections varied by
+**4.9 LU** — audible as the narrator stepping back from the microphone at each paragraph and forward
+again at the next.
+
+My first attempt was the obvious one, and it barely helped: 4.9 down to 4.3. The quiet sections were
+exactly the ones with tall peaks, so the ceiling stopped them being lifted. The pass that works
+brings the same sections to **1.5 LU**, and produces a file measuring **exactly what the sample you
+approved measured**. That's what's in now.
+
+It only changes level — the length is untouched — and if the meter can't run for any reason the
+script is still joined as before, with a note saying so.
+
+### The voice engine underneath was upgraded, carefully
+
+Breeze only exists in a newer version of the speech engine, so that engine moved forward. Before it
+did, it was checked two ways: every call the app makes is unchanged, and the one voice model whose
+behaviour genuinely changed was rendered side by side, old against new — **16 out of 16 runs
+finished cleanly and passed the quality check on both.** The difference in output is real but small,
+and it's smallest on the long-script path the app actually uses.
+
+Two things I could not check and am not going to pretend otherwise: the **larger Qwen clone model
+wasn't measured** (its files aren't on this Mac), and the rare failure this change touches didn't
+reproduce in either version, so it's bounded rather than settled. Both are written down in the
+project record.
+
 ## 0.6.106 — 2026-09-29
 
 ### A clip that will not play now tells you why, and which Mac has it

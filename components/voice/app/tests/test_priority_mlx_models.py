@@ -574,6 +574,16 @@ def test_qwen_clone_long_form_join_uses_production_boundary_pacing(
             AssertionError("Qwen 1.7B assembly must retain every generated frame")
         ),
     )
+    # Loudness matching is switched off for this test, and that is not a concession — it is this
+    # test staying about what it is about. The fixture identifies each section by giving it its own
+    # amplitude (0.1, 0.2, 0.3, 0.4) and then asserts those amplitudes survive, which is how it
+    # proves the sections are neither mixed up nor crossfaded at a join. Levelling exists to make
+    # every section the *same* loudness, so it removes exactly that signal. The subject here is
+    # production boundary pacing, and the pass is measured to be length-preserving (ratio 1.000 at
+    # 50 ms, 200 ms and 1 s), so turning it off does not weaken a single pacing or silence
+    # assertion below. `tests/test_long_form_loudness.py` is where levelling itself is tested.
+    monkeypatch.setattr(generation, "_levelled_sections",
+                        lambda paths, *args, **kwargs: (list(paths), False))
     job = generation.GenerationJob(
         job_id="qwen-boundaries",
         mode="txt2speech",

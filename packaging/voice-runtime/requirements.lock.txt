@@ -912,14 +912,12 @@ mlx @ https://files.pythonhosted.org/packages/c3/47/5f33906cb03d6a378a697cd2d264
     #   -r packaging/voice-runtime/requirements-pilot.txt
     #   mlx-audio
     #   mlx-lm
-mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@94c7716212b2228f178d2f9c7619a591fd1b0b78
     # via -r packaging/voice-runtime/requirements-pilot.txt
 mlx-lm==0.31.3 \
     --hash=sha256:61eb0e3ba09444f77f874aff295401d7ccd20b39495cbbce0c782a15474ce733 \
     --hash=sha256:758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8
-    # via
-    #   -r packaging/voice-runtime/requirements-pilot.txt
-    #   mlx-audio
+    # via -r packaging/voice-runtime/requirements-pilot.txt
 mlx-metal @ https://files.pythonhosted.org/packages/3f/69/fe3b783ebe999f3118234e1e940feb622518bfb1dea6ac5d13b1d36a8449/mlx_metal-0.31.2-py3-none-macosx_14_0_arm64.whl#sha256=b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc \
     --hash=sha256:b25385bcee18fc194092255b8b53b9a3d8489eb650e59160f1b57aadd07aa2dc
     # via

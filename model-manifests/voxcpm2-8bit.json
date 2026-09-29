@@ -60,6 +60,8 @@
     "recommended_unified_memory_gb": 24,
     "status": "unqualified"
   },
+  "quantization": "MLX 8-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/VoxCPM2-8bit",
   "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032",
   "schema_version": 1,
   "source": {
@@ -81,7 +83,5 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/VoxCPM2-8bit/tree/d52725898a0675703f7f9ddc5a4d1a3cdbb99032?recursive=true&expand=true&limit=100"
       }
     ]
-  },
-  "quantization": "MLX 8-bit",
-  "quantization_source": "the publisher's model id states it: mlx-community/VoxCPM2-8bit"
+  }
 }

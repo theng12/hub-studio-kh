@@ -134,6 +134,15 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # companions are what make a generation possible at all, and on an offline kit node
     # nothing can fetch them, so both are packaged and both are declared as dependencies.
     {"package_id": "pocket-tts-4bit", "model_id": "mlx-community/pocket-tts-4bit", "revision": "59592598c532759d2b66a3d8905a612dcbe8419c", "engine": "voice-mlx", "requires_packages": ["pocket-tts-tokenizer", "pocket-tts-preset-voices"]},
+    # ── Breeze TTS 2 4-bit (owner request 2026-09-29) ──
+    # The publisher ships three files that are not inference data: `.gitattributes`, its own
+    # `README.md`, and a demo video. `LICENSE` and `NOTICE` are deliberately NOT excluded — the
+    # pack's licence is the one fact about a model that has to travel with it.
+    #
+    # `Breeze-TTS-2-demo.mp4` is why `exclude` matters here rather than being tidiness: it is a
+    # video file inside a voice package, and the kit copies what the manifest lists. Left in, it
+    # would ride on all four drives and into every install for no inference value at all.
+    {"package_id": "breeze-tts-2-mlx-4bit", "model_id": "mlx-community/Breeze-TTS-2-mlx-4bit", "revision": "3a06d26b172ea4ae1da2f42d708383e9c79d5526", "engine": "voice-mlx", "exclude": (".gitattributes", "README.md", "Breeze-TTS-2-demo.mp4")},
     # `tokenizer.model` is loaded on EVERY generation: the flow-LM's text conditioner calls
     # mlx_audio's `download_if_necessary("hf://kyutai/pocket-tts-without-voice-cloning/
     # tokenizer.model@d4fdd22a…")`, which resolves through `hf_hub_download` against the
@@ -220,6 +229,12 @@ DETAILS: dict[str, dict[str, Any]] = {
     # best-sounding English cloning model on the menu. A local render through the app's own
     # worker on 2026-09-24 re-measured the peak and is what the evidence line records.
     "pocket-tts-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Owner listening review 2026-09-24: 1.9 GB peak, one of only two engines with a credible 8 GB path. Local render through the app's own worker on a 32 GB M2 Max measured 1.93 GB peak for the cloning path (6.64 s of audio in 0.30 s of inference) and 0.25 GB for the preset path, so 8 GB is the floor and 16 GB the comfortable tier.")},
+    # 16 GB rather than the 8 GB the resident size would allow, and the reason is a disagreement
+    # between two measurements rather than caution for its own sake: [M] resident set size held flat
+    # at ~3.3 GB in every mode, which fits 8 GB, while [M] the kernel's peak footprint reading ranged
+    # 5.41 to 23.93 GB across runs and was never pinned down. Until the second is settled, 8 GB is
+    # plausible and not demonstrated, so the claim is the tier that is not at risk.
+    "breeze-tts-2-mlx-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Qualified 2026-09-29 on this project's staging Mac. Resident set size held flat at ~3.3 GB in all five modes (design, clone, direction, long-form, vocal events), which fits 8 GB; the kernel peak footprint reading ranged 5.41 to 23.93 GB and was never settled, so 16 GB is the floor this catalogue claims. Throughput measured 0.27x realtime — about 19.8 minutes per 1,000 words — which is the real cost of this model, not memory.")},
     "pocket-tts-tokenizer": {"defaults": {"parameters_source": "model/tokenizer.model"}, "memory": (8, 8, "A 58 KB sentencepiece model with no memory floor of its own; it is carried wherever pocket-tts-4bit is, because every generation loads it.")},
     "pocket-tts-preset-voices": {"defaults": {"parameters_source": "model/embeddings/alba.safetensors"}, "memory": (8, 8, "Eight preset voice prompts totalling about 4.4 MB, used only by the preset/zero-shot path when no reference clip is supplied.")},
     # ── Adopted from the local Voice Studio cache (2026-09-20) ──

@@ -21,7 +21,7 @@ mojimoji>=0.0.13,<1
 pyopenjtalk>=0.4,<1
 mlx==0.31.2
 mlx-lm==0.31.3
-mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@2c9461f5d8315fa8e7013ab2729495b2bb83d384
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@94c7716212b2228f178d2f9c7619a591fd1b0b78
 mistral-common[audio]==1.11.5
 inflect>=7.0
 unidecode>=1.3

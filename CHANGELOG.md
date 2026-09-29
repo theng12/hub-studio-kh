@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.6.107 — 2026-09-29 · The long-form joiner levels, and Breeze TTS 2 4-bit ships
+
+Two things the owner asked for in one release, because Breeze is the reason the first one finally
+got measured.
+
+### The joiner now matches section loudness — and the obvious fix was the wrong one
+
+**The owner asked directly:** *"did you fix the loudness and the make the joiner work?"* He was right
+that it did not. `_join_long_form_wavs` had **no loudness matching for any family**, so a long script
+came out at whatever level each independently-rendered section happened to land on. Measured on
+Breeze TTS 2 4-bit: the 14 sections of one 1,227-word script span **4.9 LU** (−30.0 to −25.0 LUFS),
+which the ear hears as the narrator stepping back from the microphone at every paragraph.
+
+**The first implementation was one linear gain per section, and it was measured to fail.** The
+sections span 4.9 LU of loudness *and* **18.4 to 22.7 dB of crest factor**, so what actually decides
+each section's final level is how much gain it can take before its peak reaches the ceiling.
+`min(target − I, ceiling − TP)` narrowed the span only **4.9 LU → 4.3 LU** — every quiet section was
+capped, and the step survived the fix. FFmpeg's EBU R128 `loudnorm` per section brought the same 14
+sections to **1.5 LU**, and the joined file measured **−17.50 LUFS / −1.42 dBTP — identical to the
+sample the owner listened to and approved.** That is what ships, and the rejected measurement is
+recorded beside the constants so the next person does not re-derive it.
+
+Each family declares `section_loudness_target_lufs` on its `catalog.FAMILIES` entry (`None` opts
+out), with the true-peak ceiling and loudness range beside it. The pass is length-preserving —
+measured ratio **1.000** at 50 ms, 200 ms and 1 s — so it changes level and nothing else; where
+FFmpeg is missing or a section cannot be levelled, the join proceeds unlevelled and **says so**,
+because a job that has already spent twenty minutes generating must never be lost to a meter.
+
+### Breeze TTS 2 4-bit (MLX) is a family, a model, and a manifest
+
+`mlx-community/Breeze-TTS-2-mlx-4bit` at revision `3a06d26b` — 12 files / 3,042,440,328 bytes — with
+a `design_clone_or_direct` resolver, an entry in `MLX_AUDIO_FAMILIES`, and the **0.60 s join pause
+the owner chose by ear** from three cuts of the same Aiden render. It designs a voice from a written
+description, clones one from a reference clip plus its transcript, takes a direction for how a line
+is read, and performs inline vocal events such as `(sigh)` rather than reading them aloud. 24 kHz
+mono, English and Chinese, **16 GB floor** — 16 rather than the 8 GB the resident size would allow,
+because RSS held flat at ~3.3 GB while the kernel's peak-footprint reading ranged 5.41–23.93 GB and
+was never settled. 16 GB is also where 50 of the owner's ~53 machines sit.
+
+**Breeze refuses a voice with no transcript rather than faking one.** It builds its clone prompt from
+`f"{speaker}{ref_text}"`, so the placeholder Pocket TTS's resolver substitutes would not degrade the
+clone, it would condition it on the wrong words. The refusal names the Voices page.
+
+### The runtime moved 0.4.7 → 0.5.7, and it was measured first
+
+`breeze_tts` exists only in mlx-audio 0.5.7, so the shipping voice runtime had to move. A runtime
+swap is exactly the shape that shipped an unnoticed mflux change for five releases, so it was
+audited and then **rendered**: every entry point the worker calls is byte-identical
+(`generate_audio`, `load_model`, `GenerationResult`, all seven model `generate()` signatures), no
+dependency floor rises, **769 voice tests pass identically**, and a 16-render A/B on the one family
+with a real behavioural change found **16/16 terminating by EOS and 16/16 accepted** by the project's
+own Whisper quality gate.
+
+The change is real and stays recorded: Qwen3-TTS's clone sampler now applies its forced 1.5
+repetition penalty to the **last 64 tokens** instead of the whole history, and no longer restores the
+EOS logit after top-k/top-p filtering — confirmed live at runtime, and the audio is genuinely
+different (same-seed cross-version waveform correlation ≈ 0). What is the same is everything the
+project measures, and the **shipped sectioned path is where the delta is smallest** (same-seed totals
+within 1–3 tokens). **Two residual risks, stated rather than buried:** the **1.7B Base was not
+measured** — no real copy exists on this disk, only dangling symlinks onto an unmounted drive — and
+the rare EOS-failure tail did not reproduce in either version, so it is bounded (≤1 in 5 single-shot,
+≤1 in 3 sectioned per arm at 95%) without being resolved. The pin is one line either way:
+`2c9461f5…` **is** v0.4.7, `94c77162…` is v0.5.7, and the regenerated lock changed **nothing else**.
+
+`tests/test_breeze_family.py` (11 tests) pins the three forms, the transcript refusal, and the
+registry wiring. `tests/test_long_form_loudness.py` (12 tests) drives the real joiner over real WAV
+files and measures the result — the level test was **proved to fail** with levelling disabled, and
+the empty-file test reproduces the `30 != 10` failure that caught a section being silently emptied.
+`docs/model-benchmarks.md`, the manifest inventory and five package counts were regenerated for the
+31st package. **Gate: 1512 tests, OK (11 skipped).** `native/build.sh` green.
+
 ## 0.6.106 — 2026-09-29 · A clip that will not play now says why, and names the Mac that has it
 
 **The owner, asked whether the Hub should keep its own copy of every finished artifact so a result

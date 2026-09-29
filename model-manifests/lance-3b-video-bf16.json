@@ -111,6 +111,8 @@
     "recommended_unified_memory_gb": 16,
     "status": "qualified"
   },
+  "quantization": "bf16",
+  "quantization_source": "the publisher's model id states it: mlx-community/Lance-3B-Video-bf16",
   "requires_packages": [
     "lance-3b-processor-qwen2-5-vl"
   ],
@@ -135,7 +137,5 @@
         "tree_api_url": "https://huggingface.co/api/models/mlx-community/Lance-3B-Video-bf16/tree/b70ba0a53c14eef573570fe65b31e295bd8216af?recursive=true&expand=true&limit=100"
       }
     ]
-  },
-  "quantization": "bf16",
-  "quantization_source": "the publisher's model id states it: mlx-community/Lance-3B-Video-bf16"
+  }
 }
