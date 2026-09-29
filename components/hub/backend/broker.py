@@ -1868,11 +1868,52 @@ def terminal_result(b: dict, item: dict) -> dict | None:
     }
 
 
+def local_artifact_path(item: dict) -> str | None:
+    """The item's artifact path, but only when that file is on *this* Mac.
+
+    `public_item` used to strip `artifact_path` from every item, which left the
+    app's **Show in Finder** button permanently disabled: `native/StudioAPI.swift`
+    decodes `item.artifactPath` and reveals the file it names, so a field that
+    never arrived meant a control that could never fire. The owner hit it on the
+    machine that generated the file ("even on this machine, i can't click show in
+    finder too"), which is the one case where the path is guaranteed to resolve.
+
+    The distinction that matters is *whose* path it is. A path recorded by a
+    worker on another Mac names a file on that Mac's disk; publishing it would
+    offer the operator a reveal that Finder cannot perform. So the path is
+    published for exactly the items this Mac produced, and the other gate — the
+    app's own `FileManager.fileExists` check — covers the rest.
+
+    Returns None for an item with no recorded path, an unassigned item, or a
+    worker that is no longer registered.
+    """
+    path = item.get("artifact_path")
+    if not isinstance(path, str) or not path:
+        return None
+    studio_id = item.get("studio")
+    if not isinstance(studio_id, str) or not studio_id:
+        return None
+    studio = next((s for s in _monitor().registry if s.get("id") == studio_id), None)
+    if studio is None or not peers.is_local_studio(studio):
+        return None
+    return path
+
+
 def public_item(b: dict, item: dict) -> dict:
-    """Return a public job item without worker-local paths or worker URLs."""
+    """Return a public job item without worker URLs or another Mac's paths.
+
+    `worker_artifact_url` and `worker_accepted_params` never leave the Hub: a
+    worker's URL names a port that will belong to nothing after the next restart,
+    and its accepted params are a worker-local receipt. `artifact_path` is
+    published only through `local_artifact_path`, so it appears only when the
+    file it names is on this Mac.
+    """
     result = {k: v for k, v in item.items()
               if k not in {"artifact_path", "worker_artifact_url",
                            "worker_accepted_params"}}
+    local_path = local_artifact_path(item)
+    if local_path is not None:
+        result["artifact_path"] = local_path
     result["execution_started_at"] = item.get("execution_started_at")
     if result.get("cancel_error") is not None:
         result["cancel_error"] = _sanitize_public_error(result["cancel_error"])

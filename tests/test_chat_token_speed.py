@@ -99,7 +99,10 @@ class ChatTokenSpeedSourceTests(unittest.TestCase):
     def test_the_row_and_the_live_turn_show_it(self) -> None:
         row = body(VIEWS, "private func chatJobRow(_ job: NativeJob) -> some View")
         self.assertIn("job.tokenSpeed", row, "the Chat job row must show the rate")
-        self.assertIn("job.generationSuffix", row, "the round trip must still be shown")
+        # The round trip is shown through the shared line now, not by a copy written into this row:
+        # the row keeps only the fact that is its own.
+        self.assertIn("jobMetaLine(job)", row,
+                      "the Chat row must draw the shared line, which carries the generation time")
         turn = VIEWS[VIEWS.index("if !turn.speed.isEmpty"):]
         turn = turn[:turn.index("\n", turn.index("Text(turn.speed)"))]
         self.assertIn("Text(turn.speed)", turn,

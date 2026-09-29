@@ -2,6 +2,36 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.104 — 2026-09-29
+
+### Show in Folder works now — it never could
+
+The button was there on every finished row and it was dead on every finished row, on every Mac,
+including the one that made the file. The Hub was storing where each result went and then removing
+that field before the app ever saw it, so the button had nothing to point at and stayed grey.
+
+A result this Mac produced now carries its own location, and **Show in Folder** selects that file in
+Finder. A job that ran on another Mac still shows a disabled button with the reason in its tooltip,
+because there is genuinely no folder on this Mac to open.
+
+### Every row says when it was generated
+
+The rows told you what made a clip and how long it took, but never *when* — so two runs of the same
+script looked identical and the only way to date one was to count down from the top. Each row now
+carries the date and time the job was filed, in the same style the rest of the app uses. A job the
+Hub never stamped shows no date rather than a wrong one.
+
+### The rows are separated, and the player no longer jumps the list
+
+Two things about the same panel. The rows sat directly on the workspace background with nothing
+between them, so a long history read as one block; there is a divider between rows now, the same as
+the Jobs page has always drawn.
+
+And the player bar above the list used to appear only once you pressed Play on something — which
+pushed the whole list down as it appeared and pulled it back up when you stopped, moving the row you
+were reading out from under the pointer. The player is now always in place. Before anything is
+loaded its controls are greyed out and it says what to do to load a clip.
+
 ## 0.6.103 — 2026-09-29
 
 ### Every studio's "Recent" list now scrolls to everything

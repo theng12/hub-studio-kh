@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.104 — 2026-09-29 · The four things the job rows were missing
+
+**The owner, from screenshots of his own Audio and Jobs pages:** *"the audio scrubber is appearing and
+disappearing … it shouldn't move the list"*, *"i think we should have a divider or a line between
+them — they all in the same black background"*, *"even on this machine, i can't click show in finder
+too"*, and *"there's is no generation date so i don't know when each of them was generated on."*
+
+Four reports about one screen. Each was a thing written **once per panel or once per row builder**,
+and therefore missing or wrong in five or six places at the same time.
+
+**1. Show in Folder was disabled on every row of every machine.** `broker.public_item` — the function
+every job payload is built by — dropped `artifact_path` from every item it published. The app's
+`canRevealArtifact` reads `item.artifactPath` and checks the file is there, so the field arrived nil,
+the check was never reached, and the button was disabled everywhere, **including the Mac that wrote
+the file**. The app's own docstring already described the intended behaviour — *"The Hub records the
+worker's `output_path` on the item and this reveals exactly that"* — so it was the publication, not
+the button, that was wrong.
+
+The rule the strip came from is real and is kept: a path recorded by a worker on **another Mac** names
+a file on that Mac's disk, and offering a reveal Finder cannot perform is worse than a disabled
+button. `local_artifact_path` publishes the path only when `peers.is_local_studio` says the producing
+worker is this Mac — the same test the broker uses to decide whose memory a worker's is. The app's
+`FileManager.fileExists` check is the second gate and still covers a remote job's path.
+`worker_artifact_url` and `worker_accepted_params` are still withheld from every item.
+
+**2. The rows had no boundary.** Each panel drew `ScrollView { LazyVStack(spacing: 12) { ForEach } }`
+straight onto the workspace background, so there was nothing between one row and the next. The Jobs
+page had drawn a `Divider()` all along. All five panels now render through one `RecentRows`, which
+draws the row and then the divider, so no panel can be the one without it.
+
+**3. The transport appeared and disappeared.** It was drawn only while a clip was loaded, so pressing
+Play pushed the whole list down and Stop pulled it back — the row being read moved under the pointer.
+It is now always on screen, takes an optional job, and is inert with a one-line reason until
+something is loaded.
+
+**4. No row carried a generation date.** Six row builders each hand-wrote the same "status · model"
+`HStack`, and the date was written into none of them. That line is now `jobMetaLine`, in one place, and
+it renders `NativeJob.generatedAtLabel` — the Hub's own `batch.created_at` through the same
+`moment(_:)` formatter the fleet pages use. A job with no stamp shows no date rather than 1970.
+
+`native/build.sh` green (three suites). `tests/test_recent_job_lists.py` grew from 3 tests to 14 and
+now pins the divider, the transport and the date **by shape** — one `RecentRows`, one `stateBadge`
+call site, one meta line — so the sixth panel and the seventh row builder are caught. New
+`tests/test_local_artifact_reveal.py` (14 tests) pins both halves of the path contract: a local job
+publishes its path, a remote job does not, and the app still refuses to reveal a file that is not
+here. `tests/native/api_main.swift` adds four checks for the date and the reveal gate. Each fix was
+proved to fail with the defect restored.
+
 ## 0.6.103 — 2026-09-29 · Every studio's "Recent" list was capped at five, so it could not scroll
 
 **The owner, with a screenshot:** *"audio generation tab only shows a few and i can't scroll it about.

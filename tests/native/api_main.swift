@@ -3724,6 +3724,53 @@ struct NativeAPITests {
         require(NativeJob.trimmed(1.0) == "1" && NativeJob.trimmed(1.5) == "1.5",
                 "a control's value must be shown without trailing zeros")
 
+        // A row says when it was generated. Six row builders each hand-wrote the "status · model"
+        // line and none of them wrote a date, so the owner could not tell two runs of the same
+        // script apart except by counting rows down from the top.
+        let stamp = 1_700_000_000.0
+        let datedJob = NativeJob(id: "dated", state: "done", progress: 1, text: "hello",
+                                 model: "fixture/voice", createdAt: stamp,
+                                 outputURL: nil, error: nil)
+        require(datedJob.generatedAtLabel == NativeWorkspaceStore.moment(stamp),
+                "a job with a Hub stamp must show it, got: \(datedJob.generatedAtLabel ?? "nil")")
+        let undatedJob = NativeJob(id: "undated", state: "done", progress: 1, text: "hello",
+                                   model: "fixture/voice", createdAt: nil,
+                                   outputURL: nil, error: nil)
+        require(undatedJob.generatedAtLabel == nil,
+                "a job the Hub never stamped must not be dated, got: "
+                    + "\(undatedJob.generatedAtLabel ?? "nil")")
+        // A zero stamp is the same absence, not a job made in 1970: 0 is what a missing time looks
+        // like once it has been through a number field.
+        let zeroedJob = NativeJob(id: "zeroed", state: "done", progress: 1, text: "hello",
+                                  model: "fixture/voice", createdAt: 0,
+                                  outputURL: nil, error: nil)
+        require(zeroedJob.generatedAtLabel == nil,
+                "a zero stamp must read as no stamp, got: \(zeroedJob.generatedAtLabel ?? "nil")")
+
+        // Show in Folder points at a file on this Mac. The Hub publishes the path only for a job
+        // this Mac produced; the row is the second gate, so a path that is not here is never
+        // offered whatever the payload said.
+        let here = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hub-reveal-\(UUID().uuidString).wav")
+        try Data("RIFF".utf8).write(to: here)
+        defer { try? FileManager.default.removeItem(at: here) }
+        let onThisMac = NativeJob(id: "local", state: "done", progress: 1, text: "",
+                                  model: "fixture/voice", createdAt: stamp,
+                                  outputURL: nil, error: nil, artifactPath: here.path)
+        require(onThisMac.canRevealArtifact,
+                "a result that is a file on this Mac must offer Show in Folder")
+        let onAnotherMac = NativeJob(id: "remote", state: "done", progress: 1, text: "",
+                                     model: "fixture/voice", createdAt: stamp,
+                                     outputURL: nil, error: nil,
+                                     artifactPath: here.path + ".not-here")
+        require(onAnotherMac.canRevealArtifact == false,
+                "a path with no file behind it must not offer Show in Folder")
+        let withNoPath = NativeJob(id: "nopath", state: "done", progress: 1, text: "",
+                                   model: "fixture/voice", createdAt: stamp,
+                                   outputURL: nil, error: nil)
+        require(withNoPath.canRevealArtifact == false,
+                "a job with no recorded path must not offer Show in Folder")
+
         // B28: "Use in …" must point the Studio that owns the model at it. It used to set the
         // Subtitle selection for every non-audio model.
         for function in engineFunctions {

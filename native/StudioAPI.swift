@@ -1954,6 +1954,22 @@ struct NativeJob: Identifiable, Equatable {
         return FileManager.default.fileExists(atPath: artifactPath)
     }
 
+    /// When this job was generated, as a person reads it — nil when the Hub stamped no time.
+    ///
+    /// Every row said what made a clip and how long it took, but never *when*. Both job lists run
+    /// newest first, so two runs of the same script were indistinguishable and the only way to
+    /// date one was to count rows down from the top. The owner asked for the date directly
+    /// ("there's is no generation date so i don't know when each of them was generated on").
+    ///
+    /// `createdAt` is the Hub's own `batch.created_at` — when the batch was filed. For a finished
+    /// row that is the generation it belongs to; for a running one it is when it started, which is
+    /// the same fact read before the end. It goes through `NativeWorkspaceStore.moment` so a job
+    /// date and a node date are written the same way.
+    var generatedAtLabel: String? {
+        guard let createdAt, createdAt > 0 else { return nil }
+        return NativeWorkspaceStore.moment(createdAt)
+    }
+
     /// "1.5", "1", "0.35" — a control's value with no trailing zeros and no invented precision.
     static func trimmed(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
@@ -6946,7 +6962,13 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and
     /// its own clock, which is the same Mac's clock in every case that matters here.
-    static func moment(_ seconds: Double, now: Date = Date()) -> String {
+    ///
+    /// `nonisolated` because it is a pure function of its argument: it holds no state, and the
+    /// `DateFormatter` is built per call rather than shared. It lives on this `@MainActor` store
+    /// because that is where the fleet pages that first needed it are, but a value type such as
+    /// `NativeJob` has to be able to date itself too — a job row showing when it was generated is
+    /// the same formatting problem as a node row showing when it was last seen.
+    nonisolated static func moment(_ seconds: Double, now: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short

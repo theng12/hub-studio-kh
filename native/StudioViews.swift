@@ -340,6 +340,32 @@ private struct RowActions<Content: View>: View {
     }
 }
 
+/// The scrolling list of finished work a Studio page shows under its "Recent …" heading.
+///
+/// The five panels were five copies of `ScrollView { LazyVStack(spacing: 12) { ForEach(…) } }`, so
+/// no row had a boundary: on the dark workspace every row sat directly on the panel behind it and
+/// the owner could not tell where one finished and the next began — *"they all in the same black
+/// background"*. The Jobs page had drawn a `Divider()` between its rows all along; this is that
+/// same division, in one place, so the five panels cannot drift apart one fix at a time.
+private struct RecentRows<Item: Identifiable, Row: View>: View {
+    let items: [Item]
+    let row: (Item) -> Row
+
+    init(items: [Item], @ViewBuilder row: @escaping (Item) -> Row) {
+        self.items = items
+        self.row = row
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(items) { item in
+                row(item)
+                Divider()
+            }
+        }
+    }
+}
+
 /// A whole-number field that can be typed into as well as stepped.
 ///
 /// A value outside `range` is refused on commit and the field falls back to what it was, so a
@@ -1380,7 +1406,7 @@ struct StudioContent: View {
                     if let job = previewImageJob { Text(job.text).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     Divider()
                     HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 12) { ForEach(workspace.imageJobs) { imageJobRow($0) } } }
+                    ScrollView { RecentRows(items: workspace.imageJobs) { imageJobRow($0) } }
                         .frame(minHeight: 80, maxHeight: 150)
                 }
                 .padding(.leading, 20)
@@ -1501,6 +1527,29 @@ struct StudioContent: View {
         }
     }
 
+    /// The line under a row's prompt: what made it, whether it finished, and when.
+    ///
+    /// Six row builders each hand-wrote this `HStack`, so a fact added to one was missing from the
+    /// other five. That is how the list ended up with no generation date at all: the model and the
+    /// pace were written out per builder and the date was written out nowhere. One builder means
+    /// the next fact lands on every row of every Studio at once.
+    @ViewBuilder
+    private func jobMetaLine(_ job: NativeJob) -> some View {
+        HStack(spacing: 8) {
+            stateBadge(job.state)
+            // The model's own published label, which carries its quantization — the same name the
+            // picker on the Chat page offered.
+            Text("\(modelName(job.model))\(job.generationSuffix)")
+                .font(.caption).foregroundStyle(.secondary)
+            // When it was made. Absent when the Hub stamped no time, which is a different fact from
+            // "a long time ago" and is not invented.
+            if let made = job.generatedAtLabel {
+                Text(made).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Generated \(made)")
+            }
+        }
+    }
+
     /// What a job was asked for, under the model line. Renders nothing when the job states no
     /// controls — a job another client filed, or a modality with none — rather than an empty line.
     @ViewBuilder
@@ -1534,11 +1583,7 @@ struct StudioContent: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     jobProgress(job)
                     jobRequestFacts(job, .image)
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -1663,11 +1708,7 @@ struct StudioContent: View {
                         Text("Completed music will appear here.").foregroundStyle(.secondary).font(.callout)
                         Spacer(minLength: 0)
                     } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.musicJobs) { musicJobRow($0) }
-                            }
-                        }
+                        ScrollView { RecentRows(items: workspace.musicJobs) { musicJobRow($0) } }
                         .frame(minHeight: 80, maxHeight: 170)
                     }
                 }
@@ -1877,11 +1918,7 @@ struct StudioContent: View {
                     .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     jobProgress(job)
                     jobRequestFacts(job, .music)
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -2035,11 +2072,7 @@ struct StudioContent: View {
                     if workspace.videoJobs.isEmpty {
                         empty("Your clips", "Finished video jobs will appear here, with their length and a way to save them.", symbol: "film")
                     } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.videoJobs) { job in videoJobRow(job) }
-                            }
-                        }
+                        ScrollView { RecentRows(items: workspace.videoJobs) { videoJobRow($0) } }
                     }
                     Spacer(minLength: 0)
                 }
@@ -2199,11 +2232,7 @@ struct StudioContent: View {
                 }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     jobProgress(job)
                     jobRequestFacts(job, .video)
                     // The clip's own facts already carry its length, so the separate "Clip length"
@@ -2415,17 +2444,19 @@ struct StudioContent: View {
                     // loaded, and the pace the clip was made at. The Audio page offered Play and
                     // nothing else, so a three-minute script could not be scrubbed, paused where it
                     // mattered, or compared against its own length.
-                    if let job = loadedAudioJob, player.hasAudio { audioTransport(job) }
+                    // The transport is always on screen, loaded or not. It used to appear only once
+                    // a clip had been played, which pushed the whole list down the moment Play was
+                    // pressed and pulled it back on Stop — the row the operator was reading moved
+                    // out from under the pointer, and on a long history the list jumped by the
+                    // height of the transport. Reserving the space is the fix; with nothing loaded
+                    // the controls are disabled and say so.
+                    audioTransport(loadedAudioJob)
                     ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
                         Group {
                             if workspace.audioJobs.isEmpty {
                                 empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
                             } else {
-                                ScrollView {
-                                    LazyVStack(alignment: .leading, spacing: 12) {
-                                        ForEach(workspace.audioJobs) { jobRow($0, compact: true) }
-                                    }
-                                }
+                                ScrollView { RecentRows(items: workspace.audioJobs) { jobRow($0, compact: true) } }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                             }
                         }
@@ -2874,11 +2905,7 @@ struct StudioContent: View {
                         // The subtitle row, not the audio one: this panel once drew Play and Save
                         // for a transcript, while the Jobs page correctly offered Open Transcript
                         // for the very same job.
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(workspace.subtitleJobs) { job in subtitleJobRow(job) }
-                            }
-                        }
+                        ScrollView { RecentRows(items: workspace.subtitleJobs) { subtitleJobRow($0) } }
                         .frame(minHeight: 60, maxHeight: 170)
                     }
                 }
@@ -3545,11 +3572,7 @@ struct StudioContent: View {
                     .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     jobProgress(job)
                     if job.state == "done" {
                         Text("Transcript").font(.caption).foregroundStyle(.secondary)
@@ -3595,13 +3618,7 @@ struct StudioContent: View {
                     .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        // The model's own published label, which carries its quantization - the
-                        // same name the picker on the Chat page offered.
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     // Tokens per second, derived only from the Chat worker's own stated generation
                     // time. When the worker stated none there is no rate; the row names the Hub's
                     // round trip as the round trip rather than passing it off as the model's speed.
@@ -3658,11 +3675,7 @@ struct StudioContent: View {
                     .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
-                    HStack(spacing: 8) {
-                        stateBadge(job.state)
-                        Text("\(modelName(job.model))\(job.generationSuffix)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    jobMetaLine(job)
                     jobProgress(job)
                     jobRequestFacts(job, .audio)
                     // What was actually produced: length, size and the size requested. An asset
@@ -3699,9 +3712,17 @@ struct StudioContent: View {
         return workspace.audioJobs.first { $0.id == loadedAudioJobID }
     }
 
-    /// A conventional transport for the loaded Voice clip. Nothing starts on its own: the row's
-    /// Play loads the clip, and this controls what is loaded.
-    @ViewBuilder private func audioTransport(_ job: NativeJob) -> some View {
+    /// A conventional transport for the loaded Voice clip — drawn whether or not one is loaded.
+    ///
+    /// Nothing starts on its own: the row's Play loads the clip, and this controls what is loaded.
+    /// The parameter is optional so the panel can reserve this control's height before the first
+    /// clip is played. When it is nil the transport is inert rather than hidden, and the caption
+    /// names the one thing that fills it.
+    @ViewBuilder private func audioTransport(_ job: NativeJob?) -> some View {
+        // Both halves of "there is something to control": a job selected *and* the player holding
+        // its audio. They arrive one after the other, and a slider bound to a player with no file
+        // would otherwise look live while it did nothing.
+        let ready = job != nil && player.hasAudio
         VStack(spacing: 6) {
             HStack(spacing: 12) {
                 Button {
@@ -3710,6 +3731,7 @@ struct StudioContent: View {
                     Label(player.playing ? "Pause" : "Play",
                           systemImage: player.playing ? "pause.fill" : "play.fill")
                 }
+                .disabled(!ready)
                 .accessibilityLabel(player.playing ? "Pause the loaded clip" : "Resume the loaded clip")
                 Button {
                     player.stop()
@@ -3717,10 +3739,11 @@ struct StudioContent: View {
                 } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
+                .disabled(!ready)
                 Spacer()
                 // The pace the operator chose, when the lane publishes one: a clip made at 1.5× is
                 // a different result from one at the model's own pace, and the row could not say so.
-                if let speed = job.voiceSettings?.speed {
+                if let speed = job?.voiceSettings?.speed {
                     Text("speed \(NativeJob.trimmed(speed))×")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -3733,7 +3756,14 @@ struct StudioContent: View {
             }
             Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }),
                    in: 0...max(player.duration, 0.001))
+                .disabled(!ready)
                 .accessibilityLabel("Playback position")
+            // The reason the three controls above are grey, said once and only while it is true.
+            if !ready {
+                Text("Choose Play on a clip to load it here.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor),

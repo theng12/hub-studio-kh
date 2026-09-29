@@ -52,16 +52,34 @@ class GenerationTimeTests(unittest.TestCase):
     )
 
     def test_every_job_row_shows_it(self) -> None:
-        """One suffix, one style per Studio, both pages: the generator and Jobs cannot disagree."""
+        """One suffix, one style per Studio, both pages: the generator and Jobs cannot disagree.
+
+        The suffix used to be written into each row style, and this test counted the copies — six
+        rows, six occurrences. That checked *membership*: it passed for as long as nobody added a
+        row, and it had to be hand-edited for every fact added beside the suffix. The date went in
+        that way, written into no row at all, because six copies is six chances to forget one.
+
+        All six now draw one shared `jobMetaLine`, so the invariant is the opposite: the suffix is
+        written **once**, and every row style draws the line that carries it. A seventh row that
+        forgets the line fails this test; a seventh row that hand-writes the suffix fails it too.
+        """
         self.assertEqual(
-            VIEWS.count("job.generationSuffix"), len(self.ROW_STYLES),
-            f"each of the {len(self.ROW_STYLES)} row styles must show the generation time once")
+            1, VIEWS.count("job.generationSuffix"),
+            "job.generationSuffix is written more than once — it belongs to the one shared row "
+            "line (`jobMetaLine`), and a second copy is a copy that can drift")
         for row in self.ROW_STYLES:
             with self.subTest(row=row):
                 self.assertIn(row, VIEWS, f"{row} is gone; update this test with the new styles")
                 body = VIEWS[VIEWS.index(row):]
                 body = body[:body.index("\n    private func", 10)]
-                self.assertIn("generationSuffix", body, f"{row} must show the generation time")
+                self.assertIn("jobMetaLine(job)", body,
+                              f"{row} must draw the shared row line, which is where the generation "
+                              "time - and the date - are rendered")
+        # And the line itself has to keep showing what this file exists for.
+        line = VIEWS[VIEWS.index("private func jobMetaLine"):
+                     ]
+        line = line[:line.index("\n    private func", 10)]
+        self.assertIn("generationSuffix", line, "the shared row line must show the generation time")
 
     def test_the_dispatcher_routes_every_function_with_a_job_history_to_a_row(self) -> None:
         """`jobRow(_:for:)` is the router; a function it drops loses its history silently.

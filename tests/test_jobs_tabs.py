@@ -115,10 +115,13 @@ class JobsTabTests(unittest.TestCase):
         """
         row = body(VIEWS, "private func videoJobRow(_ job: NativeJob) -> some View")
         self.assertIn("job.text", row, "the row must show the prompt that was sent")
-        self.assertIn("stateBadge(job.state)", row, "the row must carry the state badge")
-        self.assertIn("modelName(job.model)", row,
-                      "the row must name the model by its published label, quantization included")
-        self.assertIn("job.generationSuffix", row, "the row must show how long it took")
+        # The status badge, the model label and the generation time are not written here any more:
+        # all six row styles draw the one shared line, and this asserts the row reached it rather
+        # than that it grew its own copy. `tests/test_recent_job_lists.py` and
+        # `tests/test_generation_time.py` pin what the line contains.
+        self.assertIn("jobMetaLine(job)", row,
+                      "the row must draw the shared line that carries the state badge, the model "
+                      "label and the generation time")
         # The clip's own measured facts, through the one derivation every row reads. The length is
         # the fact the Hub records for video; it reaches the row inside `assetFacts` rather than on
         # a second line of its own, which printed the same number twice in one row. Asserted in two
@@ -156,14 +159,15 @@ class JobsTabTests(unittest.TestCase):
                       "an empty section must still say so per Studio")
 
     def test_the_chat_row_is_a_text_row(self) -> None:
-        """Prompt, model, state, time and the answer - and no artifact affordance it has none."""
+        """Prompt, model, state, time and the answer — and no artifact affordance it has none."""
         row = body(VIEWS, "private func chatJobRow(_ job: NativeJob) -> some View")
         self.assertIn("job.text", row, "the row must show the prompt that was sent")
         self.assertIn("job.answer", row, "the row must show the answer the Hub recorded")
-        self.assertIn("stateBadge(job.state)", row, "the row must carry the state badge")
-        self.assertIn("modelName(job.model)", row,
-                      "the row must name the model by its published label, quantization included")
-        self.assertIn("job.generationSuffix", row, "the row must show how long it took")
+        # As with the Video row: the badge, the model label and the time come through the one
+        # shared line rather than being re-written here.
+        self.assertIn("jobMetaLine(job)", row,
+                      "the row must draw the shared line that carries the state badge, the model "
+                      "label and the generation time")
         self.assertIn("textSelection(.enabled)", row, "an answer is text the operator may copy")
         for offered in ('Button("Copy Answer")', 'Button("Save…")'):
             self.assertIn(offered, row, f"an answer must offer {offered}")
