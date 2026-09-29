@@ -3,8 +3,47 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.108** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
+Last updated: **0.6.109** (the long-form joiner levels every family, and Breeze TTS 2 4-bit ships with the mlx-audio 0.5.7 runtime it needs; 2026-09-29).
 
+> **0.6.109 — a controller that booted before its network was unreachable, and looked fine.**
+>
+> **The owner, after a power cut on a headless controller:** *"I tried to connect to it from the node.
+> It doesn't work I think the ip was blocked… I just stop server and then start server again. Only
+> then the node can be connect… I have to restart it every time there's a new node. this is a
+> terrible bug."*
+>
+> **Nothing was blocked.** There is **no IP blocking, no lockout and no rate limit anywhere in the
+> Hub** — no per-IP state exists at all (checked `auth.py`, `fleet_nodes.py`, and every
+> `request.client` use in `standalone.py`). The cause is worse: `bindableListenHost()` reads this
+> Mac's addresses **once, at the instant the services start**, and treats a chosen address that is
+> not there as one this Mac *no longer has* — dropping it and binding whatever remains, which is
+> **loopback** when nothing else is left.
+>
+> **The boot instant is the worst possible one.** The app is a login item, so on a headless Mac after
+> a power cut it starts while Ethernet is negotiating, DHCP is unanswered and Tailscale is not up.
+> The Hub then comes up on `127.0.0.1`, **answers its own health check, writes its ready file and
+> reports "Local services ready"** — healthy by every measure it publishes, and reachable by no node
+> at all. His manual stop/start was the same read taken a minute later.
+>
+> ⚠ **The second symptom is the same cause, not a second bug:** a controller bound to loopback cannot
+> probe its nodes, so they showed offline until it was restarted — *"after I've connected the
+> machines, it's still shown offline, until I click restart or sth."*
+>
+> Fixed by remembering the missing set (`addressesMissingAtStart`) and letting the **three-second
+> supervisor loop restart the services when one appears**; the spawn clears the set, so a
+> deliberately narrowed Hub restarts at most once rather than looping. The note also stopped stating
+> the wrong fact — it said *"no longer has 192.168.1.21"* from a single reading; it now says the Mac
+> does not have it **yet**, that this is usual for a minute after a restart, and that the services
+> restart by themselves.
+>
+> `ShellConfiguration.arrivedAddresses` is the decision, extracted **pure with injectable addresses**
+> so a headless boot is testable without waiting for a network. Five assertions in
+> `tests/native/main.swift`, one **proved to fail** with the comparison stubbed out.
+>
+> **Not fixed, and worth knowing:** the Hub still decides its bind list only at start. A Mac that
+> loses and regains the *same* address while running does not rebind — that was always true and is
+> not what he hit. If it ever matters, the supervisor loop is now the place to notice it.
+>
 > **0.6.108 — a node that had joined came up saying it had not.**
 >
 > **The owner, on a second Mac:** *"it shows not joined a controller. but at the bottom it shows i
