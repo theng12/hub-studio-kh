@@ -91,11 +91,18 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn("try Self.verifyArtifactFile(", install, "hashing a 2 GB image on the main actor froze the window")
         self.assertNotIn("try Self.verifyArtifactFile(", body(API, "private func downloadReleaseArtifact", 4200))
 
-    def test_only_a_joined_node_updates_itself_and_only_when_idle(self):
+    def test_an_idle_mac_of_either_role_updates_itself_and_only_when_idle(self):
+        # 0.6.114 let only a joined node do this and left controllers to a button; the unified
+        # update extends it to controllers once they are drained. Role is no longer a condition.
         tick = body(API, "func releaseTick(", 2600)
-        self.assertIn('controllerIdentity?.settings.role == "agent"', tick)
+        self.assertNotIn("settings.role", tick, "a controller updates itself when drained too")
         self.assertIn("activeWorkCount == 0", tick)
         self.assertIn("releasePublisherKey != nil", tick, "this must never be the read that pins a key")
+
+    def test_an_old_uncertain_job_does_not_block_updating_for_ever(self):
+        count = body(API, "func countActiveWork(", 1400)
+        self.assertIn('job.state == "uncertain"', count)
+        self.assertIn("deadlineSeconds", count)
 
     def test_an_update_relaunches_the_app_without_the_quit_prompt(self):
         self.assertIn("onRelaunchRequested", HUB)
