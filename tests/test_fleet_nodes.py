@@ -551,5 +551,110 @@ class TheRegistryMigratesFromItsOldShapeTest(unittest.TestCase):
         self.assertEqual(list(fleet_nodes._read()), ["mac-mini-2"])
 
 
+class NodeStatusAndLabelTest(unittest.TestCase):
+    """Symmetric removal: a node can ask whether it is still listed, and a rename reaches the roster."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-fleet-status-")
+        self.old_data = fleet_nodes.DATA_DIR
+        fleet_nodes.DATA_DIR = Path(self.temporary.name)
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        fleet_nodes.DATA_DIR = self.old_data
+        self.temporary.cleanup()
+
+    def _join(self, node_id: str, name: str = "") -> dict:
+        return fleet_nodes.join({"node_id": node_id, "name": name or node_id,
+                                 "address": "http://192.168.1.21:8080"})
+
+    def test_status_says_member_removed_or_unknown(self) -> None:
+        self._join("kept")
+        self._join("sold")
+        fleet_nodes.remove("sold", by="operator")
+        self.assertEqual(fleet_nodes.status("kept"), {"id": "kept", "state": "member"})
+        gone = fleet_nodes.status("sold")
+        self.assertEqual(gone["state"], "removed")
+        self.assertGreater(gone["removed_at"], 0)
+        self.assertIn("removed this Mac on", gone["detail"])
+        self.assertEqual(fleet_nodes.status("never-heard-of-it"),
+                         {"id": "never-heard-of-it", "state": "unknown"})
+
+    def test_a_voluntary_leave_is_forgotten_not_evicted(self) -> None:
+        self._join("leaver")
+        self.assertTrue(fleet_nodes.leave("leaver"))
+        self.assertEqual(fleet_nodes.status("leaver")["state"], "unknown")
+        self.assertEqual(fleet_nodes.removed(), {})
+        self._join("leaver")  # no tombstone, so it may simply join again
+
+    def test_a_revoked_credential_is_told_it_was_removed_and_nothing_publishes_the_hash(self) -> None:
+        sold = self._join("sold")
+        kept = self._join("kept", "kept")
+        self.assertIsNone(fleet_nodes.revoked_detail(sold["credential"]), "still valid until removed")
+        fleet_nodes.remove("sold", by="operator")
+        told = fleet_nodes.revoked_detail(sold["credential"])
+        self.assertIsNotNone(told, "the removed Mac's credential must be recognised as revoked")
+        self.assertIn("removed this Mac on", told)
+        self.assertIsNone(fleet_nodes.revoked_detail(kept["credential"]))
+        self.assertIsNone(fleet_nodes.revoked_detail(""))
+        self.assertNotIn("revoked_hash", json.dumps(fleet_nodes.removed()))
+        # Re-admitting ends it: the old credential is then just an unknown one again.
+        fleet_nodes.readmit("sold")
+        self.assertIsNone(fleet_nodes.revoked_detail(sold["credential"]))
+
+    def test_a_rename_on_the_mac_updates_the_roster_name(self) -> None:
+        self._join("studio-mac-1102-x", "studio-mac-1102")
+        self.assertTrue(fleet_nodes.rename("studio-mac-1102-x", "studio-mac-1501"))
+        self.assertEqual(fleet_nodes._read()["studio-mac-1102-x"]["name"], "studio-mac-1501")
+        self.assertFalse(fleet_nodes.rename("studio-mac-1102-x", "studio-mac-1501"))
+        self.assertFalse(fleet_nodes.rename("studio-mac-1102-x", "   "))
+        self.assertFalse(fleet_nodes.rename("nobody", "x"))
+
+    def test_never_connected_needs_a_day_and_no_answer_since_joining(self) -> None:
+        now = time.time()
+        base = {"id": "n", "name": "n", "address": "http://127.0.0.1:1"}
+        for label, joined, seen, expected in (
+                ("old and silent", now - 3 * 86400, now - 3 * 86400, True),
+                ("old but answered since", now - 3 * 86400, now - 60, False),
+                ("joined an hour ago", now - 3600, now - 3600, False)):
+            with self.subTest(label):
+                row = asyncio.run(fleet_nodes.probe(
+                    {**base, "joined_at": joined, "last_seen_at": seen}, FakeClient({})))
+                self.assertIs(row["never_connected"], expected)
+
+
+class TheNodeIdentityStopsFollowingTheHostnameTest(unittest.TestCase):
+    """C3: a rename in macOS before the first save used to change the id a controller knows a Mac by."""
+
+    def setUp(self) -> None:
+        from components.hub.backend import control_plane
+        self.control_plane = control_plane
+        self.temporary = tempfile.TemporaryDirectory()
+        self.old_file = control_plane.SETTINGS_FILE
+        self.old_cache = control_plane._settings_cache
+        control_plane.SETTINGS_FILE = Path(self.temporary.name) / "controller_settings.json"
+        control_plane._settings_cache = None
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        self.control_plane.SETTINGS_FILE = self.old_file
+        self.control_plane._settings_cache = self.old_cache
+        self.temporary.cleanup()
+
+    def test_the_first_id_is_kept_when_the_hostname_changes(self) -> None:
+        from unittest import mock
+        with mock.patch("socket.gethostname", return_value="studio-mac-1102.local"):
+            self.control_plane.ensure_controller_id()
+        self.control_plane._settings_cache = None
+        with mock.patch("socket.gethostname", return_value="studio-mac-1501.local"):
+            self.assertEqual(self.control_plane.load_settings()["controller_id"],
+                             "studio-mac-1102-hub")
+
+    def test_a_damaged_settings_file_is_left_alone(self) -> None:
+        self.control_plane.SETTINGS_FILE.write_text("{not json")
+        self.control_plane.ensure_controller_id()
+        self.assertEqual(self.control_plane.SETTINGS_FILE.read_text(), "{not json")
+
+
 if __name__ == "__main__":
     unittest.main()

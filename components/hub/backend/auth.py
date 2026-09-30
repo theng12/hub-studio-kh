@@ -530,6 +530,9 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/overview$"),
     ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
+    # Whether this controller still lists a Mac: how a removal reaches the Mac itself. Read-only;
+    # a node credential may ask only about its own id (checked in the route).
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/status$"),
     # Remote app update: a controller mirrors a signed release and its nodes pull it. Publishing
     # is fleet-reachable because GatewayKH holds only the Fleet token; the signature made with the
     # key the owner installed via POST /api/hub/release/trust is what authorises the release.
@@ -567,6 +570,7 @@ NODE_ALLOWED = (
     ("GET", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/overview$"),
     ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/status$"),
 )
 _NODE_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in NODE_ALLOWED)
 
@@ -767,6 +771,13 @@ def make_middleware(token: str):
                 response.set_cookie("kh_studio_token", fleet, httponly=True,
                                     samesite="strict")
                 return response
+        # A node credential this controller revoked by removing that Mac: say so, with the date,
+        # instead of a bare 401 the Mac cannot tell from a controller that lost its roster.
+        if offered:
+            from . import fleet_nodes
+            removed_detail = fleet_nodes.revoked_detail(offered)
+            if removed_detail:
+                return JSONResponse({"detail": removed_detail}, status_code=403)
         return JSONResponse(
             {"detail": credential_refusal_detail(request, token)},
             status_code=401,

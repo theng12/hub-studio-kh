@@ -71,6 +71,8 @@ class FleetPermissionTests(unittest.TestCase):
             # Introducing itself, and seeing its siblings.
             ("POST", "/api/hub/fleet/nodes"),
             ("GET", "/api/hub/fleet/nodes"),
+            # Whether it is still listed: how a removal on the controller reaches the Mac.
+            ("GET", "/api/hub/fleet/nodes/node-1/status"),
             # The fleet view, for an operator running the app on a Mac that is not the
             # controller. It reads health, disk and measured speed; it changes nothing.
             ("GET", "/api/hub/fleet/overview"),
@@ -99,6 +101,7 @@ class FleetPermissionTests(unittest.TestCase):
             ("POST", "/api/hub/memory/release"),
             # Membership: a fleet member may introduce itself, not evict others.
             # Anything nobody has classified yet.
+            ("POST", "/api/hub/fleet/nodes/node-1/status"),
             ("POST", "/api/hub/there-is-no-such-route"),
             ("GET", "/api/hub/there-is-no-such-route"),
             ("PUT", "/api/hub/stats"),

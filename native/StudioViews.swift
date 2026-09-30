@@ -1171,7 +1171,7 @@ struct StudioContent: View {
                     }
                     ForEach(machineBreakdown(stats), id: \.0) { machine, group in
                         HStack {
-                            Text(machine == "local" ? "This Mac" : machine).font(.callout)
+                            Text(machine == "local" ? "This Mac" : workspace.fleetMachineName(machine)).font(.callout)
                             Spacer()
                             Text("\(group.count) jobs · \(seconds(group.avgS)) average")
                                 .font(.callout).foregroundStyle(.secondary)
@@ -4846,8 +4846,10 @@ struct StudioContent: View {
             // registers and what the controller routes by, and it never changes when this Mac is
             // renamed — so a Mac that was renamed away from its hostname is still the same node,
             // and the operator can read the value that actually identifies it.
-            LabeledContent("Node identity", value: workspace.controllerIdentity?.settings.controllerId ?? "Not reporting")
-            Text("This is the id this Mac registers with a controller and is routed by. Renaming this Mac changes only the label above; this value stays the same, so a rename never re-registers a node.")
+            // The label is what the owner sees everywhere; the id is only a key, kept as a tooltip.
+            LabeledContent("Node identity", value: workspace.controllerIdentity?.settings.machineName ?? "Not reporting")
+                .help("Internal id: \(workspace.controllerIdentity?.settings.controllerId ?? "not reporting")")
+            Text("This Mac is shown by this name everywhere. Hover for the internal id it registers with a controller and is routed by: renaming this Mac never changes it, so a rename never re-registers a node.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -5231,7 +5233,7 @@ struct StudioContent: View {
         guard let pin = workspace.routingPin, pin.hasPrefix("machine:") else {
             return "New work runs on whichever Mac can take it. Use Send here to pin one."
         }
-        return "New work is pinned to \(pin.replacingOccurrences(of: "machine:", with: "")). Press Automatic to let the Hub choose again."
+        return "New work is pinned to \(workspace.fleetMachineName(pin.replacingOccurrences(of: "machine:", with: ""))). Press Automatic to let the Hub choose again."
     }
 
     private func machineFacts(_ machine: NativeFleetMachine) -> String {
@@ -5435,6 +5437,7 @@ struct StudioContent: View {
 
     /// "last seen 4 min ago", or the honest alternative when the Hub has no stamp for it.
     private func nodeSeenLine(_ node: NativeFleetNode) -> String {
+        if node.neverConnected == true { return "never connected since it joined" }
         guard let seen = NativeWorkspaceStore.ago(node.lastSeenAt) else {
             return node.isReachable ? "seen just now" : "never seen"
         }
@@ -5782,7 +5785,7 @@ struct StudioContent: View {
             ForEach(workspace.storageUsage) { usage in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(usage.machine == "local" ? "This Mac" : usage.machine).font(.headline)
+                        Text(usage.machine == "local" ? "This Mac" : workspace.fleetMachineName(usage.machine)).font(.headline)
                         Spacer()
                         Text(NativeWorkspaceStore.gigabytes(usage.usedBytes)).font(.system(.body, design: .monospaced))
                     }

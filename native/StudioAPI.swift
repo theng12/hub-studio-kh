@@ -1481,6 +1481,8 @@ struct NativeFleetNode: Decodable, Equatable, Identifiable {
     /// Whether this controller holds a credential for the Mac. False is a row from before
     /// per-node credentials, which has to prove itself on its next join.
     let hasCredential: Bool?
+    /// Joined more than a day ago and never answered since. Absent from a Hub older than the field.
+    let neverConnected: Bool?
 
     var isReachable: Bool { state == "reachable" }
     /// The node answered and refused *this controller's* credential — a different fault from a
@@ -2938,6 +2940,24 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The status of the last controller join that was refused for authentication (401/403), else
     /// nil. Read by the re-join loop to tell a stale credential from a controller that is simply off.
     private(set) var lastJoinAuthStatus: Int?
+    /// A self-removal this Mac could not deliver because its controller did not answer. Kept on disk
+    /// (with the credential that authorises it) and retried until the controller gives an answer, so
+    /// "remove it from the node" reaches the controller even if it was off when the owner pressed it.
+    struct PendingLeave: Codable, Equatable {
+        let controllerURL: String
+        let nodeID: String
+        let credential: String
+        /// Seconds since 1970. After this the Mac stops trying; the owner can still remove it there.
+        let expires: Double
+    }
+    private(set) var pendingLeave: PendingLeave?
+    private var lastMembershipCheck: Date?
+    /// Consecutive `unknown` answers. One is a controller that restarted or lost a file, so a Mac
+    /// leaves its group only after several in a row.
+    private var membershipUnknownStreak = 0
+    static let membershipCheckSeconds: TimeInterval = 60
+    static let unknownAnswersBeforeLeaving = 3
+    static let pendingLeaveLifetime: TimeInterval = 14 * 24 * 3600
     /// Called once a join succeeds, so the app can save the controller for the next start; called
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
@@ -3109,6 +3129,7 @@ final class NativeWorkspaceStore: ObservableObject {
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-music.json"), "a pending music request") { try loadPendingMusic() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-pending-transcription.json"), "a pending transcription") { try loadPendingTranscription() }
             loadBestEffort(dataDirectory.appendingPathComponent("native-model-downloads.json"), "the model-download list") { try loadHubDownloadRuns() }
+            loadBestEffort(dataDirectory.appendingPathComponent("native-pending-leave.json"), "a pending group departure") { try loadPendingLeave() }
             await refresh()
             guard self.connectionID == requestConnection else { return }
             // The Clone tab's picker is built from this library and is the only way to choose the
@@ -3219,6 +3240,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// One poll tick: refresh what the screen shows (only if it can be seen), then the update check.
     func pollOnce(now: Date = Date()) async {
         if isWindowVisible() { await refresh(reportErrors: false) }
+        await membershipTick(now: now)
         await releaseTick(now: now)
     }
 
@@ -5588,6 +5610,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 ["api", "hub", "machine-label"], method: "POST", body: RenameRequest(name: name))
             guard connectionID == requestConnection else { return }
             await refreshConnection()
+            // The controller's roster keeps the name this Mac joined with; tell it now.
+            lastMembershipCheck = nil
+            await membershipTick()
             // **The rename is reported as a rename, and the identity it did not change is named.**
             // `controller_id` is what a join registers and what the controller routes by; a note
             // that only said "this Mac is now called X" left the operator to assume the fleet saw a
@@ -6035,7 +6060,8 @@ final class NativeWorkspaceStore: ObservableObject {
     /// and the startup attempt, tells the local Hub to mint its own credential (which is what
     /// actually takes the group's token off this Mac), and keeps the controller's own sentence on
     /// screen with the date it named.
-    private func handleControllerRemoval(detail: String, address: String, target: URL) async {
+    private func handleControllerRemoval(detail: String, address: String, target: URL,
+                                         notice: String? = nil) async {
         // This Mac's own credential was revoked the moment it was removed; keeping it would only
         // invite a retry the controller has already refused.
         setNodeCredential(nil)
@@ -6053,7 +6079,7 @@ final class NativeWorkspaceStore: ObservableObject {
         invalidateStartupMembershipAttempt()
         controllerReachable = false
         controllerCredentialRefused = false
-        controllerHealthNote = FleetCopy.removalNotice(date: date, address: shown)
+        controllerHealthNote = notice ?? FleetCopy.removalNotice(date: date, address: shown)
         // A removal is a failure the operator has to act on, and it is also the answer to a join
         // they may have just pressed: both the banner and the standing line carry it.
         note(.failure, controllerHealthNote ?? detail)
@@ -6233,6 +6259,84 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    // MARK: Membership check — a removal on either side reaches the other
+
+    /// Once a minute, from the poll tick: deliver a leave the controller has not heard, then ask the
+    /// controller whether it still lists this Mac. Not a join — a join mints a credential each call.
+    func membershipTick(now: Date = Date()) async {
+        if let last = lastMembershipCheck, now.timeIntervalSince(last) < Self.membershipCheckSeconds { return }
+        lastMembershipCheck = now
+        await retryPendingLeave(now: now)
+        await askControllerWhetherStillListed()
+    }
+
+    private func retryPendingLeave(now: Date) async {
+        guard let pending = pendingLeave else { return }
+        var delivered = now.timeIntervalSince1970 >= pending.expires
+        if !delivered, let target = try? Self.privateHTTPAddress(pending.controllerURL) {
+            var request = URLRequest(url: target.appendingPathComponent("api/hub/fleet/nodes/\(pending.nodeID)"))
+            request.httpMethod = "DELETE"
+            request.timeoutInterval = 15
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue(pending.credential, forHTTPHeaderField: "X-Hub-Token")
+            if let (_, response) = try? await session.data(for: request),
+               let status = (response as? HTTPURLResponse)?.statusCode {
+                delivered = (200..<300).contains(status) || [401, 403, 404].contains(status)
+            }
+        } else if !delivered { delivered = true }  // an address that no longer validates cannot be retried
+        if delivered {
+            pendingLeave = nil
+            try? savePendingLeave()
+        }
+    }
+
+    /// `GET …/nodes/<id>/status` with this Mac's own credential (the group token if that one is
+    /// refused), carrying the current label so a rename reaches the controller's roster.
+    /// `removed` clears this Mac's membership at once; `unknown` only after several answers in a row;
+    /// anything that is not an answer (offline, 401, 5xx, an older controller's 404) changes nothing.
+    private func askControllerWhetherStillListed() async {
+        guard controllerRemoval == nil, !joiningFleet, rejoinTask == nil, startupRejoinTask == nil,
+              controllerIdentity?.settings.fleetCredentialOrigin == "adopted",
+              let membership = storedMembership,
+              let target = try? Self.privateHTTPAddress(membership.controllerAddress),
+              let nodeID = controllerIdentity?.settings.controllerId.lowercased(),
+              let requestConnection = connectionID else { return }
+        var components = URLComponents(url: target.appendingPathComponent("api/hub/fleet/nodes/\(nodeID)/status"),
+                                       resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "name", value: controllerIdentity?.settings.machineName)]
+        guard let url = components?.url else { return }
+        func ask(_ credential: String?) async -> (Int, [String: Any])? {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let credential { request.setValue(credential, forHTTPHeaderField: "X-Hub-Token") }
+            guard let (data, response) = try? await session.data(for: request),
+                  let http = response as? HTTPURLResponse else { return nil }
+            return (http.statusCode, (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:])
+        }
+        let own = nodeOriginCredential
+        guard var answer = await ask(own) else { return }
+        if answer.0 == 401, let group = fleetTokenCredential, group != own, let again = await ask(group) {
+            answer = again
+        }
+        guard connectionID == requestConnection, controllerRemoval == nil else { return }
+        let detail = (answer.1["detail"] as? String) ?? ""
+        let state = answer.1["state"] as? String
+        if (answer.0 == 403 && FleetCopy.isRemoval(detail)) || (answer.0 == 200 && state == "removed") {
+            await handleControllerRemoval(detail: detail, address: membership.controllerAddress, target: target)
+        } else if answer.0 == 200, state == "unknown" {
+            membershipUnknownStreak += 1
+            if membershipUnknownStreak >= Self.unknownAnswersBeforeLeaving {
+                membershipUnknownStreak = 0
+                await handleControllerRemoval(
+                    detail: "the controller no longer lists this Mac", address: membership.controllerAddress,
+                    target: target, notice: FleetCopy.forgottenNotice(address: membership.controllerAddress))
+            }
+        } else if answer.0 == 200 {
+            membershipUnknownStreak = 0
+        }
+    }
+
     /// Stop the backed-off re-join and put it back at the first interval. Called when this Mac is
     /// no longer a node, when it leaves the group, or when an operator joins by hand.
     private func cancelMembershipRejoin() {
@@ -6319,8 +6423,24 @@ final class NativeWorkspaceStore: ObservableObject {
         if let membership, let token = membership.token, !token.isEmpty,
            let nodeID = controllerIdentity?.settings.controllerId.lowercased(),
            let target = try? Self.privateHTTPAddress(membership.controllerAddress) {
+            let credential = heldNodeCredential ?? token
             let outcome = await removeThisMacFromController(target: target, nodeID: nodeID,
                                                             groupToken: token)
+            // The controller did not give an answer (off, or a server error): keep the request and
+            // the credential that authorises it, and let the tick deliver it. 401/403/404 are
+            // answers — the Mac is already gone from there, or was never allowed to remove itself.
+            var undelivered = false
+            switch outcome {
+            case .unavailable: undelivered = true
+            case .refused(let status, _): undelivered = ![401, 403, 404].contains(status)
+            default: break
+            }
+            if undelivered {
+                pendingLeave = PendingLeave(
+                    controllerURL: membership.controllerAddress, nodeID: nodeID, credential: credential,
+                    expires: Date().addingTimeInterval(Self.pendingLeaveLifetime).timeIntervalSince1970)
+                try? savePendingLeave()
+            }
             switch outcome {
             case .removed:
                 controllerNote = ""
@@ -6334,9 +6454,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 controllerNote = detail.isEmpty
                     ? " The controller refused to remove this Mac (HTTP \(status)); remove it there."
                     : " The controller refused to remove this Mac (HTTP \(status)): \(detail)"
+                if undelivered { controllerNote += " This Mac will keep telling it for up to 14 days." }
             case .unavailable(let reason):
                 controllerNote = " The controller at \(membership.controllerAddress) answered nothing "
-                    + "(\(reason)); it may still list this Mac — remove it there."
+                    + "(\(reason)); it may still list this Mac. This Mac will keep telling it for up to "
+                    + "14 days, or remove it there."
             }
         }
         guard connectionID == requestConnection else { return }
@@ -6566,8 +6688,15 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// The name of a machine in this controller's roster, for a result that must name Macs rather
     /// than ids. Falls back to the id the Hub used, which is still a value the operator can match.
+    /// The label a person set for a machine, for anything that would otherwise print its id. The id
+    /// is an internal key (a Mac renamed to studio-mac-1501 keeps the id it first registered with),
+    /// so it is only the last resort — views put it in a tooltip.
     func fleetMachineName(_ machine: String) -> String {
-        fleetNodes?.nodes.first { $0.id.lowercased() == machine.lowercased() }?.name ?? machine
+        let key = machine.lowercased()
+        if let own = controllerIdentity?.settings, own.controllerId.lowercased() == key { return own.machineName }
+        if let node = fleetNodes?.nodes.first(where: { $0.id.lowercased() == key }) { return node.name }
+        if let row = fleetOverview?.machines.first(where: { $0.machine.lowercased() == key }) { return row.label }
+        return machine
     }
 
     /// The address to offer a controller: one it can reach this Mac at.
@@ -8644,6 +8773,19 @@ final class NativeWorkspaceStore: ObservableObject {
     private func loadPendingTranscription() throws {
         guard let pendingTranscriptionURL, FileManager.default.fileExists(atPath: pendingTranscriptionURL.path) else { return }
         pendingTranscription = try JSONDecoder().decode(PendingTranscription.self, from: Data(contentsOf: pendingTranscriptionURL))
+    }
+    private var pendingLeaveURL: URL? { dataDirectory?.appendingPathComponent("native-pending-leave.json") }
+    private func savePendingLeave() throws {
+        guard let pendingLeaveURL else { return }
+        if let pendingLeave {
+            try JSONEncoder().encode(pendingLeave).write(to: pendingLeaveURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingLeaveURL.path)
+        } else { try? FileManager.default.removeItem(at: pendingLeaveURL) }
+    }
+    private func loadPendingLeave() throws {
+        pendingLeave = nil
+        guard let pendingLeaveURL, FileManager.default.fileExists(atPath: pendingLeaveURL.path) else { return }
+        pendingLeave = try JSONDecoder().decode(PendingLeave.self, from: Data(contentsOf: pendingLeaveURL))
     }
     private var hubDownloadRunsURL: URL? { dataDirectory?.appendingPathComponent("native-model-downloads.json") }
     private func saveHubDownloadRuns() throws {
