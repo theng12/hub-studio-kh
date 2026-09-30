@@ -316,6 +316,12 @@ def test_only_the_newest_two_releases_are_kept(hub, tmp_path):
     seed = _seed()
     _trust(hub, seed)
     shas = []
+    app_release.blob_dir().mkdir(parents=True, exist_ok=True)
+    in_flight = app_release.blob_dir() / f".{'a' * 64}.inflight.part"
+    abandoned = app_release.blob_dir() / f".{'b' * 64}.abandoned.part"
+    in_flight.write_bytes(b"half")
+    abandoned.write_bytes(b"half")
+    os.utime(abandoned, (time.time() - 7200, time.time() - 7200))
     for number in range(3):
         files = {**FILES_A, R + "components/hub/backend/broker.py": f"# broker {number}\n".encode()}
         descriptor, body, _e, blobs = _release(seed, files, tmp_path, build=f"b{number}00000")
@@ -328,6 +334,8 @@ def test_only_the_newest_two_releases_are_kept(hub, tmp_path):
     stored = {p.name for p in app_release.blob_dir().iterdir()}
     assert shas[0][1] not in stored, "the oldest release's own blob is collected"
     assert shas[1][1] in stored and shas[2][1] in stored
+    assert in_flight.exists(), "collecting garbage must not delete an upload that is still arriving"
+    assert not abandoned.exists(), "an upload abandoned hours ago is collected"
 
 
 # ── a node mirroring its controller ────────────────────────────────────────

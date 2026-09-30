@@ -581,7 +581,11 @@ def collect_garbage() -> None:
         referenced |= {digest for kind, _x, _s, digest in fm.flatten(groups).values() if kind == "f"}
     try:
         for blob in blob_dir().iterdir():
-            if blob.name not in referenced:
+            if blob.name.startswith("."):
+                # An upload in flight: left alone unless it was abandoned hours ago.
+                if time.time() - blob.stat().st_mtime > 3600:
+                    blob.unlink(missing_ok=True)
+            elif blob.name not in referenced:
                 blob.unlink(missing_ok=True)
     except OSError:
         pass
