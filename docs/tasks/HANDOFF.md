@@ -29,12 +29,26 @@ Last updated: **0.6.115** (scarcest-first scheduling, node removal from either s
 > **Fleet.** Removal from either side (`GET /fleet/nodes/{id}/status`, a 403 with the removal date for a
 > revoked credential, 14-day retry of a node's leave notice). Labels everywhere; node id persisted.
 >
+> **YuE2 decoder (P0, found by the coordinator through the gateway).** Every YuE2 job failed with
+> *"the YuE2 decoder (yue2-vae) is not installed"* on every Mac although the files were on disk:
+> `_run_yue2` read `files["requires"]`, a key `model_packages.preflight` never returns. Now
+> `MusicCache.companion_root("yue2-vae")` resolves it from the decoder package's own receipt +
+> manifest layout destination. `DecoderResolvesFromARealLayoutTests` (tests/test_music_yue2.py)
+> builds the library from the shipped manifests; reverting the fix reproduces the owner's sentence.
+> ⚠ **NOT done: retiring ACE-Step 1.5** (owner decision relayed by the coordinator: the Hub offers
+> only YuE2 and Stable Audio 3). The removal was started and **blocked by the tool's permission
+> classifier**, so nothing of it is in this release: `model-manifests/ace-step-1-5-turbo.json`,
+> the ACE paths in `components/music/app/backend/{catalog,generation,cache,main,memory_policy,
+> engine_child}.py`, `packaging/{music_worker,hub_worker,stage_voice,capture_model_manifests}.py`
+> and ~14 tests still ship ACE-Step. `generation.py` makes ACE the default model
+> (`DEFAULT_MODEL = require_model(MAIN_REPO)`), so it needs SA3 as the new default.
+>
 > **Merge notes.** One conflict, `components/hub/backend/auth.py`: fleet and delta both extended
 > `FLEET_ALLOWED` and `NODE_ALLOWED`; every entry from both is kept. `standalone.py`, `StudioAPI.swift`
 > (`pollOnce` runs `membershipTick` then `releaseTick`), `tests/native/api_main.swift` and `broker.py`
 > auto-merged and were exercised by the gate; no feature-versus-feature conflict was found.
 >
-> **Gate: `unittest discover -s tests -p 'test_*.py'` -> 1593 tests, OK (13 skipped), 582 s, exit 0**
+> **Gate: `unittest discover -s tests -p 'test_*.py'` -> 1596 tests, OK (13 skipped), 636 s, exit 0** (run on the tree with the YuE2 fix, c317f3b; the first merged-tree run was 1593 OK, 582 s)
 > (`.build/hub-gate/bin/python`, `PYTHONPATH=$PWD/.build/test-deps`; includes the isolated-child
 > `tests/hub_regression/cases` run); `native/build.sh` green (boundary, API contract, lifecycle).
 > Not exercised here: a real delta install, a real node removal across two Macs, or the relaunch after an
