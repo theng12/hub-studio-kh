@@ -365,7 +365,7 @@ def _stage_video(context: dict) -> dict | None:
     return {
         **matched,
         **({k: v for k, v in (yue2_note or {}).items()}),
-        # BRIDGE (one release, revert to 'video' in the release after): every Mac already installed
+        # BRIDGE (revert to 'video' only once NO Mac still runs < 0.6.121): every Mac already installed
         # (0.6.119/0.6.120) verifies a staged update with ITS OWN `runtimePaths`, which has no
         # `video`, so it refuses any release that says 'video' here and can never update itself.
         # Nothing reads this label but that check (`_video_spec` reads `runtime_sha256`, and the

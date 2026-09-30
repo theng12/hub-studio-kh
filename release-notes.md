@@ -2,6 +2,13 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.122 - 2026-10-01
+
+### Updates restart the app by themselves
+
+**Updates now restart the app by themselves** - the previous versions could hang half-quit after installing
+an update (Force Quit fixed it). Studio Hub now stops its engine first, then closes and reopens on its own.
+
 ## 0.6.121 - 2026-10-01
 
 ### Macs can install updates by themselves again

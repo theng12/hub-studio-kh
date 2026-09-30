@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.122 — 2026-10-01 · Updates restart the app by themselves
+
+Found in the 0.6.121 rollout: four controllers that took 0.6.119 -> 0.6.121 installed it and then sat
+half-quit for ever (Force Quit, then open, fixed each). `AppDelegate.relaunchAfterUpdate` called `NSApp.terminate`
+from the release tick, which is a main-actor task. With the engine running, `applicationShouldTerminate` answers
+`.terminateLater` and AppKit waits in a nested loop; the engine's exit is delivered as another main-actor task,
+which cannot run until the tick returns, so the reply never came, the app never quit and the reopen helper
+waited on it for ever. Diagnosis: `_orchestra/audit-20260930/update-0120/diag/relaunch-*`.
+- **Fix** (`554ed1f`): the relaunch stops the engine FIRST and quits from `onStopped` (`engineStopped`), so
+  `NSApp.terminate` runs from the engine's exit, when nothing is running and `applicationShouldTerminate` answers
+  `.terminateNow`. A hung stop is still force-stopped by itself after 15 s. No engine running: it quits at once.
+  Seams `spawnRelaunchHelper` / `terminateApp`; `tests/native/lifecycle_main.swift` `relaunch-after-update`
+  asserts the order (helper started once, no quit while the engine runs, quit after it stops, idle quits at
+  once). Mutation-proved (terminate straight away -> the quit-while-running assertion fails).
+- **Other paths audited:** no other `NSApp.terminate` runs inside a main-actor task. The user-Quit path
+  (`applicationShouldTerminate`) is reached from a menu/Dock/Apple event on the run loop, not from a task; its
+  task only replies (`NSApp.reply`), which is safe. The one remaining `terminate` is the launch-error alert in
+  `applicationDidFinishLaunching` (no controller, `.terminateNow`).
+- **Bridge kept:** the video component is still labelled `runtime: "voice"` (`0.6.121`). Macs still on
+  0.6.119/0.6.120 verify an update with their own table (no `video`) and must be able to take this release. The
+  bridge can only be reverted once no Mac runs below 0.6.121.
+- **A Mac on 0.6.119-0.6.121 still has the bug when it takes THIS update:** its own (old) app does that one
+  relaunch. After the install the new app is already in place; Force Quit the old process (or `kill` it) and
+  open Studio Hub. From 0.6.122 on, updates restart by themselves.
+
 ## 0.6.121 — 2026-10-01 · Macs can install updates by themselves again
 
 Found in the 0.6.120 rollout: no controller or node updated. `ReleaseInstaller.runtimePaths`
@@ -19,10 +44,9 @@ the label `voice` swaps).
   `packaging/stage_voice.py` labels the video component `'runtime': 'voice'` (nothing reads that label except the
   installer check; `_video_spec` reads `runtime_sha256`). Verified by running the real 0.6.119 installer source
   against the staged 0.6.121 app.
-- **NEXT RELEASE (0.6.122) MUST revert the bridge:** set `'runtime': 'video'` back in `_stage_video`, delete the
-  BRIDGE comment, and **delete `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`** in
-  `tests/test_installer_knows_shipped_runtimes.py` (it would fail the revert on purpose). Do that only once the
-  fleet is on 0.6.121 or later.
+- **Reverting the bridge** (set `'runtime': 'video'` back in `_stage_video`, delete the BRIDGE comment and
+  `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`) is possible only once no Mac runs
+  below 0.6.121. 0.6.122 keeps it (see below).
 
 ## 0.6.120 — 2026-09-30 · Lance video is retired; video is LTX-2.3
 

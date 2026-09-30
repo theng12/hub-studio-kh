@@ -31,7 +31,12 @@ class NoDialogOnTheUnattendedPath(unittest.TestCase):
     def test_a_relaunch_after_an_update_force_stops_a_hung_shutdown_without_asking(self):
         hub = (NATIVE / "StudioHub.swift").read_text()
         relaunch = _body(hub, "func relaunchAfterUpdate()")
-        self.assertRegex(relaunch, r"forceStopWithoutAsking = true\s+NSApp\.terminate")
+        relaunch = relaunch[:relaunch.index("\n    }\n")]
+        # The engine is stopped FIRST and the quit comes from its exit (`engineStopped`): quitting here,
+        # inside the release tick's main-actor task, waits for an exit that can never be delivered.
+        self.assertRegex(relaunch, r"forceStopWithoutAsking = true\s+if controller\.running \{ controller\.stop\(\) \}")
+        self.assertNotIn("NSApp.terminate", relaunch)
+        self.assertRegex(_body(hub, "func engineStopped()"), r"else if relaunching \{ terminateApp\(\) \}")
         force = _body(hub, "private func scheduleForceStop")
         self.assertRegex(force, r"if self\.forceStopWithoutAsking \{ self\.forceStop\(\) \} else \{ self\.confirmForceStop\(\) \}")
 

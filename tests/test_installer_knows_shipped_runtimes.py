@@ -40,8 +40,8 @@ class InstallerKnowsShippedRuntimes(unittest.TestCase):
 
     def test_bridge_release_video_is_verifiable_by_the_apps_already_installed(self):
         """0.6.119/0.6.120 apps check a staged update against THEIR table (no `video`). Until the
-        fleet is past the release that carries the fixed table, the video record must name a runtime
-        that old table has. Delete this test together with the BRIDGE note in stage_voice.py."""
+        fleet is past 0.6.121 (no Mac below it), the video record must name a runtime that old table has.
+        Delete this test together with the BRIDGE note in stage_voice.py, and only then."""
         source = (ROOT / "packaging/stage_voice.py").read_text()
         video = source[source.index("def _stage_video"):]
         declared = re.search(r"'runtime': '([^']+)'", video).group(1)
