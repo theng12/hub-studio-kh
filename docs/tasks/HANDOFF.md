@@ -3,7 +3,65 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.117** (Trash Folder, one retired-models list; 2026-09-30).
+Last updated: **0.6.118** (drain for update, unattended key pin, blob-push fix; 2026-09-30).
+
+> **0.6.118 — a Mac that never goes idle still updates itself (drain for update); the unattended tick pins
+> its own key; a blob push no longer stalls the controller** (live pilot findings, 2026-09-30). Read
+> `CHANGELOG.md` 0.6.118; what to know:
+>
+> - **Drain for update** (`releaseTick` in `native/StudioAPI.swift`, `components/hub/backend/update_drain.py`).
+>   A verified offer waits `updateDrainGrace` (600 s; `defaults write <bundle id> UpdateDrainGraceSeconds -int N`)
+>   for `activeWorkCount == 0`; after that the app asks its Hub (`POST /api/hub/update/drain {"want":true}`,
+>   Hub token) to stop taking new work, keeps the lease alive every 30 s, and installs when running work
+>   finishes. **Refusal code `MACHINE_BUSY` (409)**: the gateway's `_LOCATION_REFUSAL_CODES` re-routes it
+>   (`LOCATION_NOT_READY`) and the broker's `_is_machine_reservation_refusal` treats it as "wait", not failure.
+>   One flag feeds `broker.busy_machines()` (every machine taken: scheduler, peer admission
+>   `_peer_admission_refusal`, chat/transcription lanes) and `_submission_readiness`.
+> - **Stagger rule:** one Mac per controller group drains/installs at a time, controller included: the
+>   controller holds one in-memory slot (`update_drain.slot`); a node asks it via `POST /api/hub/fleet/update-slot`
+>   (added to `FLEET_ALLOWED` and `NODE_ALLOWED`); an old/unreachable controller does not block a node.
+> - **Cannot wedge:** the drain and the slot are 120 s leases; failed install -> `endUpdateDrain()` at once
+>   and that build is not retried (`autoUpdateFailedBuild`); app/Hub/Mac restart -> the lease lapses.
+>   Only queued jobs are excluded from the count while draining (they persist through the relaunch);
+>   running work still counts. Visible: sidebar "Updating after current work finishes...",
+>   `GET /api/health` `update_draining`.
+> - **Key pin:** `releaseTick` no longer needs a pinned key. First unattended read pins the local Hub's
+>   key via `refreshRelease` (TOFU), `lastReleaseCheck` is reset so the verify happens on the next tick
+>   (10 s), a different key later refuses (`releaseRefusal` names it). `rememberReleasePublisherKey`
+>   persists it as before.
+> - **Human blockers found in the unattended path:** (1) fixed - after the install the relaunch stops
+>   the services and, if that hangs 15 s, `confirmForceStop()` raised an `NSAlert` nobody answers;
+>   `relaunchAfterUpdate` now sets `forceStopWithoutAsking` and `scheduleForceStop` force-stops itself.
+>   (2) verified fine - the 0.6.114 "jobs are running, install anyway?" dialog is `confirmingInstall` in
+>   `StudioViews` (manual button only); `installOfferedRelease(automatic:)` has none; the quit prompt is
+>   skipped while `relaunching`; no window/Connections/connection notice is needed. (3) left, deliberate:
+>   `memoryInventory != nil` (only a Hub older than the app lacks that route).
+>   `tests/test_update_unattended.py` pins these by source.
+> - **Blob push:** `PUT /api/hub/release/blob/<sha>` no longer recomputes `missing_blobs()` (dropped `need`
+>   from its reply; gateway reads `GET /need` once), runs `BlobUpload` in a thread, and
+>   `release_delta.installed_by_sha` is memoised per installed app. `POST /api/hub/release` adds `basis`
+>   `{installed_app, wanted_blobs, needed_blobs}`. **Measured on this Mac** (0.6.117 stage manifest vs
+>   the 0.6.116 stage as installed app): `need` = 12 blobs, 13.7 MB; per-`missing_blobs()` cost ~20-30 ms
+>   warm (0.23 s cold), so with 12 blobs the per-PUT rescan cannot explain 550 s. **It only explains it if
+>   `need` was thousands of blobs, i.e. the controller could not find its own installed app** (or had to hash
+>   it cold, ~20 s+ on a loaded Mac). The next push's `basis.installed_app` says which; not verifiable here
+>   (the SSD-installed 0.6.116 on 1500 is not reachable).
+> - **Gate:** `unittest discover -s tests -p 'test_*.py'` -> **1597 tests, OK (13 skipped), 599 s, exit 0**;
+>   `native/build.sh` green. Mutation-proved (each fails on an assertion): Swift 6 (no grace, queued counts,
+>   failed install keeps drain, needs pinned key first, no next-tick verify, ignores slot refusal) and
+>   Python 9 (busy_machines ignores drain, submission ignores drain, slot not exclusive, node fail-closed,
+>   lease never lapses, node route missing, force-stop flag missing, PUT rescans, PUT commit on loop, sha
+>   index not memoised).
+> - **Delta 0.6.117 -> 0.6.118** (stage manifests): 11 files changed (13,912,888 B) + 1 added
+>   (`update_drain.py`, 3,166 B) + 0 removed = **12 blobs, 13,916,054 B** (native binary 12,984,024 B is
+>   most of it). Totals 93,042 -> 93,043 files; 5,185,502,300 -> 5,185,558,591 B.
+> - **DMG** `dist/StudioHub-0.6.118-9781819.dmg` (1,946,012,769 B, SHA-256
+>   `91221238d8ca6ee8bfac0e2ed91ab946eb40dedecf0e507b5b2e1ac0d6622a34`, `hdiutil verify` valid), built with
+>   `.build/make-dmg-noprune.sh` from the `9781819` stage; the 0.6.117 DMG moved to `_trash/dist/`.
+>   Installable app: `.build/StudioHub-0118/Studio Hub.app` (manifest `0.6.118` / `9781819246dc344f9ec56fbecb260f2e0713a9a9`).
+>   **Not installed, not on the drives.** `.build/StudioHub-0116`/`-0117` untouched.
+> - **Not done:** grace is a `defaults` key, not a Settings control; a real drain/install across two Macs
+>   was not exercised (no installs, no drives); the SSD-app manifest question above.
 
 > **0.6.117 — output cleanup uses a Trash Folder; ONE list retires a model; updates stop piling up**
 > (two owner decisions, 2026-09-30). Read `CHANGELOG.md` 0.6.117; what to know:
