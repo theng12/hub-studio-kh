@@ -28,6 +28,21 @@ Last updated: **0.6.117** (Trash Folder, one retired-models list; 2026-09-30).
 >   replaced app to the Trash Folder (falls back to removal if `trashFolder` is nil or on another volume);
 >   `retireReleaseArtifacts()` moves everything under `Updates/` after any completed install. Tests build
 >   `ReleaseInstaller` with no `trashFolder`, so they never touch the real Hub data.
+> - **Delta rollout 0.6.116 -> 0.6.117**, from the two stages' file manifests: **11 files changed
+>   (13,691,402 bytes), 1 added (`components/retired_models.py`, 1,199 bytes), 0 removed.** The native binary
+>   changed (12,939,800 bytes), so this is the delta that carries new Swift; the runtimes are byte-identical.
+>   Total files 93,041 -> 93,042; 5,185,460,742 -> 5,185,502,300 bytes.
+> - **Gate: `unittest discover -s tests -p 'test_*.py'` -> 1584 tests, OK (13 skipped), 725 s, exit 0**
+>   (`.build/hub-gate/bin/python`, `PYTHONPATH=$PWD/.build/test-deps`; +3 files of new tests). `native/build.sh`
+>   green (boundary, API contract, lifecycle, release build). Mutation-proved, each failing on an assertion:
+>   15 Python mutants (prune-deletes, delete-fallback, purge `<=`, purge never, 10-day purge, no admission
+>   purge, old default, no migration, six retired-list readers) and 4 Swift mutants (swap removes, downloads
+>   not moved, failed install moves, only installed one moved).
+> - **Built, NOT installed, NOT on the drives.** `dist/StudioHub-0.6.117-ae40e35.dmg` (1,942,969,730 bytes,
+>   SHA-256 `968b7d46f647a979fac2e8606a184cfe5789f170163deb24fd33b6066c369e64`, `hdiutil verify` valid), from
+>   the `ae40e35` stage. Installable app: `.build/StudioHub-0117/Studio Hub.app` (manifest `0.6.117` /
+>   `ae40e35aef1777be4a070e86be702856602937aa`). Built with `.build/make-dmg-noprune.sh`; the 0.6.116 DMG
+>   moved to `_trash/dist/`; `.build/StudioHub-0116` and `-0115b` untouched.
 > - **Not done / known:** the Trash Folder is per Hub data dir, not per managed root; an output root on
 >   another volume than the data dir never moves (skipped, stays live) - today every root is under the data dir.
 >   A rolled-back app is a manual drag from the Trash Folder; there is no UI for it.
