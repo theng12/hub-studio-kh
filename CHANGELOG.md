@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.6.118 — 2026-09-30 · A Mac that never goes idle still updates itself; a push no longer stalls the controller
+
+The live pilot (gateway pushed 0.6.117 to controller 1500) showed two gaps that kept every Mac on the
+old version, and a slow controller.
+
+**Drain for update** (owner decision 2026-09-30; `native/StudioAPI.swift` `releaseTick`, new
+`components/hub/backend/update_drain.py`). An unattended install needs `activeWorkCount == 0`, which a
+Mac under continuous work never reaches. Now a Mac with a verified update waits `updateDrainGrace`
+(**10 minutes**, default; `defaults write <bundle id> UpdateDrainGraceSeconds -int N`) for a natural idle;
+after that it asks its Hub to **stop taking new work**, lets everything running finish (nothing is ever
+killed), installs, relaunches, and takes work again.
+- **Refusal code: `MACHINE_BUSY`** (409). It is the code the gateway already files as a location refusal
+  (`_LOCATION_REFUSAL_CODES` -> `LOCATION_NOT_READY`, the job is re-routed to another Mac) and the broker's
+  own "not available right now" (`_is_machine_reservation_refusal`: the item waits, never fails). Applied
+  three ways from one flag: `broker.busy_machines()` names every machine while draining (the scheduler
+  starts nothing, peer requests are refused, the chat/transcription lanes cannot take the Mac);
+  `_submission_readiness` refuses a submission first.
+- **Stagger: one Mac per controller group drains or installs at a time, the controller included.** The
+  controller holds one in-memory "update slot"; a node asks for it (`POST /api/hub/fleet/update-slot`,
+  fleet and node credentials) before its Hub drains. A controller too old to know the route, or
+  unreachable, does not hold a node back. Controllers update first anyway (a node is offered a release
+  only once its controller runs it), so in practice a controller claims the slot first.
+- **A drain can never wedge.** It is a two-minute lease the app renews every 30 s (through the install
+  too); the slot is the same. A failed install ends the drain at once and that build is not tried again;
+  an app that dies, a Hub that restarts or a Mac that reboots simply lets the lease lapse.
+- While draining, jobs that are only *queued* do not hold the drain open (they wait in the Hub's saved
+  queue through the relaunch); running work still does.
+- Visible: the sidebar says "Updating after current work finishes..." while an update is waiting or
+  draining, and `GET /api/health` carries `update_draining` for the fleet view.
+
+**The key is pinned on the unattended path too.** `releaseTick` returned at once when no controller key
+was pinned, and the pin was only made when someone opened Connections, so a Mac installed from a drive
+never updated. The tick now pins its own Hub's release-signing key on the first read (trust on first use,
+the rule a node uses at join) and verifies the offer against it on the very next tick (10 s later, not 10
+minutes): a key read at the same time as the artifact still proves nothing. A different key presented
+later is refused, never replaced.
+
+**Other things in the unattended path that needed a person, fixed.** The relaunch after an install stops
+the services; after 15 s of a hung shutdown it raised "The local services are still stopping" with a
+Force Stop button nobody was there to press, and the update never finished. A relaunch after an update
+now force-stops by itself (`forceStopWithoutAsking`). Checked and fine: the manual Install's "jobs are
+running" confirmation lives in the view, not in the installer; the quit prompt is already skipped while
+relaunching; nothing in the path needs a window, the Connections page or a connection notice.
+(`memoryInventory != nil` is still required: a Hub with no memory-policy route cannot say whether a Studio
+is busy, so it waits - only a Hub older than the app answers that way.)
+
+**A blob push no longer stalls the controller** (`components/hub/standalone.py`, `backend/app_release.py`,
+`backend/release_delta.py`). Every `PUT /api/hub/release/blob/<sha>` recomputed the full missing set
+(directory listing plus a walk of ~93,000 manifest entries) on the event loop just to fill in a "remaining"
+count no sender reads. The PUT reply is now `{"ok": true, "stored": sha}` (gateway asks `GET /need` once at
+the end); the disk and hashing work of a PUT runs in a worker thread; the installed app's sha index is
+built once, not per blob served or pushed. `POST /api/hub/release` answers with an additive
+`basis: {installed_app, wanted_blobs, needed_blobs}` so a push can say whether the controller measured
+`need` against its own installed app (a controller that cannot find it needs the whole release).
+
 ## 0.6.117 — 2026-09-30 · A Trash Folder instead of deleting; one list of retired models
 
 Two owner decisions (2026-09-30) and two clean-ups of what an update leaves behind.

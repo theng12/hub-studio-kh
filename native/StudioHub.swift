@@ -584,7 +584,9 @@ final class StudioController: ObservableObject {
             guard let self, !Task.isCancelled, self.stopping, process.isRunning else { return }
             self.status = "Local services are still stopping"
             self.canForceStop = true
-            self.confirmForceStop()
+            // An unattended update is waiting on this exit and nobody is there to answer a dialog:
+            // work was drained before it began, so a shutdown that hangs is ended, not asked about.
+            if self.forceStopWithoutAsking { self.forceStop() } else { self.confirmForceStop() }
         }
     }
     var recoveryPending: Bool { restartTask != nil }
@@ -595,12 +597,16 @@ final class StudioController: ObservableObject {
         alert.informativeText = "You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job."
         alert.addButton(withTitle: "Keep Waiting")
         alert.addButton(withTitle: "Force Stop")
-        if alert.runModal() == .alertSecondButtonReturn, worker.isRunning {
-            let pid = worker.processIdentifier
-            // Only the still-owned worker's isolated group may be signalled.
-            if getpgid(pid) == pid { killpg(pid, SIGKILL) }
-            else { kill(pid, SIGKILL) }
-        }
+        if alert.runModal() == .alertSecondButtonReturn { forceStop() }
+    }
+    /// Set by the relaunch after an installed update: the force-stop escalation then acts by itself.
+    var forceStopWithoutAsking = false
+    private func forceStop() {
+        guard let worker, worker.isRunning else { return }
+        let pid = worker.processIdentifier
+        // Only the still-owned worker's isolated group may be signalled.
+        if getpgid(pid) == pid { killpg(pid, SIGKILL) }
+        else { kill(pid, SIGKILL) }
     }
     func confirmStop() {
         let alert = NSAlert()
@@ -949,6 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         relaunching = true
+        controller.forceStopWithoutAsking = true
         NSApp.terminate(nil)
     }
     @objc func openWindow() {

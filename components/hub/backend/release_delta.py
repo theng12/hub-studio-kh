@@ -89,12 +89,20 @@ def installed_entries(app: Path) -> dict[str, fm.Entry]:
     return entries
 
 
+_by_sha_cache: list = []   # [(entries, by_sha)], valid while `installed_entries` hands back the same dict
+
+
 def installed_by_sha(app: Path) -> dict[str, str]:
-    """sha256 -> one relative path in the installed app that holds those bytes."""
+    """sha256 -> one relative path in the installed app that holds those bytes. Built once per
+    installed app (it walks ~93,000 entries), not once per blob served or pushed. Read-only."""
+    entries = installed_entries(app)
+    if _by_sha_cache and _by_sha_cache[0][0] is entries:
+        return _by_sha_cache[0][1]
     found: dict[str, str] = {}
-    for path, (kind, _x, _size, digest) in installed_entries(app).items():
+    for path, (kind, _x, _size, digest) in entries.items():
         if kind == "f":
             found.setdefault(digest, path)
+    _by_sha_cache[:] = [(entries, found)]
     return found
 
 

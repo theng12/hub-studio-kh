@@ -918,6 +918,10 @@ struct StudioContent: View {
                         Text(studio.status).font(.caption).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
+                    if let updating = workspace.updateStatusLine {
+                        Text(updating).font(.caption).foregroundStyle(.blue)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Text("Studio Hub \(appVersion)")
                         .font(.caption2).foregroundStyle(.secondary)
                         .textSelection(.enabled)

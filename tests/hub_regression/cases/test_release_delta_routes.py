@@ -287,6 +287,61 @@ def test_a_controller_that_already_runs_the_release_needs_no_blobs_and_serves_th
     assert not list(app_release.blob_dir().glob("*")), "nothing needed storing"
 
 
+def test_a_blob_put_does_no_rescan_and_runs_off_the_event_loop(hub, tmp_path, monkeypatch):
+    """The pilot push took minutes: every PUT rebuilt the whole missing set (a listing, a walk of ~93,000
+    manifest entries) on the event loop. A PUT stores one blob; the count is asked once, by `GET /need`."""
+    from components.hub.backend import app_release, release_delta
+    seed = _seed()
+    _trust(hub, seed)
+    _d, body, _entries_, blobs = _release(seed, FILES_A, tmp_path)
+    need = _push(hub, body).json()["need"]
+    assert len(need) > 2
+
+    rescans = []
+    real = app_release.missing_blobs
+    monkeypatch.setattr(app_release, "missing_blobs", lambda: rescans.append(1) or real())
+    on_loop = []
+
+    def note_thread(original):
+        def wrapper(self, *args):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(original.__name__)
+            except RuntimeError:
+                pass
+            return original(self, *args)
+        return wrapper
+    for name in ("write", "commit"):
+        monkeypatch.setattr(app_release.BlobUpload, name, note_thread(getattr(app_release.BlobUpload, name)))
+
+    for sha in need:
+        response = hub.put(f"/api/hub/release/blob/{sha}", headers=_fleet_headers(), content=blobs[sha])
+        assert response.status_code == 200, response.text
+        assert response.json() == {"ok": True, "stored": sha}
+    assert rescans == [], "a blob PUT must not recompute the missing set"
+    assert on_loop == [], f"disk and hashing work ran on the event loop: {on_loop}"
+    assert hub.get("/api/hub/release/need", headers=_fleet_headers()).json() == {"need": []}
+    assert len(rescans) == 1, "the sender asks once, at the end"
+
+    app = _tree(tmp_path / "Applications" / "Studio Hub.app", FILES_A)
+    first = release_delta.installed_by_sha(app)
+    assert release_delta.installed_by_sha(app) is first, "the installed app's sha index is built once, not per blob"
+
+
+def test_a_push_says_which_installed_app_its_need_is_measured_against(hub, tmp_path, monkeypatch):
+    """`need` is the whole release when a controller cannot find its own installed app, and only what
+    changed when it can. The answer says which, so a slow push can be told apart from a wrong basis."""
+    seed = _seed()
+    _trust(hub, seed)
+    _d, body, _entries_, blobs = _release(seed, FILES_A, tmp_path)
+    lost = _push(hub, body).json()
+    assert lost["basis"] == {"installed_app": None, "wanted_blobs": len(blobs), "needed_blobs": len(blobs)}
+    app = _tree(tmp_path / "Applications" / "Studio Hub.app", FILES_A)
+    monkeypatch.setenv("STUDIOHUB_RELEASE_MANIFEST", str(app / R / "release-manifest.json"))
+    found = _push(hub, body).json()
+    assert found["basis"] == {"installed_app": str(app), "wanted_blobs": len(blobs), "needed_blobs": 0}
+
+
 def test_only_the_gateways_credential_may_push_and_a_node_may_only_read(hub, tmp_path):
     seed = _seed()
     _trust(hub, seed)

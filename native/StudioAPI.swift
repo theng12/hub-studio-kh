@@ -3001,6 +3001,21 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var installingRelease = false
     /// A one-line progress sentence while `installingRelease` is true.
     @Published private(set) var releaseProgress: String?
+    /// A verified update is waiting for this Mac to finish its work (unattended install).
+    @Published private(set) var updateWaiting = false
+    /// This Mac's Hub is refusing NEW work so the running work can finish and the update install:
+    /// the grace period for a natural idle ran out. Running work is never stopped.
+    @Published private(set) var updateDraining = false
+    /// What the sidebar says while an update waits for work to finish.
+    var updateStatusLine: String? { updateWaiting || updateDraining ? "Updating after current work finishes…" : nil }
+    /// How long a Mac with a verified update waits for a natural idle before it stops taking new
+    /// work. Default ten minutes; `defaults write <bundle id> UpdateDrainGraceSeconds -int N` changes it.
+    var updateDrainGrace: TimeInterval = {
+        let value = UserDefaults.standard.double(forKey: "UpdateDrainGraceSeconds")
+        return value > 0 ? value : 600
+    }()
+    private var updatePendingSince: Date?
+    private var drainLease: Task<Void, Never>?
     /// The build whose banner the operator dismissed. An offer stays dismissed until a different
     /// build is advertised; nothing installs on a timer.
     @Published private(set) var dismissedReleaseBuild: String?
@@ -3238,6 +3253,11 @@ final class NativeWorkspaceStore: ObservableObject {
         releaseRefusal = nil
         installingRelease = false
         releaseProgress = nil
+        updateWaiting = false
+        updateDraining = false
+        updatePendingSince = nil
+        drainLease?.cancel()
+        drainLease = nil
         controllerReleaseIdentity = nil
         trustedPublisher = nil
     }
@@ -3269,11 +3289,15 @@ final class NativeWorkspaceStore: ObservableObject {
     /// would keep a Mac from ever installing an update. With no deadline published it still counts.
     var activeWorkCount: Int { countActiveWork(now: Date()) }
 
-    func countActiveWork(now: Date, deadline published: Double? = nil) -> Int {
+    func countActiveWork(now: Date, deadline published: Double? = nil, excludingQueued: Bool? = nil) -> Int {
         let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused", "uncertain", "recovery_pending"]
         let deadline = published ?? models.compactMap { $0.laneContract?.deadlineSeconds }.max()
+        // A drained Mac starts nothing, so a job that is only queued will not run until it is back:
+        // it waits in the Hub's saved queue through the relaunch, and counting it would never let the
+        // drain finish. Running work still counts.
+        let skipQueued = excludingQueued ?? updateDraining
         func counts(_ job: NativeJob) -> Bool {
-            guard states.contains(job.state) else { return false }
+            guard states.contains(job.state), !(skipQueued && job.state == "queued") else { return false }
             guard job.state == "uncertain", let deadline, let created = job.createdAt else { return true }
             return now.timeIntervalSince1970 - created < deadline
         }
@@ -7222,7 +7246,10 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             // An update that fails on its own is not tried again for the same build until the app
             // restarts: the failure is on screen, and a retry loop would re-copy 5 GB every minute.
-            if automatic { autoUpdateFailedBuild = descriptor.build }
+            if automatic {
+                autoUpdateFailedBuild = descriptor.build
+                await endUpdateDrain()   // a failed install must not leave this Mac refusing work
+            }
             note(.failure, Self.actionable(error, action: "Install the update"))
             await refreshRelease()
         }
@@ -7301,38 +7328,100 @@ final class NativeWorkspaceStore: ObservableObject {
     private var lastAutoUpdateAttempt: Date?
     private var autoUpdateFailedBuild: String?
 
-    /// Every Mac - node or controller - updates itself when it has nothing to do.
+    /// Every Mac - node or controller - updates itself, with nobody at the keyboard.
     ///
-    /// The owner's decision (2026-09-30) was that a node installs an offered update when idle; the
-    /// unified update extends it to controllers, which install once they are **drained**: no job
-    /// running or queued, no download, no Studio busy (`activeWorkCount == 0`, read fresh). A busy
-    /// Mac waits and is asked again a minute later; the sidebar badge is still there for whoever
-    /// wants to install by hand. Controllers go first only because a node is offered a release once
-    /// its own controller is running it. Both are checked every ten minutes here, where the offer
-    /// used to be read only when someone opened Connections on that Mac.
+    /// A verified offer is installed once the Mac is **drained**: no job running or queued, no
+    /// download, no Studio busy (`activeWorkCount == 0`, read fresh). A Mac under continuous work never
+    /// gets there by itself, so the rule is **drain for update** (owner decision 2026-09-30): wait
+    /// `updateDrainGrace` (ten minutes) for a natural idle; after that ask this Mac's Hub to stop taking
+    /// NEW work (`MACHINE_BUSY`, which the gateway re-routes), let what runs finish - nothing is ever
+    /// stopped - then install and relaunch. Only one Mac per controller group drains at a time (the
+    /// controller holds the one slot; a node asks for it), and the drain is a lease the Hub lets lapse,
+    /// so a failed install or a dead app never leaves a Mac refusing work.
     ///
-    /// **Verification is unchanged.** Nothing is read or installed unless a controller key is already
-    /// pinned on this Mac (at join, or by the operator), so this can never be the read that pins one.
+    /// **Nothing here asks a person.** The confirmation before a manual Install lives in the view
+    /// (`StudioViews`), not in this path; the relaunch skips the quit prompt and force-stops a hung
+    /// shutdown by itself (`StudioHub.relaunchAfterUpdate`).
+    ///
+    /// **Verification is unchanged, and the key is pinned here too.** A Mac that never had a controller
+    /// key pinned (installed from a drive, Connections never opened) pins its own Hub's release-signing
+    /// key on the first read (trust on first use, the rule `refreshRelease` and a node's join use) and
+    /// verifies the offer against it on the very next tick: a key read at the same moment as the
+    /// artifact proves nothing. A different key presented later is refused, never replaced.
     func releaseTick(now: Date = Date()) async {
-        guard connectionID != nil, !installingRelease, releasePublisherKey != nil else { return }
+        guard connectionID != nil, !installingRelease else { return }
         if controllerIdentity == nil,
            let identity: NativeControllerIdentity = try? await get(["api", "hub", "controller"]) {
             controllerIdentity = identity
         }
+        let hadKey = releasePublisherKey != nil
         if lastReleaseCheck.map({ now.timeIntervalSince($0) >= Self.releaseCheckInterval }) ?? true {
             lastReleaseCheck = now
             await refreshRelease()
+            // Just pinned: verify on the next tick, not ten minutes from now.
+            if !hadKey && releasePublisherKey != nil { lastReleaseCheck = nil }
         }
-        guard updateOffered, let build = offeredRelease?.build, build != autoUpdateFailedBuild,
-              lastAutoUpdateAttempt.map({ now.timeIntervalSince($0) >= Self.autoUpdateRetryInterval }) ?? true
+        guard updateOffered, let build = offeredRelease?.build, build != autoUpdateFailedBuild else {
+            updatePendingSince = nil
+            await endUpdateDrain()
+            return
+        }
+        updateWaiting = true
+        let pendingSince = updatePendingSince ?? now
+        updatePendingSince = pendingSince
+        guard updateDraining
+                || lastAutoUpdateAttempt.map({ now.timeIntervalSince($0) >= Self.autoUpdateRetryInterval }) ?? true
         else { return }
         lastAutoUpdateAttempt = now
         // Fresh evidence rather than the last poll's: a hidden window does not refresh, and the
         // Studios' own busy flags are the only place a job sent by the controller shows.
         await refresh(reportErrors: false)
         await refreshMemoryPolicy()
-        guard connectionID != nil, memoryInventory != nil, activeWorkCount == 0 else { return }
-        await installOfferedRelease(automatic: true)
+        guard connectionID != nil, memoryInventory != nil else { return }
+        if activeWorkCount == 0 {
+            await installOfferedRelease(automatic: true)
+        } else if !updateDraining, now.timeIntervalSince(pendingSince) >= updateDrainGrace {
+            updateDraining = await requestDrain(true) == "draining"
+            if updateDraining { keepDrainAlive() }
+        }
+    }
+
+    private struct DrainWant: Encodable { let want: Bool }
+    private struct DrainAnswer: Decodable { let state: String }
+
+    /// Ask this Mac's Hub to stop (`true`) or resume (`false`) taking new work. The answer is
+    /// `draining`, `waiting` (another Mac in the group holds the update slot) or `resumed`; nil when
+    /// the Hub could not be asked (an older Hub has no such route - the Mac then just waits for idle).
+    private func requestDrain(_ want: Bool) async -> String? {
+        let answer: DrainAnswer? = try? await sendJSON(["api", "hub", "update", "drain"], method: "POST", body: DrainWant(want: want))
+        return answer?.state
+    }
+
+    /// The Hub's drain is a two-minute lease: renewed here every half minute, through the install
+    /// too (the tick does not run while installing). If the slot goes elsewhere the drain is over.
+    private func keepDrainAlive() {
+        drainLease?.cancel()
+        drainLease = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                if await self.requestDrain(true) == "waiting" {
+                    self.updateDraining = false
+                    self.drainLease = nil
+                    return
+                }
+            }
+        }
+    }
+
+    /// Stop draining and take work again: no update is pending any more, or the install failed.
+    private func endUpdateDrain() async {
+        updateWaiting = false
+        guard updateDraining else { return }
+        updateDraining = false
+        drainLease?.cancel()
+        drainLease = nil
+        _ = await requestDrain(false)
     }
 
     /// Download the signed artifact to a stable, private file, resuming a kept partial file when

@@ -2,6 +2,27 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.118 - 2026-09-30
+
+### Updates now install by themselves even on a Mac that is always busy
+
+**A busy Mac no longer misses updates.** Until now a Mac only updated itself when it had nothing at all to
+do, so a Mac that was always generating never updated. Now, when an update is ready, a Mac waits up to
+**10 minutes** for a quiet moment. If none comes, it stops taking **new** work (other Macs pick it up),
+lets what it is doing **finish** - nothing is ever cut off - then installs, restarts and carries on. The
+sidebar shows **"Updating after current work finishes..."** while it waits. Only one Mac in a group does
+this at a time, so the rest keep working. If an install fails, the Mac goes straight back to taking work.
+
+**Macs set up from a drive update on their own.** A Mac installed from a drive used to ignore updates
+until someone opened the Connections page. It now trusts its own Studio Hub's update key the first time
+and checks the next update against it, with nobody needing to do anything.
+
+**No question nobody can answer.** If shutting down for an update hangs, Studio Hub now ends it by itself
+instead of showing a "Force Stop" dialog on a Mac that nobody is sitting at.
+
+**Faster updates for the controller.** Sending an update to a controller no longer makes it re-check
+everything for every file it receives, so it stays responsive while the update arrives.
+
 ## 0.6.117 - 2026-09-30
 
 ### Cleanup now uses a Trash Folder, old updates no longer pile up, and retiring a model is one line

@@ -294,6 +294,14 @@ final class FixtureProtocol: URLProtocol {
     /// `nil` means the Hub predates the route (404).
     static var releaseStageScript: [[String: Any]]?
     static var releaseStageRequests = 0
+    /// What the app asked of `POST /api/hub/update/drain` (`want`), and what the Hub answers: `draining`,
+    /// or `waiting` when another Mac in the group holds the update slot.
+    static var updateDrainWants: [Bool] = []
+    static var updateDrainReply = "draining"
+    static func resetUpdateDrain(reply: String = "draining") {
+        lock.lock(); defer { lock.unlock() }; updateDrainWants = []; updateDrainReply = reply
+    }
+    static func drainWants() -> [Bool] { lock.lock(); defer { lock.unlock() }; return updateDrainWants }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -1289,6 +1297,10 @@ final class FixtureProtocol: URLProtocol {
             } else {
                 result = (404, "application/json", Data(#"{"detail":"Not Found"}"#.utf8))
             }
+        case ("POST", "/api/hub/update/drain"):
+            let want = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any])?["want"] as? Bool ?? false
+            Self.lock.lock(); Self.updateDrainWants.append(want); let reply = Self.updateDrainReply; Self.lock.unlock()
+            result = (200, "application/json", Data("{\"state\":\"\(want ? reply : "resumed")\"}".utf8))
         case ("POST", "/api/hub/release/trust"):
             let body = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]) ?? [:]
             Self.lock.lock()
@@ -5378,6 +5390,148 @@ struct NativeAPITests {
         tick += 120
         await updateStore.releaseTick(now: tick)
         require(failedSwaps == 1, "an unattended install that failed must not loop: \(failedSwaps)")
+
+        // ── Drain for update: a Mac that never goes idle stops taking NEW work, finishes, installs ──
+        func offerDrain(_ build: String) async {
+            let json = makeReleaseDescriptor(version: "0.6.62", build: build, artifact: artifact,
+                                             gateway: gatewayKey, controllerSigning: controllerKey)
+            FixtureProtocol.setRelease(identity: identity, body: releaseBody(json), artifact: artifact)
+            updateStore.currentAppBuild = "currentbuild"
+            updateStore.currentAppVersion = "0.6.50"
+            await updateStore.refreshRelease()
+            require(updateStore.updateOffered, "the drain release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+        }
+        var drainSwaps = 0
+        var drainRelaunches = 0
+        var drainFails = false
+        updateStore.installVerifiedArtifact = { _, _ in
+            drainSwaps += 1
+            if drainFails { throw ReleaseError("fixture: the copy failed") }
+            return "drainbuild"
+        }
+        updateStore.onReleaseRestartRequested = { drainRelaunches += 1 }
+        updateStore.updateDrainGrace = 600
+        FixtureProtocol.resetUpdateDrain()
+        FixtureProtocol.setMemoryPolicyOverride(nil)                                  // the voice Studio is busy, for good
+        await offerDrain("drainbuild")
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        let drainStart = tick
+        require(updateStore.updateStatusLine == "Updating after current work finishes…",
+                "a pending update must say so in the app: \(updateStore.updateStatusLine ?? "nil")")
+        require(!updateStore.updateDraining && FixtureProtocol.drainWants().isEmpty,
+                "inside the grace period a busy Mac keeps taking work")
+        tick = drainStart + 500
+        await updateStore.releaseTick(now: tick)
+        require(!updateStore.updateDraining && FixtureProtocol.drainWants().isEmpty,
+                "the grace period is ten minutes, not less")
+        tick = drainStart + 601
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.updateDraining && FixtureProtocol.drainWants() == [true],
+                "after the grace period the Mac asks its Hub to stop taking new work: \(FixtureProtocol.drainWants())")
+        require(drainSwaps == 0 && drainRelaunches == 0, "a draining Mac must not interrupt the work still running")
+        // Work that is only QUEUED waits in the Hub's saved queue through the relaunch: it must not hold the drain open.
+        FixtureProtocol.mutate { FixtureProtocol.errorBatchMode = "retried" }
+        await updateStore.refresh()
+        require(updateStore.countActiveWork(now: Date(), excludingQueued: false) == 1 + updateStore.countActiveWork(now: Date(), excludingQueued: true),
+                "the fixture must hold a queued job that only the drain stops counting")
+        tick += 10
+        await updateStore.releaseTick(now: tick)
+        require(drainSwaps == 0, "running work has not finished yet, so nothing installs")
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // the running work finished
+        tick += 10
+        await updateStore.releaseTick(now: tick)
+        require(drainSwaps == 1 && drainRelaunches == 1,
+                "once the running work finishes, the drained Mac installs and relaunches: \(drainSwaps) swaps, \(drainRelaunches) relaunches")
+        tick += 10
+        await updateStore.releaseTick(now: tick)
+        require(!updateStore.updateDraining && FixtureProtocol.drainWants().last == false && updateStore.updateStatusLine == nil,
+                "with the update taken the Mac takes work again")
+        FixtureProtocol.mutate { FixtureProtocol.errorBatchMode = "off" }
+
+        // A failed install ends the drain: the Mac takes work again, and does not loop on that build.
+        drainSwaps = 0
+        drainFails = true
+        FixtureProtocol.resetUpdateDrain()
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        await offerDrain("drainfail")
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        tick += 601
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.updateDraining, "the second busy Mac drains after the grace period too")
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        tick += 10
+        await updateStore.releaseTick(now: tick)
+        require(drainSwaps == 1 && !updateStore.updateDraining && FixtureProtocol.drainWants().last == false,
+                "a failed install must end the drain and resume taking work: \(drainSwaps) swaps, draining \(updateStore.updateDraining)")
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        require(drainSwaps == 1 && !updateStore.updateDraining, "a build that failed is not tried or drained for again")
+        drainFails = false
+
+        // One Mac per controller group: while another holds the slot this one keeps waiting and asks again.
+        FixtureProtocol.resetUpdateDrain(reply: "waiting")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        await offerDrain("drainslot")
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        tick += 601
+        await updateStore.releaseTick(now: tick)
+        require(!updateStore.updateDraining && FixtureProtocol.drainWants() == [true],
+                "a Mac whose group already has a draining Mac must not drain")
+        FixtureProtocol.resetUpdateDrain(reply: "draining")
+        tick += 61                                   // a Mac still waiting asks again a minute later
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.updateDraining, "it drains as soon as the slot is free")
+        // The offer going away (a different release, or none) ends the drain too.
+        FixtureProtocol.clearRelease()
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        require(!updateStore.updateDraining && FixtureProtocol.drainWants().last == false,
+                "no pending update means no drain")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+
+        // ── The unattended path pins its own Hub's key on first read, then verifies on the next tick ──
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        let freshDescriptor = makeReleaseDescriptor(version: "0.6.63", build: "freshbuild", artifact: artifact,
+                                                    gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(freshDescriptor), artifact: artifact)
+        let pinStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await pinStore.connect(baseURL: URL(string: "http://127.0.0.1:45690")!,
+                                 dataDirectory: updateDirectory, token: "native-test-token")
+        pinStore.currentAppBuild = "currentbuild"
+        pinStore.currentAppVersion = "0.6.50"
+        var pinSwaps = 0
+        pinStore.installVerifiedArtifact = { _, _ in pinSwaps += 1; return "freshbuild" }
+        pinStore.onReleaseRestartRequested = {}
+        require(pinStore.releasePublisherKey == nil, "a Mac installed from a drive has no key pinned")
+        tick += 700
+        await pinStore.releaseTick(now: tick)
+        require(pinStore.releasePublisherKey?.fingerprint == controllerFingerprint,
+                "the unattended tick must pin its own Hub's key on the first read")
+        require(pinSwaps == 0, "a key read at the same time as the artifact proves nothing: nothing installs yet")
+        tick += 10
+        await pinStore.releaseTick(now: tick)
+        require(pinSwaps == 1, "the next tick verifies against the pin and installs, with nobody at Connections: \(pinStore.releaseRefusal ?? "nil")")
+
+        // A different key presented later is refused, never adopted.
+        let swappedKey = Curve25519.Signing.PrivateKey()
+        let swappedIdentity = releaseIdentityJSON(publicKey: swappedKey.publicKey.rawRepresentation,
+                                                fingerprint: releaseSha256(swappedKey.publicKey.rawRepresentation))
+        let swappedDescriptor = makeReleaseDescriptor(version: "0.6.64", build: "otherbuild", artifact: artifact,
+                                                    gateway: gatewayKey, controllerSigning: swappedKey)
+        FixtureProtocol.setRelease(identity: swappedIdentity, body: releaseBody(swappedDescriptor), artifact: artifact)
+        pinStore.currentAppBuild = "currentbuild"
+        tick += 700
+        await pinStore.releaseTick(now: tick)
+        tick += 120
+        await pinStore.releaseTick(now: tick)
+        require(pinSwaps == 1 && !pinStore.updateOffered && pinStore.releasePublisherKey?.fingerprint == controllerFingerprint,
+                "an update signed under a different key must not install, and must not replace the pin")
+        require(pinStore.releaseRefusal?.contains("different release-signing key") == true,
+                "the refusal must name the changed key: \(pinStore.releaseRefusal ?? "nil")")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
         FixtureProtocol.setMemoryPolicyOverride(nil)
         FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = false }
         FixtureProtocol.currentRole = "standalone"

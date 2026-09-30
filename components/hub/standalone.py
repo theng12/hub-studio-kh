@@ -25,10 +25,11 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, chat_jobs, release_sync, shared_voices, transcription_jobs, vocabulary
+from .backend import app_release, chat_jobs, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -561,6 +562,10 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     # envelopes; readiness applies only once a model was actually requested.
     if not envelope.get("model"):
         return None
+    if update_drain.draining():
+        # Re-routable: the gateway files MACHINE_BUSY as a location refusal and tries another Mac.
+        return {"code": "MACHINE_BUSY",
+                "detail": "this Mac is finishing its current work to install an update"}
     if (retired := _retired_refusal(envelope.get("model"))):
         return retired
     catalog = _model_catalog()
@@ -1111,7 +1116,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # could not read it, and a controller is exactly who needs to know that a node came up
         # loopback-only instead of discovering it as a timeout.
         return {"ok": True, "workers": len(monitor.registry),
-                "role": control_plane.load_settings()["role"], "bind": _bind_facts()}
+                "role": control_plane.load_settings()["role"], "bind": _bind_facts(),
+                "update_draining": update_drain.draining()}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
@@ -1957,18 +1963,22 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.put("/api/hub/release/blob/{sha256}")
     async def put_release_blob(sha256: str, request: Request) -> dict[str, Any]:
+        # Everything that touches the disk or the 47,000-entry manifest runs off the event loop: a
+        # controller taking a push must keep answering its app, its nodes and its gateway.
         try:
-            upload = app_release.BlobUpload(sha256)
+            upload = await run_in_threadpool(app_release.BlobUpload, sha256)
             try:
                 async for chunk in request.stream():
-                    upload.write(chunk)
-                upload.commit()
+                    await run_in_threadpool(upload.write, chunk)
+                await run_in_threadpool(upload.commit)
             except BaseException:
                 upload.abort()
                 raise
         except app_release.ReleaseRefused as exc:
             raise HTTPException(exc.status_code, exc.message) from exc
-        return {"ok": True, "stored": sha256, "need": len(app_release.missing_blobs())}
+        # No "remaining" count: recomputing it per blob was the slow part of a push, and the sender
+        # asks `GET /release/need` once at the end (the contract's "complete when need is empty").
+        return {"ok": True, "stored": sha256}
 
     @app.post("/api/hub/release/stage", status_code=202)
     def stage_release() -> dict[str, Any]:
@@ -1982,6 +1992,19 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.get("/api/hub/release/stage")
     def stage_release_status() -> dict[str, Any]:
         return release_sync.stage_status()
+
+    @app.post("/api/hub/update/drain")
+    async def update_drain_request(body: dict[str, Any]) -> dict[str, Any]:
+        """The app on this Mac asks to stop taking new work for an update (``want: true``, renewed
+        while it waits) or to resume (``false``). Hub token only. See ``update_drain``."""
+        return await update_drain.request(bool(body.get("want")), release_sync.controller_target())
+
+    @app.post("/api/hub/fleet/update-slot")
+    def update_slot(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        """A group member asks this controller for the group's one update slot."""
+        from .backend import auth as hub_auth
+        holder = str(hub_auth._fleet_actor(request).get("node_id") or "fleet")
+        return {"granted": update_drain.slot(holder, bool(body.get("want")))}
 
     @app.get("/api/hub/release/identity")
     def release_identity() -> dict[str, Any]:

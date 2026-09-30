@@ -550,6 +550,8 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/release/files/[A-Za-z0-9_.+-]+$"),
     ("GET", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
     ("GET", r"^/api/hub/release/need$"),
+    # One Mac per group drains for an update at a time: a node asks its controller for the slot.
+    ("POST", r"^/api/hub/fleet/update-slot$"),
     ("PUT", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
@@ -587,6 +589,7 @@ NODE_ALLOWED = (
     ("GET", r"^/api/hub/release/files$"),
     ("GET", r"^/api/hub/release/files/[A-Za-z0-9_.+-]+$"),
     ("GET", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
+    ("POST", r"^/api/hub/fleet/update-slot$"),
 )
 _NODE_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in NODE_ALLOWED)
 

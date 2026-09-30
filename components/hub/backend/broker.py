@@ -42,6 +42,7 @@ from .monitor import is_cached
 from .registry import DATA_DIR, base_url, machine_enabled, studio_enabled
 from .resources import host_stats
 from . import stall
+from . import update_drain
 from . import memory_admission
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
@@ -1478,6 +1479,9 @@ def listed_batches() -> list[dict]:
 def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
+    if update_drain.draining():
+        # This Mac is finishing its work to install an update: every machine is taken.
+        return {s.get("machine", "local") for s in by_id.values()} | {"local"}
     occupied = set(_external_machine_leases) | {
         by_id[sid].get("machine", "local")
         for sid in _busy

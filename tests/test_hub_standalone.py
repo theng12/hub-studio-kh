@@ -221,6 +221,43 @@ class StandaloneHubConfigTests(unittest.TestCase):
         self.assertEqual(preview_calls[0]["managed_output_roots"],
                          sorted(str(root) for root in self.output_roots))
 
+    def test_update_drain_route_is_the_owners_and_shows_in_health(self) -> None:
+        from contextlib import ExitStack
+        from fastapi.testclient import TestClient
+        from components.hub.backend import auth, ledger, monitor as monitor_module, registry, update_drain
+        from components.hub.standalone import create_app
+
+        with ExitStack() as stack:
+            for module, name, value in (
+                (registry, "DATA_DIR", self.data_dir),
+                (registry, "REGISTRY_FILE", self.data_dir / "studios.json"),
+                (registry, "LABELS_FILE", self.data_dir / "machine_labels.json"),
+                (registry, "FLAGS_FILE", self.data_dir / "machine_flags.json"),
+                (monitor_module, "DATA_DIR", self.data_dir),
+                (auth, "TOKEN_FILE", self.data_dir / ".hub_token"),
+                (auth, "PASSWORD_FILE", self.data_dir / ".hub_password.json"),
+                (auth, "SESSIONS_FILE", self.data_dir / ".hub_sessions.json"),
+                (ledger, "DB_FILE", self.data_dir / "hub.db"),
+                (ledger, "PINOKIO_HOME", self.data_dir),
+            ):
+                stack.enter_context(patch.object(module, name, value))
+            registry._labels_cache = None
+            registry._flags_cache = None
+            self.addCleanup(lambda: (setattr(update_drain, "_drain_until", 0.0),
+                                     setattr(update_drain, "_slot", None)))
+            owner = {"Authorization": "Bearer same-existing-hub-token"}
+            with TestClient(create_app(start_background=False)) as client:
+                self.assertEqual(client.post("/api/hub/update/drain", json={"want": True}).status_code, 401)
+                self.assertFalse(client.get("/api/health", headers=owner).json()["update_draining"])
+                answer = client.post("/api/hub/update/drain", json={"want": True}, headers=owner)
+                self.assertEqual(answer.json(), {"state": "draining"})
+                self.assertTrue(client.get("/api/health", headers=owner).json()["update_draining"])
+                answer = client.post("/api/hub/update/drain", json={"want": False}, headers=owner)
+                self.assertEqual(answer.json(), {"state": "resumed"})
+                self.assertFalse(client.get("/api/health", headers=owner).json()["update_draining"])
+                slot = client.post("/api/hub/fleet/update-slot", json={"want": True}, headers=owner)
+                self.assertEqual(slot.json(), {"granted": True})
+
     def test_packaged_artifact_metadata_never_sends_token_to_foreign_url(self) -> None:
         import asyncio
         from components.hub.backend import broker, peers

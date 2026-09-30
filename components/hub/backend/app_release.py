@@ -656,7 +656,13 @@ def accept_release(body: Any) -> dict[str, Any]:
     if manifest is None:
         return merged
     # The answer to a manifest push: what is stored, and what the sender still has to send.
-    return {"descriptor": merged, "need": missing_blobs()}
+    need = missing_blobs()
+    # Why the sender is asked for what it is asked for: a controller that cannot find its own installed
+    # app (`installed_app: null`) needs the whole release, one that can needs only what changed.
+    app = release_delta.installed_app_root()
+    return {"descriptor": merged, "need": need,
+            "basis": {"installed_app": str(app) if app else None,
+                      "wanted_blobs": len(_held_blob_sizes()), "needed_blobs": len(need)}}
 
 
 def load_release() -> dict[str, Any] | None:
