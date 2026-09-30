@@ -3,7 +3,43 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.119** (Quit only asks when a job is running; 2026-09-30).
+Last updated: **0.6.120** (Lance video retired; video is LTX-2.3; 2026-10-01).
+
+> **0.6.120 - Lance video is retired; video is LTX-2.3** (owner, 2026-09-30: "the Lance one sucks and is
+> terrible ... remove it like the ace 1.5"). Read `CHANGELOG.md` 0.6.120; what to know:
+>
+> - `lance-3b-video-bf16`, `mlx-community/Lance-3B-Video-bf16`, `lance-3b-processor-qwen2-5-vl` and
+>   `Qwen/Qwen2.5-VL-3B-Instruct` are in `components/retired_models.py` (the one list): never offered, never
+>   staged, refused by name. Both manifests, `lance_runner.py`, `packaging/lance-runtime/`,
+>   `qualification/lance-video-worker-run.py` are in `_trash/0.6.120-lance-retire/` (symlink target
+>   `~/Developer/_trash/studio-hub-kh/`). `LANCE_3B`, `run_lance`, `lance_runtime_python`, the `video-lance`
+>   engine, `--lance-runtime` / `--unqualified-lance-runtime` and `runtimes/video-lance` no longer exist
+>   (nothing else used that tree). **The stage command no longer takes `--lance-runtime`** (loop step 3 fixed).
+>   The default video model was already LTX (`MODELS` lists it first; `MODEL_ID`/`DEFAULTS` read it).
+> - Kit / listing: **28 packages, ~103.5 GB** (was 30 / 119.1). `.build/lance-runtime`, `.build/lance-revision.txt`,
+>   `.build/fetch_lance.py`, `.build/kit-add-lance.sh` are unused scratch now. Drives still hold Lance in
+>   `model-library/` until the next kit refresh moves it to each drive's `_trash`.
+> - **Tests:** the Lance pins became "not offered; LTX is the one video model and the default; a Lance manifest left
+>   on a drive is not a video manifest" (`test_video_worker.EngineRowTests`); `test_retired_models` covers all four
+>   ids with old manifests planted. Mutation-proved: re-adding `lance-3b-video-bf16.json` failed 4 tests; dropping the
+>   ids from the list failed the retired test. Doc-count tests, `model-readings.json` (Lance row removed, record
+>   regenerated), `research/st01-runtime-contracts.json` updated.
+> - **Gate:** `unittest discover` -> **1594 tests, OK (13 skipped), 559 s, exit 0**; `native/build.sh` green.
+>   (A first run had 4 doc-count/contract failures, fixed.)
+> - **Delta 0.6.119 -> 0.6.120** (stage file manifests): 11 files changed (879,166 B: `retired_models.py`,
+>   `standalone.py`, `model_packages.py`, video `generation.py`, music `generation.py`/`yue2.py`, `release-notes.md`,
+>   `voice/CHANGELOG.md`, `voice/VERSION`, `Info.plist`, `release-manifest.json`; the native binary is byte-identical),
+>   0 added, **15,577 removed** (983,228,606 B: 15,574 under `runtimes/video-lance`, `lance_runner.py`, two manifests).
+>   **Bytes to send: 879,166 (11 blobs)**; removals send nothing. Totals 93,043 -> 77,466 files;
+>   5,185,566,996 -> 4,202,323,961 B (app 5,282,264 KB -> 4,286,592 KB on disk, -0.95 GiB).
+> - **DMG** `dist/StudioHub-0.6.120-c439bbf.dmg` (1,568,998,085 B, SHA-256
+>   `0cb073f410ec4b078169a37765ba87c7b04cc2f4e720f955ce39ee2bbe87908f`, `hdiutil verify` valid), built with
+>   `.build/make-dmg-noprune.sh`. **That script's first output carried 573 MB of dead space**
+>   (`CUDIFEncoding-bytes-wasted`, 2.14 GB file); it was re-compacted with `hdiutil convert -format UDZO` and the
+>   wasted copy moved to `_trash/dist/`. Check `hdiutil imageinfo` for `bytes-wasted: 0` after a DMG build.
+>   Installable app: `.build/StudioHub-0120/Studio Hub.app` (manifest `0.6.120` /
+>   `c439bbf9a94ff01b66af45958290db38058ffb6a`). **Not installed, not on the drives, nothing pushed to controllers.**
+>   `.build/StudioHub-0119` (SSD/fleet source) untouched.
 
 > **0.6.119 — Quit asks only when a job is running** (owner, 2026-09-30: "if no job is running. quit is quit.
 > if have job, then we should ask."). Read `CHANGELOG.md` 0.6.119; what to know:
@@ -2070,7 +2106,6 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
      --runtime .build/voice-runtime --native-shell .build/StudioHub \
      --image-runtime .build/image-runtime-mflux020 \
      --video-runtime .build/video-runtime \
-     --lance-runtime .build/lance-runtime \
      --yue2-runtime .build/yue2-runtime \
      --output ".build/StudioHub-<n>/Studio Hub.app"
    ```
