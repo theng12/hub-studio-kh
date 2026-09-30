@@ -3191,7 +3191,7 @@ async def _dispatch_loop():
                     if not entry.get("is_cloud") and not is_cached(entry):
                         b["governor_note"] = (
                             f"'{b['model']}' not downloaded on {studio['id']} "
-                            f"— broadcast the download or try another machine")
+                            f"— download it on that Mac, or pin another")
                         continue
                     # ── fleet memory governor ──
                     # Peer Hubs report their own host snapshots, so we can

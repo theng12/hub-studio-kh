@@ -1438,6 +1438,9 @@ struct NativeMachineUsage: Decodable, Equatable, Identifiable {
     let enabled: Bool
     let overLimit: Bool
     let freeBytes: Int64?
+    /// What the next cleanup would delete under these limits, as the Hub replays its own rule.
+    /// Nil from a Hub that predates it.
+    let wouldDeleteBytes: Int64?
     var id: String { machine }
 }
 
@@ -1644,6 +1647,28 @@ struct NativeFleetPoolMember: Decodable, Equatable {
     var isReachable: Bool { state == "reachable" }
 }
 
+/// One row of `GET /api/hub/model-health`: a model's state on one machine.
+struct NativeModelHealthRow: Decodable, Equatable {
+    let modelId: String
+    let machine: String
+    let state: String
+}
+struct NativeModelHealthResponse: Decodable { let models: [NativeModelHealthRow] }
+
+struct NativeMachineReadiness: Equatable {
+    var ready = 0
+    var downloadRequired = 0
+    var blocked = 0
+    /// A machine that answers but has no model it can run is not healthy, whatever its Hub says.
+    var cannotRunAnything: Bool { ready == 0 && downloadRequired + blocked > 0 }
+    var summary: String {
+        var parts = ["\(ready) model\(ready == 1 ? "" : "s") ready"]
+        if downloadRequired > 0 { parts.append("\(downloadRequired) need download") }
+        if blocked > 0 { parts.append("\(blocked) blocked") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct NativeFleetOverview: Decodable, Equatable {
     let machines: [NativeFleetMachine]
     let summary: NativeFleetOverviewSummary
@@ -1793,6 +1818,26 @@ struct NativeJob: Identifiable, Equatable {
     /// Jobs page can show a batch another client submitted, so the discard route is addressed with
     /// the index the Hub actually reported.
     var itemIndex: Int = 0
+    /// Why a queued batch is waiting, in the Hub's own words ("'X' not downloaded on Y"), when it
+    /// says. The row used to draw a fixed "Waiting for a free worker" over this.
+    var governorNote: String? = nil
+    /// The Mac that ran, or holds, this item: the id the Hub recorded when it dispatched (`local`
+    /// for this Mac). Nil until the item has been dispatched.
+    var machine: String? = nil
+    /// How many dispatch attempts this item has used, and when the next one is due (epoch seconds).
+    var tries: Int? = nil
+    var retryAt: Double? = nil
+
+    /// The line for a queued row: the Hub's stated reason, else the generic wait, then the retry
+    /// clock when the item is in a retry loop (a 30 s MACHINE_BUSY deferral shows as this).
+    static func waitingLabel(note: String?, tries: Int?, retryAt: Double?, now: Date = Date()) -> String {
+        var text = (note?.isEmpty == false) ? note! : "Waiting for a free worker"
+        if let retryAt, retryAt > now.timeIntervalSince1970 {
+            text += " · retrying in \(clock((retryAt - now.timeIntervalSince1970).rounded(.up)))"
+            if let tries, tries > 0 { text += " (attempt \(tries + 1))" }
+        }
+        return text
+    }
 
     /// "· took 52 s", "· running 12 s", or nothing when the Hub has not timed it.
     ///
@@ -2801,6 +2846,13 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var fleetNodes: NativeFleetInventory?
     /// Every Mac in the fleet in one row each, for the fleet screen.
     @Published private(set) var fleetOverview: NativeFleetOverview?
+    /// Per machine (`local` or a node id), how many models are ready to run. Empty until read.
+    @Published private(set) var fleetReadiness: [String: NativeMachineReadiness] = [:]
+    /// When the fleet page last read everything cleanly, whether a read is in flight, and what
+    /// the last failed read could not get.
+    @Published private(set) var fleetRefreshedAt: Date?
+    @Published private(set) var fleetRefreshing = false
+    @Published private(set) var fleetReadError: String?
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
     /// Whether the controller this Mac joined is answering, and a sentence saying so. Kept as
@@ -3011,6 +3063,10 @@ final class NativeWorkspaceStore: ObservableObject {
     private var pendingTranscription: PendingTranscription?
     private var modelPackages: [String: HubModelPackage] = [:]
     private var hubDownloadRuns: [String: String] = [:]
+    /// The last row read for each running Hub download, kept through a failed read; and the runs
+    /// that ended this session, which are no longer polled but stay listed with their reason.
+    private var hubDownloadLast: [String: NativeDownload] = [:]
+    private var finishedHubDownloads: [String: NativeDownload] = [:]
 
     init(sessionConfiguration: URLSessionConfiguration = .ephemeral) {
         let configuration = sessionConfiguration.copy() as! URLSessionConfiguration
@@ -3066,9 +3122,10 @@ final class NativeWorkspaceStore: ObservableObject {
             guard self.connectionID == requestConnection else { return }
             pollTask = Task { [weak self] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(2))
+                    guard let delay = self?.nextPollDelay else { break }
+                    try? await Task.sleep(for: .seconds(delay))
                     guard !Task.isCancelled else { break }
-                    await self?.refresh(reportErrors: false)
+                    await self?.pollOnce()
                 }
             }
         } catch {
@@ -3085,6 +3142,8 @@ final class NativeWorkspaceStore: ObservableObject {
         invalidateStartupMembershipAttempt()
         cancelMembershipRejoin()
         finishedJobCache.removeAll()
+        hubDownloadLast.removeAll()
+        finishedHubDownloads.removeAll()
         pollTask?.cancel()
         pollTask = nil
         saveTask?.cancel()
@@ -3147,6 +3206,33 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     func refresh() async { await refresh(reportErrors: true) }
+
+    /// Set by the app to say whether its window can be seen. Polling for the screen's sake stops
+    /// while it cannot; the release check below does not, because a node's window is normally
+    /// closed and that is exactly when it should be updating itself.
+    var isWindowVisible: () -> Bool = { true }
+
+    /// Two seconds while something is running and someone is looking; ten otherwise. Every tick
+    /// costs a fan of reads that scale with job history, so an idle Mac must not pay the busy rate.
+    var nextPollDelay: Double { isWindowVisible() && activeWorkCount > 0 ? 2 : 10 }
+
+    /// One poll tick: refresh what the screen shows (only if it can be seen), then the update check.
+    func pollOnce(now: Date = Date()) async {
+        if isWindowVisible() { await refresh(reportErrors: false) }
+        await releaseTick(now: now)
+    }
+
+    /// Work an update, or a relaunch, would interrupt: jobs of every kind that are waiting or
+    /// running, downloads, a transcription, and any Studio that reports itself busy (which is how a
+    /// job a controller sent to this Mac shows, since it is not one of this Hub's own batches).
+    var activeWorkCount: Int {
+        let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused", "uncertain", "recovery_pending"]
+        let jobs = [audioJobs, imageJobs, musicJobs, videoJobs, subtitleJobs, chatJobs]
+            .reduce(0) { $0 + $1.filter { states.contains($0.state) }.count }
+        let transfers = downloads.filter { states.contains($0.state) }.count
+        let busy = memoryInventory?.studios.filter { $0.policy?.busy == true || $0.policy?.activeWork == true }.count ?? 0
+        return jobs + transfers + busy + (transcribing ? 1 : 0)
+    }
 
     private func refresh(reportErrors: Bool) async {
         guard baseURL != nil, let requestConnection = connectionID, !refreshing else { return }
@@ -3257,7 +3343,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     unplaceable[batch.modality, default: 0] += 1
                     continue
                 }
-                if let known = finishedJobCache[batch.id] {
+                if let known = finishedJobCache[batch.id], known.state != "error" || batch.settled {
                     finished[batch.id] = known
                     Self.file(known, for: function, images: &images, musics: &musics,
                               history: &history, subtitles: &subtitlesFromHub, chats: &chats,
@@ -3268,7 +3354,13 @@ final class NativeWorkspaceStore: ObservableObject {
                     let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
                     guard connectionID == requestConnection else { return }
                     let job = Self.mapHubJob(detail)
-                    if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }
+                    // A failure used to be re-read every two seconds, for ever. It is remembered
+                    // too, but only on the Hub's positive word that nothing in the batch is waiting
+                    // or running: a retry makes it active again, and that is what sends it back
+                    // through here.
+                    if ["done", "cancelled"].contains(job.state) || (job.state == "error" && batch.settled) {
+                        finished[batch.id] = job
+                    }
                     Self.file(job, for: function, images: &images, musics: &musics,
                               history: &history, subtitles: &subtitlesFromHub, chats: &chats,
                               videos: &videos)
@@ -3317,17 +3409,38 @@ final class NativeWorkspaceStore: ObservableObject {
             subtitleJobs = subtitles.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             chatJobs = chats.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
+            var prunedRuns = false
             for (runID, repo) in hubDownloadRuns {
-                // A download that has finished and been forgotten by the Hub is not a reason to
-                // stop showing everything else.
-                guard let run: HubModelDownload = try? await get(["api", "hub", "model-downloads", runID]) else {
-                    hubDownloadRuns.removeValue(forKey: runID)
-                    continue
+                do {
+                    let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
+                    let download = Self.mapHubDownload(run, repo: repo)
+                    if ["done", "cancelled", "error", "interrupted"].contains(run.state) {
+                        // Finished: stop asking the Hub about it every two seconds and forget it
+                        // across launches. The row stays for this session (a failure keeps its
+                        // reason there); it is not polled again.
+                        hubDownloadRuns.removeValue(forKey: runID)
+                        hubDownloadLast.removeValue(forKey: runID)
+                        finishedHubDownloads[runID] = download
+                        prunedRuns = true
+                    } else {
+                        hubDownloadLast[runID] = download
+                        hubTransfers.append(download)
+                    }
+                } catch {
+                    guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+                    if Self.isUnknownRun(error) {
+                        // Only a 404 says the Hub has forgotten the run. Any other failure is one
+                        // missed read, and a still-running download keeps its last known row.
+                        hubDownloadRuns.removeValue(forKey: runID)
+                        hubDownloadLast.removeValue(forKey: runID)
+                        prunedRuns = true
+                    } else if let last = hubDownloadLast[runID] {
+                        hubTransfers.append(last)
+                    }
                 }
-                hubTransfers.append(NativeDownload(id: run.id, repo: repo, state: run.state,
-                    percent: 0, downloadedBytes: 0, totalBytes: 0,
-                    error: run.state == "error" || run.state == "interrupted" ? "Hub model download \(run.state)." : nil))
             }
+            if prunedRuns { try? saveHubDownloadRuns() }
+            hubTransfers += finishedHubDownloads.values.sorted { $0.id < $1.id }
             downloads = hubTransfers + (transfersValue?.jobs ?? []).map(Self.mapDownload)
             tokenStatus = settingsValue?.value ?? NativeTokenStatus(isSet: false, masked: "")
             if let storage: HubStorageGroups = try? await get(["studio", "voice", "api", "model-storage"]) {
@@ -3678,6 +3791,18 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             await refresh()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Cancel the image job") } }
+    }
+
+    /// Put a failed item back in the queue; the Hub keeps its prompt and settings. Any modality.
+    func retryJob(_ job: NativeJob) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let _: EmptyResponse = try await sendEmpty(
+                ["api", "hub", "jobs", job.id, "items", String(job.itemIndex), "retry"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            finishedJobCache.removeValue(forKey: job.id)
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Retry the job") } }
     }
 
     func reconcileImage(_ job: NativeJob) async {
@@ -5114,6 +5239,12 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Start the model download") } }
     }
 
+    /// Clear a finished download's row (a failed one keeps its reason on screen until then).
+    func dismissDownload(_ job: NativeDownload) {
+        finishedHubDownloads.removeValue(forKey: job.id)
+        downloads.removeAll { $0.id == job.id }
+    }
+
     func cancelDownload(_ job: NativeDownload) async {
         guard let requestConnection = connectionID else { return }
         do {
@@ -5315,6 +5446,20 @@ final class NativeWorkspaceStore: ObservableObject {
             storageUsage = []
             storageNote = Self.actionable(error, action: "Read local storage settings")
         }
+    }
+
+    /// What cleanup would delete right now if these limits were applied: the Hub's own dry run over
+    /// its index, summed over this Mac's machines. Nil when the Hub cannot say.
+    func storageWouldDelete(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool) async -> Int64? {
+        guard let effective = deviceSettings?.effective else { return nil }
+        let preview: NativeStoragePreview? = try? await sendJSON(
+            ["api", "hub", "settings", "preview"], method: "POST",
+            body: StoragePreviewBody(maxBytes: maxBytes, retentionDays: retentionDays,
+                                     cleanupEnabled: cleanupEnabled,
+                                     cleanupIntervalSeconds: effective.cleanupIntervalSeconds,
+                                     minimumFreeBytes: effective.minimumFreeBytes ?? 0))
+        let figures = preview?.machines.compactMap(\.wouldDeleteBytes) ?? []
+        return figures.isEmpty ? nil : figures.reduce(0, +)
     }
 
     /// Apply new limits. The Hub validates them before anything is written.
@@ -5550,26 +5695,73 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Read the nodes that have joined this Mac, and their live state.
     func refreshFleetNodes() async {
         guard let requestConnection = connectionID else { return }
+        fleetRefreshing = true
+        defer { fleetRefreshing = false }
+        var failures: [String] = []
+        var rosterRead = false
+        // A failed read keeps the last good value and says what failed: wiping the list and
+        // printing "unavailable in this build" made one flaky node's timeout read as a missing
+        // feature.
         do {
             let value: NativeFleetInventory = try await get(["api", "hub", "fleet", "nodes"])
             guard connectionID == requestConnection else { return }
             fleetNodes = value
+            rosterRead = true
         } catch {
-            guard connectionID == requestConnection else { return }
-            // An older Hub without the route must not break the screen.
-            fleetNodes = nil
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            failures.append("the joined nodes (\(Self.describe(error)))")
         }
         // The overview is a separate read because it can be slower - it waits on remote Macs -
-        // and the node list must still appear promptly when a node is off.
+        // and the node list must still appear promptly when a node is off. The per-machine model
+        // health is read beside it: it is the only place the Hub says whether a machine that
+        // answers can actually run its models.
+        async let overviewRead: NativeFleetOverview = get(["api", "hub", "fleet", "overview"])
+        async let healthRead: NativeModelHealthResponse? = try? get(["api", "hub", "model-health"])
         do {
-            let overview: NativeFleetOverview = try await get(["api", "hub", "fleet", "overview"])
+            let overview = try await overviewRead
             guard connectionID == requestConnection else { return }
             fleetOverview = overview
         } catch {
-            guard connectionID == requestConnection else { return }
-            fleetOverview = nil
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            failures.append("the fleet overview (\(Self.describe(error)))")
         }
-        clearRoutingPinIfItsMachineLeft()
+        if let health = await healthRead {
+            guard connectionID == requestConnection else { return }
+            fleetReadiness = Self.readiness(from: health.models)
+        }
+        if failures.isEmpty {
+            fleetRefreshedAt = Date()
+            fleetReadError = nil
+        } else {
+            fleetReadError = "Could not read " + failures.joined(separator: " or ") + "."
+        }
+        // Only a roster read this time is evidence of who is in the fleet.
+        if rosterRead { clearRoutingPinIfItsMachineLeft() }
+    }
+
+    /// Per machine, how many models are ready, need a download or are blocked (paused, no
+    /// runtime, too little memory). `unknown` is the Hub saying it has no evidence, so it counts
+    /// as nothing rather than as ready or as broken.
+    static func readiness(from rows: [NativeModelHealthRow]) -> [String: NativeMachineReadiness] {
+        rows.reduce(into: [:]) { result, row in
+            var entry = result[row.machine] ?? NativeMachineReadiness()
+            switch row.state {
+            case "ready": entry.ready += 1
+            case "download_required": entry.downloadRequired += 1
+            case "unknown": break
+            default: entry.blocked += 1
+            }
+            result[row.machine] = entry
+        }
+    }
+
+    /// Unreachable first, otherwise in the Hub's order: on ~50 Macs the ones that need someone
+    /// are the ones to see without scrolling.
+    static func unreachableFirst<T>(_ items: [T], reachable: (T) -> Bool) -> [T] {
+        items.enumerated().sorted { a, b in
+            let (ra, rb) = (reachable(a.element), reachable(b.element))
+            return ra != rb ? !ra : a.offset < b.offset
+        }.map(\.element)
     }
 
     /// Drop a "Send here" pin whose machine is no longer in this fleet.
@@ -6783,7 +6975,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// trusting anything else, download the artifact to a temporary file (streamed to disk, never
     /// held in memory), verify the SHA-256 of those bytes, then swap. Nothing is installed
     /// silently, and the whole thing is abandoned on the first failure.
-    func installOfferedRelease() async {
+    func installOfferedRelease(automatic: Bool = false) async {
         guard !installingRelease else { return }
         guard updateOffered, let descriptor = offeredReleaseDescriptor, let pinned = releasePublisherKey else {
             note(.failure, releaseRefusal ?? "No verified update is being offered.")
@@ -6807,11 +6999,25 @@ final class NativeWorkspaceStore: ObservableObject {
                 throw ReleaseError(reason)
             }
             releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
+            // `downloadReleaseArtifact` returns only a file it has already verified against the
+            // signed size and SHA-256, so the bytes are not hashed a second time here.
             let artifact = try await downloadReleaseArtifact(descriptor: descriptor)
-            releaseProgress = "Verifying the downloaded bytes…"
-            try Self.verifyArtifactFile(artifact, descriptor: descriptor)
-            releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
-            let landed = try installVerifiedArtifact(artifact, descriptor)
+            if automatic {
+                // The check that started this was minutes ago. Work that arrived while the file was
+                // downloading is not interrupted; the file is kept and the next idle check installs.
+                await refresh(reportErrors: false)
+                await refreshMemoryPolicy()
+                guard memoryInventory != nil, activeWorkCount == 0 else {
+                    releaseRefusal = nil
+                    note(.success, "Studio Hub \(descriptor.version) is downloaded and waiting: this Mac is busy, so it will install when it is idle.")
+                    return
+                }
+            }
+            releaseProgress = "Installing \(descriptor.version) (\(descriptor.build)) — copying the app, which takes a minute or two…"
+            // Mounting the image and copying a multi-gigabyte bundle is blocking work; on the main
+            // actor it froze the whole window, including the progress line above.
+            let install = installVerifiedArtifact
+            let landed = try await Task.detached(priority: .userInitiated) { try install(artifact, descriptor) }.value
             guard landed == descriptor.build else {
                 throw ReleaseError("The app that landed reports build \(landed), not \(descriptor.build).")
             }
@@ -6825,13 +7031,56 @@ final class NativeWorkspaceStore: ObservableObject {
             // in place, so the next press reuses or resumes it rather than re-downloading.
             try? FileManager.default.removeItem(at: artifact)
             try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent())
-            note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Restarting the local services now — running work will stop.")
+            note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Relaunching Studio Hub now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
         } catch {
+            // An update that fails on its own is not tried again for the same build until the app
+            // restarts: the failure is on screen, and a retry loop would re-copy 5 GB every minute.
+            if automatic { autoUpdateFailedBuild = descriptor.build }
             note(.failure, Self.actionable(error, action: "Install the update"))
             await refreshRelease()
         }
+    }
+
+    // MARK: - Checking for, and taking, updates without the Connections page open
+
+    static let releaseCheckInterval: TimeInterval = 600
+    static let autoUpdateRetryInterval: TimeInterval = 60
+    private var lastReleaseCheck: Date?
+    private var lastAutoUpdateAttempt: Date?
+    private var autoUpdateFailedBuild: String?
+
+    /// A joined node updates itself when it has nothing to do; a controller only says so.
+    ///
+    /// The owner's decision (2026-09-30): a node that is idle installs an offered update and
+    /// relaunches, and a busy one waits until it is. A controller stays manual because it is the one
+    /// thing 50 Macs depend on; it gets the sidebar badge. Both are checked every ten minutes here,
+    /// where the offer used to be read only when someone opened Connections on that Mac.
+    ///
+    /// **Verification is unchanged.** Nothing is read or installed unless a controller key is already
+    /// pinned on this Mac (at join, or by the operator), so this can never be the read that pins one.
+    func releaseTick(now: Date = Date()) async {
+        guard connectionID != nil, !installingRelease, releasePublisherKey != nil else { return }
+        if controllerIdentity == nil,
+           let identity: NativeControllerIdentity = try? await get(["api", "hub", "controller"]) {
+            controllerIdentity = identity
+        }
+        if lastReleaseCheck.map({ now.timeIntervalSince($0) >= Self.releaseCheckInterval }) ?? true {
+            lastReleaseCheck = now
+            await refreshRelease()
+        }
+        guard updateOffered, let build = offeredRelease?.build, build != autoUpdateFailedBuild,
+              controllerIdentity?.settings.role == "agent",
+              lastAutoUpdateAttempt.map({ now.timeIntervalSince($0) >= Self.autoUpdateRetryInterval }) ?? true
+        else { return }
+        lastAutoUpdateAttempt = now
+        // Fresh evidence rather than the last poll's: a hidden window does not refresh, and the
+        // Studios' own busy flags are the only place a job sent by the controller shows.
+        await refresh(reportErrors: false)
+        await refreshMemoryPolicy()
+        guard connectionID != nil, memoryInventory != nil, activeWorkCount == 0 else { return }
+        await installOfferedRelease(automatic: true)
     }
 
     /// Download the signed artifact to a stable, private file, resuming a kept partial file when
@@ -6860,7 +7109,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // A complete artifact was kept from an earlier failed install. It is reused without a
             // second transfer once it still matches the signed size and digest.
             do {
-                try Self.verifyArtifactFile(destination, descriptor: descriptor)
+                releaseProgress = "Checking the update already downloaded…"
+                try await Self.verifyOffMain(destination, descriptor)
                 releaseProgress = "Using the update already downloaded — \(descriptor.offered.sizeDisplay)."
                 return destination
             } catch {
@@ -6900,7 +7150,8 @@ final class NativeWorkspaceStore: ObservableObject {
         // Completeness is proved against the signed descriptor before the bytes go any further. A
         // file that is short or hashes wrong is not a resumable prefix, so it is discarded.
         do {
-            try Self.verifyArtifactFile(destination, descriptor: descriptor)
+            releaseProgress = "Verifying the downloaded bytes…"
+            try await Self.verifyOffMain(destination, descriptor)
         } catch {
             try? FileManager.default.removeItem(at: destination)
             throw ReleaseError("\(error.localizedDescription) The downloaded file was discarded.")
@@ -6918,9 +7169,17 @@ final class NativeWorkspaceStore: ObservableObject {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
+    /// The same check on a background thread: a 2 GB image takes seconds to hash, and on the main
+    /// actor that is a frozen window.
+    private static func verifyOffMain(_ file: URL, _ descriptor: ReleaseDescriptor) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try verifyArtifactFile(file, descriptor: descriptor)
+        }.value
+    }
+
     /// The signed descriptor's SHA-256 over the bytes on disk. Throws with a plain sentence on any
     /// mismatch; a corruption check, not the trust decision.
-    static func verifyArtifactFile(_ file: URL, descriptor: ReleaseDescriptor) throws {
+    nonisolated static func verifyArtifactFile(_ file: URL, descriptor: ReleaseDescriptor) throws {
         let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
         guard size == descriptor.bytes else {
             throw ReleaseError("The downloaded update is \(size.map(String.init) ?? "an unknown number of") bytes but the signed descriptor says \(descriptor.bytes). Nothing was installed.")
@@ -8022,8 +8281,26 @@ final class NativeWorkspaceStore: ObservableObject {
             // source for the row rather than threading a second value through the mapping.
             stalledSeconds: wire.stalledSeconds,
             answer: item?.text ?? "",
-            itemIndex: item?.index ?? 0)
+            itemIndex: item?.index ?? 0,
+            governorNote: wire.governorNote, machine: item?.machine,
+            tries: item?.tries, retryAt: item?.retryAt)
     }
+
+    private static func mapHubDownload(_ run: HubModelDownload, repo: String) -> NativeDownload {
+        let total = run.totalBytes ?? 0, done = run.bytesDone ?? 0
+        let failed = run.state == "error" || run.state == "interrupted"
+        let reason = run.errorTail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return NativeDownload(
+            id: run.id, repo: repo, state: run.state,
+            percent: total > 0 ? min(100, Double(done) / Double(total) * 100) : 0,
+            downloadedBytes: done, totalBytes: total,
+            error: failed ? (reason.isEmpty ? "Hub model download \(run.state)." : reason) : nil)
+    }
+
+    /// The Hub answers 404 for a run it no longer knows; `validateResponse` carries the status
+    /// code in the message, and that is the only thing that says "forgotten" rather than "failed
+    /// to answer just now".
+    private static func isUnknownRun(_ error: Error) -> Bool { describe(error).contains("(HTTP 404)") }
 
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
         NativeDownload(
@@ -8484,7 +8761,12 @@ private struct HubStorageMemory: Decodable {
     let thisMacGb: Int
     let runsHere: Bool
 }
-private struct HubModelDownload: Decodable { let id: String; let packageId: String; let state: String }
+/// `bytes_done` is measured by the Hub from the folder the download writes into, `total_bytes` is the
+/// manifest's own sum, and `error_tail` is the end of the downloader's output once a run failed.
+private struct HubModelDownload: Decodable {
+    let id: String; let packageId: String; let state: String
+    let bytesDone: Int64?; let totalBytes: Int64?; let errorTail: String?
+}
 private struct HubModelImport: Encodable { let sourceFolder: String }
 private struct RenameRequest: Codable { let name: String }
 private struct ModelHealthRecheck: Encodable { let model: String; let studio: String? }
@@ -8987,11 +9269,24 @@ private struct HubJobSummary: Decodable {
     /// The Hub's own "nothing has moved" clock for this batch. Published on the summary and on the
     /// detail (both come from `broker.batch_summary`), and read by neither until now.
     let stalledSeconds: Double?
+    /// Item counts from `batch_summary`. A batch with none waiting, running or uncertain is
+    /// settled; a summary that does not say is treated as not settled.
+    let queued: Int?
+    let retrying: Int?
+    let running: Int?
+    let cancelRequested: Int?
+    let uncertain: Int?
+    var settled: Bool {
+        guard let queued, let retrying, let running, let cancelRequested, let uncertain else { return false }
+        return queued + retrying + running + cancelRequested + uncertain == 0
+    }
 }
 private struct HubJobDetail: Decodable {
     let id: String
     let model: String
     let createdAt: Double?
+    /// Also from `batch_summary`: why a queued batch waits. Nil once nothing is waiting.
+    let governorNote: String?
     /// The same field the summary carries: `/api/hub/jobs/{id}` is `_summary(batch)`, so the detail
     /// is the summary plus `items`.
     let stalledSeconds: Double?
@@ -9001,6 +9296,10 @@ private struct HubJobItem: Decodable {
     let state: String
     /// The item's position in the batch, which is what the discard route is addressed with.
     let index: Int?
+    /// Which Mac holds the item, how many attempts it has used and when the next is due.
+    let machine: String?
+    let tries: Int?
+    let retryAt: Double?
     let progress: Double?
     /// The phase label the studio reported with its progress, when it reports one.
     let progressStage: String?

@@ -119,6 +119,8 @@ final class StudioController: ObservableObject {
     private let now: () -> Date
     private let healthRequest: (URLRequest, URLSession) async throws -> (Data, URLResponse)
     var onStopped: (() -> Void)?
+    /// Set by the app delegate: quit and reopen the (now replaced) app after an update.
+    var onRelaunchRequested: (() -> Void)?
 
     init(configuration: ShellConfiguration, serviceExecutable: URL? = nil,
          appBundle: URL = Bundle.main.bundleURL,
@@ -184,7 +186,10 @@ final class StudioController: ObservableObject {
             self?.rememberReleasePublisherKey(key)
         }
         workspace.onReleaseRestartRequested = { [weak self] in
-            self?.restartServices()
+            // An installed update replaces the app on disk, so the window in front of the operator
+            // is still the old binary and its version label stays stale. The app relaunches; with
+            // no app around it (tests) the services restart as before.
+            if let relaunch = self?.onRelaunchRequested { relaunch() } else { self?.restartServices() }
         }
     }
     var running: Bool { worker?.isRunning == true }
@@ -826,6 +831,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     private var statusItem: NSStatusItem!
     private var quitPending = false
+    /// True while quitting only to reopen after an update, which must not stop to ask.
+    private var relaunching = false
     private var statusObserver: AnyCancellable?
     private var failureObserver: AnyCancellable?
 
@@ -866,6 +873,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = content
         window.delegate = self
         window.isReleasedWhenClosed = false
+        controller.workspace.isWindowVisible = { [weak self] in
+            guard let window = self?.window else { return true }
+            return window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+        }
+        controller.onRelaunchRequested = { [weak self] in self?.relaunchAfterUpdate() }
         window.center()
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem(); mainMenu.addItem(applicationItem)
@@ -924,6 +936,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             controller.start()
         }
     }
+    /// Reopen the app once this process has exited. The data-folder lock is held until then, so a
+    /// second copy started now would hand off to this one and quit; the helper waits for the exit.
+    func relaunchAfterUpdate() {
+        let script = "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.5; done; /usr/bin/open \"$0\""
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = ["-c", script, Bundle.main.bundleURL.path]
+        do { try helper.run() } catch {
+            // Could not arrange a reopen: leave the app running rather than quit and not come back.
+            controller.failure = "The update is installed, but Studio Hub could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
+            return
+        }
+        relaunching = true
+        NSApp.terminate(nil)
+    }
     @objc func openWindow() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -946,12 +973,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard controller?.running == true || controller?.recoveryPending == true else { return .terminateNow }
         if quitPending { return .terminateLater }
-        let alert = NSAlert()
-        alert.messageText = "Quit Studio Hub and stop its engine?"
-        alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
-        alert.addButton(withTitle: "Keep Running")
-        alert.addButton(withTitle: "Quit and Stop")
-        guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        if !relaunching {
+            let alert = NSAlert()
+            alert.messageText = "Quit Studio Hub and stop its engine?"
+            alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
+            alert.addButton(withTitle: "Keep Running")
+            alert.addButton(withTitle: "Quit and Stop")
+            guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        }
         quitPending = true
         controller.stop()
         return controller.running ? .terminateLater : .terminateNow

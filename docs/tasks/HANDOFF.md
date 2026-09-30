@@ -3,7 +3,61 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.113** (an unreachable node now says *why*, as a field; 2026-09-30).
+Last updated: **0.6.114** (the app says what the Hub already knew; 2026-09-30).
+
+> **0.6.114 — twelve findings from the native-app audit (`_orchestra/audit-20260930/ui-hub.md`), all
+> "the Hub published it, the app drew a fixed sentence". Read `CHANGELOG.md` for the list; this is
+> what you must know before touching any of it.**
+>
+> **⚠ OWNER DECISION: a joined NODE updates itself when idle; a CONTROLLER stays manual (sidebar
+> badge only).** `NativeWorkspaceStore.releaseTick` (10-minute offer check, 1-minute idle retry) is
+> the whole mechanism. "Idle" is `activeWorkCount == 0` with a **fresh** `refresh()` +
+> `refreshMemoryPolicy()` — a job a controller sent to a node is *not* one of that node's batches, so
+> the Studios' own `busy` flags are the only place it shows. It requires a **pinned** controller key
+> (`releasePublisherKey != nil`) so it can never be the read that pins one, re-checks idleness after
+> the download (work that arrived defers the swap, file kept), and never retries a failed build until
+> the app restarts. After a landed install the app **relaunches**: `AppDelegate.relaunchAfterUpdate`
+> starts a `sh` helper that waits for this PID to exit (the data-folder lock is held until then) and
+> `open`s the bundle; `relaunching` skips the "Quit and stop its engine?" alert.
+> ⚠ **The relaunch helper and the unattended install were exercised by the native contract suite
+> (installer stubbed) and by reading the code, NOT by installing over a live app** — the fix agent
+> was forbidden to launch or install. First real node update: watch it.
+>
+> **Polling.** `nextPollDelay` = 2 s only while the window is visible *and* work is active, else 10 s;
+> a hidden/minimised/occluded window skips the screen refresh (`isWindowVisible`, set by the app
+> delegate) but **not** the update check, because a node's window is normally closed. `/api/hub/jobs`
+> has **no `since`/limit parameter**: it still re-reads every finished batch from SQLite on each call.
+> A cheap Hub-side page/limit is the next lever and was not invented here.
+>
+> **Job cache.** Failed batches are cached only when the summary's own counts (`queued`, `retrying`,
+> `running`, `cancel_requested`, `uncertain`) are all zero — a Retry makes it active again.
+> `tests/test_job_detail_cache_is_safe.py` says why; its comment had already named this invalidation as
+> owed once the app could retry.
+>
+> **Downloads.** The downloader prints nothing while it works, so `model_downloads._public` measures
+> `bytes_done` from `<library>/.studiohub/staging/<package>-<digest>` (the record stores that path as
+> `staging`; it is never published). Companion packages are not in `total_bytes`. Finished runs leave
+> `native-model-downloads.json` but stay in the session's Jobs list; a fixture reusing one run id
+> across downloads needs `dismissDownload` between them.
+>
+> **Storage.** `output_storage.preview()` now returns `would_delete_bytes` (the sweep's rule replayed
+> on the index; hard links counted per file, so it can overstate). Proved equal to what `enforce`
+> frees in `tests/test_hub_ops_visibility.py`.
+>
+> **Not done, deliberately:** a Cancel for the update download (Task not held), a remote "download
+> this model on node X" action (a product choice — the queued note now says *"download it on that
+> Mac, or pin another"*), auto-refresh of the Fleet page, a search field for ~50 nodes, chat-row Retry.
+> `finishedHubDownloads` and the two mutable release fields are in-memory by design.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1549 tests, OK (12 skipped), 611 s, exit 0;
+> `native/build.sh` green (boundary, API contract, lifecycle).** New: `tests/test_hub_ops_visibility.py`
+> (6), `tests/test_native_operator_surfaces.py` (19), ~40 checks in `tests/native/api_main.swift`.
+> **Mutation-proved** (each failed on an assertion, restored): governor note dropped, unknown counted as
+> blocked, drop-on-any-failure, no prune, controller auto-updating, retry on the wrong route, reversed
+> sort, no dry-run figure, the broker string, download progress/error tail, both storage-preview rules,
+> and six view wirings. ⚠ **Two of these have two independent guards** (idle check before *and* after the
+> download; error-cache settled check on write *and* read), so mutating one alone survives by design —
+> the test only bites when both go, which is what `e2`/`f2` did.
 
 > **0.6.113 — the reason a node did not answer was only ever in a sentence, spelled two ways.**
 >

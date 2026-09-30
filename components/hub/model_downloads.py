@@ -48,6 +48,39 @@ def _write(value: dict) -> None:
     _atomic_write(path, value)
 
 
+def _dir_bytes(path: str) -> int:
+    """Bytes on disk under `path`, `.part` files included: what a resumable download has so far."""
+    total = 0
+    for item in Path(path).rglob("*"):
+        try:
+            if item.is_file() and not item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _error_tail(run_id: str, limit: int = 300) -> str | None:
+    """The end of the downloader's own output: the reason a run failed, in its words."""
+    try:
+        text = (data_dir() / "model-download-runs" / run_id / "output.log").read_text(errors="replace")
+    except OSError:
+        return None
+    return text.strip()[-limit:] or None
+
+
+def _public(run: dict) -> dict:
+    """The run as the API publishes it: progress while it is active, the failure text once it
+    has failed. The downloader prints nothing while it works, so progress is measured from the
+    staging folder it writes into rather than read from its log."""
+    out = {key: value for key, value in run.items() if key != "staging"}
+    if run.get("staging") and run.get("state") in {"running", "recovery_pending"}:
+        out["bytes_done"] = _dir_bytes(run["staging"])
+    if run.get("state") in {"error", "interrupted"}:
+        out["error_tail"] = _error_tail(run["id"])
+    return out
+
+
 def _mark_exited(value: dict, run_id: str, process: subprocess.Popen) -> bool:
     run = value["runs"].get(run_id)
     result = process.poll()
@@ -87,11 +120,17 @@ def reconcile() -> dict:
 
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
           sources: dict | None) -> dict:
+    from components import model_packages
     with _lock:
         value = reconcile()
         for existing in value["runs"].values():
             if existing.get("package_id") == package_id and existing.get("state") in {"running", "recovery_pending"}:
-                return {**existing, "reused": True}
+                return {**_public(existing), "reused": True}
+        # Worked out before the child starts: a manifest that cannot be digested must fail here, not
+        # after a downloader is already running with no record of it.
+        total_bytes = sum(int(f.get("size") or 0) for f in manifest.get("files", []))
+        staging = str(Path(library).expanduser().resolve() / ".studiohub" / "staging"
+                      / f"{package_id}-{model_packages.manifest_digest(manifest)}")
         run_id = uuid.uuid4().hex
         root = data_dir() / "model-download-runs" / run_id
         root.mkdir(parents=True, mode=0o700)
@@ -125,17 +164,18 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
         finally:
             stream.close()
         run = {"id": run_id, "package_id": package_id, "state": "running",
-               "started_at": time.time(), "pid": process.pid}
+               "started_at": time.time(), "pid": process.pid,
+               "total_bytes": total_bytes, "staging": staging}
         value["runs"][run_id] = run
         _processes[run_id] = process
         _write(value)
-        return dict(run)
+        return _public(run)
 
 
 def status(run_id: str) -> dict | None:
     with _lock:
         value = reconcile()
-        return dict(value["runs"][run_id]) if run_id in value["runs"] else None
+        return _public(value["runs"][run_id]) if run_id in value["runs"] else None
 
 
 def _stop_owned(run_id: str, process: subprocess.Popen) -> int | None:
@@ -168,11 +208,11 @@ def cancel(run_id: str) -> dict | None:
         run = value["runs"].get(run_id)
         process = _processes.get(run_id)
         if run is None or run.get("state") != "running" or process is None:
-            return dict(run) if run else None
+            return _public(run) if run else None
         exit_code = _stop_owned(run_id, process)
         run.update(state="cancelled", exit_code=exit_code, finished_at=time.time())
         _write(value)
-        return dict(run)
+        return _public(run)
 
 
 def shutdown() -> None:

@@ -34,17 +34,21 @@ class DownloadProgressHonestyTests(unittest.TestCase):
         caption = caption[:caption.index("\n    }")]
         self.assertIn("workspace.models.first(where: { $0.repo == download.repo })?.sizeGB", caption)
 
-    def test_the_hub_really_has_no_byte_counts_to_show(self):
-        """Why the app cannot show a percentage: the run record the Hub returns has none.
+    def test_the_hub_now_reports_byte_counts_and_the_app_reads_them(self):
+        """The tripwire fired, as it was written to: the Hub now reports progress (0.6.114).
 
-        If this ever changes, the row should start showing the real figure rather than the caption.
+        `bytes_done` is measured from the folder the download writes into and `total_bytes` is the
+        manifest's own sum, so the row draws a real bar as soon as the first file starts. The
+        spinner and the model's size remain only for the moment before there is anything to count.
         """
         source = (ROOT / "components/hub/model_downloads.py").read_text()
-        record = source[source.index('run = {"id": run_id, "package_id": package_id'):]
-        record = record[:record.index("}")]
-        for field in ("bytes", "percent", "progress", "total"):
-            self.assertNotIn(field, record,
-                             "the Hub now reports progress; show it in the row instead")
+        for field in ("bytes_done", "total_bytes", "error_tail"):
+            self.assertIn(field, source, "the Hub must publish " + field)
+        for field in ("bytesDone", "totalBytes", "errorTail"):
+            self.assertIn(f"let {field}: ", API[API.index("private struct HubModelDownload"):][:400],
+                          "the app must decode " + field)
+        self.assertNotIn('percent: 0, downloadedBytes: 0, totalBytes: 0,\n                    error: run.state',
+                         API, "the app must not hardcode a zero for a download the Hub measures")
 
 
 if __name__ == "__main__":

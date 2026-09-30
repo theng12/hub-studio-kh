@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.6.114 — 2026-09-30 · The app says what the Hub already knew
+
+Twelve findings from the native-app audit, all of the same kind: the Hub published the fact and the
+app drew a fixed sentence, a green tick or nothing. No routing or scheduling behaviour changes.
+
+**Jobs**
+- **A queued job shows its reason.** `governor_note` (and `tries` / `retry_at`) are decoded onto
+  `NativeJob`, so *"'X' not downloaded on <machine>"* replaces the hard-coded *"Waiting for a free
+  worker"*, and a job in the 30 s `MACHINE_BUSY` retry loop says *"retrying in N s (attempt 2)"*.
+  The note used to tell the operator to *"broadcast the download"* — no such action exists — and now
+  says *"download it on that Mac, or pin another"* (`broker.py`, a string only).
+- **A job row says which Mac ran or holds it** and how many tries a failure took; **failed jobs get a
+  Retry button** (`POST /api/hub/jobs/{id}/items/{i}/retry` already existed). A retry drops the batch
+  from the finished-job cache.
+- **Overview "In progress" includes Video and Subtitle jobs**, which it read as idle.
+
+**Fleet**
+- **Health is runnability.** The Fleet page reads `/api/hub/model-health` and shows per machine
+  *"N models ready · N need download · N blocked"*; a Mac that answers but has no ready model is
+  orange, not green, and `degraded`/`down` are orange instead of the neutral clock. The sidebar
+  counts models that can *run* (`runsHere`), not models the Hub merely ships a package for. `speech`
+  and `voice` no longer both render as "Voice", and modalities with no completed work are not listed.
+- **"Send here" is visible where it applies**: a *"Sending to X · Clear"* chip beside Generate on the
+  Image, Music, Video, Audio and Subtitle pages (orange when the pinned Mac is offline), and the
+  button is disabled for an offline Mac (clearing an existing pin always works).
+- **The Fleet page is a dated report**: *as of hh:mm:ss*, a spinner while Refresh runs, unreachable
+  Macs first, and a failed read keeps the last good list and names what failed instead of wiping it
+  and saying *"unavailable in this build"*.
+- **"Hand over…" asks first**, like rotate, leave and remove.
+
+**Updates**
+- **Owner decision, 2026-09-30: a joined node updates itself when idle.** Every ten minutes the app
+  reads the controller's offer (it used to be read only when Connections was opened). A node with
+  nothing running or waiting — its own jobs, downloads, transcription, and every Studio's own `busy`
+  flag, which is where a job sent by the controller shows — downloads, verifies and installs it, then
+  **relaunches the app** so the version label is current. A busy node waits (checked every minute).
+  Work that arrives while the file downloads defers the swap. A failed unattended install is not
+  retried for the same build until the app restarts. **Nothing is read or installed unless a
+  controller key is already pinned**, so this can never be the read that pins one; verification is
+  unchanged.
+- **Controllers stay manual** but the sidebar Connections row carries an *Update* badge.
+- **A manual Install asks first when jobs are active**, naming how many will stop.
+- **The install no longer freezes the window.** SHA-256 over the DMG, `hdiutil attach` and the 5 GB
+  copy ran on the main actor; they run detached, the second hash of the same file is gone, and the
+  progress line repaints ("copying the app, which takes a minute or two").
+
+**Model downloads**
+- **Progress is real.** The downloader prints nothing while it works, so the Hub measures
+  `bytes_done` from the staging folder it writes into (`.part` files included) against `total_bytes`,
+  the manifest's own sum; the row draws a bar and *"3.2 GB of 12 GB"*.
+- **A failure shows the downloader's own words** (`error_tail`, the last 300 characters of its
+  output), not *"Hub model download error."*, and stays on the Models and Overview pages with a
+  Dismiss button. `recovery_pending` is drawn.
+- **Finished runs are pruned** from `native-model-downloads.json` and no longer polled every two
+  seconds for ever, and **one failed read no longer drops a running download** — only the Hub's 404.
+
+**Poll cost**
+- Failed batches are cached like finished ones, **but only on the Hub's positive word that nothing in
+  the batch is waiting or running** (a Retry makes it active again). Polling is 2 s only while work
+  is active and the window is visible, otherwise 10 s, and is skipped while the window is hidden or
+  minimised — the update check is not, because a node's window is normally closed.
+  `/api/hub/jobs` has no `since`/limit parameter, so it still lists every batch; that is Hub-side
+  and was not invented here.
+
+**Storage**
+- **Restore Defaults confirms**, naming the limits it replaces. The Hub's `preview()` now returns
+  `would_delete_bytes` — the sweep's own arithmetic replayed on the index without touching a file —
+  and the limits editor shows *"Saving lets cleanup delete about X GB"* for the values typed.
+
+**Tests:** `tests/test_hub_ops_visibility.py` (download progress and failure text, the storage dry
+run proven equal to what `enforce` actually frees, the note wording), `tests/test_native_operator_surfaces.py`
+(view wiring), and about forty new checks in `tests/native/api_main.swift`. Two existing tests were
+rewritten because their premise changed and both said so: the download tripwire ("the Hub has no
+byte counts") and the job-cache test, whose comment already named the native retry invalidation as
+owed.
+
 ## 0.6.113 — 2026-09-30 · Why a node did not answer, as a field rather than a sentence
 
 **The distinction was always made; it was just not readable.** The peer poll separates two

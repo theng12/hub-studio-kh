@@ -508,6 +508,11 @@ struct StudioContent: View {
     /// that cannot be undone by pressing the same button again, so each is confirmed first.
     @State private var confirmingLeave = false
     @State private var confirmingRotation = false
+    @State private var confirmingHandover = false
+    @State private var confirmingInstall = false
+    @State private var confirmingRestoreStorage = false
+    /// What cleanup would delete under the limits typed in the storage editor; nil while unknown.
+    @State private var draftWouldDelete: Int64?
     @State private var pendingNodeRemoval: NativeFleetNode?
     /// The new controller's address and token, typed before the handover runs.
     @State private var handoverAddress = ""
@@ -562,7 +567,16 @@ struct StudioContent: View {
     private var activeImages: [NativeJob] { workspace.imageJobs.filter { active($0.state) } }
     private var activeMusic: [NativeJob] { workspace.musicJobs.filter { active($0.state) } }
     private var activeAudio: [NativeJob] { workspace.audioJobs.filter { active($0.state) } }
-    private var activeDownloads: [NativeDownload] { workspace.downloads.filter { active($0.state) } }
+    private var activeVideo: [NativeJob] { workspace.videoJobs.filter { active($0.state) } }
+    /// A subtitle batch this app is transcribing shows as `transcriptionActivity`, so it is not
+    /// listed twice.
+    private var activeSubtitles: [NativeJob] {
+        workspace.transcribing ? [] : workspace.subtitleJobs.filter { active($0.state) }
+    }
+    /// Running downloads, and a failed one so the reason stays where the operator started it.
+    private var activeDownloads: [NativeDownload] {
+        workspace.downloads.filter { active($0.state) || $0.error != nil }
+    }
     private var filteredModels: [NativeModel] {
         workspace.models.filter { model in
             (modelFilter == "All functions" || model.function.rawValue == modelFilter) &&
@@ -570,7 +584,7 @@ struct StudioContent: View {
             (modelSearch.isEmpty || model.label.localizedCaseInsensitiveContains(modelSearch) || model.repo.localizedCaseInsensitiveContains(modelSearch))
         }
     }
-    private func active(_ state: String) -> Bool { ["queued", "running", "cancel_requested", "cancelling", "paused"].contains(state) }
+    private func active(_ state: String) -> Bool { ["queued", "running", "cancel_requested", "cancelling", "paused", "recovery_pending"].contains(state) }
     private func stateLabel(_ state: String) -> String {
         switch state { case "done": return "Completed"; case "cancel_requested", "cancelling": return "Stopping"; case "error": return "Failed"; default: return state.replacingOccurrences(of: "_", with: " ").capitalized }
     }
@@ -635,7 +649,13 @@ struct StudioContent: View {
         case "queued":
             HStack(spacing: 8) {
                 ProgressView().progressViewStyle(.linear).frame(width: 140)
-                Text("Waiting for a free worker").font(.caption).foregroundStyle(.secondary)
+                // The Hub's own reason when it states one ("model not downloaded on X"), in orange
+                // because it is the thing the operator can act on; the generic wait otherwise.
+                Text(NativeJob.waitingLabel(note: job.governorNote, tries: job.tries, retryAt: job.retryAt))
+                    .font(.caption)
+                    .foregroundStyle(job.governorNote?.isEmpty == false ? Color.orange : Color.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case "running":
             if job.progress > 0.001 {
@@ -860,6 +880,8 @@ struct StudioContent: View {
                             // work, there is just no engine behind them yet.
                             Label(page.title, systemImage: page.symbol)
                                 .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
+                                // An offered update is otherwise only visible on this page.
+                                .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
                                 .tag(page)
                         }
                     }
@@ -1045,7 +1067,7 @@ struct StudioContent: View {
                     sectionTitle("In progress")
                     Button("View All Jobs") { studio.select(.jobs) }
                 }
-                if activeAudio.isEmpty && activeImages.isEmpty && activeMusic.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
+                if activeAudio.isEmpty && activeImages.isEmpty && activeMusic.isEmpty && activeVideo.isEmpty && activeSubtitles.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
@@ -1059,6 +1081,8 @@ struct StudioContent: View {
                     ForEach(activeAudio) { job in jobRow(job, compact: true) }
                     ForEach(activeImages) { imageJobRow($0) }
                     ForEach(activeMusic) { musicJobRow($0) }
+                    ForEach(activeVideo) { videoJobRow($0) }
+                    ForEach(activeSubtitles) { subtitleJobRow($0) }
                     if workspace.transcribing { transcriptionActivity }
                     ForEach(activeDownloads) { download in downloadRow(download) }
                 }
@@ -1362,6 +1386,7 @@ struct StudioContent: View {
                             .accessibilityLabel("Image prompt")
                         HStack {
                             activeWorkIndicator(activeImages)
+                            pinChip
                             Spacer()
                             ActiveAura(active: !activeImages.isEmpty || workspace.submittingImage) {
                                 Button("Generate Image") { selectedImageID = nil; Task { await workspace.generateImage() } }
@@ -1547,6 +1572,15 @@ struct StudioContent: View {
                 Text(made).font(.caption).foregroundStyle(.secondary)
                     .accessibilityLabel("Generated \(made)")
             }
+            // Which Mac ran or holds it: on a controller the operator otherwise cannot tell where
+            // a job went, or which node keeps failing it.
+            if let machine = job.machine, !machine.isEmpty {
+                Text("on \(machine == "local" ? "this Mac" : workspace.fleetMachineName(machine))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if job.state == "error", let tries = job.tries, tries > 1 {
+                Text("after \(tries) tries").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1583,6 +1617,11 @@ struct StudioContent: View {
         .rowAction()
     }
 
+    /// Puts a failed job back in the queue (`POST .../items/{i}/retry`); prompt and settings are kept.
+    @ViewBuilder private func retryButton(_ job: NativeJob) -> some View {
+        Button("Retry") { Task { await workspace.retryJob(job) } }.disabled(!connected).rowAction()
+    }
+
     private func imageJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 10) {
@@ -1608,6 +1647,8 @@ struct StudioContent: View {
                     } else if job.state == "uncertain" {
                         Button("Check Result") { Task { await workspace.reconcileImage(job) } }.disabled(!connected).rowAction()
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .image) }.disabled(!connected).rowAction()
+                    } else if job.state == "error" {
+                        retryButton(job)
                     } else if active(job.state) {
                         Button("Cancel") { Task { await workspace.cancelImage(job) } }.disabled(!connected).rowAction()
                     }
@@ -1638,6 +1679,7 @@ struct StudioContent: View {
                         HStack {
                             Text("\(workspace.musicPrompt.count) characters").font(.caption).foregroundStyle(.secondary)
                             Spacer()
+                            pinChip
                             activeWorkIndicator(activeMusic)
                             ActiveAura(active: !activeMusic.isEmpty || workspace.submittingMusic) {
                                 Button("Generate Music") { selectedMusicID = nil; Task { await workspace.generateMusic() } }
@@ -1953,6 +1995,8 @@ struct StudioContent: View {
                     } else if job.state == "uncertain" {
                         Button("Check Result") { Task { await workspace.reconcileMusic(job) } }.disabled(!connected).rowAction()
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .music) }.disabled(!connected).rowAction()
+                    } else if job.state == "error" {
+                        retryButton(job)
                     } else if active(job.state) {
                         Button("Cancel") { Task { await workspace.cancelMusic(job) } }.disabled(!connected).rowAction()
                     }
@@ -2049,6 +2093,7 @@ struct StudioContent: View {
                         }
                         HStack {
                             if workspace.submittingVideo { ProgressView().controlSize(.small) }
+                            pinChip
                             Button("Generate Video") { Task { await workspace.generateVideo() } }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!connected || workspace.submittingVideo
@@ -2259,6 +2304,8 @@ struct StudioContent: View {
                     } else if job.state == "uncertain" {
                         Button("Check Result") { Task { await workspace.reconcileVideo(job) } }.disabled(!connected).rowAction()
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .video) }.disabled(!connected).rowAction()
+                    } else if job.state == "error" {
+                        retryButton(job)
                     } else if active(job.state) {
                         Button("Cancel") { Task { await workspace.cancelVideo(job) } }.disabled(!connected).rowAction()
                     }
@@ -2305,6 +2352,7 @@ struct StudioContent: View {
                         HStack {
                             Text("\(workspace.audioText.count) characters").font(.caption).foregroundStyle(.secondary)
                             Spacer()
+                            pinChip
                             activeWorkIndicator(activeAudio)
                             ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
                                 Button("Generate Audio") { Task { await workspace.generateAudio() } }
@@ -2837,6 +2885,7 @@ struct StudioContent: View {
                                 Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
                                 Spacer()
                                 if workspace.transcribing { ProgressView().controlSize(.small) }
+                                pinChip
                                 Button("Transcribe") { Task { await workspace.transcribe() } }.buttonStyle(.borderedProminent)
                                     .disabled(!connected || workspace.transcribing || workspace.transcriptionFile == nil || selectedTranscriptionModel?.cached != true || selectedTranscriptionModel?.supported != true || selectedTranscriptionModel?.runtimeReady != true)
                             }
@@ -3708,6 +3757,7 @@ struct StudioContent: View {
                         revealButton(job)
                     } else if job.state == "uncertain" {
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected).rowAction()
+                    } else if job.state == "error" { retryButton(job)
                     } else if active(job.state) { Button("Cancel") { Task { await workspace.cancelAudio(job) } }.disabled(!connected).rowAction() }
                 }
             }
@@ -3785,14 +3835,19 @@ struct StudioContent: View {
                 Spacer()
                 Text(stateLabel(download.state)).font(.caption).foregroundStyle(.secondary)
                 if active(download.state) { Button("Cancel") { Task { await workspace.cancelDownload(download) } }.disabled(!connected) }
+                else if download.error != nil { Button("Dismiss") { workspace.dismissDownload(download) } }
             }
             if active(download.state) {
                 if download.percent > 0 || download.totalBytes > 0 {
                     ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                    if download.totalBytes > 0 {
+                        Text("\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
-                    // A Hub model download runs in the Hub's own child process, which reports its
-                    // state but not its byte counts - so there is no honest percentage to draw, and
-                    // a bar pinned at zero reads as "stuck" for the whole download. The size comes
+                    // No byte counts yet (the Hub measures them from the folder the download writes
+                    // into, which does not exist until the first file starts), so there is no honest
+                    // percentage to draw, and a bar pinned at zero reads as "stuck". The size comes
                     // from the model itself, which is the same figure the Models page shows.
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -3801,13 +3856,15 @@ struct StudioContent: View {
                     }
                 }
             }
-            if let error = download.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error = download.error, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
         }
     }
     /// What is known about a download's size, without inventing progress.
     ///
-    /// The Hub does not report byte counts for a model download, so the honest line is the model's
-    /// own size ("downloading a 12.4 GB model") rather than "0 bytes" or a bar that never moves.
+    /// Before the Hub reports byte counts the honest line is the model's own size
+    /// ("downloading a 12.4 GB model") rather than "0 bytes" or a bar that never moves.
     private func sizeCaption(for download: NativeDownload) -> String {
         if let size = workspace.models.first(where: { $0.repo == download.repo })?.sizeGB {
             return String(format: "Downloading in the background · %.1f GB model", size)
@@ -4151,6 +4208,13 @@ struct StudioContent: View {
                 NumberField(title: "Keep finished work (days)", value: $draftRetentionDays, range: 1...365)
                 Toggle("Clean up automatically", isOn: $draftCleanup)
             }.formStyle(.grouped).frame(height: 190)
+            // The Hub's own dry run under these limits: saving applies them straight away and the
+            // background cleanup then deletes finished, acknowledged output.
+            if let bytes = draftWouldDelete {
+                Text(bytes == 0 ? "Nothing would be deleted with these limits."
+                     : "Saving lets cleanup delete about \(NativeWorkspaceStore.gigabytes(bytes)) of finished work.")
+                    .font(.callout).foregroundStyle(bytes == 0 ? Color.secondary : Color.orange)
+            }
             HStack {
                 Button("Cancel") { showingStorageEditor = false }
                 Spacer()
@@ -4165,6 +4229,14 @@ struct StudioContent: View {
                 }.buttonStyle(.borderedProminent).disabled(workspace.savingStorage)
             }
         }.padding(24).frame(width: 460)
+        .task(id: "\(draftGigabytes)|\(draftRetentionDays)|\(draftCleanup)") {
+            draftWouldDelete = nil
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            draftWouldDelete = await workspace.storageWouldDelete(
+                maxBytes: Int64(draftGigabytes * 1_000_000_000), retentionDays: draftRetentionDays,
+                cleanupEnabled: draftCleanup)
+        }
     }
     /// What's New. Deliberately the same text the release ships as `release-notes.md`, so the
     /// screen cannot describe a build it is not part of.
@@ -4218,7 +4290,7 @@ struct StudioContent: View {
                             .font(.callout).fontWeight(.semibold)
                         Text("\(release.sizeDisplay) · signed by controller key \(release.shortSigner)… · from \(release.publisherId)")
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("Installing replaces this app and restarts the local services. Any work running right now will stop.")
+                        Text("Installing replaces this app and relaunches it. Any work running right now will stop.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         if let progress = workspace.releaseProgress {
@@ -4226,11 +4298,25 @@ struct StudioContent: View {
                         }
                     }
                     Spacer(minLength: 8)
+                    // Installing relaunches the app. With nothing running that is just the press; with
+                    // work active it says how much will stop first.
                     Button(workspace.installingRelease ? "Installing…" : "Install") {
-                        Task { await workspace.installOfferedRelease() }
+                        if workspace.activeWorkCount > 0 { confirmingInstall = true }
+                        else { Task { await workspace.installOfferedRelease() } }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(workspace.installingRelease)
+                    .confirmationDialog(
+                        "Install \(release.version) and relaunch?",
+                        isPresented: $confirmingInstall, titleVisibility: .visible) {
+                            Button("Install and Relaunch", role: .destructive) {
+                                Task { await workspace.installOfferedRelease() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            let count = workspace.activeWorkCount
+                            Text("\(count) job\(count == 1 ? " is" : "s are") still running or waiting on this Mac. Installing relaunches Studio Hub and stops \(count == 1 ? "it" : "them").")
+                        }
                     Button("Dismiss") { workspace.dismissOfferedRelease() }
                         .disabled(workspace.installingRelease)
                 }
@@ -4604,10 +4690,7 @@ struct StudioContent: View {
                             TextField("Its Fleet token", text: $handoverToken)
                                 .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
                             Button(workspace.fleetOperationRunning ? "Handing over…" : "Hand over…") {
-                                Task {
-                                    await workspace.handOverFleet(to: handoverAddress,
-                                                                  token: handoverToken)
-                                }
+                                confirmingHandover = true
                             }
                             .disabled(!connected || workspace.fleetOperationRunning
                                       || handoverAddress.isEmpty || handoverToken.isEmpty)
@@ -4938,6 +5021,17 @@ struct StudioContent: View {
                 Text("A new Fleet token is minted and pushed to every joined Mac. The old one stops working immediately. Every member and GatewayKH must be given the new value; any Mac that refuses the old credential cannot be told automatically and has to be moved by hand — SSH over Tailscale.")
             }
         .confirmationDialog(
+            "Hand this group over to \(handoverAddress)?",
+            isPresented: $confirmingHandover,
+            titleVisibility: .visible) {
+                Button("Hand Over and Retire This Controller", role: .destructive) {
+                    Task { await workspace.handOverFleet(to: handoverAddress, token: handoverToken) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every node this controller can reach is moved to \(handoverAddress) with a new Fleet token, and this controller stops taking work. It keeps its history. A node that is switched off is not moved and needs the manual SSH path. This cannot be undone from here.")
+            }
+        .confirmationDialog(
             "Remove \(pendingNodeRemoval?.name ?? "this node") from this controller?",
             isPresented: Binding(get: { pendingNodeRemoval != nil },
                                  set: { if !$0 { pendingNodeRemoval = nil } }),
@@ -4967,19 +5061,37 @@ struct StudioContent: View {
                     Text("\(overview.summary.reachable) of \(overview.summary.total) reachable")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                fleetRefreshStatus
+            }
+            if let error = workspace.fleetReadError {
+                Text("\(error) Showing what was read last.")
+                    .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let overview = workspace.fleetOverview {
                 Text(poolSummary(overview))
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text(pinSummary)
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                ForEach(overview.machines) { machine in
+                ForEach(NativeWorkspaceStore.unreachableFirst(overview.machines, reachable: \.reachable)) { machine in
                     fleetMachineRow(machine)
                 }
             } else {
-                Text(connected ? "Fleet details are unavailable in this build." : "Start local services to see the fleet.")
+                Text(!connected ? "Start local services to see the fleet."
+                     : workspace.fleetRefreshing ? "Reading the fleet…"
+                     : workspace.fleetReadError == nil ? "The fleet has not been read yet." : "")
                     .font(.callout).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// "as of 14:02:07" with a spinner while a read is in flight. Both fleet sections show it: the page
+    /// used to give no sign a Refresh was running, or how old the rows were.
+    @ViewBuilder private var fleetRefreshStatus: some View {
+        if workspace.fleetRefreshing { ProgressView().controlSize(.small) }
+        if let at = workspace.fleetRefreshedAt {
+            Text("as of \(at.formatted(date: .omitted, time: .standard))")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -4990,6 +5102,22 @@ struct StudioContent: View {
             role: workspace.fleetOverview?.role,
             credentialOrigin: workspace.controllerIdentity?.settings.fleetCredentialOrigin,
             handedOverTo: workspace.controllerIdentity?.settings.handedOverTo)
+    }
+
+    /// "Sending to X · Clear" wherever work is submitted, while a Send here pin is set. The pin is
+    /// saved and attached to every submission, and used to be visible only on the Fleet page.
+    @ViewBuilder private var pinChip: some View {
+        if let pin = workspace.routingPin, !pin.isEmpty {
+            let id = pin.hasPrefix("machine:") ? String(pin.dropFirst("machine:".count)) : pin
+            let offline = workspace.fleetOverview?.machines.first { $0.machine == id }?.reachable == false
+            HStack(spacing: 4) {
+                Image(systemName: "pin.fill")
+                Text("Sending to \(id == "local" ? "this Mac" : workspace.fleetMachineName(id))\(offline ? " (offline)" : "")")
+                Button("Clear") { workspace.routingPin = nil }.buttonStyle(.link)
+            }
+            .font(.caption).foregroundStyle(offline ? Color.orange : Color.blue)
+            .help("Send here is set on the Fleet page. New work waits for this Mac until you clear the pin.")
+        }
     }
 
     /// Which pool this list is. The rows answer "how is each Mac doing", which is only half the
@@ -5009,12 +5137,8 @@ struct StudioContent: View {
     @ViewBuilder private func fleetMachineRow(_ machine: NativeFleetMachine) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                Image(systemName: machine.reachable
-                      ? (machine.health == "up" ? "checkmark.circle.fill" : "clock")
-                      : "exclamationmark.triangle")
-                    .foregroundStyle(machine.reachable
-                                     ? (machine.health == "up" ? Color.green : Color.secondary)
-                                     : Color.orange)
+                Image(systemName: machineSymbol(machine))
+                    .foregroundStyle(machineTint(machine))
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(machine.isLocal ? "This Mac" : machine.label).fontWeight(.medium)
@@ -5029,6 +5153,10 @@ struct StudioContent: View {
                         }
                     }
                     Text(machineFacts(machine)).font(.caption).foregroundStyle(.secondary)
+                    if let readiness = workspace.fleetReadiness[machine.machine] {
+                        Text(readiness.summary).font(.caption)
+                            .foregroundStyle(readiness.cannotRunAnything ? Color.orange : Color.secondary)
+                    }
                     // Where the Mac answers, so a row can be matched to the address the operator
                     // wrote down. Absent for this Mac, whose addresses are listed above.
                     if let address = machine.address, !address.isEmpty, !machine.isLocal {
@@ -5037,9 +5165,13 @@ struct StudioContent: View {
                     }
                 }
                 Spacer()
-                if !machine.modalities.isEmpty {
-                    Text(machine.modalities.keys.sorted().map(modalityTitle).joined(separator: ", "))
+                // What it has finished so far. `speech` and `voice` are both Voice, and a modality with
+                // no completed work is not something this Mac has done.
+                let done = doneModalities(machine)
+                if !done.isEmpty {
+                    Text(done.joined(separator: ", "))
                         .font(.caption).foregroundStyle(.secondary)
+                        .help("Work this Mac has completed")
                 }
                 Text(seconds(machine.averageSeconds)).font(.system(.caption, design: .monospaced))
                     .frame(minWidth: 78, alignment: .trailing)
@@ -5050,11 +5182,13 @@ struct StudioContent: View {
                     Text("Offline").font(.caption).foregroundStyle(.orange)
                 }
                 if canPinWork {
-                    Button(workspace.routingPin == "machine:\(machine.machine)" ? "Automatic" : "Send here") {
-                        workspace.routingPin = workspace.routingPin == "machine:\(machine.machine)"
-                            ? nil : "machine:\(machine.machine)"
+                    let pinned = workspace.routingPin == "machine:\(machine.machine)"
+                    Button(pinned ? "Automatic" : "Send here") {
+                        workspace.routingPin = pinned ? nil : "machine:\(machine.machine)"
                     }
-                    .disabled(!connected)
+                    // An Offline Mac cannot be pinned (the label above says so); clearing an
+                    // existing pin to it always works.
+                    .disabled(!connected || (!machine.reachable && !pinned))
                     .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
                 }
             }
@@ -5062,6 +5196,24 @@ struct StudioContent: View {
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 3)
+    }
+
+    /// Runnable, not merely answering: a Mac whose Hub replies but which has no model it can run is
+    /// orange, and so is one the Hub itself calls degraded or down. Green needs both.
+    private func machineSymbol(_ machine: NativeFleetMachine) -> String {
+        if !machine.reachable { return "exclamationmark.triangle" }
+        if machine.health == "up" { return machineCannotRun(machine) ? "exclamationmark.circle.fill" : "checkmark.circle.fill" }
+        return ["degraded", "down"].contains(machine.health) ? "exclamationmark.circle.fill" : "clock"
+    }
+
+    private func machineTint(_ machine: NativeFleetMachine) -> Color {
+        if !machine.reachable { return .orange }
+        if machine.health == "up" { return machineCannotRun(machine) ? .orange : .green }
+        return ["degraded", "down"].contains(machine.health) ? .orange : .secondary
+    }
+
+    private func machineCannotRun(_ machine: NativeFleetMachine) -> Bool {
+        workspace.fleetReadiness[machine.machine]?.cannotRunAnything == true
     }
 
     /// What this Mac's part in the group is, when the Hub says. Absent means an older Hub that
@@ -5094,6 +5246,12 @@ struct StudioContent: View {
         return parts.joined(separator: " · ")
     }
 
+    private func doneModalities(_ machine: NativeFleetMachine) -> [String] {
+        var seen = Set<String>()
+        return machine.modalities.filter { $0.value > 0 }.keys.sorted().map(modalityTitle)
+            .filter { seen.insert($0).inserted }
+    }
+
     private func modalityTitle(_ modality: String) -> String {
         switch modality {
         case "image": return "Image"
@@ -5114,7 +5272,9 @@ struct StudioContent: View {
             HStack {
                 Text("Joined nodes").font(.headline)
                 Spacer()
-                Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.disabled(!connected)
+                fleetRefreshStatus
+                Button("Refresh") { Task { await workspace.refreshFleetNodes() } }
+                    .disabled(!connected || workspace.fleetRefreshing)
             }
             if let fleet = workspace.fleetNodes {
                 if fleet.nodes.isEmpty {
@@ -5134,7 +5294,7 @@ struct StudioContent: View {
                     Text(fleetSummaryLine(fleet))
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    ForEach(fleet.nodes) { node in
+                    ForEach(NativeWorkspaceStore.unreachableFirst(fleet.nodes, reachable: \.isReachable)) { node in
                         joinedNodeRow(node)
                     }
                 }
@@ -5142,7 +5302,9 @@ struct StudioContent: View {
                     removedNodes(removed)
                 }
             } else {
-                Text(connected ? "Joined nodes are unavailable in this build." : "Start local services to see joined nodes.")
+                Text(!connected ? "Start local services to see joined nodes."
+                     : workspace.fleetRefreshing ? "Reading the joined nodes…"
+                     : workspace.fleetReadError ?? "The joined nodes have not been read yet.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
@@ -5444,7 +5606,7 @@ struct StudioContent: View {
     /// `StudioFunction.allCases`, so a new one is counted here without a second edit.
     private var generatorSummary: String {
         let parts = StudioFunction.allCases.filter { $0.hasEngine }.compactMap { function -> String? in
-            let count = workspace.supportedModels(for: function).count
+            let count = workspace.supportedModels(for: function).filter(NativeWorkspaceStore.runsHere).count
             guard count > 0 else { return nil }
             let label = StudioPage.page(for: function)?.title ?? function.rawValue
             return "\(label) \(count)"
@@ -5641,8 +5803,18 @@ struct StudioContent: View {
                     showingStorageEditor = true
                 }
                 .disabled(!connected || workspace.savingStorage)
-                Button("Restore Defaults") { Task { await workspace.restoreStorageDefaults() } }
+                Button("Restore Defaults…") { confirmingRestoreStorage = true }
                     .disabled(!connected || workspace.savingStorage)
+                    .confirmationDialog(
+                        "Restore the shipped storage limits?",
+                        isPresented: $confirmingRestoreStorage, titleVisibility: .visible) {
+                            Button("Restore Defaults", role: .destructive) {
+                                Task { await workspace.restoreStorageDefaults() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This replaces your limits (\(NativeWorkspaceStore.gigabytes(settings.effective.maxBytes)), \(settings.effective.retentionDays) days, cleanup \(settings.effective.cleanupEnabled ? "on" : "off")) with the shipped ones. If they are lower, the next cleanup deletes finished, acknowledged work down to them.")
+                        }
                 if workspace.savingStorage { ProgressView().controlSize(.small) }
             }
             if let note = workspace.storageNote {

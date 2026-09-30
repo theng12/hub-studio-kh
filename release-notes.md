@@ -2,6 +2,39 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.114 — 2026-09-30
+
+### The app now tells you what it already knew
+
+**A waiting job says why it is waiting.** Instead of *"Waiting for a free worker"* it shows the
+reason — for example that the model is not downloaded on the Mac it was sent to — and, when it is
+trying again, when. Every job row also says **which Mac ran it**, and a **failed job has a Retry
+button**.
+
+**The Fleet page tells the truth about each Mac.** A Mac that answers but has no model it can run is
+no longer a green tick: each row says how many models are ready, how many need a download and how
+many are blocked. Unreachable Macs come first, the page shows *as of* when it last read, a spinner
+while it refreshes, and if something could not be read it says *what* — and keeps the last list
+instead of going blank. **Send here** is now visible on the create pages ("Sending to … · Clear"),
+and cannot be set on a Mac that is off. **Hand over…** asks you to confirm.
+
+**Updates.** *If this Mac is a Node,* it now installs an offered update **by itself when it has
+nothing to do** — no running or waiting jobs, no downloads — and then reopens Studio Hub so the
+version shown is the new one. A busy Node waits until it is idle. **A Controller still updates only
+when you press Install**, but the Connections entry in the sidebar now shows an **Update** badge.
+Pressing Install while jobs are running asks first and says how many will stop. Installing no longer
+freezes the window.
+
+**Model downloads show progress** (a bar and "3.2 GB of 12 GB"), show the **real reason** when they
+fail, and the failed row stays until you dismiss it.
+
+**Storage.** Restore Defaults asks first, and the limits editor shows how much finished work cleanup
+would delete with the numbers you typed.
+
+**Smaller:** Overview's "In progress" now includes Video and Subtitle jobs; the sidebar counts the
+models this Mac can actually run; "Voice" is not listed twice; an idle Mac polls less often, and a
+hidden window does not poll at all.
+
 ## 0.6.113 — 2026-09-30
 
 ### A machine that is switched off now says so, instead of blaming Studio Hub

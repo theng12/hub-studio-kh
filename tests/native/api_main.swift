@@ -86,6 +86,17 @@ final class FixtureProtocol: URLProtocol {
     static var imageAckPaths: [String] = []
     static var imageAckRejects = false
     static var discardPaths: [String] = []
+    static var retryPaths: [String] = []
+    static var overviewFails = false
+    /// Change fixture state from async test code, where NSLock's lock/unlock are unavailable.
+    static func mutate(_ change: () -> Void) { lock.lock(); change(); lock.unlock() }
+    /// "off", "settled" (a failed batch with nothing waiting) or "retried" (queued again).
+    static var errorBatchMode = "off"
+    static var voiceDownloadsIdle = false
+    /// What `GET /api/hub/model-downloads/hub-download-1` answers: normal, a transient 500, the
+    /// Hub having forgotten the run (404), or a failed run with the downloader's own last words.
+    static var hubDownloadMode = "normal"
+    static var hubDownloadReads = 0
     static var uncertainMusic = false
     static var corruptMusic = false
     static var musicAckPaths: [String] = []
@@ -588,6 +599,13 @@ final class FixtureProtocol: URLProtocol {
             result = packagesDown
                 ? (503, "application/json", Data(#"{"detail":"PackageError: manifest for one model is malformed"}"#.utf8))
                 : (200, "application/json", Self.packagesFixture)
+        case ("GET", "/api/hub/model-health"):
+            // Per (machine, model): this Mac can run two models and needs one download; the joined
+            // node answers its Hub but has no model it can run.
+            result = (200, "application/json", Data(#"{"paused":[],"models":[{"model_id":"a","machine":"local","state":"ready"},{"model_id":"b","machine":"local","state":"ready"},{"model_id":"c","machine":"local","state":"download_required"},{"model_id":"a","machine":"studio-3","state":"download_required"},{"model_id":"b","machine":"studio-3","state":"insufficient_memory"},{"model_id":"c","machine":"studio-3","state":"unknown"}]}"#.utf8))
+        case ("POST", "/api/hub/jobs/old-job/items/0/retry"):
+            Self.lock.lock(); Self.retryPaths.append(path); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"ok":true,"batch_id":"old-job","item_index":0,"state":"queued"}"#.utf8))
         case ("POST", "/api/hub/model-health/recheck"):
             let body = requestBody()
             Self.lock.lock()
@@ -832,7 +850,8 @@ final class FixtureProtocol: URLProtocol {
         case ("POST", "/studio/voice/api/settings/test-hf-token"):
             result = (200, "application/json", Data(#"{"ok":true,"name":"Fixture User","type":"user","orgs":["fixture-org"]}"#.utf8))
         case ("GET", "/api/hub/fleet/overview"):
-            Self.lock.lock(); Self.fleetCalls.append("overview"); Self.lock.unlock()
+            Self.lock.lock(); Self.fleetCalls.append("overview"); let overviewFails = Self.overviewFails; Self.lock.unlock()
+            if overviewFails { result = (500, "application/json", Data(#"{"detail":"fixture: a node timed out"}"#.utf8)); break }
             result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","role":"agent","address":null,"reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","role":"agent","address":"http://192.168.1.20:47873","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"role":"agent","controller":{"machine":"controller-mac","label":"Control Mac","role":"controller","address":"http://192.168.1.21:47873","state":"reachable","detail":null,"version":"0.4.0"},"roster_readable":true,"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
         case ("GET", "/api/hub/controller"):
             Self.lock.lock()
@@ -913,8 +932,17 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"running"}"#.utf8))
         case ("GET", "/api/hub/model-downloads/hub-download-1"):
-            Self.lock.lock(); let cancelled = Self.hubDownloadCancelled; Self.lock.unlock()
-            result = (200, "application/json", Data("{\"id\":\"hub-download-1\",\"package_id\":\"whisper-turbo\",\"state\":\"\(cancelled ? "cancelled" : "running")\"}".utf8))
+            Self.lock.lock()
+            let cancelled = Self.hubDownloadCancelled
+            let mode = Self.hubDownloadMode
+            Self.hubDownloadReads += 1
+            Self.lock.unlock()
+            switch mode {
+            case "transient": result = (500, "application/json", Data(#"{"detail":"fixture hiccup"}"#.utf8))
+            case "forgotten": result = (404, "application/json", Data(#"{"detail":"unknown model download"}"#.utf8))
+            case "failed": result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"error","error_tail":"Download incomplete or invalid: model.safetensors"}"#.utf8))
+            default: result = (200, "application/json", Data("{\"id\":\"hub-download-1\",\"package_id\":\"whisper-turbo\",\"state\":\"\(cancelled ? "cancelled" : "running")\",\"bytes_done\":3000000000,\"total_bytes\":12000000000}".utf8))
+            }
         case ("DELETE", "/api/hub/model-downloads/hub-download-1"):
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
@@ -950,11 +978,22 @@ final class FixtureProtocol: URLProtocol {
             let extraChat = Self.chatJobWithoutStatedTime
             Self.lock.unlock()
             if extraChat { batches.append(["id": "chat-job-nostated", "modality": "chat"]) }
-            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["batches": batches]))
+            // A failed image batch, when a test asks for one: the Hub's own item counts say whether
+            // it is settled (nothing waiting) or was retried (one queued again).
+            Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
+            var listed = batches as [[String: Any]]
+            if errorBatch != "off" {
+                listed.append(["id": "err-job", "modality": "image", "queued": errorBatch == "retried" ? 1 : 0,
+                               "retrying": 0, "running": 0, "cancel_requested": 0, "uncertain": 0, "error": 1])
+            }
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["batches": listed]))
+        case ("GET", "/api/hub/jobs/err-job"):
+            Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
+            result = (200, "application/json", Data("{\"id\":\"err-job\",\"modality\":\"image\",\"model\":\"fixture/flux\",\"created_at\":1,\"items\":[{\"index\":0,\"state\":\"\(errorBatch == "retried" ? "queued" : "error")\",\"prompt\":\"x\",\"error\":\"worker refused\"}]}".utf8))
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
             if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
-            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact","runtime_s":31.0}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"governor_note":"'x' not downloaded on image@studio-mac-1102 — download it on that Mac, or pin another","items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact","runtime_s":31.0,"machine":"studio-mac-1102","tries":2,"retry_at":4102444800.0}]}"#.utf8))
         case ("GET", "/api/hub/jobs/new-job"):
             // `created_at` matters: history is sorted by it, and the assertions below take the
             // most recent job, which is this one.
@@ -1063,6 +1102,8 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.discardPaths.append(path); Self.uncertainMusic = false; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"batch_id":"music-job","item_index":0}"#.utf8))
         case ("GET", "/studio/voice/api/downloads"):
+            Self.lock.lock(); let idleDownloads = Self.voiceDownloadsIdle; Self.lock.unlock()
+            if idleDownloads { result = (200, "application/json", Data(#"{"jobs":[]}"#.utf8)); break }
             result = (200, "application/json", Data(#"{"jobs":[{"id":"download-1","repo":"mlx-community/whisper-large-v3-turbo","state":"running","bytes_done":50,"bytes_total":100,"percent":50.0}]}"#.utf8))
         case ("GET", "/api/hub/jobs/chat-job"):
             // The shape the Hub records for a Chat-page completion: one item, the operator's last
@@ -1234,7 +1275,7 @@ final class FixtureProtocol: URLProtocol {
 
     private static let settingsFixture = Data(#"{"defaults":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000}}"#.utf8)
 
-    private static let storagePreviewFixture = Data(#"{"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"machines":[{"machine":"local","used_bytes":7200000000,"protected_bytes":1500000000,"max_bytes":50000000000,"retention_days":30,"enabled":true,"over_limit":false,"free_bytes":410000000000}]}"#.utf8)
+    private static let storagePreviewFixture = Data(#"{"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"machines":[{"machine":"local","used_bytes":7200000000,"protected_bytes":1500000000,"max_bytes":50000000000,"retention_days":30,"enabled":true,"over_limit":false,"free_bytes":410000000000,"would_delete_bytes":3200000000}]}"#.utf8)
 
     /// Shaped like the Hub's real reply, including a model with no timed run so the app's
     /// "not measured" path is exercised rather than assumed.
@@ -1937,6 +1978,21 @@ struct NativeAPITests {
         require(secondPass == firstPass,
                 "a finished job must be fetched once, not on every poll: \(firstPass) then \(secondPass)")
 
+        // A failed batch is remembered too - but only while the Hub says nothing in it is waiting, so
+        // a Retry (which queues it again) is seen on the next poll rather than hidden by the cache.
+        FixtureProtocol.mutate { FixtureProtocol.errorBatchMode = "settled" }
+        await degraded.refresh()
+        let withFailure = FixtureProtocol.jobDetailCount()
+        await degraded.refresh()
+        require(FixtureProtocol.jobDetailCount() == withFailure,
+                "a settled failed batch must be fetched once, not on every poll")
+        FixtureProtocol.mutate { FixtureProtocol.errorBatchMode = "retried" }
+        await degraded.refresh()
+        require(FixtureProtocol.jobDetailCount() > withFailure
+                    && degraded.imageJobs.first { $0.id == "err-job" }?.state == "queued",
+                "a retried batch must be read again, not served from the cache")
+        FixtureProtocol.mutate { FixtureProtocol.errorBatchMode = "off" }
+
         // How long a generation took, shown in the generator and in Jobs. The Hub writes
         // `runtime_s` when an item finishes and `elapsed_s` while it runs; the app showed neither,
         // so a 4.6-second clip that took 52 seconds to make read as "4.6 s" - which the owner
@@ -2345,6 +2401,31 @@ struct NativeAPITests {
                 "a machine with no measured work must report no average, not zero")
         require(FixtureProtocol.fleetRequests().contains("overview"),
                 "the overview must be read from the Hub: \(FixtureProtocol.fleetRequests())")
+        // Runnable, not merely answering (F2): per machine, from /api/hub/model-health.
+        require(store.fleetReadiness["local"] == NativeMachineReadiness(ready: 2, downloadRequired: 1, blocked: 0),
+                "this Mac's readiness: \(String(describing: store.fleetReadiness["local"]))")
+        require(store.fleetReadiness["local"]?.cannotRunAnything == false, "a Mac with ready models can run")
+        require(store.fleetReadiness["studio-3"] == NativeMachineReadiness(ready: 0, downloadRequired: 1, blocked: 1),
+                "an unknown state counts as nothing: \(String(describing: store.fleetReadiness["studio-3"]))")
+        require(store.fleetReadiness["studio-3"]?.cannotRunAnything == true,
+                "a node that answers but has no model it can run must not read as healthy")
+        require(store.fleetReadiness["studio-3"]?.summary == "0 models ready · 1 need download · 1 blocked",
+                "the row says why: \(store.fleetReadiness["studio-3"]?.summary ?? "nil")")
+        require(store.fleetRefreshedAt != nil && store.fleetReadError == nil && !store.fleetRefreshing,
+                "a clean read is dated and reports no error")
+        let sorted = NativeWorkspaceStore.unreachableFirst(store.fleetOverview!.machines, reachable: \.reachable)
+        require(sorted.map(\.machine) == ["studio-3", "local"], "unreachable machines float to the top")
+        require(NativeWorkspaceStore.unreachableFirst([1, 2, 3, 4], reachable: { $0 % 2 == 0 }) == [1, 3, 2, 4],
+                "the order within each group is the Hub's")
+        // A read that fails keeps the last good list and says what failed (F10).
+        FixtureProtocol.mutate { FixtureProtocol.overviewFails = true }
+        await store.refreshFleetNodes()
+        require(store.fleetOverview?.summary.total == 2, "a failed read must not wipe the last good overview")
+        require(store.fleetReadError?.contains("fleet overview") == true,
+                "the error must name what could not be read: \(store.fleetReadError ?? "nil")")
+        FixtureProtocol.mutate { FixtureProtocol.overviewFails = false }
+        await store.refreshFleetNodes()
+        require(store.fleetReadError == nil, "the next clean read clears the error")
         // A Mac that joined a group has to be able to see the group. The pool is read back from
         // the controller, so the screen can name the head of the group and say plainly whether
         // what it is showing is all of it.
@@ -3048,6 +3129,11 @@ struct NativeAPITests {
                 "protected bytes must be shown, not just the total")
         require(store.storageUsage.first?.overLimit == false, "an under-limit machine is not flagged")
 
+        require(store.storageUsage.first?.wouldDeleteBytes == 3_200_000_000, "the Hub's dry run must decode")
+        let wouldDelete = await store.storageWouldDelete(maxBytes: 10_000_000_000, retentionDays: 7, cleanupEnabled: true)
+        require(wouldDelete == 3_200_000_000, "the editor's figure comes from a preview with the draft limits")
+        require(FixtureProtocol.storageRequests().last == "preview" && !FixtureProtocol.storageRequests().contains("put"),
+                "the dry run must be a preview call, never a save: \(FixtureProtocol.storageRequests())")
         await store.saveStorageLimits(maxBytes: 120_000_000_000, retentionDays: 14, cleanupEnabled: false)
         require((FixtureProtocol.storageLimitsBody()?["max_bytes"] as? NSNumber)?.int64Value
                     == 120_000_000_000,
@@ -4012,6 +4098,25 @@ struct NativeAPITests {
                 "a companion codec the catalogue does not publish as a TTS form is not a voice model")
 
         require(store.audioJobs.first?.id == "old-job", "existing audio jobs must load")
+        // What the Hub says about a waiting job, and where it ran, reaches the row (F1/F3).
+        let described = store.audioJobs.first
+        require(described?.governorNote?.contains("not downloaded on image@studio-mac-1102") == true,
+                "the Hub's reason for a waiting batch must be decoded, not replaced by a fixed sentence")
+        require(described?.machine == "studio-mac-1102" && described?.tries == 2 && described?.retryAt == 4_102_444_800,
+                "the machine, tries and next retry must be decoded: \(String(describing: described))")
+        let inTen = Date(timeIntervalSince1970: 4_102_444_790)
+        require(NativeJob.waitingLabel(note: nil, tries: nil, retryAt: nil, now: inTen) == "Waiting for a free worker",
+                "with no stated reason the generic wait remains")
+        require(NativeJob.waitingLabel(note: "'x' not downloaded on a", tries: nil, retryAt: nil, now: inTen)
+                    == "'x' not downloaded on a", "a stated reason replaces the generic wait")
+        require(NativeJob.waitingLabel(note: nil, tries: 1, retryAt: 4_102_444_800, now: inTen)
+                    == "Waiting for a free worker · retrying in 10.0 s (attempt 2)",
+                "a retry loop must say when it retries: \(NativeJob.waitingLabel(note: nil, tries: 1, retryAt: 4_102_444_800, now: inTen))")
+        require(!NativeJob.waitingLabel(note: nil, tries: 1, retryAt: 4_102_444_780, now: inTen).contains("retrying"),
+                "a retry time in the past is not a countdown")
+        await store.retryJob(described!)
+        require(FixtureProtocol.retryPaths == ["/api/hub/jobs/old-job/items/0/retry"],
+                "Retry must post the failed item's own route: \(FixtureProtocol.retryPaths)")
         require(store.downloads.first?.percent == 50, "download progress must load")
         await store.startDownload(supportedSTT[0])
         require(FixtureProtocol.lastDownloadPath == "/api/hub/model-packages/whisper-turbo/download", "model download bypassed Hub package management")
@@ -4019,6 +4124,42 @@ struct NativeAPITests {
         require(store.downloads.contains { $0.id == "hub-download-1" }, "Hub model download status missing")
         await store.cancelDownload(store.downloads.first { $0.id == "hub-download-1" }!)
         require(store.downloads.contains { $0.id == "hub-download-1" && $0.state == "cancelled" }, "Hub model download cancellation missing")
+        // A finished run is not polled again, for the rest of the session.
+        FixtureProtocol.mutate {
+            FixtureProtocol.hubDownloadMode = "normal"; FixtureProtocol.hubDownloadCancelled = false
+            FixtureProtocol.hubDownloadReads = 0
+        }
+        await store.refresh()
+        require(FixtureProtocol.hubDownloadReads == 0, "a cancelled download run must be pruned, not polled every tick")
+        // The fixture reuses one run id for every download; a real Hub does not, so clear the old row.
+        store.dismissDownload(store.downloads.first { $0.id == "hub-download-1" }!)
+        // A running download reports real progress, from the Hub's own byte counts.
+        await store.startDownload(supportedSTT[0])
+        let progress = store.downloads.first { $0.id == "hub-download-1" }
+        require(progress?.percent == 25 && progress?.totalBytes == 12_000_000_000,
+                "download progress must come from the Hub's bytes: \(String(describing: progress))")
+        // One failed read is not the download vanishing.
+        FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "transient" }
+        await store.refresh()
+        require(store.downloads.contains { $0.id == "hub-download-1" && $0.state == "running" },
+                "a transient read failure must not drop a running download")
+        // Only the Hub saying it does not know the run drops it.
+        FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "forgotten" }
+        await store.refresh()
+        require(!store.downloads.contains { $0.id == "hub-download-1" }, "a run the Hub forgot (404) must go")
+        // A failure names its real reason, and the row is kept for the operator, without polling.
+        FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "normal" }
+        await store.startDownload(supportedSTT[0])
+        FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "failed"; FixtureProtocol.hubDownloadReads = 0 }
+        await store.refresh()
+        let failedRun = store.downloads.first { $0.id == "hub-download-1" }
+        require(failedRun?.state == "error" && failedRun?.error == "Download incomplete or invalid: model.safetensors",
+                "a failed download must show the downloader's own reason: \(String(describing: failedRun))")
+        await store.refresh()
+        require(FixtureProtocol.hubDownloadReads == 1, "a failed run is read once, then kept without polling")
+        store.dismissDownload(failedRun!)
+        require(!store.downloads.contains { $0.id == "hub-download-1" }, "a dismissed failure must clear")
+        FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "normal" }
         store.audioModel = "other/tts"
         store.audioText = "Unsupported voice model"
         let submitsBeforeUnsupported = FixtureProtocol.generatedBodies().count
@@ -4826,8 +4967,8 @@ struct NativeAPITests {
         require(swaps == 1, "a verified artifact must reach the swap exactly once")
         require(restarts == 1, "a completed install must ask the existing restart path exactly once")
         require(updateStore.connectionNotice?.kind == .success, "a completed install must be reported")
-        require(updateStore.connectionNotice?.text.contains("Restarting") == true,
-                "the report must say the services restart: \(updateStore.connectionNotice?.text ?? "nil")")
+        require(updateStore.connectionNotice?.text.contains("Relaunching") == true,
+                "the report must say the app relaunches: \(updateStore.connectionNotice?.text ?? "nil")")
         require(updateStore.currentAppBuild == "newbuild",
                 "the installed build must become the current one so the banner clears")
         require(updateStore.currentAppVersion == "0.6.50",
@@ -4950,6 +5091,59 @@ struct NativeAPITests {
                 "a partial file larger than the signed size must be discarded, not appended to")
         require(!FixtureProtocol.artifactRangeHeaders().contains(where: { $0.hasPrefix("bytes=") }),
                 "an oversized fragment must not be used as a resume offset: \(FixtureProtocol.artifactRangeHeaders())")
+        // ── An idle joined node takes an offered update itself; a controller only badges it ──
+        // (owner decision 2026-09-30). The installer is stubbed, so nothing touches /Applications.
+        let autoDescriptor = makeReleaseDescriptor(version: "0.6.60", build: "autobuild", artifact: artifact,
+                                                   gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(autoDescriptor), artifact: artifact)
+        updateStore.currentAppBuild = "currentbuild"
+        updateStore.currentAppVersion = "0.6.50"
+        var autoSwaps = 0
+        var autoRelaunches = 0
+        updateStore.installVerifiedArtifact = { _, _ in autoSwaps += 1; return "autobuild" }
+        updateStore.onReleaseRestartRequested = { autoRelaunches += 1 }
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // every Studio idle
+        var tick = Date(timeIntervalSince1970: 2_000_000_000)
+        FixtureProtocol.currentRole = "controller"
+        await updateStore.refreshConnection()
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.showingUpdateBanner, "a controller must show the update badge")
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(autoSwaps == 0, "a controller is never updated unattended")
+        FixtureProtocol.currentRole = "agent"
+        await updateStore.refreshConnection()
+        FixtureProtocol.setMemoryPolicyOverride(nil)                                  // the voice Studio is busy
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(autoSwaps == 0, "a busy node must wait, not interrupt its work")
+        require(updateStore.nextPollDelay == 2, "a visible window over active work polls every two seconds")
+        updateStore.isWindowVisible = { false }
+        require(updateStore.nextPollDelay == 10, "a hidden window does not poll at the busy rate")
+        updateStore.isWindowVisible = { true }
+        require(updateStore.activeWorkCount >= 1, "a busy Studio is active work: \(updateStore.activeWorkCount)")
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.activeWorkCount == 0, "the fixture node is idle: \(updateStore.activeWorkCount)")
+        require(autoSwaps == 1 && autoRelaunches == 1,
+                "an idle node must install the offered update and relaunch once: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        // A failed unattended install is not retried for the same build (it would re-copy 5 GB a minute).
+        let failing = makeReleaseDescriptor(version: "0.6.61", build: "failbuild", artifact: artifact,
+                                            gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(failing), artifact: artifact)
+        var failedSwaps = 0
+        updateStore.installVerifiedArtifact = { _, _ in failedSwaps += 1; throw ReleaseError("fixture: the copy failed") }
+        await updateStore.refreshRelease()
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 1, "an unattended install that failed must not loop: \(failedSwaps)")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = false }
+        FixtureProtocol.currentRole = "standalone"
         FixtureProtocol.clearRelease()
 
         // ── The owner's publisher-key front door ───────────────────────────────────────────

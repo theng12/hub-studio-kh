@@ -17,8 +17,12 @@ HUB_ROUTES = (ROOT / "components" / "hub" / "standalone.py").read_text()
 
 class JobDetailCacheTests(unittest.TestCase):
     def test_only_final_states_are_remembered(self):
-        self.assertIn('if ["done", "cancelled"].contains(job.state) { finished[batch.id] = job }', API,
-                      "only a state that cannot come back may be cached")
+        self.assertIn('if ["done", "cancelled"].contains(job.state) || (job.state == "error" && batch.settled) {', API,
+                      "only a state that cannot come back may be cached; a failure comes back through Retry, "
+                      "so it is cached only on the Hub's word that nothing in the batch is waiting or running")
+        settled = API[API.index("var settled: Bool {"):][:260]
+        for count in ("queued", "retrying", "running", "cancelRequested", "uncertain"):
+            self.assertIn(count, settled, f"a batch with {count} work is not settled")
 
     def test_the_cache_is_dropped_when_the_connection_changes(self):
         disconnect = API[API.index("func disconnect()"):]
@@ -27,7 +31,11 @@ class JobDetailCacheTests(unittest.TestCase):
                       "a reconnect must not serve the previous Hub's jobs")
 
     def test_cached_jobs_are_shown_without_a_request(self):
-        self.assertIn("if let known = finishedJobCache[batch.id] {", API)
+        self.assertIn('if let known = finishedJobCache[batch.id], known.state != "error" || batch.settled {', API)
+
+    def test_a_retry_drops_the_batch_from_the_cache(self):
+        retry = API[API.index("func retryJob("):][:700]
+        self.assertIn("finishedJobCache.removeValue(forKey: job.id)", retry)
 
     def test_the_only_routes_that_re_open_a_finished_job_are_the_retry_routes(self):
         """The Hub may re-open exactly one failed item, and only through the retry routes.

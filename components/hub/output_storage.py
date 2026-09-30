@@ -308,6 +308,7 @@ def preview(*, machine: str, max_bytes: int, retention_days: int,
             rows = []
     physical = {}
     protected = {}
+    removable: dict[str, list] = {}
     cutoff = now - retention_days * 86400
     for row in rows:
         key = (row["device"], row["inode"])
@@ -316,7 +317,18 @@ def preview(*, machine: str, max_bytes: int, retention_days: int,
                     and row["reader_leases"] == 0 and row["transfer_leases"] == 0)
         if not eligible:
             protected[key] = max(protected.get(key, 0), row["bytes"])
+        else:
+            removable.setdefault(row["id"], [row["generated_at"], 0])[1] += row["bytes"]
     used = sum(physical.values())
+    # What the next sweep would delete under these limits: `enforce`'s own rule (oldest eligible
+    # group first, while it is past retention or the total is over the limit), replayed on the
+    # index without touching a file. Hard links are counted per file, so it can overstate.
+    would_delete, simulated = 0, used
+    for generated_at, size in sorted(removable.values()):
+        if generated_at >= cutoff and simulated <= max_bytes:
+            continue
+        would_delete += size
+        simulated = max(0, simulated - size)
     free = []
     roots = {Path(row["managed_root"]) for row in rows}
     roots.update(_space_roots(managed_output_roots))
@@ -327,7 +339,7 @@ def preview(*, machine: str, max_bytes: int, retention_days: int,
             pass
     return {"machine": machine, "used_bytes": used, "protected_bytes": sum(protected.values()),
             "max_bytes": max_bytes, "retention_days": retention_days, "enabled": enabled,
-            "minimum_free_bytes": minimum_free_bytes,
+            "minimum_free_bytes": minimum_free_bytes, "would_delete_bytes": would_delete,
             "over_limit": used > max_bytes, "free_bytes": min(free) if free else None,
             "expired_before": cutoff}
 
