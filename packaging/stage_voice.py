@@ -365,7 +365,13 @@ def _stage_video(context: dict) -> dict | None:
     return {
         **matched,
         **({k: v for k, v in (yue2_note or {}).items()}),
-        'runtime': 'video',
+        # BRIDGE (one release, revert to 'video' in the release after): every Mac already installed
+        # (0.6.119/0.6.120) verifies a staged update with ITS OWN `runtimePaths`, which has no
+        # `video`, so it refuses any release that says 'video' here and can never update itself.
+        # Nothing reads this label but that check (`_video_spec` reads `runtime_sha256`, and the
+        # worker file is checked separately), so 'voice' lets those apps take this release; the
+        # 0.6.121+ app knows `video`. Pinned by tests/test_installer_knows_shipped_runtimes.py.
+        'runtime': 'voice',
         'runtime_sha256': tree_digest(resources / 'runtimes/video'),
         'source_sha256': tree_digest(video_source),
     }

@@ -5750,7 +5750,12 @@ struct NativeAPITests {
             }
             for (_, record) in components {
                 let runtime = (record["runtime"] as? String) ?? "voice"
-                guard let paths = ReleaseInstaller.runtimePaths[runtime] else { continue }
+                // The layout the real bundle has (`runtimes/<runtime>/bin/python3`), NOT the
+                // installer's own table: a runtime missing from the table used to be skipped here,
+                // so a manifest the installer could not verify still built a "complete" fake app and
+                // the suite stayed green (0.6.120: `video` was never in the table).
+                let paths = ReleaseInstaller.runtimePaths[runtime]
+                    ?? ["Contents/Resources/runtimes/\(runtime)/bin/python3"]
                 for relative in paths {
                     // The Music overlay is created only when the caller asked for it, so one test
                     // can leave it out.
@@ -5846,8 +5851,9 @@ struct NativeAPITests {
             "music": ["runtime": "voice+music-overlay"],
             "chat": ["runtime": "voice"],
             "subtitle": ["runtime": "voice"],
+            "video": ["runtime": "video"],
         ]
-        for missing in ["voice", "image", "music", "chat", "subtitle"] {
+        for missing in ["voice", "image", "music", "chat", "subtitle", "video"] {
             let incomplete = installParent.appendingPathComponent("missing-\(missing)/Studio Hub.app")
             try makeFakeApp(at: incomplete, build: "newbuild", components: allComponents)
             // Remove the component's own worker entry point, which its release manifest declares.
@@ -5890,6 +5896,21 @@ struct NativeAPITests {
             require(error.localizedDescription.contains("release-manifest.json"),
                     "the refusal must name the missing manifest, got: \(error.localizedDescription)")
         }
+        // The release manifest of the build that shipped (0.6.120, c439bbf), byte for byte as the
+        // installed app carries it, must pass the installer's own pre-swap check. The hand-built
+        // manifests above never named `video`, so they could not see that the installer refused
+        // every release that ships Video - which is why no Mac in the fleet updated itself.
+        let shippedManifest = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("fixtures/release-manifest-0.6.120-c439bbf.json")
+        let shippedComponents = (try JSONSerialization.jsonObject(with: Data(contentsOf: shippedManifest))
+            as! [String: Any])["components"] as! [String: [String: Any]]
+        require(shippedComponents["video"] != nil, "the fixture must be a manifest that ships Video")
+        let shippedApp = installParent.appendingPathComponent("shipped-manifest/Studio Hub.app")
+        try makeFakeApp(at: shippedApp, build: "newbuild", components: shippedComponents)
+        let shippedLanded = try installer.swapStagedApp(staged: shippedApp, descriptor: swapDescriptor)
+        require(shippedLanded == "newbuild",
+                "the installer must accept the release manifest that actually shipped, got: \(shippedLanded)")
+
         // A component whose runtime name this installer does not know is refused by name, naming
         // both files to update.
         let unknownRuntime = installParent.appendingPathComponent("unknown-runtime/Studio Hub.app")
