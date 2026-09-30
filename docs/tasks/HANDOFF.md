@@ -3,7 +3,55 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.121** (installer knows the Video runtime + bridge label; 2026-10-01).
+Last updated: **0.6.122** (updates restart the app by themselves; 2026-10-01).
+
+> **0.6.122 - Updates restart the app by themselves (relaunch hang fixed; bridge KEPT)** (0.6.119-0.6.121 installs hung
+> half-quit on four controllers, 2026-10-01). Read `CHANGELOG.md` 0.6.122 and
+> `_orchestra/audit-20260930/update-0120/diag/relaunch-*` (incident) and `relaunch-fixed-0122-*` (proof); what to know:
+>
+> - **Cause:** `AppDelegate.relaunchAfterUpdate` called `NSApp.terminate` from the release tick, a main-actor task. With the
+>   engine running `applicationShouldTerminate` answers `.terminateLater`, AppKit waits in a nested loop, and the engine's
+>   exit (a main-actor task) can never run until the tick returns -> never replied, never quit, the reopen helper waited for
+>   ever. **Fix** (`554ed1f`, `native/StudioHub.swift`): stop the engine first, quit from `onStopped` (`engineStopped`), so
+>   `terminate` runs with nothing running and answers `.terminateNow`. Seams `spawnRelaunchHelper` / `terminateApp`;
+>   `lifecycle_main.swift` `relaunch-after-update` (mutation-proved: quit straight away -> "must not quit while the engine is
+>   still running" fails); `test_update_unattended` pins the source shape.
+> - **Other paths audited, none changed:** no other `NSApp.terminate` runs inside a main-actor task. User Quit goes
+>   `terminate` (menu/Dock/Apple event on the run loop) -> `.terminateLater` -> a task that only `reply`s: safe, and proved
+>   live below. The one other `terminate` is the launch-error alert (no controller -> `.terminateNow`). Known, not a hang:
+>   `confirmForceStop`/`confirmQuitWhileBusy` run `runModal` inside a task, so while such a dialog is up other main-actor
+>   tasks wait for the answer.
+> - **BRIDGE KEPT** (`runtime: 'voice'` for video in `_stage_video`): Macs on 0.6.119/0.6.120 must still accept this
+>   release. Revert it (and delete `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`) only once no Mac
+>   runs below 0.6.121.
+> - **A Mac on 0.6.119-0.6.121 still hangs once, taking THIS update** (its own old app does that relaunch): after the install
+>   the new app is on disk; `kill <pid>` (Force Quit) the old process, then open Studio Hub. From 0.6.122 on it is automatic.
+> - **End-to-end proof on this Mac (no manual step):** real 0.6.122 installed with `install_local.sh`; a throwaway TEST release
+>   (`0.6.122.1`, build `ca4380f`, scratch commit on a local branch never pushed, stage moved to `_trash/test-releases/`) was
+>   pushed ONLY to 127.0.0.1:47873 (delta, 3 blobs, 3.4 KB, signed with the fleet publisher key; version comparator:
+>   `ReleaseVersion` accepts 4 components, `0.6.122.1 > 0.6.122`). Published 04:25:05; the app's 600 s release check offered
+>   it at 04:32:10; pin/verify -> delta stage -> swap done by 04:32:17.9; engine stop begun ~04:32:17.9; `terminate:` ->
+>   `applicationShouldTerminate: NSTerminateNow` at 04:32:19.037 (exit status 0 at 19.05); the helper opened the new app
+>   (pid 72734) at 04:32:19.4; `/api/version` 0.6.122.1 again at 04:32:32.9. **Outage 14.9 s, no kill, no click.** (The
+>   window was not hidden: no Automation permission for System Events; the release tick does not depend on it.) Then the
+>   local Hub's held release was replaced by real 0.6.122 (push_delta replaces `release.json`) and `install_local.sh`
+>   put real 0.6.122 back; the Apple-event Quit of the 0.6.122.1 app took the real user-Quit path:
+>   `NSTerminateLater` 04:33:39.77 -> reply YES 04:33:41.21 -> exit 04:33:41.24 by itself. Final: /Applications
+>   0.6.122 / `f710e41`, serving, held release 0.6.122 / `f710e41` (not an offer), app pid stable.
+> - **Gate:** `unittest discover` -> **1597 tests, OK (13 skipped), 589 s, exit 0** (a first run had 1 failure: the source pin
+>   `test_a_relaunch_after_an_update_force_stops_a_hung_shutdown_without_asking` still expected the old shape; updated);
+>   `native/build.sh` green (boundary, API contract, lifecycle).
+> - **Delta (stage file manifests):** **0.6.121 -> 0.6.122: 6 files, 6 blobs, 13,495,854 B to send** (native binary,
+>   `Info.plist`, `release-manifest.json`, `release-notes.md`, `voice/CHANGELOG.md`, `voice/VERSION`). **0.6.119 -> 0.6.122:
+>   12 files, 12 blobs, 13,876,425 B to send**, 0 added, ~15.6k removed (the Lance tree; removals send nothing). Totals
+>   77,466 files, 4,202,330,364 B.
+> - **DMG** `dist/StudioHub-0.6.122-f710e41.dmg` (1,570,244,746 B, SHA-256
+>   `d3276c58e2e1c09a7d6f9d6fdc1671f707920411abd2ce3430a112c49c0b582a`, `hdiutil verify` valid, `bytes-wasted: 0`), built with
+>   `.build/make-dmg-noprune.sh`; its first output carried 557 MB of dead space (kept as
+>   `_trash/dist/StudioHub-0.6.122-f710e41-wasted557MB.dmg`), re-compacted with `hdiutil convert -format UDZO`. The
+>   0.6.121 DMG moved to `_trash/dist/`. Installable app: `.build/StudioHub-0122/Studio Hub.app` (manifest `0.6.122` /
+>   `f710e41292c7a4752fa406867998a07a6b08bb90`). **Installed on this Mac only; not on the drives, nothing pushed to
+>   controllers.**
 
 > **0.6.121 - Macs can install updates by themselves again (installer fix + ONE-RELEASE BRIDGE)** (0.6.120 rollout,
 > 2026-10-01: no controller or node updated). Read `CHANGELOG.md` 0.6.121 and
@@ -15,9 +63,9 @@ Last updated: **0.6.121** (installer knows the Video runtime + bridge label; 202
 >   **Fix** (`7031035`): `video` is in the table; tests use the real 0.6.120 manifest as a fixture, the fake-app helper
 >   builds the real layout, `tests/test_installer_knows_shipped_runtimes.py` pins "every runtime `stage_voice.py`
 >   writes is verifiable".
-> - **BRIDGE (`28ad677`) - REVERT IN 0.6.122:** installed 0.6.119/0.6.120 apps verify with THEIR table (no `video`),
+> - **BRIDGE (`28ad677`) - kept in 0.6.122, revert only when no Mac runs < 0.6.121:** installed 0.6.119/0.6.120 apps verify with THEIR table (no `video`),
 >   so this release labels `components.video.runtime` **`'voice'`** in `packaging/stage_voice.py` `_stage_video`.
->   Nothing else reads that label (`_video_spec` reads `runtime_sha256`). **Next release: set it back to `'video'`,
+>   Nothing else reads that label (`_video_spec` reads `runtime_sha256`). **To revert: set it back to `'video'`,
 >   delete the BRIDGE comment and DELETE `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`**
 >   (only once the fleet is on >= 0.6.121). Until then the staged manifest says `voice` for video on purpose.
 > - **Verified (the point of the release):** the REAL 0.6.119 installer (`git show 5417087:native/UpdateClient.swift`
