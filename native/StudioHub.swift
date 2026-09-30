@@ -942,9 +942,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             stateItem.title = status
         }
         failureObserver = controller.$failure.dropFirst().compactMap { $0 }.sink { [weak self] _ in self?.openWindow() }
-        controller.onStopped = { [weak self] in
-            if self?.quitPending == true { NSApp.reply(toApplicationShouldTerminate: true) }
-        }
+        controller.onStopped = { [weak self] in self?.engineStopped() }
         // Decided before the window opens, and only once per launch. The launchd agent starts the
         // executable directly, so it carries the login marker in its environment; a login item
         // launch carries the AppleEvent instead.
@@ -962,20 +960,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     /// Reopen the app once this process has exited. The data-folder lock is held until then, so a
     /// second copy started now would hand off to this one and quit; the helper waits for the exit.
+    ///
+    /// The engine is stopped FIRST and the app quits from `onStopped`. Calling `NSApp.terminate`
+    /// while the engine runs answers `.terminateLater` and waits inside a nested event loop - but
+    /// this is reached from the release tick, itself a main-actor task, and the engine's exit is
+    /// delivered as another main-actor task, which cannot run until the first one returns. The app
+    /// then never quit, the helper below waited on it for ever and the Mac stayed without a Hub
+    /// (seen live 2026-10-01: four controllers after 0.6.119 -> 0.6.121).
     func relaunchAfterUpdate() {
         let script = "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.5; done; /usr/bin/open \"$0\""
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sh")
         helper.arguments = ["-c", script, Bundle.main.bundleURL.path]
-        do { try helper.run() } catch {
+        do { try spawnRelaunchHelper(helper) } catch {
             // Could not arrange a reopen: leave the app running rather than quit and not come back.
             controller.failure = "The update is installed, but Studio Hub could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
             return
         }
         relaunching = true
         controller.forceStopWithoutAsking = true
-        NSApp.terminate(nil)
+        if controller.running { controller.stop() } else { terminateApp() }
     }
+    /// The engine has stopped: finish a Quit that was waiting for it, or the app's quit for a relaunch.
+    func engineStopped() {
+        if quitPending { NSApp.reply(toApplicationShouldTerminate: true) }
+        else if relaunching { terminateApp() }
+    }
+    /// Seams for the lifecycle test: starting the reopen helper and quitting the app.
+    var spawnRelaunchHelper: (Process) throws -> Void = { try $0.run() }
+    var terminateApp: () -> Void = { NSApp.terminate(nil) }
     @objc func openWindow() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

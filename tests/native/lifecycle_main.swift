@@ -397,6 +397,36 @@ struct NativeLifecycleTests {
             }
         }
 
+        // An installed update relaunches the app from the release tick - a main-actor task. The app must
+        // stop the engine first and quit from its exit: quitting while the engine runs waits in a nested
+        // loop inside that task, the engine's exit can never be delivered, and the app hangs for ever
+        // (seen live on four controllers). Here the quit is a seam, so the test asserts the order.
+        if runs("relaunch-after-update") {
+            let server = try LocalHubFixture(); defer { server.stop() }
+            let controller = try makeController(root: temporary.appendingPathComponent("relaunch-update"),
+                                                server: server, now: Date.init)
+            controller.start()
+            let started = await waitUntil { readyPID(controller) != nil && controller.running }
+            requireLifecycle(started, "relaunch-update: the service did not start")
+            let pid = readyPID(controller)!
+            let delegate = AppDelegate()
+            delegate.controller = controller
+            controller.onStopped = { delegate.engineStopped() }
+            var helpers = 0, quits = 0, runningAtQuit = true
+            delegate.spawnRelaunchHelper = { _ in helpers += 1 }
+            delegate.terminateApp = { quits += 1; runningAtQuit = controller.running }
+            delegate.relaunchAfterUpdate()
+            requireLifecycle(helpers == 1, "relaunch-update: the reopen helper must be started once, got \(helpers)")
+            requireLifecycle(quits == 0, "relaunch-update: the app must not quit while the engine is still running")
+            requireLifecycle(controller.forceStopWithoutAsking, "relaunch-update: a hung stop must be forced, not asked about")
+            let quit = await waitUntil { quits == 1 }
+            requireLifecycle(quit, "relaunch-update: the app never quit after the engine stopped")
+            requireLifecycle(!runningAtQuit && kill(pid, 0) != 0, "relaunch-update: the app quit before the engine had stopped")
+            // With no engine running there is nothing to wait for: it quits straight away.
+            delegate.relaunchAfterUpdate()
+            requireLifecycle(quits == 2 && helpers == 2, "relaunch-update: an idle app must quit at once, got \(quits) quits")
+        }
+
         print("Native lifecycle checks passed")
     }
 }
