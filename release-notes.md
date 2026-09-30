@@ -2,6 +2,37 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.115 — 2026-09-30
+
+### Work goes to the right Mac, removing a Mac works from both ends, and updates get much smaller
+
+**Jobs only go to Macs that can run them.** Studio Hub now checks that a Mac has enough memory for
+the model before it sends it a job. When a Mac frees up, it takes the waiting job that the *fewest*
+Macs could run, so your big Macs are kept for the work only they can do. If two jobs are equal, it
+prefers the one that uses the model the Mac already has loaded, then the one that has waited longest.
+**Send here** still wins on the Mac you chose, and chat and subtitles follow the same order. A Mac
+that is busy is asked again within seconds instead of being left alone for half a minute, and the
+capacity numbers you see count only the Macs that have enough memory. On a test of your fleet mix
+(10 Macs with 8 GB, 5 with 16 GB, 2 with 24 GB, 1 with 32 GB, running 500 image, 200 voice and 100
+chat jobs) no Mac sat idle while it could have worked, and each size of Mac was 97-98% busy.
+
+**Removing a Mac works from either side.** Remove a node on the controller and the node leaves the
+group within about a minute, or the next time it starts. Leave from the node and the controller
+forgets it straight away; if the controller is switched off, the node keeps trying for up to 14 days.
+A Mac the controller removed is told so, with the date. A Mac that left on its own can join again.
+Machines are shown by their **name** everywhere (the ID appears when you hover), renaming a Mac
+updates the controller, and a Mac that has **never connected since it joined** is flagged.
+
+**Updates are much smaller.** Every build now carries a list of its files. A Mac that already has the
+previous version copies it and downloads only what changed - for the last update that was 9 files and
+13.5 MB instead of a 1.8 GB disk image - and if it cannot prove the result is exact, it falls back to
+the full disk image. Nodes fetch the update from their own controller, and **a Controller now installs
+an offered update by itself once it has nothing running or waiting**, just as a Node does. The kit
+installer keeps the old app until the new one has been checked.
+
+**One thing to know:** going from 0.6.114 to 0.6.115 is still a full update, because the older app
+cannot do the small kind. The first small update will be 0.6.115 to 0.6.116.
+
 ## 0.6.114 — 2026-09-30
 
 ### The app now tells you what it already knew

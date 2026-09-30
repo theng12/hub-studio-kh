@@ -3,7 +3,42 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.114** (the app says what the Hub already knew; 2026-09-30).
+Last updated: **0.6.115** (scarcest-first scheduling, node removal from either side, delta updates; 2026-09-30).
+
+> **0.6.115 — three reviewed branches merged (`wave2-sched`, `wave2-fleet`, `wave2-delta`), kept as
+> merge commits. Read `CHANGELOG.md` for the list; this is what you must know before touching them.**
+>
+> **⚠ ROLLOUT: 0.6.114 -> 0.6.115 is a FULL (disk image) update** — 0.6.114 apps have no delta path.
+> The first delta update is **0.6.115 -> 0.6.116**; that is where to watch the APFS-clone stage, the
+> "cannot prove it, fall back to the DMG" path and the controller's `.../release/need` exchange for
+> the first time in the field. The gateway side (`release_publisher.py`: manifest push, blob PUT,
+> fall back on 400/404/405 or a missing `delta` key) is a separate task; the wire contract is
+> `_orchestra/audit-20260930/CONTRACT-hub-release-delta.md`.
+>
+> **⚠ SUPERSEDES the 0.6.114 owner decision below: a CONTROLLER now auto-installs an offered release
+> when drained**, exactly like a node (delta removed the role gate in `StudioAPI.releaseTick`; it still
+> needs a pinned publisher key and `activeWorkCount == 0` after a fresh refresh). The 0.6.114 note
+> "a CONTROLLER stays manual" is no longer true; the sidebar Update badge remains.
+>
+> **Scheduler.** `memory_admission.requirement_gb` (measured -> manifest -> catalog) is a **hard
+> eligibility floor**; a freed Mac takes the waiting job the fewest Macs can run (ties: loaded model,
+> then oldest; "Send here" wins). No more 30 s `MACHINE_BUSY` park or 90 s avoid. This replaces the
+> 0.6.112 note about `MACHINE_BUSY` deferral. BOARD.md's "8 GB tier stays unclaimed rather than refused"
+> is annotated as superseded.
+>
+> **Fleet.** Removal from either side (`GET /fleet/nodes/{id}/status`, a 403 with the removal date for a
+> revoked credential, 14-day retry of a node's leave notice). Labels everywhere; node id persisted.
+>
+> **Merge notes.** One conflict, `components/hub/backend/auth.py`: fleet and delta both extended
+> `FLEET_ALLOWED` and `NODE_ALLOWED`; every entry from both is kept. `standalone.py`, `StudioAPI.swift`
+> (`pollOnce` runs `membershipTick` then `releaseTick`), `tests/native/api_main.swift` and `broker.py`
+> auto-merged and were exercised by the gate; no feature-versus-feature conflict was found.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` -> 1593 tests, OK (13 skipped), 582 s, exit 0**
+> (`.build/hub-gate/bin/python`, `PYTHONPATH=$PWD/.build/test-deps`; includes the isolated-child
+> `tests/hub_regression/cases` run); `native/build.sh` green (boundary, API contract, lifecycle).
+> Not exercised here: a real delta install, a real node removal across two Macs, or the relaunch after an
+> unattended install — no Mac was installed over.
 
 > **0.6.114 — twelve findings from the native-app audit (`_orchestra/audit-20260930/ui-hub.md`), all
 > "the Hub published it, the app drew a fixed sentence". Read `CHANGELOG.md` for the list; this is

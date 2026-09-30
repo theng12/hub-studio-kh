@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.6.115 — 2026-09-30 · Scarcest-first scheduling, node removal from either side, delta updates
+
+Three reviewed branches (`wave2-sched`, `wave2-fleet`, `wave2-delta`) merged into one release.
+**Rollout note: 0.6.114 → 0.6.115 is itself a full (disk image) update**, because 0.6.114 apps have
+no delta path. The first delta update is 0.6.115 → 0.6.116.
+
+**Scheduler** (`broker.py`, `memory_admission.py`, `chat_jobs.py`, `transcription_jobs.py`)
+- **Memory is a hard eligibility floor.** A job only goes to a Mac with enough unified memory for
+  that model. The requirement is, in order: measured → manifest → catalog
+  (`memory_admission.requirement_gb`). A Mac below it is never a candidate, however idle.
+- **A freed Mac takes the waiting job that the fewest Macs can run**, so big Macs are kept for the
+  work only they can do. Ties: stay on the model already loaded, then oldest. **"Send here" wins on
+  its Mac.** Chat and subtitle jobs follow the same order.
+- **A busy Mac is retried within seconds.** The 30 s `MACHINE_BUSY` park and the 90 s avoid are gone.
+- **Capacity numbers count only Macs with enough memory** for the model.
+- Simulation (owner's fleet mix 10 x 8 GB / 5 x 16 GB / 2 x 24 GB / 1 x 32 GB; 500 image + 200 TTS +
+  100 LLM jobs): 0 idle-while-eligible, 0 scarcest-first violations, 97-98% utilisation per tier.
+- Tests: `tests/hub_regression/cases/test_scarcest_first_dispatch.py`; `test_memory_admission`,
+  `test_hub_memory_admission`, `test_below_tier_warning`, `test_pool_peer_machine_busy` and
+  `test_image_memory_pressure` rewritten where their premise changed.
+
+**Fleet** (`fleet_nodes.py`, `auth.py`, `standalone.py`, `StudioAPI.swift`, `StudioViews.swift`)
+- **Removing a node works from either side.** Controller remove: the node leaves within about a
+  minute, or at its next start (it polls `GET /api/hub/fleet/nodes/{id}/status`). Node leave: the
+  controller forgets it immediately, and the node retries the notice for up to 14 days if the
+  controller is off.
+- **A Mac the controller removed is told so, with the date** (a 403 carrying the removal detail
+  instead of a bare 401). A Mac that left on its own can re-join.
+- **Machines are shown by label everywhere** (the id is a tooltip); renaming a node updates the
+  controller. A node that has **never connected since it joined** is flagged. The node id is
+  persisted on first run.
+
+**Delta updates** (`file_manifest.py`, `release_delta.py`, `release_sync.py`, `app_release.py`,
+`UpdateClient.swift`, `install_app.command`, `packaging/stage_voice.py`)
+- **Every build carries a per-file manifest** (`Contents/Resources/file-manifest/`). Controllers
+  accept **manifest-only releases** and ask only for the files they are missing (`.../release/need`,
+  `.../release/blob/{sha256}`); the signed descriptor commits to the manifest.
+- **A Mac stages an APFS clone plus the changed files** (measured 0.6.113 → 0.6.114: 9 files,
+  13.5 MB) and **falls back to the disk image** whenever it cannot prove the result.
+- **Nodes pull their controller's release** (trust on first use of the publisher key).
+- **Controllers auto-install when drained** — the 0.6.114 role gate is gone, so a controller with
+  nothing running or waiting now updates itself like a node (this reverses 0.6.114's "controllers
+  stay manual"; the sidebar Update badge remains).
+- **The kit installer keeps the old app until the new one is verified.**
+- Wire contract: `_orchestra/audit-20260930/CONTRACT-hub-release-delta.md`.
+
+**Merge note.** `auth.py`: both fleet and delta added allow-list entries; all are kept (fleet's
+`/fleet/nodes/{id}/status` in `FLEET_ALLOWED` and `NODE_ALLOWED`; delta's release files/blob/need in
+`FLEET_ALLOWED` and the five read-only release routes in `NODE_ALLOWED`).
+
 ## 0.6.114 — 2026-09-30 · The app says what the Hub already knew
 
 Twelve findings from the native-app audit, all of the same kind: the Hub published the fact and the
