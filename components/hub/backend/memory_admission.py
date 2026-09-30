@@ -1,15 +1,23 @@
 """Persisted, operator-visible RAM admission policy for local model dispatch.
 
-A model's published RAM floor is a qualification tier, not a wall. The owner runs
-FLUX.2 Klein on 8 GB Apple-silicon Macs and has produced tens of thousands of
-images there, so no model is excluded from a machine by its total memory: the
-tier is reported to the operator and the job proceeds.
+A model's RAM requirement is a **hard eligibility floor**, per model (owner decision,
+2026-09-30, reversing the 2026-09 "a tier is not a wall" rule): a Mac whose total memory is
+below it is not a candidate for that model, and the scheduler counts it out of the model's
+*pool* (`broker.pool_machines`). The requirement is, in order:
 
-What remains a hard gate is the *live* free-memory requirement. "This Mac has
-8 GB of RAM" is a fact that does not change, but "this Mac has 0.4 GB free right
-now because three Studios are holding models" is a fact about this moment, and
-starting a generation into it is what turns a slow job into a killed worker. The
-free floor stays, and it is what the Models screen tunes.
+1. the operator's override for the model, else
+2. the **measured** peak the fleet has proven (`_FLEET_DEFAULTS` - FLUX.2 Klein 4-bit runs on
+   the owner's 8 GB Macs, so its requirement is 8 GB whatever the catalog says), else
+3. the model manifest's ``qualification.minimum_unified_memory_gb``, else
+4. the worker's own catalog row (``min_unified_memory_gb`` / ``min_total_memory_gb``).
+
+A model that publishes nothing has no floor, and a Mac whose RAM is unknown is still eligible:
+the worker's own MemoryGuard stays the final authority.
+
+Separately, the *live* free-memory requirement is a hard gate too. "This Mac has 8 GB of RAM" is
+a fact that does not change, but "this Mac has 0.4 GB free right now because three Studios are
+holding models" is a fact about this moment, and starting a generation into it is what turns a
+slow job into a killed worker. The free floor is what the Models screen tunes.
 
 The effective policy is site-local; it never changes a worker catalog or
 GenStudio's global ownership decisions.
@@ -23,7 +31,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import workload_policy
+from . import model_ids, workload_policy
 from .registry import DATA_DIR
 
 
@@ -32,8 +40,9 @@ DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 
 # These are measured fleet defaults, intentionally allowed to be less
 # conservative than a worker catalog. FLUX.2 Klein 4B MLX 4-bit has completed
-# thousands of generations on the owner's 8 GB Apple-silicon nodes. Keep the
-# free-memory floor as the live safety guard instead of excluding that class.
+# thousands of generations on the owner's 8 GB Apple-silicon nodes, so 8 GB is its
+# requirement (the first rung of `requirement_gb`); the free-memory floor stays the
+# live safety guard.
 _FLEET_DEFAULTS = {
     "aitrader/flux2-klein-4b-mlx-4bit": {
         "min_total_memory_gb": 8.0,
@@ -79,6 +88,56 @@ def _published_total_memory_gb(catalog_entry: dict) -> float | None:
         if value is not None:
             return value
     return None
+
+
+_manifest_cache: tuple[str, float, dict[str, float]] | None = None
+
+
+def _manifest_tiers() -> dict[str, float]:
+    """Lower-cased model id or package id -> the manifest's ``minimum_unified_memory_gb``.
+
+    Read through `model_ids` and kept for a few seconds: the scheduler asks per Mac per pass, and
+    a directory listing each time was most of a scheduling pass. A manifest added or edited shows
+    up within the interval; `reset_for_tests` drops it at once.
+    """
+    global _manifest_cache
+    root = str(model_ids.manifest_root())
+    now = time.monotonic()
+    if _manifest_cache and _manifest_cache[0] == root and now - _manifest_cache[1] < 5.0:
+        return _manifest_cache[2]
+    manifests = model_ids.load_manifests()
+    tiers: dict[str, float] = {}
+    for alias, model_id in model_ids.load_index().items():
+        tier = _number(((manifests.get(model_id) or {}).get("qualification") or {}).get(
+            "minimum_unified_memory_gb"))
+        if tier is not None:
+            tiers[alias] = tier
+    _manifest_cache = (root, now, tiers)
+    return tiers
+
+
+def requirement_gb(model: str, catalog_entry: dict, *,
+                   use_override: bool = True) -> tuple[float | None, str]:
+    """The total RAM this model needs, and where the number came from.
+
+    Returns ``(gb, source)`` with ``source`` one of ``operator_override``, ``measured``,
+    ``manifest``, ``catalog`` or ``none`` (``gb`` is ``None``: nothing was published, so nothing
+    is enforced). This is the eligibility floor the scheduler uses; see the module docstring.
+    """
+    key = _normalized(model or catalog_entry.get("repo"))
+    override = _read().get(key) if use_override else None
+    if override:
+        return override["min_total_memory_gb"], "operator_override"
+    measured = _FLEET_DEFAULTS.get(key)
+    if measured:
+        return measured["min_total_memory_gb"], "measured"
+    tier = _manifest_tiers().get(key)
+    if tier is not None:
+        return tier, "manifest"
+    tier = workload_policy.required_total_memory_gb(model, catalog_entry)
+    if tier is not None:
+        return tier, "catalog"
+    return None, "none"
 
 
 def _number(value) -> float | None:
@@ -137,9 +196,10 @@ def _write(values: dict[str, dict]) -> None:
 def describe(model: str, catalog_entry: dict) -> dict:
     """Return catalog, fleet-default, and effective site-local RAM floors.
 
-    The total-memory floor is reported for the operator but is deliberately never
-    in force: ``effective_min_total_memory_gb`` is 0 whenever no operator
-    override names one, so no dispatch is refused for the size of the machine.
+    ``effective_min_total_memory_gb`` is the model's requirement (`requirement_gb`) and is
+    enforced: dispatch refuses a Mac below it, the scheduler leaves that Mac out of the model's
+    pool, and the published capacity counts only Macs that meet it. It is 0 for a model that
+    publishes no floor at all. ``min_total_source`` names where the number came from.
 
     ``_FLEET_DEFAULTS`` is a per-model *measurement* — the models the owner has proven below
     their published tier — so it cannot be derived from anything, and a model nobody has
@@ -160,21 +220,14 @@ def describe(model: str, catalog_entry: dict) -> dict:
         or (qualified_free is not None and qualified_free != catalog_free)
     )
 
-    # Kept for visibility in the Models screen and in receipts; never enforced.
-    default_total = (
-        fleet_default["min_total_memory_gb"] if fleet_default
-        else qualified_total
-    )
+    default_total = requirement_gb(model, catalog_entry, use_override=False)[0]
     default_free = (
         fleet_default["min_free_memory_gb"] if fleet_default
         else max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
     )
     override = _read().get(key)
-    # Only an explicit operator override can put a floor back, which is the point of the
-    # override: the machinery never decides that a Mac is too small for a model it owns.
-    effective_total = (
-        override["min_total_memory_gb"] if override else 0.0
-    )
+    required_total, total_source = requirement_gb(model, catalog_entry)
+    effective_total = required_total or 0.0
     effective_free = (
         override["min_free_memory_gb"] if override else default_free
     )
@@ -211,6 +264,7 @@ def describe(model: str, catalog_entry: dict) -> dict:
         "default_min_total_memory_gb": default_total,
         "default_min_free_memory_gb": default_free,
         "effective_min_total_memory_gb": effective_total,
+        "min_total_source": total_source,
         "effective_min_free_memory_gb": effective_free,
         "source": source,
         # Whether a per-model fleet measurement exists for this model. False is not an error:
@@ -257,5 +311,6 @@ def reset_override(model: str, catalog_entry: dict) -> dict:
 
 
 def reset_for_tests() -> None:
-    global _cache
+    global _cache, _manifest_cache
     _cache = None
+    _manifest_cache = None

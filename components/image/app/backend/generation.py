@@ -254,8 +254,8 @@ Z_IMAGE_TURBO = ImageModel(
     # exactly the measurement that is outstanding.
     #
     # What decides "this machine class is unqualified" is the published *tier*
-    # (min_unified_memory_gb = 16): reported to the operator with a below-tier warning, and
-    # deliberately never a wall, per memory_admission's own doctrine.
+    # (min_unified_memory_gb = 16): reported to the operator with a below-tier warning; the Hub's
+    # requirement (measured, else manifest, else this tier) is what gates dispatch, since 2026-09-30.
     min_free_memory_gb=3.0,
     qualification={
         'measured_on': '32 GiB M2 Max (Mac14,13), mflux 0.20.0, 4-bit pack',

@@ -658,9 +658,10 @@ class ModelEntry:
     # floor while controlled qualification is still in progress.
     min_unified_memory_gb: Optional[int] = 8
     # The live-free-memory floor the Hub enforces before dispatching this model, where the owner
-    # has approved one. `None` keeps the Hub's own default. The tier above is a *qualification*
-    # tier and is deliberately never enforced; this is the one that stops a job starting into a
-    # nearly-full Mac, so it is a different fact and is published under its own name.
+    # has approved one. `None` keeps the Hub's own default. The tier above is the model's RAM
+    # requirement (the Hub enforces it as an eligibility floor unless the manifest or a fleet
+    # measurement says otherwise); this one stops a job starting into a nearly-full Mac, so it
+    # is a different fact and is published under its own name.
     min_free_memory_gb: Optional[float] = None
     recommended_hardware: str = ""
     capabilities: tuple[str, ...] = ("tts",)

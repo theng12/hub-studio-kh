@@ -74,12 +74,21 @@ def test_a_reserved_peer_defers_the_item_and_avoids_that_machine(fixture_monitor
 
     assert item["state"] == "queued", f"{item['state']}: {item['error']}"
     assert item["error_code"] == "MACHINE_BUSY", "the reason must survive as the peer named it"
-    assert item["retry_at"] > time.time(), "a deferred item must be retried, not dropped"
+    # Premise changed (owner decision 2026-09-30, "never idle while eligible work is queued"): the
+    # item used to be parked for 30 s with the Mac avoided for 90 s, so a Mac that freed a moment
+    # later sat idle for over a minute. It is now retried on the dispatcher's own heartbeat, and the
+    # Mac is out of selection only for the short avoid window - for every item aimed at it.
+    assert not item["retry_at"], "a busy Mac must not park the item: the heartbeat retries it"
+    now = time.time()
+    assert now < item["avoid_machines"][studio["machine"]] <= now + broker.MACHINE_RESERVED_AVOID_S
+    assert broker._machine_reserved_until[studio["machine"]] > now
     assert item["tries"] == 0, "a refusal at the door consumed no generation attempt"
     assert broker.item_errors(batch) == [], "a wait must not be published as a failed item"
     assert "reserved for other work" in item["error"], "the peer's own reason must be kept"
     assert not broker._item_allows_studio(item, studio, time.time()), (
         "the reserved Mac must be out of the next selection, so the pool picks a free one")
+    assert broker._item_allows_studio(item, studio, time.time() + 2 * broker.MACHINE_RESERVED_AVOID_S), (
+        "and only briefly: the same Mac is offered the work again as soon as the window is over")
 
 
 def test_a_peers_non_reservation_refusal_is_still_terminal(fixture_monitor):
