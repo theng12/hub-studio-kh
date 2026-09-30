@@ -16,7 +16,8 @@
 - Before implementation, read docs/implementation-plan.md and docs/tasks/BOARD.md. Claim a READY ST task and record start commit/worktree, owned files and completion proof. If no card is READY, the `▶ TAKE OVER HERE` block names the single task in progress to resume instead of starting new work.
 - One coordinator owns the board and canonical progress; workers own assigned task cards/reports. Serialize shared native, staging and Voice registry edits.
 - Mark DONE only after required evidence, independent review and integration. Preserve partial model/hardware checkpoints and explicit blockers.
-- Per-device generated-output defaults are editable 50 GB total and 30 days; operating defaults are configurable, while integrity/authentication/active-job safeguards remain enforced.
+- Per-device generated-output defaults are editable: **20 GB of live output, kept 3 days, 5 GB minimum free disk** (0.6.117; were 50 GB / 30 days / 1 GB); operating defaults are configurable, while integrity/authentication/active-job safeguards remain enforced. Cleanup never deletes: it **moves** acknowledged output into the Hub's **Trash Folder** (`<hub data>/trash/<UTC date>/<batch>/`), a same-volume rename whose failure just skips the file. A dated Trash folder older than 15 days is purged - the only hard delete - and admission empties it oldest-first before refusing for low free disk. `max_bytes` counts live output only. A settings file written before 0.6.117 that still holds the old defaults reads as the new ones.
+- **One list retires a model:** `components/retired_models.py` (`RETIRED_MODELS`). The Hub catalog, the model list published to the gateway, the kit / SSD listing, kit staging and the model-copy step all read it, and a retired model is refused by name (`MODEL_RETIRED`). Retiring a model is one line there.
 
 ## Working rules
 

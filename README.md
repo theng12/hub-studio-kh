@@ -22,9 +22,10 @@ VoxCPM2 4-bit/8-bit/full; OmniVoice full; and three Whisper choices.
 Music is an accepted extension with its backend/runtime integrated; its native workflow
 and real-model qualification remain open. Chat and Video are deferred.
 
-All operating defaults are editable. Generated-output cleanup defaults to **50 GB
-total per device across the studios and 30 days after generation**, whichever
-condition is reached first. Automatic login startup and optional scoped-token
+All operating defaults are editable. Generated-output cleanup defaults to **20 GB
+of live output per device across the studios and 3 days after generation**, whichever
+condition is reached first; cleaned-up work moves to a Trash Folder that empties
+itself after 15 days, and a 5 GB free-disk floor applies. Automatic login startup and optional scoped-token
 connection to GatewayKH are part of the target. The app bundles runtimes; complete
 model packages can accompany it in an offline install kit.
 

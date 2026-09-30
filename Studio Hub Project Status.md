@@ -45,7 +45,7 @@ second planning system.
   replays the same accepted work, changed body conflicts.
 - One physical heavy-work/memory admission boundary across studios. Node-owned
   pause/disable/storage/physical reservation must be enforced, not bypassed.
-- Editable defaults 50,000,000,000 bytes/device and 30 days. Protect active,
+- Editable defaults 20,000,000,000 bytes/device and 3 days (0.6.117; Trash Folder empties after 15). Protect active,
   transferring, unacknowledged outputs and reference audio.
 - A valid terminal completion whose artifact cannot be verified stays
   `artifact_metadata_error`; do not change billing semantics.

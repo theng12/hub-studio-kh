@@ -129,12 +129,24 @@ def validate_native_shell(native_shell: Path) -> None:
         raise ValueError(f'native shell binary is not executable: {native_shell}')
 
 
-def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None) -> None:
+def copy_model_manifests(destination: Path) -> None:
+    """Ship the model manifests, minus any retired model (`components/retired_models.py`)."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from components import retired_models
+    copy_tracked_tree(ROOT / 'model-manifests', destination, suffix='.json',
+                      skip=lambda path: retired_models.manifest_retired(
+                          json.loads(path.read_text()), path.stem))
+
+
+def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None, skip=None) -> None:
     names = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-z', '--',
         source.relative_to(ROOT).as_posix()]).decode().split('\0')
     for name in filter(None, names):
         path = ROOT / name
         if suffix and path.suffix != suffix:
+            continue
+        if skip and skip(path):
             continue
         if path.is_symlink():
             raise ValueError(f'Shipped resource cannot be a symlink: {path}')
@@ -159,7 +171,7 @@ def _stage_voice(context: dict) -> dict:
     # `QWEN_VALIDATOR_MODEL_UNDECLARED` after its reference had prepared fine, and the ASR leg
     # could not resolve its processor. The fix the smoke needed, and the difference between a
     # worker that can explain itself and one that cannot.
-    copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
+    copy_model_manifests(resources / 'model-manifests')
     for name in ('VERSION', 'CHANGELOG.md'):
         shutil.copyfile(ROOT / name, voice / name)
     provenance = context['provenance']
@@ -189,7 +201,7 @@ def _stage_hub(context: dict) -> dict | None:
     copy_tracked_tree(ROOT / 'components/hub', hub)
     # `Resources/components/*.py` — the shared modules — is already staged by `stage()`, for
     # every bundle, so there is one place that decides what the workers can import.
-    copy_tracked_tree(ROOT / 'model-manifests', resources / 'model-manifests', suffix='.json')
+    copy_model_manifests(resources / 'model-manifests')
     shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
     provenance = context['hub_provenance']
     return {

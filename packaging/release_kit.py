@@ -22,6 +22,7 @@ import time
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from components import retired_models  # noqa: E402 - the one retired-models list
 
 
 def git_commit() -> str | None:
@@ -73,6 +74,8 @@ def build(app: Path, library: Path) -> dict:
     models = []
     for manifest_path in sorted((resources / "model-manifests").glob("*.json")):
         manifest = json.loads(manifest_path.read_text())
+        if retired_models.manifest_retired(manifest, manifest_path.stem):
+            continue                            # a retired model is never listed for a kit
         package_id = manifest["package_id"]
         row = installed.get(package_id)
         files, size = folder_bytes(library / row["folder"]) if row else (0, 0)

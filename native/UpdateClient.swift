@@ -412,6 +412,44 @@ enum ReleaseArtifactStore {
     }
 }
 
+// MARK: - Trash Folder
+
+/// The Hub's self-cleaning Trash Folder (`<data>/hub/trash/<UTC date>/...`). The Hub deletes a dated
+/// folder once it is more than 15 days old (`components/hub/output_storage.py`, the only hard delete),
+/// so anything moved here can be taken back for 15 days and then goes by itself.
+enum HubTrash {
+    static var live: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/trash", isDirectory: true)
+    }
+
+    /// Move `item` into `<trash>/<UTC date>/<label>-<id>/`, keeping its name unless `named` says
+    /// otherwise. Only ever a same-volume rename: returns false, leaving `item` untouched, if the
+    /// Trash Folder is on another volume or the move fails. It never copies and never deletes;
+    /// what to do about a false is the caller's decision.
+    @discardableResult
+    static func move(_ item: URL, into trash: URL, label: String, named: String? = nil,
+                     fileManager: FileManager = .default, now: Date = Date()) -> Bool {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(identifier: "UTC")
+        format.dateFormat = "yyyy-MM-dd"
+        let folder = trash.appendingPathComponent(format.string(from: now), isDirectory: true)
+            .appendingPathComponent("\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+            let here = try item.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            let there = try folder.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            guard let here, let there, here.isEqual(there) else { return false }
+            try fileManager.moveItem(at: item, to: folder.appendingPathComponent(named ?? item.lastPathComponent))
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
 // MARK: - Artifact form
 
 /// Which artifact shape is published. A disk image is implemented; anything else is refused with
@@ -446,13 +484,18 @@ struct ReleaseInstaller {
     /// Free bytes on the volume holding a folder, or nil when it cannot be read. Injectable so the
     /// free-space guard can be exercised without filling a disk.
     var availableCapacity: (URL) -> Int64?
+    /// Where the replaced app goes, so an update can be rolled back for 15 days. Nil (the default,
+    /// and what tests use) removes it instead, as before; `live` names the Hub's Trash Folder.
+    var trashFolder: URL?
 
     init(targetApp: URL = URL(fileURLWithPath: "/Applications/Studio Hub.app"),
+         trashFolder: URL? = nil,
          fileManager: FileManager = .default,
          attach: @escaping (URL, URL) throws -> Void = ReleaseInstaller.attachImage,
          detach: @escaping (URL) throws -> Void = ReleaseInstaller.detachImage,
          availableCapacity: @escaping (URL) -> Int64? = ReleaseInstaller.volumeAvailableCapacity) {
         self.targetApp = targetApp
+        self.trashFolder = trashFolder
         self.fileManager = fileManager
         self.attach = attach
         self.detach = detach
@@ -477,7 +520,7 @@ struct ReleaseInstaller {
         return total
     }
 
-    static let live = ReleaseInstaller()
+    static let live = ReleaseInstaller(trashFolder: HubTrash.live)
 
     /// The release manifest the staged bundle carries, whose `components` map is exactly what the
     /// Hub inside will spawn. `packaging/stage_voice.py` writes it and `packaging/hub_worker.py`
@@ -592,8 +635,17 @@ struct ReleaseInstaller {
         }
         do {
             let landed = try verifyAppComplete(targetApp, expectedBuild: descriptor.build)
-            // Only now is the old copy disposable.
-            if hadOld { try? fileManager.removeItem(at: old) }
+            // Only now is the old copy out of the way for good: it goes to the Hub's Trash Folder
+            // (a same-volume rename; on APFS the clone-staged new app shares its blocks, so this
+            // costs about the changed bytes). If there is no Trash Folder, or it is on another volume
+            // than the app, a move would be a copy, so it falls back to removing the old app.
+            if hadOld {
+                let kept = trashFolder.map {
+                    HubTrash.move(old, into: $0, label: "previous-app", named: targetApp.lastPathComponent,
+                                  fileManager: fileManager)
+                } ?? false
+                if !kept { try? fileManager.removeItem(at: old) }
+            }
             return landed
         } catch {
             try? fileManager.removeItem(at: targetApp)

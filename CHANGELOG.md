@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.117 — 2026-09-30 · A Trash Folder instead of deleting; one list of retired models
+
+Two owner decisions (2026-09-30) and two clean-ups of what an update leaves behind.
+
+**Output cleanup moves work to a Trash Folder; it never deletes it** (`components/hub/output_storage.py`).
+- Acknowledged output with no reader and no transfer is now **moved** to `<hub data>/trash/<UTC date>/<batch>/`
+  (a same-volume rename) instead of unlinked. A move that fails skips the file; there is no fallback
+  to a delete. `max_bytes` counts **live** output only.
+- The Trash Folder empties itself: a dated folder older than **15 days** is removed (`purge_trash`, run
+  at the start of every sweep, even with cleanup switched off). That purge is the only hard delete.
+- **A full Trash Folder cannot wedge admission.** The Trash Folder shares the disk, so when free space is
+  below the floor `admission()` first removes Trash folders **oldest day first**, only as many as it
+  takes, and refuses only if the disk is still short - copies already scheduled for deletion go
+  before work is refused. (Chosen over "refuse until day 16": a refusal for up to 15 days is the
+  failure this prevents.)
+- **New defaults:** 20 GB of live output, 3 days, 5 GB minimum free (were 50 GB / 30 days / 1 GB).
+  A `device_settings.json` written before this release that still holds the old default for a value
+  reads as "never chosen" and gets the new one; a value the operator changed is kept. Every save and
+  restore stamps `defaults_version`, so choosing 30 days afterwards sticks.
+- The storage screen shows the Trash Folder's size, "emptied automatically after 15 days"
+  (`POST /api/hub/settings/preview` returns `trash: {bytes, days}`); the limits editor and the
+  restore-defaults confirmation now say "moves to the Trash Folder".
+
+**Updates no longer pile up on disk** (`native/UpdateClient.swift`, `native/StudioAPI.swift`).
+- `swapStagedApp` moves the replaced app into the Trash Folder (`previous-app-<id>/Studio Hub.app`)
+  instead of `removeItem`, so a rollback is possible for 15 days. On APFS the new app is clone-staged
+  and shares blocks with it, so this costs about the changed bytes. If there is no Trash Folder or it
+  is on another volume than the app, it falls back to the old `removeItem` (a move there would be a copy).
+- Full-update downloads (`Updates/<key>/`, about 1.9 GB each) were never pruned. After **any completed
+  install**, everything under `Updates/` - the download just installed and any older one - moves to the
+  Trash Folder. A failed install moves nothing (the downloads are what the retry resumes from).
+  `relaunchAfterUpdate` is unchanged.
+
+**One list retires a model** (`components/retired_models.py`, `RETIRED_MODELS`, seeded with
+`ace-step-1-5-turbo` and its model id). The Hub catalog (`_model_catalog`), the identity index
+(`model_ids`), the aggregate model list published to the gateway (`_assemble_aggregate_catalog`), the
+kit listing (`release_kit`), kit staging (`stage_voice.copy_model_manifests`) and the model-copy step
+(`copy_models_for_this_mac.py`) all read it, and a retired model is refused by name
+(`MODEL_RETIRED`) on submit and on peer dispatch. So an old ACE-Step manifest on a drive can never
+bring it back. Retiring the next model is one line.
+
+**Tests (each mutation-proved, failing on an assertion):** `test_output_trash` (prune moves, failed move
+skips, purge only past 15 days and only dated folders, admission not wedged, defaults, old-default
+migration), `test_retired_models` (adding an id removes it from the catalog, identity index, kit
+listing, staging and published list, and refuses it), the model-copy end-to-end case, and the Swift
+harness (old app in the Trash Folder after a swap, stored downloads moved after an install, a failed
+install moves nothing, the fallback without a Trash Folder).
+
 ## 0.6.116 — 2026-09-30 · ACE-Step 1.5 is retired; music is YuE2 and Stable Audio 3
 
 **Owner decision (2026-09-30):** ACE-Step 1.5 Turbo (2B DiT) is not offered any more. The Hub's music

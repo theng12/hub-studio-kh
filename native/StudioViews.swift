@@ -4201,7 +4201,7 @@ struct StudioContent: View {
     private var storageEditor: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Local storage limits").font(.title2.weight(.semibold))
-            Text("These apply to this Mac only. Protected work is never deleted, so lowering the limit can leave this Mac above it.")
+            Text("These apply to this Mac only. Cleaned-up work moves to the Trash Folder, which empties itself automatically. Protected work is never touched, so lowering the limit can leave this Mac above it.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
                 DoubleField(title: "Keep at most (GB)", value: $draftGigabytes, range: 1...2000, step: 1)
@@ -4209,10 +4209,10 @@ struct StudioContent: View {
                 Toggle("Clean up automatically", isOn: $draftCleanup)
             }.formStyle(.grouped).frame(height: 190)
             // The Hub's own dry run under these limits: saving applies them straight away and the
-            // background cleanup then deletes finished, acknowledged output.
+            // background cleanup then moves finished, acknowledged output to the Trash Folder.
             if let bytes = draftWouldDelete {
-                Text(bytes == 0 ? "Nothing would be deleted with these limits."
-                     : "Saving lets cleanup delete about \(NativeWorkspaceStore.gigabytes(bytes)) of finished work.")
+                Text(bytes == 0 ? "Nothing would be moved to the Trash Folder with these limits."
+                     : "Saving lets cleanup move about \(NativeWorkspaceStore.gigabytes(bytes)) of finished work to the Trash Folder.")
                     .font(.callout).foregroundStyle(bytes == 0 ? Color.secondary : Color.orange)
             }
             HStack {
@@ -5782,6 +5782,9 @@ struct StudioContent: View {
             LabeledContent("Size limit", value: NativeWorkspaceStore.gigabytes(settings.effective.maxBytes))
             LabeledContent("Keep finished work for", value: "\(settings.effective.retentionDays) days")
             LabeledContent("Automatic cleanup", value: settings.effective.cleanupEnabled ? "On" : "Off")
+            if let trash = workspace.storageTrash {
+                LabeledContent("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), emptied automatically after \(trash.days) days")
+            }
             ForEach(workspace.storageUsage) { usage in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -5816,7 +5819,7 @@ struct StudioContent: View {
                             }
                             Button("Cancel", role: .cancel) {}
                         } message: {
-                            Text("This replaces your limits (\(NativeWorkspaceStore.gigabytes(settings.effective.maxBytes)), \(settings.effective.retentionDays) days, cleanup \(settings.effective.cleanupEnabled ? "on" : "off")) with the shipped ones. If they are lower, the next cleanup deletes finished, acknowledged work down to them.")
+                            Text("This replaces your limits (\(NativeWorkspaceStore.gigabytes(settings.effective.maxBytes)), \(settings.effective.retentionDays) days, cleanup \(settings.effective.cleanupEnabled ? "on" : "off")) with the shipped ones. If they are lower, the next cleanup moves finished, acknowledged work to the Trash Folder down to them.")
                         }
                 if workspace.savingStorage { ProgressView().controlSize(.small) }
             }

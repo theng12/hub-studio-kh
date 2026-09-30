@@ -18,6 +18,8 @@ import json
 import os
 from pathlib import Path
 
+from components import retired_models
+
 
 # Cached (signature, index, manifests).  The signature is the manifest
 # directory's mtime and file list, so adding or removing a manifest - which is
@@ -34,12 +36,13 @@ def manifest_root() -> Path:
 
 
 def _signature(root: Path) -> tuple:
+    retired = tuple(retired_models.RETIRED_MODELS)
     try:
         info = root.stat()
         names = tuple(sorted(path.name for path in root.glob("*.json")))
     except OSError:
-        return (str(root), None, ())
-    return (str(root), info.st_mtime_ns, names)
+        return (str(root), None, (), retired)
+    return (str(root), info.st_mtime_ns, names, retired)
 
 
 def _load() -> tuple[dict[str, str], dict[str, dict]]:
@@ -58,6 +61,8 @@ def _load() -> tuple[dict[str, str], dict[str, dict]]:
             continue
         if not isinstance(manifest, dict):
             continue
+        if retired_models.manifest_retired(manifest, Path(name).stem):
+            continue                            # a retired model has no identity to resolve
         model_id = manifest.get("model_id")
         if not isinstance(model_id, str) or not model_id.strip():
             continue

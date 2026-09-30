@@ -1427,6 +1427,13 @@ struct NativeStorageLimits: Decodable, Equatable {
 struct NativeStoragePreview: Decodable, Equatable {
     let effective: NativeStorageLimits
     let machines: [NativeMachineUsage]
+    /// The Trash Folder cleanup moves output into. Nil from a Hub that predates it.
+    let trash: NativeTrash?
+}
+
+struct NativeTrash: Decodable, Equatable {
+    let bytes: Int64
+    let days: Int
 }
 
 struct NativeMachineUsage: Decodable, Equatable, Identifiable {
@@ -2806,6 +2813,7 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var memoryInventory: NativeMemoryInventory?
     @Published private(set) var deviceSettings: NativeDeviceSettings?
     @Published private(set) var storageUsage: [NativeMachineUsage] = []
+    @Published private(set) var storageTrash: NativeTrash?
     @Published private(set) var storageNote: String?
     @Published private(set) var savingStorage = false
     /// Measured generation history from the Hub, refreshed on demand.
@@ -3206,6 +3214,7 @@ final class NativeWorkspaceStore: ObservableObject {
         statisticsHours = nil
         deviceSettings = nil
         storageUsage = []
+        storageTrash = nil
         storageNote = nil
         savingStorage = false
         modelNote = nil
@@ -5481,6 +5490,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     minimumFreeBytes: settings.effective.minimumFreeBytes ?? 0))
             guard connectionID == requestConnection else { return }
             storageUsage = preview.machines
+            storageTrash = preview.trash
         } catch {
             guard connectionID == requestConnection else { return }
             deviceSettings = nil
@@ -7203,12 +7213,9 @@ final class NativeWorkspaceStore: ObservableObject {
             currentAppVersion = descriptor.version
             updateOffered = false
             releaseRefusal = nil
-            // Only a completed install makes the artifact disposable. Every failure above leaves it
-            // in place, so the next press reuses or resumes it rather than re-downloading.
-            if let artifact {
-                try? FileManager.default.removeItem(at: artifact)
-                try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent())
-            }
+            // Only a completed install makes a stored download disposable. Every failure above leaves
+            // them in place, so the next press reuses or resumes one rather than re-downloading.
+            retireReleaseArtifacts()
             note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Relaunching Studio Hub now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
@@ -7219,6 +7226,18 @@ final class NativeWorkspaceStore: ObservableObject {
             note(.failure, Self.actionable(error, action: "Install the update"))
             await refreshRelease()
         }
+    }
+
+    /// After a completed install, everything under `Updates/` - the download just installed and any
+    /// older one an earlier attempt left - moves to the Hub's Trash Folder, which empties itself
+    /// after 15 days. Nothing pruned these before, so each full download (about 1.9 GB) built up
+    /// for good. A move that fails leaves the download where it is: never a delete.
+    func retireReleaseArtifacts() {
+        guard let base = dataDirectory else { return }
+        let updates = base.appendingPathComponent("Updates", isDirectory: true)
+        let trash = base.appendingPathComponent("hub/trash", isDirectory: true)
+        let entries = (try? FileManager.default.contentsOfDirectory(at: updates, includingPropertiesForKeys: nil)) ?? []
+        for entry in entries { HubTrash.move(entry, into: trash, label: "release-download") }
     }
 
     /// The folder the Hub staged an update in (`.studiohub-staged-<id>`, beside the installed app),

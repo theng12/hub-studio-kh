@@ -87,8 +87,9 @@ class StorageBudgetLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("job_storage.budget_loop", source,
                       "the packaged Hub must start the sweep, not only the development build")
         self.assertIn("storage_sweep.cancel()", source, "and stop it when the Hub stops")
-        self.assertEqual(standalone_config.DEFAULT_MAX_BYTES, 50_000_000_000)
-        self.assertEqual(standalone_config.DEFAULT_RETENTION_DAYS, 30)
+        self.assertEqual(standalone_config.DEFAULT_MAX_BYTES, 20_000_000_000)
+        self.assertEqual(standalone_config.DEFAULT_RETENTION_DAYS, 3)
+        self.assertEqual(standalone_config.DEFAULT_MINIMUM_FREE_BYTES, 5_000_000_000)
         self.assertTrue(standalone_config.DEFAULT_CLEANUP_ENABLED)
         self.assertGreater(standalone_config.cleanup_interval_seconds(), 0)
 

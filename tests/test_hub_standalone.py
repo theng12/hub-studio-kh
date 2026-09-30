@@ -122,17 +122,18 @@ class StandaloneHubConfigTests(unittest.TestCase):
         changed = config.save_device_settings(max_bytes=60_000_000_000, retention_days=14)
         restored = config.restore_device_defaults()
 
-        self.assertEqual(defaults["effective"]["max_bytes"], 50_000_000_000)
-        self.assertEqual(defaults["effective"]["retention_days"], 30)
+        self.assertEqual(defaults["effective"]["max_bytes"], 20_000_000_000)
+        self.assertEqual(defaults["effective"]["retention_days"], 3)
+        self.assertEqual(defaults["effective"]["minimum_free_bytes"], 5_000_000_000)
         self.assertEqual(changed["effective"], {
             "max_bytes": 60_000_000_000, "retention_days": 14,
             "cleanup_enabled": True, "cleanup_interval_seconds": 300,
-            "minimum_free_bytes": 1_000_000_000,
+            "minimum_free_bytes": 5_000_000_000,
         })
         self.assertEqual(restored["effective"], {
-            "max_bytes": 50_000_000_000, "retention_days": 30,
+            "max_bytes": 20_000_000_000, "retention_days": 3,
             "cleanup_enabled": True, "cleanup_interval_seconds": 300,
-            "minimum_free_bytes": 1_000_000_000,
+            "minimum_free_bytes": 5_000_000_000,
         })
         self.assertEqual(stat.S_IMODE((self.data_dir / "device_settings.json").stat().st_mode), 0o600)
 
@@ -212,7 +213,8 @@ class StandaloneHubConfigTests(unittest.TestCase):
 
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
-        self.assertEqual(accepted.json()["effective"]["max_bytes"], 50_000_000_000)
+        self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)
+        self.assertEqual(preview.json()["trash"]["days"], 15)
         self.assertEqual(preview.status_code, 200)
         self.assertEqual([row["machine"] for row in preview.json()["machines"]], ["node-a"])
         self.assertEqual(len(preview_calls), 1)

@@ -226,12 +226,12 @@ assert output_storage.register_finalized_output(machine='device-a', studio='imag
     managed_output_roots=[str(image)], output_path=str(partial), derivatives=[str(derivative)],
     generated_at=1, batch_id='q', item_index=0, bytes=2, sha256=hashlib.sha256(b'12').hexdigest())
 output_storage.mark_receipt_acked(batch_id='q', item_index=0)
-original, calls = Path.unlink, {'count': 0}
-def interrupted(path):
+original, calls = os.rename, {'count': 0}
+def interrupted(src, dst):
     calls['count'] += 1
-    if calls['count'] == 1: return original(path)
+    if calls['count'] == 1: return original(src, dst)
     raise OSError('fixture interruption')
-with patch.object(Path, 'unlink', interrupted):
+with patch.object(os, 'rename', interrupted):
     output_storage.enforce(machine='device-a', max_bytes=0, retention_days=1, now=172800)
 importlib.reload(output_storage)
 output_storage.enforce(machine='device-a', max_bytes=0, retention_days=1, now=172800)

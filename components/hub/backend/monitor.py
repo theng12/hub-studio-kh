@@ -19,6 +19,7 @@ import httpx
 
 log = logging.getLogger("studiohub.monitor")
 
+from components import retired_models
 from .registry import DATA_DIR, base_url, load_registry, prune_machine_metadata
 from .peers import studio_request
 
@@ -974,6 +975,8 @@ class StudioMonitor:
                     model.get("repo"), modality=studio["modality"],
                     entries=(model,),
                 ) is None
+                # A retired model is never published, whatever a worker still reports.
+                and not retired_models.is_retired(model.get("repo"), model.get("model_id"))
             ]
             for m in entries:
                 annotated = dict(m)

@@ -140,7 +140,7 @@ def _model_catalog() -> dict[str, dict[str, Any]]:
     picker on every Mac. Only a catalog directory that cannot be listed at all still raises,
     because "no models" would be a lie rather than a degradation.
     """
-    from components import model_packages
+    from components import model_packages, retired_models
     location = os.environ.get("STUDIOHUB_MODEL_MANIFESTS", "").strip()
     root = Path(location).expanduser().resolve() if location else Path(__file__).resolve().parents[2] / "model-manifests"
     try:
@@ -161,6 +161,8 @@ def _model_catalog() -> dict[str, dict[str, Any]]:
                 {"package_id": path.stem, "model_id": path.stem},
                 f"{path.name} is not a manifest object")
             continue
+        if retired_models.manifest_retired(manifest, path.stem):
+            continue                            # retired: never offered, even from an old manifest
         key = str(manifest.get("package_id") or path.stem)
         try:
             model_packages.validate_manifest(manifest)
@@ -540,6 +542,14 @@ def machine_health(states: list[tuple[str, str]]) -> tuple[str, str | None]:
     return health, detail
 
 
+def _retired_refusal(model: object) -> dict[str, Any] | None:
+    """Refuse a retired model by name (`components/retired_models.py` is the one list)."""
+    from components import retired_models
+    if retired_models.is_retired(model):
+        return {"code": "MODEL_RETIRED", "detail": f"{model} has been retired and is no longer offered"}
+    return None
+
+
 def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> dict[str, Any] | None:
     """Return an explicit refusal when this packaged model cannot run here.
 
@@ -551,6 +561,8 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     # envelopes; readiness applies only once a model was actually requested.
     if not envelope.get("model"):
         return None
+    if (retired := _retired_refusal(envelope.get("model"))):
+        return retired
     catalog = _model_catalog()
     manifest = next((row for row in catalog.values()
                      if row.get("model_id") == envelope.get("model")), None)
@@ -851,6 +863,8 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
         managed_output_roots=worker.get("managed_output_roots"))
     if blocked:
         return blocked
+    if (retired := _retired_refusal(model)):
+        return retired
     # The packaged model gate only applies where this Hub actually owns a model
     # library to verify against; without one the worker remains the authority on
     # whether its own model can run.
@@ -1029,7 +1043,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         peer_lease_sweep = None
         release_mirror = None
         if start_background:
-            # 50 GB or 30 days, whichever comes first, enforced for every studio - not only in
+            # The output size / age limits (device settings), enforced for every studio - not only in
             # development. See job_storage.budget_loop.
             import asyncio as _asyncio
             from .backend import job_storage
@@ -1139,7 +1153,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 enabled=value["cleanup_enabled"],
                 minimum_free_bytes=value["minimum_free_bytes"],
                 managed_output_roots=sorted(roots))
-                for machine, roots in roots_by_machine.items()]}
+                for machine, roots in roots_by_machine.items()],
+                "trash": {"bytes": output_storage.trash_bytes(max_age=10), "days": output_storage.TRASH_DAYS}}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 

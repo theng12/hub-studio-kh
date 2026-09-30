@@ -317,6 +317,22 @@ class EndToEndTests(unittest.TestCase):
                 (destination / "old-model" / self.REVISION / "weights.bin").read_text(),
                 "the corrected weights!")
 
+    def test_a_retired_model_is_never_copied_even_from_an_old_manifest_on_the_drive(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kit, library, _manifests = self._build(root, {
+                "kept-model": ("d" * 40, {"weights.bin": "kept"}),
+                "ace-step-1-5-turbo": ("e" * 40, {"weights.bin": "retired"}),   # in retired_models.py
+            })
+            (kit / self.APP / "Contents/Resources/components/retired_models.py").write_text(
+                (ROOT / "components" / "retired_models.py").read_text())
+            code, output = self._run(root, kit)
+            self.assertEqual(code, 0, output)
+            destination = root / "StudioHubModels"
+            self.assertTrue((destination / "kept-model").is_dir(), output)
+            self.assertFalse((destination / "ace-step-1-5-turbo").exists(),
+                             "a retired model was staged onto a Mac from an old manifest")
+
     def test_updated_models_are_recorded_so_the_app_sees_them_as_installed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

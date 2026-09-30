@@ -14,17 +14,24 @@ from .backend.vocabulary import REQUIRED_WORKERS as _REQUIRED_WORKERS
 from .backend.vocabulary import WORKER_FOR_MODALITY as _WORKER_FOR_MODALITY
 
 
-DEFAULT_MAX_BYTES = 50_000_000_000
-DEFAULT_RETENTION_DAYS = 30
+DEFAULT_MAX_BYTES = 20_000_000_000          # live outputs only; the Trash Folder is not counted
+DEFAULT_RETENTION_DAYS = 3
 DEFAULT_CLEANUP_ENABLED = True
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
-DEFAULT_MINIMUM_FREE_BYTES = 1_000_000_000
+DEFAULT_MINIMUM_FREE_BYTES = 5_000_000_000
 # `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
 # derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
 # because it is the inverse table, but `_worker()` no longer looks a descriptor's id up in it:
 # the descriptor declares its own modality and the vocabulary validates that, so a worker id the
 # Hub does not route fails with the modality named and the file to edit (see `_worker`).
 _SETTINGS_FILE = "device_settings.json"
+# The defaults before 0.6.117 (30 days / 50 GB / 1 GB), which every Mac that ever saved or restored
+# its settings still has on disk. A file with no `defaults_version` was written before the new
+# defaults existed, so a value equal to the old default is read as "never chosen" and gets the new
+# one; a value that differs was chosen by the operator and is kept. Every write stamps the version,
+# so an operator who saves exactly 30 days afterwards is not migrated again.
+_DEFAULTS_VERSION = 2
+_LEGACY_DEFAULTS = {"max_bytes": 50_000_000_000, "retention_days": 30, "minimum_free_bytes": 1_000_000_000}
 
 
 def data_dir() -> Path:
@@ -173,6 +180,8 @@ def _settings() -> dict[str, int | bool]:
         value = json.loads(_settings_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         value = {}
+    if isinstance(value, dict) and "defaults_version" not in value:
+        value = {key: item for key, item in value.items() if _LEGACY_DEFAULTS.get(key) != item}
     max_bytes = value.get("max_bytes", DEFAULT_MAX_BYTES) if isinstance(value, dict) else DEFAULT_MAX_BYTES
     retention_days = value.get("retention_days", DEFAULT_RETENTION_DAYS) if isinstance(value, dict) else DEFAULT_RETENTION_DAYS
     enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
@@ -222,7 +231,7 @@ def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled
                                     cleanup_enabled=cleanup_enabled,
                                     cleanup_interval_seconds=cleanup_interval_seconds,
                                     minimum_free_bytes=minimum_free_bytes)
-    _atomic_write(_settings_path(), value)
+    _atomic_write(_settings_path(), value | {"defaults_version": _DEFAULTS_VERSION})
     return load_device_settings()
 
 
@@ -233,6 +242,7 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
         "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
         "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+        "defaults_version": _DEFAULTS_VERSION,
     })
     return load_device_settings()
 

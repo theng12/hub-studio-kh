@@ -2,6 +2,30 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.117 - 2026-09-30
+
+### Cleanup now uses a Trash Folder, old updates no longer pile up, and retiring a model is one line
+
+**Nothing is deleted straight away any more.** When Studio Hub tidies up finished pictures, voices and
+music, it moves them into a **Trash Folder** inside its own data folder instead of deleting them. The
+Trash Folder empties itself: anything that has been there more than **15 days** is removed for good, and
+if the disk gets short, the oldest trash goes first so it never stops you generating. **Storage** in
+Settings now shows how big the Trash Folder is.
+
+**Tidier defaults.** Studio Hub keeps **20 GB** of finished work for **3 days** and wants **5 GB** of the
+disk left free (it used to be 50 GB, 30 days and 1 GB). A Mac that was still on the old numbers picks up
+the new ones on its own; any number you changed yourself stays as you set it. The 20 GB counts only
+your current work, not the Trash Folder.
+
+**Updates clean up after themselves.** When an update replaces the app, the old copy goes into the Trash
+Folder instead of being deleted, so you can go back for 15 days. The downloaded update files, which
+used to stay on the disk for good (about 1.9 GB each), move to the Trash Folder once an update has
+installed.
+
+**Retired models stay retired.** There is now one list of models we no longer offer. A model on it is
+never shown, never put onto a drive kit and never accepted for a job, even if an old copy of its files
+is on a drive. ACE-Step 1.5 is on the list.
+
 ## 0.6.116 - 2026-09-30
 
 ### ACE-Step 1.5 is retired; music is YuE2 and Stable Audio 3

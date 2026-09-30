@@ -506,8 +506,15 @@ def main() -> int:
         print(f"  Could not find the models at:\n      {library}")
         return 2
 
+    # The one retired-models list ships inside the app; an app that predates it retires nothing.
+    sys.path.insert(0, str(resources / "components"))
+    try:
+        from retired_models import manifest_retired  # type: ignore
+    except ImportError:
+        manifest_retired = lambda manifest, stem=None: False  # noqa: E731
     manifests = {m["package_id"]: m for m in
-                 (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))}
+                 (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
+                 if not manifest_retired(m)}
     memory = machine_memory_gb()
     # The app's own companion reader, so a package's relationship is resolved exactly as the app
     # resolves it - under either spelling a manifest may carry, and not by a second copy of the

@@ -1318,7 +1318,7 @@ final class FixtureProtocol: URLProtocol {
 
     private static let settingsFixture = Data(#"{"defaults":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000}}"#.utf8)
 
-    private static let storagePreviewFixture = Data(#"{"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"machines":[{"machine":"local","used_bytes":7200000000,"protected_bytes":1500000000,"max_bytes":50000000000,"retention_days":30,"enabled":true,"over_limit":false,"free_bytes":410000000000,"would_delete_bytes":3200000000}]}"#.utf8)
+    private static let storagePreviewFixture = Data(#"{"effective":{"max_bytes":50000000000,"retention_days":30,"cleanup_enabled":true,"cleanup_interval_seconds":3600,"minimum_free_bytes":20000000000},"machines":[{"machine":"local","used_bytes":7200000000,"protected_bytes":1500000000,"max_bytes":50000000000,"retention_days":30,"enabled":true,"over_limit":false,"free_bytes":410000000000,"would_delete_bytes":3200000000}],"trash":{"bytes":1800000000,"days":15}}"#.utf8)
 
     /// Shaped like the Hub's real reply, including a model with no timed run so the app's
     /// "not measured" path is exercised rather than assumed.
@@ -3325,6 +3325,8 @@ struct NativeAPITests {
         require(store.storageUsage.first?.overLimit == false, "an under-limit machine is not flagged")
 
         require(store.storageUsage.first?.wouldDeleteBytes == 3_200_000_000, "the Hub's dry run must decode")
+        require(store.storageTrash?.bytes == 1_800_000_000 && store.storageTrash?.days == 15,
+                "the Trash Folder's size and emptying period must decode for the storage screen")
         let wouldDelete = await store.storageWouldDelete(maxBytes: 10_000_000_000, retentionDays: 7, cleanupEnabled: true)
         require(wouldDelete == 3_200_000_000, "the editor's figure comes from a preview with the draft limits")
         require(FixtureProtocol.storageRequests().last == "preview" && !FixtureProtocol.storageRequests().contains("put"),
@@ -5149,6 +5151,21 @@ struct NativeAPITests {
                 "a completed download whose hash is wrong must be discarded, not kept for a resume")
         require(FixtureProtocol.releaseReads() >= 1, "the wrong-hash attempt must have downloaded once")
 
+        // An older download an earlier attempt left behind. A FAILED install must move nothing to
+        // the Trash Folder: the downloads are what the next press resumes from.
+        let updatesFolder = updateDirectory.standardizedFileURL.appendingPathComponent("Updates")
+        let hubTrash = updateDirectory.standardizedFileURL.appendingPathComponent("hub/trash")
+        let olderDownload = updatesFolder.appendingPathComponent("older-release")
+        try FileManager.default.createDirectory(at: olderDownload, withIntermediateDirectories: true)
+        try Data("older release".utf8).write(to: olderDownload.appendingPathComponent("older.dmg"))
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
+        await updateStore.refreshRelease()
+        updateStore.installVerifiedArtifact = { _, _ in throw ReleaseError("fixture: the swap failed") }
+        await updateStore.installOfferedRelease()
+        require(updateStore.connectionNotice?.kind == .failure, "the failed install must be reported")
+        require(FileManager.default.fileExists(atPath: olderDownload.path) && !FileManager.default.fileExists(atPath: hubTrash.path),
+                "a failed install must move nothing to the Trash Folder")
+
         // The happy path: a verified artifact reaches the swap, and the existing restart path is
         // asked exactly once. The installer is stubbed, so nothing touches /Applications.
         FixtureProtocol.setRelease(identity: identity, body: releaseBody(descriptor), artifact: artifact)
@@ -5168,6 +5185,17 @@ struct NativeAPITests {
                 "the installed build must become the current one so the banner clears")
         require(updateStore.currentAppVersion == "0.6.50",
                 "the installed version must become the current one too")
+        // Everything under Updates/ - the installed download and the older one - moved to the Trash
+        // Folder (a dated subfolder) rather than being deleted or left to build up.
+        let trashedNames = (FileManager.default.enumerator(at: hubTrash, includingPropertiesForKeys: nil)?
+            .compactMap { ($0 as? URL)?.lastPathComponent }) ?? []
+        require(trashedNames.contains("older.dmg") && trashedNames.contains(shaDescriptor.filename),
+                "a completed install must move every stored download to the Trash Folder: \(trashedNames)")
+        require(((try? FileManager.default.contentsOfDirectory(atPath: updatesFolder.path)) ?? []).isEmpty,
+                "nothing may be left under Updates/ after a completed install")
+        let dated = (try? FileManager.default.contentsOfDirectory(atPath: hubTrash.path)) ?? []
+        require(dated.count == 1 && dated[0].range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
+                "the Trash Folder must be filed under a UTC date the Hub's purge recognises: \(dated)")
 
         // A kept partial file is found again and resumed with a Range request, completing to the
         // exact signed artifact. The Range header sent is asserted, and the bytes the swap sees.
@@ -5585,6 +5613,29 @@ struct NativeAPITests {
             options: [], format: nil) as? [String: Any]
         require(landedPlist?["StudioHubBuild"] as? String == "newbuild",
                 "the target must hold the new build after the swap")
+
+        // The replaced app goes to the Trash Folder (so an update can be rolled back for 15 days);
+        // it is not deleted. Where there is no usable Trash Folder it is removed, as before.
+        let trashRoot = installParent.appendingPathComponent("hub/trash")
+        try Data("previous app".utf8).write(to: targetApp.appendingPathComponent("Contents/previous-app-marker"))
+        try makeFakeApp(at: stagedApp, build: "newbuild")
+        let keepingInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: trashRoot,
+                                                attach: { _, _ in }, detach: { _ in })
+        _ = try keepingInstaller.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
+        let keptApps = (FileManager.default.enumerator(at: trashRoot, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.lastPathComponent == "previous-app-marker" }) ?? []
+        require(keptApps.count == 1, "the replaced app must be in the Trash Folder, not deleted: \(keptApps)")
+        require(!FileManager.default.fileExists(atPath: targetApp.appendingPathComponent("Contents/previous-app-marker").path),
+                "the new app, not the old one, must be in place")
+        let blockedTrash = installParent.appendingPathComponent("trash-is-a-file")
+        try Data("x".utf8).write(to: blockedTrash)
+        try makeFakeApp(at: stagedApp, build: "newbuild")
+        let fallbackInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: blockedTrash,
+                                                 attach: { _, _ in }, detach: { _ in })
+        _ = try fallbackInstaller.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
+        require(((try? FileManager.default.contentsOfDirectory(atPath: installParent.path)) ?? [])
+                    .filter { $0.hasPrefix(".studiohub-old-") }.isEmpty,
+                "with no usable Trash Folder the replaced app is removed, as before")
 
         // The full-image install refuses up front when the volume cannot hold the new app beside the
         // old one, names the numbers, and leaves nothing staged and the installed app untouched.

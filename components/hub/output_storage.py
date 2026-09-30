@@ -3,10 +3,16 @@
 Workers retain their files.  This index only accepts paths under roots supplied
 by the packaged owner descriptor, so a worker result can never turn an
 arbitrary local pathname into a deletion candidate.
+
+Cleanup never deletes an output.  It **moves** acknowledged, unleased output into the Trash Folder
+(`<data dir>/trash/<UTC date>/<batch>/`), a same-volume rename; a move that fails is skipped, never
+retried as a delete.  The Trash Folder empties itself: a dated folder older than `TRASH_DAYS` is
+removed, and that purge is the only hard delete here.  `max_bytes` counts live outputs only.
 """
 from __future__ import annotations
 
 import os
+import re
 import copy
 import hashlib
 import stat
@@ -18,6 +24,8 @@ from pathlib import Path
 
 from .backend import ledger
 
+TRASH_DAYS = 15
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _START_LOCK = threading.Lock()
 _LOCK = threading.RLock()
 _STARTED = False
@@ -62,6 +70,67 @@ def recover_process_leases() -> None:
     with _LOCK, ledger._conn() as conn:
         conn.execute("UPDATE output_groups SET reader_leases=0, transfer_leases=0 "
                      "WHERE reader_leases!=0 OR transfer_leases!=0")
+
+
+def trash_root() -> Path:
+    return ledger.DATA_DIR / "trash"
+
+
+def _trash_days() -> list[Path]:
+    """Dated Trash Folder subfolders, oldest first.  Anything not named like a date is not ours."""
+    try:
+        days = [p for p in trash_root().iterdir() if _DAY.fullmatch(p.name) and p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return []
+    return sorted(days)
+
+
+_TRASH_SIZE: tuple[float, int] = (0.0, 0)
+
+
+def trash_bytes(max_age: float = 0.0) -> int:
+    """Disk used by the Trash Folder, for the storage screen.
+
+    A replaced app can sit in it (about 90,000 files), so the screen, which asks on every preview,
+    passes `max_age` to reuse a recent walk instead of stat-ing them all again.
+    """
+    global _TRASH_SIZE
+    if max_age and time.monotonic() - _TRASH_SIZE[0] < max_age:
+        return _TRASH_SIZE[1]
+    total = 0
+    for day in _trash_days():
+        for base, _, names in os.walk(day):
+            for name in names:
+                try:
+                    total += os.lstat(os.path.join(base, name)).st_size
+                except OSError:
+                    pass
+    _TRASH_SIZE = (time.monotonic(), total)
+    return total
+
+
+def purge_trash(now: float | None = None) -> int:
+    """Remove dated Trash Folders older than TRASH_DAYS.  The only hard delete in this module."""
+    now = time.time() if now is None else float(now)
+    oldest_kept = time.strftime("%Y-%m-%d", time.gmtime(now - TRASH_DAYS * 86400))
+    purged = 0
+    for day in _trash_days():
+        if day.name < oldest_kept:              # ISO dates sort as text
+            shutil.rmtree(day, ignore_errors=True)
+            purged += 1
+    return purged
+
+
+def _to_trash(path: Path, group, file_id: int, now: float) -> bool:
+    """Move one output into today's Trash Folder.  False (file untouched) if the rename fails."""
+    batch = re.sub(r"[^A-Za-z0-9._-]", "_", str(group["batch_id"] or group["job_id"]))
+    target = trash_root() / time.strftime("%Y-%m-%d", time.gmtime(now)) / batch / f"{file_id}-{path.name}"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(path, target)                 # same volume or it fails; never a delete
+    except OSError:
+        return False
+    return True
 
 
 def _root_for(path: Path, roots: list[Path]) -> Path | None:
@@ -349,6 +418,8 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
             managed_output_roots: object = None, minimum_free_bytes: int = 0) -> dict:
     with _LOCK:
         _schema()
+        now = time.time() if now is None else float(now)
+        purge_trash(now)                        # self-cleaning, even with cleanup switched off
         with ledger._conn() as conn:
             _reconcile(conn, machine)
         result = preview(machine=machine, max_bytes=max_bytes, retention_days=retention_days,
@@ -356,14 +427,13 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
                          minimum_free_bytes=minimum_free_bytes)
         if not enabled:
             return result | {"deleted": 0, "freed_bytes": 0}
-        now = time.time() if now is None else float(now)
         cutoff = now - retention_days * 86400
         with ledger._conn() as conn:
             rows = conn.execute("""SELECT * FROM output_groups WHERE machine=? AND state='finalized'
               AND receipt_acked_at IS NOT NULL AND reader_leases=0 AND transfer_leases=0
               ORDER BY generated_at ASC""", (machine,)).fetchall()
             used = result["used_bytes"]
-            deleted = freed = 0
+            deleted = freed = 0                 # `deleted` keeps its name: files taken out of live output
             for group in rows:
                 current = conn.execute("SELECT * FROM output_groups WHERE id=?", (group["id"],)).fetchone()
                 if (current is None or current["state"] != "finalized" or current["receipt_acked_at"] is None
@@ -381,13 +451,14 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
                     if state != "ok" or info is None or not _same_file(info, file) or _sha256(Path(file["path"])) != file["sha256"]:
                         conn.execute("UPDATE output_groups SET state='uncertain' WHERE id=?", (group["id"],))
                         continue
-                    try:
-                        Path(file["path"]).unlink()
-                    except OSError:
+                    if not _to_trash(Path(file["path"]), group, file["id"], now):
                         continue
                     conn.execute("UPDATE output_files SET present=0 WHERE id=?", (file["id"],))
                     deleted += 1
-                    if info.st_nlink == 1:
+                    # A moved file still holds its inode (in the Trash Folder), so `st_nlink` cannot say
+                    # when the bytes leave live output: that is when no other indexed link remains.
+                    if conn.execute("SELECT 1 FROM output_files WHERE device=? AND inode=? AND present=1",
+                                    (file["device"], file["inode"])).fetchone() is None:
                         freed += info.st_size
                         used = max(0, used - info.st_size)
                 remaining = conn.execute("SELECT 1 FROM output_files WHERE group_id=? AND present=1",
@@ -431,7 +502,21 @@ def admission(*, machine: str, max_bytes: int, retention_days: int, enabled: boo
     if result["used_bytes"] > max_bytes:
         return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": "generated output cannot meet this device policy", "storage": result}
     has_managed_root = isinstance(managed_output_roots, list) and bool(managed_output_roots)
-    if minimum_free_bytes and has_managed_root and (result["free_bytes"] is None or result["free_bytes"] < minimum_free_bytes):
+    def short() -> bool:
+        return result["free_bytes"] is None or result["free_bytes"] < minimum_free_bytes
+    if minimum_free_bytes and has_managed_root and short() and result["free_bytes"] is not None:
+        # The Trash Folder shares this disk, so it must never be why work is refused: copies already
+        # scheduled for deletion go first, oldest day first, until the floor is met or none are left.
+        with _LOCK:
+            for day in _trash_days():
+                shutil.rmtree(day, ignore_errors=True)
+                result = preview(machine=machine, max_bytes=max_bytes, retention_days=retention_days,
+                                 enabled=enabled, managed_output_roots=managed_output_roots,
+                                 minimum_free_bytes=minimum_free_bytes)
+                if not short():
+                    break
+        _ADMISSION_SNAPSHOT[key] = (now, copy.deepcopy(result))
+    if minimum_free_bytes and has_managed_root and short():
         return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": "managed output storage has insufficient free space", "storage": result}
     return None
 

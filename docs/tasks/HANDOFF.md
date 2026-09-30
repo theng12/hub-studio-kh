@@ -3,7 +3,34 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.116** (ACE-Step 1.5 retired; 2026-09-30).
+Last updated: **0.6.117** (Trash Folder, one retired-models list; 2026-09-30).
+
+> **0.6.117 — output cleanup uses a Trash Folder; ONE list retires a model; updates stop piling up**
+> (two owner decisions, 2026-09-30). Read `CHANGELOG.md` 0.6.117; what to know:
+>
+> - **`output_storage.enforce` no longer unlinks.** It renames acknowledged, unleased output to
+>   `<hub data>/trash/<UTC date>/<batch>/<file id>-<name>` (same volume; a failed rename skips the file,
+>   there is **no** delete fallback). `purge_trash` removes dated folders older than `TRASH_DAYS = 15`
+>   at the start of every sweep - **the only hard delete, owner-approved**. `max_bytes` counts live output
+>   only. `admission()` empties Trash **oldest day first** before refusing for the free-space floor (my
+>   choice, so a full Trash cannot wedge work for 15 days). `hub data` = `~/Library/Application
+>   Support/StudioHub Standalone/hub`, so the native side files under `.../hub/trash` too.
+> - **New defaults 20 GB / 3 days / 5 GB free** (`standalone_config.py`). Macs that already saved the
+>   old defaults are migrated at read time (a file without `defaults_version` whose value equals the old
+>   default reads as unset; saving stamps the version). A hand-edited file keeps its numbers.
+> - **`components/retired_models.py` is the one retired list** (`RETIRED_MODELS`, seeded with
+>   `ace-step-1-5-turbo` and `ACE-Step/Ace-Step1.5`). Readers: `standalone._model_catalog`,
+>   `model_ids`, `monitor._assemble_aggregate_catalog`, `release_kit.build`,
+>   `stage_voice.copy_model_manifests`, `copy_models_for_this_mac.py` (via the app's own copy; an app
+>   that predates the module retires nothing). Refusal: `MODEL_RETIRED` in `_submission_readiness` and the
+>   peer path. **Do not put it in `model-manifests/`** - every reader globs `*.json` there.
+> - **Swift:** `HubTrash.move` (UpdateClient.swift) is the one same-volume mover. `swapStagedApp` sends the
+>   replaced app to the Trash Folder (falls back to removal if `trashFolder` is nil or on another volume);
+>   `retireReleaseArtifacts()` moves everything under `Updates/` after any completed install. Tests build
+>   `ReleaseInstaller` with no `trashFolder`, so they never touch the real Hub data.
+> - **Not done / known:** the Trash Folder is per Hub data dir, not per managed root; an output root on
+>   another volume than the data dir never moves (skipped, stays live) - today every root is under the data dir.
+>   A rolled-back app is a manual drag from the Trash Folder; there is no UI for it.
 
 > **0.6.116 — ACE-Step 1.5 is retired. Music is YuE2 and Stable Audio 3, nothing else** (owner
 > decision 2026-09-30, confirmed in chat: *"i wont' want ace 1.5 either… we only offer 2 music model,
