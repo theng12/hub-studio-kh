@@ -258,10 +258,11 @@ class MemoryCatalogTests(unittest.TestCase):
     def test_the_catalog_floors_are_the_ones_the_hub_governor_enforces(self):
         """The worker's entry is the only source for these, so check them against the Hub.
 
-        `memory_admission.describe` reads the worker's catalog entry, and only the live-free
-        floor is enforced (`broker._memory_gate`); the total-memory floor is published for the
-        operator and stays out of force unless an operator override names one. FLUX must come
-        out of this exactly as it did before: the Hub's own 2 GB free default.
+        `memory_admission.describe` reads the worker's catalog entry. Both floors are enforced
+        (`broker._memory_gate`): the live-free floor, and - since the owner's 2026-09-30 decision -
+        the total-memory requirement (measured, else manifest, else this catalog row) as a hard
+        eligibility floor. This used to assert the total floor was 0.0 because a tier was advice;
+        that premise is reversed, and Z-Image-Turbo's requirement is its manifest's measured 8 GB.
         """
         from components.hub.backend import memory_admission
 
@@ -269,7 +270,8 @@ class MemoryCatalogTests(unittest.TestCase):
         z_admission = memory_admission.describe(Z_IMAGE_TURBO.repo, entries[Z_IMAGE_TURBO.repo])
         self.assertEqual(z_admission['effective_min_free_memory_gb'], 3.0)
         self.assertEqual(z_admission['catalog_min_free_memory_gb'], 3.0)
-        self.assertEqual(z_admission['effective_min_total_memory_gb'], 0.0)
+        self.assertEqual(z_admission['effective_min_total_memory_gb'], 8.0)
+        self.assertEqual(z_admission['min_total_source'], 'manifest')
         # The invariant, not the number, because the number was wrong once in a way that cost a
         # measurement. The floor guards against starting into a nearly-full Mac; it must not
         # become a tier in disguise. A free floor at or above the smallest machine's *total* RAM

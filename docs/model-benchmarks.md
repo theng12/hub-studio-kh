@@ -119,7 +119,8 @@ settle:
 small one.** MLX grows its buffer cache into whatever memory is free, so the peak it reports
 on a 32 GB machine is partly a property of that machine. On an 8 GB Mac the cache cannot
 grow, so the same model peaks lower. This is why Z-Image-Turbo 4-bit reports a 12.9 GB-class
-peak and still runs on 8 GB machines. **A floor is a qualification tier, not a wall.**
+peak and still runs on 8 GB machines. **The Hub's RAM floor for a model is a wall, and it is the
+measured peak the fleet has proven where there is one, else the manifest tier (2026-09-30).**
 
 **Two kinds of evidence sit behind "it works".** The rows in this document are
 *benchmarks*: one run, watched, with a number. FLUX.2 Klein 4B MLX 4-bit's 8 GB

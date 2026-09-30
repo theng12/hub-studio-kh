@@ -124,6 +124,8 @@ Z-Image 16). The gate that actually refuses work is `broker._memory_gate` agains
 `effective_min_free_memory_gb`. So the free floor is the only enforced one, which makes it the one
 that matters, and it also means **Z-Image's 16 GB tier does not keep it off an 8 GB Mac** — the 8 GB
 tier stays unclaimed rather than being refused.
+*(Superseded 2026-09-30: the total-memory requirement is now a hard eligibility floor — measured,
+else manifest, else catalog — see `memory_admission.requirement_gb`.)*
 
 The FLUX entry publishes `min_total_memory_gb` and `min_unified_memory_gb` but no
 `min_free_memory_gb`, so it runs on that 2 GB default today; Z-Image publishes **8.0**, the measured

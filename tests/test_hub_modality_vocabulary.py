@@ -165,12 +165,15 @@ class MemoryPolicyVocabularyTests(unittest.TestCase):
         self.assertEqual(published["min_unified_memory_gb"], 8)
         policy = memory_admission.describe(row.repo, published)
         self.assertEqual(policy["effective_min_free_memory_gb"], 3.2)
-        self.assertEqual(policy["effective_min_total_memory_gb"], 0.0)
+        # Was 0.0 ("a tier is not a wall"). Owner decision 2026-09-30: the requirement is enforced,
+        # and for this model the manifest's 8 GB qualification is the number.
+        self.assertEqual(policy["effective_min_total_memory_gb"], 8.0)
+        self.assertEqual(policy["min_total_source"], "manifest")
         # `catalog`, not `fleet_default`: the model states it now.
         self.assertEqual(policy["source"], "catalog")
         self.assertEqual(
             broker._admission_requirements(row.repo, published),
-            {"min_total": 0.0, "min_free": 3.2})
+            {"min_total": 8.0, "min_free": 3.2})
         self.assertEqual(
             memory_admission.describe("org/brand-new-model",
                                       {"repo": "org/brand-new-model"})["effective_min_free_memory_gb"],

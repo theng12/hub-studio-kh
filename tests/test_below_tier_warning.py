@@ -1,4 +1,11 @@
-"""A published RAM tier must reach the screen, and must never become a wall.
+"""A published RAM tier must reach the screen; the *worker* never refuses on it.
+
+Premise changed, owner decision 2026-09-30: the Hub now treats a model's RAM requirement as a hard
+eligibility floor (`memory_admission.requirement_gb`; the scheduler counts a Mac below it out of the
+model's pool and never dispatches to it). What this file pins is unchanged and is the worker's half:
+the Chat worker still publishes the warning and still answers a request made straight to it - it does
+not become a second, disagreeing gate. The Hub is the one wall; the worker informs.
+
 
 The owner, 2026-09-25, on Chat: *"8 GB behaviour. Today nothing refuses and nothing warns on Chat;
 Image warns and lets you try. I recommend making Chat warn the same way, and only adding a refusal
@@ -15,8 +22,9 @@ the one machine nobody develops on.
 Two things are pinned here:
 
 1. The Chat worker publishes the warning where the app reads it, it says both numbers, and it stays
-   **advice**: the model is still eligible and still offered on the small host. A tier is not a wall
-   (``memory_admission``'s own doctrine, and the owner's stated preference).
+   **advice** *at the worker*: the row is still eligible and still offered on the small host when
+   asked directly. The Hub, not the worker, decides whether to route to that host
+   (``memory_admission``'s requirement floor, owner decision 2026-09-30).
 2. The invariant behind it, so the next studio cannot publish a warning into the void: every worker
    that puts a ``memory_warning`` on a catalog row must have a page that renders it.
 """
@@ -84,7 +92,7 @@ class ChatBelowTierWarningTests(unittest.TestCase):
         row = self._row(8)
         self.assertIsNotNone(row.get("memory_warning"))
         self.assertTrue(row.get("memory_eligible"),
-                        "a RAM tier is advice, not an admission gate")
+                        "the worker publishes a RAM tier as advice; the Hub's scheduler is the gate")
         self.assertTrue(row.get("available"), "an 8 GB Mac must still be able to try")
         self.assertTrue(row.get("execution_ready"))
 

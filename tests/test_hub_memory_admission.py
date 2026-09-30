@@ -2,7 +2,8 @@
 
 ``memory_admission.SUPPORTED_MODALITIES`` named five modalities and omitted ``chat``, so
 ``applies_to("chat")`` was False. That skipped the Hub's own queue ranking for the 9B text
-model (``broker._batch_memory_constraint_gb``) and published no admission evidence for a
+model (then ``broker._batch_memory_constraint_gb``, now the pool in
+``broker.pool_machines``) and published no admission evidence for a
 chat model in ``monitor.snapshot`` or the capability contract — the operator could not see
 the floor the governor was using, and the next modality would have been omitted the same way.
 
@@ -13,6 +14,10 @@ The rule asserted here is deliberately not a list. It is:
 * the floor comes from the row the worker publishes, under whichever spelling it ships —
   ``min_unified_memory_gb`` (Image, Voice, Music) or ``min_total_memory_gb`` (Chat,
   Subtitle) — so the modality name is never the gate.
+
+Premise changed (owner decision 2026-09-30): the total-memory floor is now a hard eligibility
+requirement, not advice. Where these cases asserted ``effective_min_total_memory_gb == 0.0`` ("a
+tier is not a wall"), they now assert the published number is the enforced one.
 """
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -81,14 +87,16 @@ class TheWorkerPublishesTheFloorTests(unittest.TestCase):
             "the Chat worker's own min_total_memory_gb was not read, so the 9B model had "
             "no published floor at all",
         )
-        self.assertEqual(policy["effective_min_total_memory_gb"], 0.0)
+        # Enforced now (was 0.0): the worker's 9 GB is this model's requirement.
+        self.assertEqual(policy["effective_min_total_memory_gb"], 9.0)
+        self.assertEqual(policy["min_total_source"], "catalog")
         self.assertEqual(policy["effective_min_free_memory_gb"], 2.0)
 
     def test_a_chat_row_publishes_its_own_free_memory_floor(self) -> None:
         policy = memory_admission.describe(CHAT_REPO, chat_row(min_free_memory_gb=3.5))
         self.assertEqual(policy["effective_min_free_memory_gb"], 3.5)
         self.assertEqual(broker._admission_requirements(CHAT_REPO, chat_row(min_free_memory_gb=3.5)),
-                         {"min_total": 0.0, "min_free": 3.5})
+                         {"min_total": 9.0, "min_free": 3.5})
 
     def test_the_spelling_a_worker_uses_does_not_change_the_floor(self) -> None:
         unified = memory_admission.describe(CHAT_REPO, chat_row(min_unified_memory_gb=9.0))
@@ -98,42 +106,31 @@ class TheWorkerPublishesTheFloorTests(unittest.TestCase):
         self.assertEqual(unified["default_min_free_memory_gb"],
                          total["default_min_free_memory_gb"])
 
-    def test_a_chat_job_is_ranked_by_its_floor(self) -> None:
-        """`_batch_memory_constraint_gb` skipped chat entirely, so its queue had no floor."""
-        temporary = tempfile.TemporaryDirectory(prefix="studiohub-admission-")
-        original = memory_admission.SETTINGS_FILE
-        self.addCleanup(setattr, memory_admission, "SETTINGS_FILE", original)
-        self.addCleanup(memory_admission.reset_for_tests)
-        self.addCleanup(temporary.cleanup)
-        memory_admission.SETTINGS_FILE = (
-            Path(temporary.name) / "memory_admission_overrides.json"
-        )
-        memory_admission.reset_for_tests()
-        memory_admission.set_override(
-            CHAT_REPO, min_total_memory_gb=9.0, min_free_memory_gb=2.5,
-            catalog_entry=chat_row(),
-        )
-        entry = {"entry": chat_row(), "observed_at": 1.0, "stale": False, "error": None}
-        called = {}
+    def test_a_chat_jobs_pool_counts_only_macs_that_meet_its_floor(self) -> None:
+        """Chat was skipped by the queue ranking entirely; its pool now honours the 9 GB floor."""
+        studios = [{"id": f"chat@{name}", "modality": "chat", "machine": name, "local": False}
+                   for name in ("small", "big")]
+        asked = {}
 
         class _Monitor:
-            def scheduling_catalog_entries(self, model, *, modality=None):
-                called["modality"] = modality
-                return [entry]
+            registry = studios
+            status = {studio["id"]: {"status": "up"} for studio in studios}
 
-        original_monitor = broker._monitor
-        broker._monitor = lambda: _Monitor()
-        try:
-            constraint = broker._batch_memory_constraint_gb(
-                {"model": CHAT_REPO, "modality": "chat"}
-            )
-        finally:
-            broker._monitor = original_monitor
-        self.assertEqual(called.get("modality"), "chat")
-        self.assertEqual(
-            constraint, 9.0,
-            "a chat batch contributed no memory floor to the queue ranking",
-        )
+            def cached_catalog_entries(self, model, *, modality=None):
+                asked["modality"] = modality
+                return [{"studio": studio, "entry": chat_row(cache={"state": "cached"})}
+                        for studio in studios]
+
+        memory = {"small": 8.59, "big": 17.18}
+        with mock.patch.object(broker, "_monitor", lambda: _Monitor()), \
+                mock.patch.object(broker.peers, "dispatch_ready", lambda studio: True), \
+                mock.patch.object(broker, "machine_enabled", lambda machine: True), \
+                mock.patch.object(broker, "studio_enabled", lambda machine, studio: True), \
+                mock.patch.object(broker, "_known_memory_gb",
+                                  lambda studio: memory[studio["machine"]]):
+            pool = broker.pool_machines("chat", CHAT_REPO)
+        self.assertEqual(asked.get("modality"), "chat")
+        self.assertEqual(pool, {"big"}, "an 8 GB Mac is below the chat model's 9 GB requirement")
 
     def test_a_chat_model_publishes_admission_evidence(self) -> None:
         model = chat_row()

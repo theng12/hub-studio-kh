@@ -20,6 +20,7 @@ and are forwarded verbatim to the studio's own generate endpoint.
 import asyncio
 import base64
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -202,28 +203,15 @@ def retry_class(modality: object) -> str:
             f"(classes: {sorted(set(MODALITY_RETRY_CLASS.values()))}) rather than letting it "
             f"take the non-durable default, where a retry can duplicate an artifact") from exc
 
-# Every modality whose artifact is sound. Derived from MODALITY so a future
-# audio modality inherits the priority below without a second edit.
-AUDIO_MODALITIES = frozenset(
-    m for m, spec in MODALITY.items() if spec[2] == "audio")
-# Audio outranks image (and every other normal-priority class) on every machine
-# that can actually run the audio model.
-#
-# This reorders only the *next* dispatch decision, which is exactly the owner's
-# rule: a machine finishes the image it is already generating, then takes audio.
-# Nothing is preempted and no machine is ever held idle — the scheduler makes a
-# single pass over this ordering, so any worker audio cannot use (too little
-# unified memory, model not downloaded, no free RAM yet) falls through to the
-# image batch in the *same* pass.
-#
-# The memory floor is never hardcoded here. _memory_gate() already skips a Mac
-# whose total unified memory is below the model's declared
-# min_unified_memory_gb, so the audio-capable pool follows the model and a
-# future TTS with a different footprint needs no code change. The pool is flat:
-# no size is preferred within it.
-AUDIO_PRIORITY = 5
-MODALITY_PRIORITY = dict({"render": 0}, **{m: AUDIO_PRIORITY for m in AUDIO_MODALITIES})
-
+# Queue order is scarcest-first (owner decision, 2026-09-30): a Mac that frees up takes the queued
+# job whose *pool* - the number of distinct Macs that could run it at all - is smallest, so the few
+# big Macs are not spent on work the many small ones can do. Ties stay on the model the Mac already
+# holds, then first come first served. The old rule ranked audio ahead of image on every Mac; that
+# is gone, because "audio" says nothing about how many Macs can run the model. See
+# `_queued_batches`, `pool_machines` and memory_admission's requirement ladder. Nothing is preempted
+# and nothing is reserved: a Mac with eligible queued work is never left idle.
+# Episode renders stay ahead of everything (they are the Hub Mac's own assembly step, and
+# `acquire_external_machine` already reserves a render Mac for them).
 MAX_TRIES = 3
 MAX_INFRA_TRIES = 8
 INFRA_RETRY_WINDOW_S = 30 * 60
@@ -232,11 +220,12 @@ RECOVERY_WINDOW_S = 120.0  # cover a full slow M1 generation after a dropped con
 RETRY_DELAYS_S = (3.0, 10.0)
 INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
-# A Mac another queue has reserved is not free *yet*, which is the same kind of wait as a
-# memory block and a different one to tune: it keeps its own interval rather than borrowing
-# CAPACITY_RETRY_S, so changing how long a memory wait sleeps cannot silently retune how often
-# a controller re-offers work to a busy peer.
-MACHINE_RESERVED_RETRY_S = 30.0
+# A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
+# refusal takes that machine out of selection for this long - for every item aimed at it, through
+# `_machine_reserved_until` - and the dispatcher's own heartbeat retries after that. It keeps its
+# own constant rather than borrowing FAILED_WORKER_AVOID_S, because a reservation is a busy Mac,
+# not a broken one, and the moment it is free it must take work again.
+MACHINE_RESERVED_AVOID_S = 5.0
 HANDOFF_RETRY_S = 15.0
 FAILED_WORKER_AVOID_S = 90.0
 MACHINE_FAILURE_THRESHOLD = 2
@@ -263,6 +252,12 @@ _EXTERNAL_LANES = frozenset(
     modality for modality, kind in MODALITY_RETRY_CLASS.items()
     if kind == RETRY_CLASS_AUXILIARY_LANE)
 _external_lane_turn: dict[str, str] = {}
+# machine -> monotonic-free wall time until which a peer's MACHINE_BUSY refusal keeps this Mac out
+# of selection. One refusal covers every item aimed at the machine, not just the one that met it.
+_machine_reserved_until: dict[str, float] = {}
+# studio id -> the model it last took work for: the model it is most likely still holding, which the
+# scheduler prefers among equal-scarcity work so a Mac does not reload for nothing.
+_last_model: dict[str, str] = {}
 # machine -> recent transport failures and an optional circuit-breaker cooldown.
 # This is intentionally process-local: after a Hub restart every worker must
 # answer health again before it becomes eligible, which is a clean circuit reset.
@@ -497,7 +492,7 @@ def _published_memory_tier_gb(model: str, modality: str) -> float | None:
     for match in reader(model, modality=modality):
         try:
             tier = memory_admission.describe(model, match["entry"]).get(
-                "catalog_min_total_memory_gb")
+                "effective_min_total_memory_gb")
         except (TypeError, ValueError):
             # A malformed published floor is the governor's problem to refuse; placement must not
             # fail a dispatch over it.
@@ -549,31 +544,111 @@ def _placement_key(modality: str, model: str | None = None):
     return key
 
 
-def _batch_memory_constraint_gb(batch: dict) -> float:
-    """Highest cache-observed admission floor for a queued exact model.
+def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str, tuple]:
+    """machine -> (studio, catalog row) for every distinct Mac that could run this model at all.
 
-    This is a ranking hint, never an admission decision. It reads the
-    monitor's durable last-good catalogue only, so queue inspection cannot
-    contact workers. The per-worker catalogue, cache, immutable revision, and
-    live-memory checks still decide whether dispatch may actually occur.
+    A job's *pool*: capacity, not availability. A Mac counts while it is up, enabled, not in
+    maintenance or cooling down, its worker is authoritative, the model is cached and not paused
+    there, the routing rule allows it (a pin is a pool of one) and its RAM is not known to be below
+    the model's requirement (`memory_admission.requirement_gb`; unknown RAM counts). Busy Macs
+    count - they will free up. Reads cached catalogs only, and the last-good row rather than the
+    fresh-only one, so a catalog that is briefly stale does not shrink the pool to nothing.
     """
-    model = str(batch.get("model") or "")
-    modality = str(batch.get("modality") or "")
-    if not model:
-        return 0.0
-    floors: list[float] = []
-    for match in _monitor().scheduling_catalog_entries(model, modality=modality):
-        entry = match["entry"]
-        if entry.get("is_cloud") or not memory_admission.applies_to(modality):
+    mon = _monitor()
+    if modality == "transcription":
+        cache = getattr(mon, "_transcribe_cache", {})
+        rows = [(studio, row) for studio in mon.registry if studio.get("modality") == modality
+                for row in ((cache.get(studio["id"]) or (0, {}))[1] or {}).get("models", [])
+                if isinstance(row, dict) and row.get("repo") == model]
+    else:
+        rows = [(m["studio"], m["entry"])
+                for m in mon.cached_catalog_entries(model, modality=modality)]
+    members: dict[str, tuple] = {}
+    for studio, entry in rows:
+        machine = studio.get("machine", "local")
+        if (machine in members
+                or not routing_rule.allows(studio, routing)
+                or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
+                or studio["id"] in _maintenance
+                or not machine_enabled(machine) or not studio_enabled(machine, studio["id"])
+                or _machine_blocked(machine)
+                or mon.status.get(studio["id"], {}).get("status") != "up"
+                or not peers.dispatch_ready(studio)
+                or not entry.get("cached", is_cached(entry))
+                or _model_block_note(studio, model, entry)):
             continue
-        requirements = _admission_requirements(model, entry)
-        try:
-            minimum = float((requirements or {}).get("min_total"))
-        except (TypeError, ValueError):
+        known = _known_memory_gb(studio)
+        needed = memory_admission.requirement_gb(model, entry)[0] or 0.0
+        if known is not None and known < needed:
             continue
-        if minimum > 0:
-            floors.append(minimum)
-    return max(floors, default=0.0)
+        members[machine] = (studio, entry)
+    return members
+
+
+def pool_machines(modality: str, model: str, routing: str = "pool") -> set[str]:
+    """The Macs that could run this model at all - see `_pool_members`."""
+    return set(_pool_members(modality, model, routing))
+
+
+def _pool_size(modality: str, model: str, routing: str = "pool") -> float:
+    """Pool size for ordering: a job nobody can run sorts last (infinity) and holds nothing up."""
+    return len(_pool_members(modality, model, routing)) or math.inf
+
+
+def _broker_dispatchable_pool(machine: str) -> float | None:
+    """Smallest pool among this queue's batches that could start on ``machine`` right now.
+
+    The same tests the dispatch loop applies - idle studio, lease, avoid window, synced voice,
+    catalog, live memory - so another lane never yields the Mac to work that would not go.
+    """
+    now = time.time()
+    best: float | None = None
+    for b in list(batches.values()):
+        if b.get("cancelled") or b["modality"] == "render":
+            continue
+        queued = [i for i in b["items"]
+                  if i["state"] == "queued" and (i.get("retry_at") or 0) <= now]
+        member = _pool_members(b["modality"], b.get("model") or "", b["routing"]).get(machine) \
+            if queued else None
+        if member is None or admission_refusal(b):
+            continue
+        studio, entry = member
+        if (studio not in _eligible_studios(b["modality"], b["routing"], b.get("model"))
+                or not _supports_genstudio_voice_evidence(b, studio)
+                or not memory_admission_dispatchable(studio, b["model"], entry)
+                or not any(_shared_voice_allows_studio(b, i, studio)
+                           and _item_allows_studio(i, studio, now) for i in queued)):
+            continue
+        best = min(best or math.inf, _pool_size(b["modality"], b["model"], b["routing"]))
+    return best
+
+
+async def scarcer_work_waiting(machine: str, pool: float, own_lane: str) -> bool:
+    """Whether another lane has strictly scarcer work that can take ``machine`` right now.
+
+    Cross-lane scarcest-first: a Mac that image, voice or music work wants is handed to the LLM
+    (or the reverse) when the other lane's job has fewer Macs to run on. Only work that can start
+    this instant defers anyone, so this can never hold a Mac idle - no reservation, just an order.
+    Each lane calls it for itself immediately before leasing; ``own_lane`` is skipped because a lane
+    already orders its own queue.
+    """
+    from . import chat_jobs, transcription_jobs
+    found = []
+    # `has_queued_work` first: an idle lane costs nothing, which is nearly always.
+    if own_lane != "broker" and any(
+            item["state"] == "queued" for b in batches.values() for item in b["items"]):
+        found.append(_broker_dispatchable_pool(machine))
+    if own_lane != "chat" and chat_jobs.has_queued_work():
+        found.append(await chat_jobs.dispatchable_pool(_monitor(), machine))
+    if own_lane != "transcription" and transcription_jobs.has_queued_work():
+        found.append(await transcription_jobs.dispatchable_pool(_monitor(), machine))
+    scarcer = any(value is not None and value < pool for value in found)
+    if scarcer:  # wake the lanes that can use it - never the caller's own, which would spin
+        for lane, wake in (("broker", _wakeup), ("chat", chat_jobs._wakeup),
+                           ("transcription", transcription_jobs._wakeup)):
+            if lane != own_lane:
+                wake.set()
+    return scarcer
 
 
 def _protection(machine: str) -> dict:
@@ -2927,7 +3002,8 @@ def _eligible_studios(modality: str, routing: str,
         if routing == "remote" and peers.is_local_studio(s):
             continue
         if (s["modality"] != modality or s["id"] in _busy
-                or s["id"] in _maintenance or machine in leased_machines):
+                or s["id"] in _maintenance or machine in leased_machines
+                or _machine_reserved_until.get(machine, 0) > time.time()):
             continue
         if not peers.dispatch_ready(s):
             continue
@@ -3019,59 +3095,35 @@ def _supports_genstudio_voice_evidence(batch: dict, studio: dict) -> bool:
     return parsed is not None and parsed >= _GENSTUDIO_VOICE_EVIDENCE_VERSION
 
 
-def _queued_batches() -> list[dict]:
-    """Queued work in modality, scarcity, then fair-turn order.
+def _queued_batches() -> list[tuple[float, dict]]:
+    """Queued work as ``(pool, batch)``, scarcest first.
 
-    Audio sorts ahead of image (see MODALITY_PRIORITY), so a worker that just
-    freed up is offered to queued audio before queued image. Because the
-    scheduler makes one pass over this list, this never idles a worker: audio
-    that cannot use a given Mac leaves it to the image batch immediately.
+    A batch's *pool* is how many distinct Macs could run its model at all (`pool_machines`); a Mac
+    that frees up is offered the smallest pool first, so the few Macs that can run a big model are
+    not spent on work the many small ones can do. Equal pools go first come first served
+    (``created_at``) - the dispatch loop puts the model a Mac already holds ahead of that, per Mac.
+    A pool of zero (nobody can run it right now, or its catalog is unknown) sorts last and holds
+    nothing up. Episode renders stay ahead of everything.
 
-    Within one normal-priority local-inference class, a workload that needs
-    more total memory receives the next compatible high-memory worker before a
-    flexible workload does. This changes only the next dispatch decision:
-    running work is never preempted, and lower-memory work remains
-    work-conserving when no constrained job is waiting.
+    This changes only the next dispatch decision: running work is never preempted, and every Mac
+    with eligible queued work is offered something, so nothing is held idle.
     """
+    pools: dict[tuple, float] = {}
+
+    def pool_of(batch: dict) -> float:
+        if batch["modality"] == "render":
+            return 0
+        key = (batch["modality"], batch.get("model") or "",
+               batch.get("routing", routing_rule.POOL))
+        if key not in pools:
+            pools[key] = _pool_size(*key)
+        return pools[key]
+
     return sorted(
-        (batch for batch in batches.values()
+        ((pool_of(batch), batch) for batch in batches.values()
          if any(item.get("state") == "queued" for item in batch.get("items", []))),
-        key=lambda b: (MODALITY_PRIORITY.get(b["modality"], 10),
-                       -_batch_memory_constraint_gb(b),
-                       b.get("last_dispatched_at", 0),
-                       b.get("created_at", 0)),
+        key=lambda row: (row[0], row[1].get("created_at", 0)),
     )
-
-
-def _image_batch_waiting(now: float) -> dict | None:
-    """A dispatchable image batch, for the audio-priority decision log.
-
-    Read from the live queue, never inferred: this is the same `queued` test the
-    scheduler itself applies, so the log line only claims audio went first when
-    an image job really was ready to take that worker.
-    """
-    for batch in batches.values():
-        if batch["modality"] != "image" or batch.get("cancelled"):
-            continue
-        if any(i["state"] == "queued" and (i.get("retry_at") or 0) <= now
-               for i in batch["items"]):
-            return batch
-    return None
-
-
-def _log_audio_priority(batch: dict, item: dict, studio: dict, now: float) -> None:
-    """One line whenever audio takes a worker ahead of ready image work."""
-    if batch["modality"] not in AUDIO_MODALITIES:
-        return
-    waiting = _image_batch_waiting(now)
-    if waiting is None:
-        return
-    logging.getLogger("studiohub.broker").info(
-        "audio priority machine=%s studio=%s audio=%s/%s#%d image-waiting=%s/%s "
-        "— audio takes this worker first; the image job keeps every other worker",
-        studio.get("machine", "local"), studio["id"],
-        batch["id"], batch["model"], item["index"],
-        waiting["id"], waiting["model"])
 
 
 def evict_finished_batches(*, keep_recent: int = 20, older_than_s: float = 900.0) -> int:
@@ -3126,7 +3178,14 @@ async def _dispatch_loop():
                                 and not item.get("cancel_signal_sent_at")):
                             await _signal_worker_cancel(client, item)
                             ledger.save_batch(batch)
-            for b in _queued_batches():
+            # Scarcest pool first; within one pool, a Mac that already holds a model is offered that
+            # model's batch before the others (a sticky pass), then first come first served.
+            work = []
+            for _pool, rows in itertools.groupby(_queued_batches(), key=lambda row: row[0]):
+                group = [row[1] for row in rows]
+                work += [(b, _pool, True) for b in group if b.get("model") in _last_model.values()]
+                work += [(b, _pool, False) for b in group]
+            for b, pool, sticky in work:
                 if _expire_genstudio_batch(b):
                     ledger.save_batch(b)
                     continue
@@ -3161,6 +3220,13 @@ async def _dispatch_loop():
                 for studio in eligible:
                     if not queued:
                         break
+                    if sticky and _last_model.get(studio["id"]) != b.get("model"):
+                        continue
+                    # Another lane's strictly scarcer job that can start on this Mac right now
+                    # goes first; it is an order, not a reservation - nothing waits on an idle Mac.
+                    if await scarcer_work_waiting(
+                            studio.get("machine", "local"), pool, "broker"):
+                        continue
                     compatible_index = next(
                         (index for index, candidate in enumerate(queued)
                          if _shared_voice_allows_studio(b, candidate, studio)
@@ -3240,6 +3306,7 @@ async def _dispatch_loop():
                     item["_reserved"] = reserve
                     _reserved["gb"] += reserve
                     _busy.add(studio["id"])
+                    _last_model[studio["id"]] = b["model"]
                     b["last_dispatched_at"] = time.time()
                     if b["modality"] in RECEIPT_DURABLE_MODALITIES:
                         # A crash after POST may lose its response. Persist the
@@ -3256,7 +3323,6 @@ async def _dispatch_loop():
                             _reserved["gb"] = max(0.0, _reserved["gb"] - reserve)
                             _busy.discard(studio["id"])
                             raise
-                    _log_audio_priority(b, item, studio, now)
                     asyncio.create_task(_run_item(client, b, item, studio))
                     assigned = True
             _wakeup.clear()
@@ -4019,10 +4085,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             item["state"] = "queued"
             item["error"] = f"waiting for a free machine: {message}"
-            item["retry_at"] = now + MACHINE_RESERVED_RETRY_S
-            item.setdefault("avoid_machines", {})[
-                studio.get("machine", "local")
-            ] = now + FAILED_WORKER_AVOID_S
+            # The Mac is busy, not broken, and the peer's 409 stays the authority on when it
+            # is free: no parked retry (the dispatcher's 3 s heartbeat asks again) and a short
+            # avoid window, recorded per machine so this one refusal covers every item aimed at it.
+            item["retry_at"] = None
+            machine = studio.get("machine", "local")
+            item.setdefault("avoid_machines", {})[machine] = now + MACHINE_RESERVED_AVOID_S
+            _machine_reserved_until[machine] = now + MACHINE_RESERVED_AVOID_S
         elif retryable and _is_transport_failure(e, message) and not b["cancelled"]:
             # Infrastructure failures get a longer bounded healing window than
             # genuine generation errors. The stable worker job id was already

@@ -43,10 +43,11 @@ def _host_facts() -> dict:
 def memory_warning(model, host: dict) -> str | None:
     """The tier warning for one model on one host.
 
-    A published RAM floor is a tier, not a wall: the worker warns and the Hub's admission
-    governor owns the live decision. FLUX.2 Klein is qualified at 16 GB and has run thousands
-    of generations on the owner's 8 GB Macs. Z-Image-Turbo's warning says what is actually
-    known — its 8 GB tier is being measured — rather than refusing the machine.
+    The worker warns and does not refuse; the Hub owns the decision, and since 2026-09-30 it
+    enforces the model's RAM requirement (measured, else manifest, else this catalog row) as a
+    hard eligibility floor. FLUX.2 Klein is qualified at 16 GB but the fleet measured it on the
+    owner's 8 GB Macs, so the Hub's requirement for it is 8 GB. Z-Image-Turbo's warning says what
+    is actually known — its 8 GB tier is being measured — rather than refusing the machine.
     """
     memory = host.get('unified_memory_bytes') or 0
     if (not host.get('eligible') or not memory or not model.below_tier_warning
@@ -139,20 +140,18 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'model_revision': model.revision, 'qualified_revision': model.revision,
             'qualified_revision_match': True, 'runtime_revision': manager.runtime_sha256,
             'runtime_compatible': True, 'runtime_ready': True,
-            # `min_total_memory_gb` is the tier the model is qualified at, not a dispatch floor:
-            # the Hub's admission governor owns the live decision, and `memory_warning` is what
-            # tells the operator their Mac is below the qualified tier while the work still runs.
+            # `min_total_memory_gb` is the tier the model is qualified at. The worker does not
+            # refuse on it: the Hub decides (its requirement floor - measured, else manifest, else
+            # this row - is enforced), and `memory_warning` tells the operator their Mac is below.
             'memory_eligible': host['eligible'],
             'min_total_memory_gb': model.qualified_minimum_memory_gb,
             'qualified_minimum_memory_gb': model.qualified_minimum_memory_gb,
-            # The key the Hub's own policy reads (`workload_policy.required_total_memory_gb`).
-            # Its total-memory floor is published for the operator and is not enforced: unless
-            # an operator override names one, the live guard is free memory, so a smaller Mac
-            # is warned here rather than refused.
+            # The key the Hub's own policy reads (`workload_policy.required_total_memory_gb`),
+            # the last rung of its requirement ladder (override, measured, manifest, this row).
             'min_unified_memory_gb': model.qualified_minimum_memory_gb,
-            # The floors the Hub's governor reads per model: `min_free_memory_gb` is enforced
-            # before dispatch, while `min_total_memory_gb`/`min_unified_memory_gb` are
-            # published for the operator and are not enforced without an operator override.
+            # The floors the Hub's governor reads per model: `min_free_memory_gb` is the live
+            # free-RAM guard before dispatch; `min_total_memory_gb`/`min_unified_memory_gb` feed
+            # the requirement the Hub enforces as an eligibility floor (measured/manifest first).
             'min_free_memory_gb': model.min_free_memory_gb,
             'memory_warning': warning,
             # What this host will actually do with the model, and the bound it is choosing.

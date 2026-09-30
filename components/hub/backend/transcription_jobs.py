@@ -707,7 +707,13 @@ def has_queued_work() -> bool:
 
 async def has_dispatchable_work(monitor, machine: str) -> bool:
     """Whether this lane can actually use ``machine`` on its next turn."""
+    return await dispatchable_pool(monitor, machine) is not None
+
+
+async def dispatchable_pool(monitor, machine: str) -> float | None:
+    """Smallest pool among this lane's batches that can start on ``machine`` right now, else None."""
     now = time.time()
+    best = None
     for batch in batches.values():
         if (batch.get("cancelled")
                 or execution_identity.lease_expired(batch.get("genstudio_execution"))
@@ -728,8 +734,14 @@ async def has_dispatchable_work(monitor, machine: str) -> bool:
                               if row.get("repo") == batch["model"]), None)
                 if entry and broker.memory_admission_dispatchable(
                         studio, batch["model"], entry):
-                    return True
-    return False
+                    pool = broker._pool_size(
+                        "transcription", batch["model"], _routing(batch))
+                    best = pool if best is None else min(best, pool)
+    return best
+
+
+def _routing(batch: dict) -> str:
+    return str(batch.get("routing") or routing_rule.POOL)
 
 
 def _expire_genstudio_batch(batch: dict) -> bool:
@@ -783,9 +795,16 @@ async def dispatch_once(monitor) -> int:
     assigned = 0
     while True:
         made_progress = False
+        # Scarcest first, like every lane: the batch with the fewest Macs that can run its model
+        # goes first, then first come first served.
+        pools = {}
         active = sorted(
             (batch for batch in batches.values() if not batch.get("cancelled")),
-            key=lambda batch: (batch.get("last_dispatched_at", 0), batch["created_at"]),
+            key=lambda batch: (
+                pools.setdefault((batch["model"], _routing(batch)), broker._pool_size(
+                    "transcription", batch["model"], _routing(batch))),
+                batch["created_at"],
+            ),
         )
         for batch in active:
             if _expire_genstudio_batch(batch):
@@ -833,7 +852,8 @@ async def dispatch_once(monitor) -> int:
                 decision, note = await broker.prepare_machine_memory(
                     monitor._client, studio, batch["model"], entry)
                 if decision != "run":
-                    broker.note_external_memory_block(machine, "transcription")
+                    if decision != "skip":  # a Mac below the model's floor is not a turn to pass on
+                        broker.note_external_memory_block(machine, "transcription")
                     blocked = f"memory admission on {machine} returned {decision}: {note or 'no detail'}"
                     if batch.get("governor_note") != blocked:
                         batch["governor_note"] = blocked
@@ -845,6 +865,11 @@ async def dispatch_once(monitor) -> int:
                 # Catalog, runtime or OS may have changed during worker and
                 # memory probes; recheck before leasing this physical Mac.
                 if broker.admission_refusal(batch):
+                    continue
+                if await broker.scarcer_work_waiting(
+                        machine, broker._pool_size(
+                            "transcription", batch["model"], _routing(batch)),
+                        "transcription"):
                     continue
                 owner = f"transcription:{batch['id']}:{item['index']}"
                 if not broker.acquire_external_machine(machine, owner):

@@ -12,6 +12,13 @@ so the 8 GB-floor Qwen3-TTS 0.6B took a 32 GB Mac while the 12-32 GB voice model
 Capability is admission's job - a machine below a model's published floor is refused before
 placement runs - so ordering is only ever the tie-break among machines that can all do the work,
 and the smallest of those is the right one on a fleet where the 16 GB+ Macs are the scarce ones.
+
+Owner decision 2026-09-30: the requirement is now also a hard eligibility floor (a Mac below it is
+outside the model's *pool* and `_memory_gate` skips it), and queue order is scarcest-pool-first
+(`test_scarcest_first_dispatch.py`). This file still tests the *machine* ordering for one job, which
+is unchanged: `_eligible_studios` keeps below-floor Macs in the list behind capable ones because the
+gate at dispatch, not this ordering, refuses them - so the premise these cases relied on ("a tier is
+never a wall") changed, and the assertions stay valid because they only ever asserted order.
 """
 from __future__ import annotations
 
