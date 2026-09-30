@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from components.hub.backend import fleet_nodes  # noqa: E402
@@ -80,6 +82,65 @@ class CredentialRefusalTests(unittest.TestCase):
         self.assertEqual(result["summary"]["unauthorized"], 1)
         self.assertEqual(result["summary"]["unreachable"], 0,
                          "a refused credential is not a silent Mac")
+
+
+class _RaisingClient:
+    """A client whose GET fails the way the network fails."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def get(self, url, timeout=None):
+        raise self.exc
+
+    async def aclose(self):
+        pass
+
+
+class UnreachableReasonTests(unittest.TestCase):
+    """**Why** a node did not answer, as a field rather than a sentence.
+
+    The reason decides what the operator is told to do, and the two answers are opposite:
+    a refused TCP connection means the Mac is up and its Studio Hub is not running, while
+    dropped packets mean the Mac is asleep, off, or firewalled — nothing about which is the
+    Hub's fault. That distinction was only ever in prose, spelled two different ways by the
+    two paths below, so a reader could not act on it without parsing a sentence. The gateway
+    consequently told the owner to *"fix Studio Hub on that Mac"* for machines that were
+    simply switched off.
+    """
+
+    def test_a_refused_connection_is_no_hub(self):
+        # TCP refused: the Mac answered and nothing is listening on :47873.
+        row = asyncio.run(fleet_nodes.probe(
+            dict(NODE), _RaisingClient(httpx.ConnectError("Connection refused"))))
+        self.assertEqual(row["state"], "unreachable")
+        self.assertEqual(row["reason"], "no_hub")
+
+    def test_a_dropped_packet_is_unreachable(self):
+        # Packets dropped: the Mac is asleep/off, or a firewall is blocking the port.
+        row = asyncio.run(fleet_nodes.probe(
+            dict(NODE), _RaisingClient(httpx.ConnectTimeout("timed out"))))
+        self.assertEqual(row["state"], "unreachable")
+        self.assertEqual(row["reason"], "unreachable")
+
+    def test_a_poll_snapshot_carries_its_own_status_as_the_reason(self):
+        from_snapshot = fleet_nodes._from_snapshot
+        no_hub = from_snapshot(dict(NODE), {"reachable": False, "auth": True, "status": "no_hub"})
+        self.assertEqual(no_hub["reason"], "no_hub")
+        dropped = from_snapshot(dict(NODE), {"reachable": False, "auth": True})
+        self.assertEqual(dropped["reason"], "unreachable",
+                         "a snapshot that states no status is not a Hub that refused")
+
+    def test_both_paths_name_the_same_vocabulary(self):
+        # The point of the field: whichever path produced the row, the reason reads the
+        # same way, so a consumer never has to know which one it was.
+        rows = [
+            asyncio.run(fleet_nodes.probe(
+                dict(NODE), _RaisingClient(httpx.ConnectError("refused")))),
+            fleet_nodes._from_snapshot(
+                dict(NODE), {"reachable": False, "auth": True, "status": "no_hub"}),
+        ]
+        self.assertEqual({r["reason"] for r in rows}, {"no_hub"})
 
 
 if __name__ == "__main__":

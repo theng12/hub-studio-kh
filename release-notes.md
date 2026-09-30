@@ -2,6 +2,27 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.113 — 2026-09-30
+
+### A machine that is switched off now says so, instead of blaming Studio Hub
+
+Nothing changes on screen in this release. It exists so that the **Fleet page can tell you the
+right thing to go and check** when a Mac does not answer.
+
+Two different things look identical when a Mac is unreachable, and they need opposite responses:
+
+- **The Mac is on, but Studio Hub is not running on it.** Then the fix is to start Studio Hub.
+- **The Mac is asleep or switched off** (or a firewall is blocking the port). Then there is nothing
+  wrong with Studio Hub at all — the Mac needs waking.
+
+This Hub has always told the two apart internally. It just never *said which* in a way the gateway
+could read, so the gateway had to guess — and it guessed "Studio Hub", which is wrong for a Mac that
+is simply off. That is why eight powered-off Macs could look like a Hub fault.
+
+The reason is now published as its own field, so the Fleet page can say **"Check that Mac is
+switched on and awake"** for a Mac that never answered, and **"Start Studio Hub on that Mac"** for
+one that answered without its Hub. Nothing else changes, and no work is affected either way.
+
 ## 0.6.112 — 2026-09-30
 
 ### Nothing changes for you in this one — it fixes two things 0.6.111 got wrong

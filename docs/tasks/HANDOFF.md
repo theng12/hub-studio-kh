@@ -3,7 +3,37 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.112** (two corrections 0.6.111 shipped, both found by auditing it; 2026-09-30).
+Last updated: **0.6.113** (an unreachable node now says *why*, as a field; 2026-09-30).
+
+> **0.6.113 — the reason a node did not answer was only ever in a sentence, spelled two ways.**
+>
+> **Found by checking an owner question, not by a failure.** He noticed one controller reporting
+> eight of nine Macs unreachable and asked whether it was a real outage or a stale roster. It was a
+> **real outage** — the Macs are switched off — but the check turned up a defect in what the
+> Gateway told him to do about it: *"Studio Hub on that Mac"* for every unreachable machine.
+>
+> **The Hub has always drawn the distinction; nothing could read it.** `peers.py` separates:
+>
+> - **`no_hub`** — TCP refused. The Mac is up and nothing is listening on `:47873`.
+> - **`unreachable`** — packets dropped. A firewall is blocking, **or the Mac is asleep or off.**
+>
+> But the two paths that produce an unreachable node wrote it differently —
+> `_from_snapshot` wrote `could not reach the node (no_hub)` with the token present, and `probe`
+> wrote `could not reach http://…: ConnectTimeout` with **no token at all** — so the only way to
+> learn the reason was to parse a sentence written two different ways. With no field to read, the
+> Gateway gave one answer to both, and picked the wrong one for eight powered-off Macs.
+>
+> `reason` is now published by both paths, in the poll's own vocabulary; `detail` is unchanged. The
+> direct-dial path classifies with the same rule the poll uses (`httpx.ConnectError` is a refusal,
+> everything else a drop), so the two agree **by construction rather than coincidence**.
+>
+> ⚠ **The Gateway reads this field, but it also has a fallback, and that is deliberate.** Every
+> controller in the fleet is on **0.6.110** and predates the field, so `gateway/fleet.py`'s
+> `_node_reach_reason` falls back to the machine's `health` and then to the token in the sentence.
+> That fallback is a second copy of a vocabulary this Hub owns and will drift; it is confined to one
+> function so deleting it, once every controller is updated, is a two-line change.
+>
+> **Gate: `unittest discover -s tests -p 'test_*.py'` → 1523 tests, OK (12 skipped), 611 s, exit 0.**
 
 > **0.6.112 — 0.6.111 was audited independently, and the audit found two defects in 0.6.111's own
 > footprint.** Neither changes shipped behaviour; one closes a hole in a guard, the other stops a

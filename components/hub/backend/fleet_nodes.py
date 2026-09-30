@@ -521,6 +521,28 @@ def _probe_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(follow_redirects=False, headers=headers)
 
 
+def _unreachable_reason(exc: BaseException) -> str:
+    """Why a node did not answer, in the same vocabulary the peer poll uses.
+
+    **A field, not a sentence, because the two callers used to disagree.** `_from_snapshot`
+    writes `could not reach the node (no_hub)` — the token is right there — while this path
+    wrote `could not reach http://…: ConnectTimeout`, which carries no token at all. A reader
+    that wanted the reason therefore had to parse prose that is spelled two different ways,
+    which is how the gateway came to tell an operator to *"fix Studio Hub on that Mac"* for a
+    machine that was simply switched off.
+
+    The distinction is the one `peers.py` already draws and documents:
+
+    * **`no_hub`** — TCP refused. Something answered the network and nothing is listening on
+      :47873, so the Mac is up and its Studio Hub is not running.
+    * **`unreachable`** — packets dropped. A firewall is blocking the port, or the Mac is
+      asleep or off. Nothing about this says the Hub is at fault.
+    """
+    if isinstance(exc, httpx.ConnectError):
+        return "no_hub"
+    return "unreachable"
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -538,6 +560,7 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     if snapshot.get("reachable") and snapshot.get("auth", True):
         return {**row, **carried, "state": "reachable", "detail": None}
     return {**row, **carried, "state": "unreachable",
+            "reason": str(snapshot.get("status") or "unreachable"),
             "detail": f"could not reach the node ({snapshot.get('status') or 'unreachable'})"}
 
 
@@ -606,7 +629,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         detail = f"could not reach {node.get('address') or 'the node'} ({PROBE_PATH}): {type(exc).__name__}"
         if reason:
             detail = f"{detail}: {reason}"
-        return {**row, "state": "unreachable", "detail": detail}
+        return {**row, "state": "unreachable", "reason": _unreachable_reason(exc), "detail": detail}
     finally:
         if owned:
             await client.aclose()

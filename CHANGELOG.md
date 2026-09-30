@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.113 — 2026-09-30 · Why a node did not answer, as a field rather than a sentence
+
+**The distinction was always made; it was just not readable.** The peer poll separates two
+failures that need opposite responses:
+
+- **`no_hub`** — TCP refused. Something answered the network and nothing is listening on `:47873`,
+  so the Mac is up and its Studio Hub is not running.
+- **`unreachable`** — packets dropped. A firewall is blocking the port, or **the Mac is asleep or
+  off.** Nothing about this says the Hub is at fault.
+
+`peers.py` documents both. But a reader could not *use* the distinction, because the two code paths
+that produce an unreachable node spelled it differently:
+
+| Path | What it wrote |
+| --- | --- |
+| `_from_snapshot` (the peer poll) | `could not reach the node (no_hub)` — the token is there |
+| `probe` (a direct dial) | `could not reach http://…: ConnectTimeout` — **no token at all** |
+
+So the only way to learn the reason was to parse a sentence that is written two different ways.
+
+**That is how the Gateway came to tell the owner to "fix Studio Hub on that Mac" for eight Macs
+that were simply switched off.** The advice is right for `no_hub` and wrong for `unreachable`, and
+with no field to read the Gateway had to give one answer to both.
+
+`reason` is now published on an unreachable node by both paths, in the peer poll's own vocabulary.
+`detail` is unchanged — it is still the sentence an operator reads.
+
+**Also published for the same reason:** the direct-dial path classifies with the same rule the poll
+uses (`httpx.ConnectError` is a refusal, everything else is a drop), so the two agree by
+construction rather than by coincidence.
+
 ## 0.6.112 — 2026-09-30 · Two corrections 0.6.111 shipped, both found by auditing it
 
 Both of these are in 0.6.111's own footprint. Neither changes a shipped behaviour; one closes a
