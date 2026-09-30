@@ -60,6 +60,9 @@ REMOVED_DETAIL = ("this controller removed this Mac on {when}; re-admit it from 
                   "to join again")
 
 
+NEVER_CONNECTED_AFTER_S = 24 * 3600
+
+
 def store_path() -> Path:
     return DATA_DIR / FILE_NAME
 
@@ -106,7 +109,8 @@ def _removed() -> dict[str, dict[str, Any]]:
 
 def removed() -> dict[str, dict[str, Any]]:
     """The machines this controller has evicted, newest first."""
-    rows = _removed()
+    rows = {key: {k: v for k, v in row.items() if k != "revoked_hash"}
+            for key, row in _removed().items()}
     return dict(sorted(rows.items(), key=lambda item: item[1].get("removed_at") or 0,
                        reverse=True))
 
@@ -413,6 +417,54 @@ def leave(node_id: str) -> bool:
     return True
 
 
+def status(node_id: str) -> dict[str, Any]:
+    """Whether this controller still lists `node_id`: `member`, `removed` (with when) or `unknown`.
+
+    What a node asks so that a removal made on the controller reaches the Mac itself. Read-only,
+    and it mints nothing: a join used as a heartbeat would issue a fresh credential on every call.
+    """
+    node_id = str(node_id or "").strip().lower()
+    document = _document()
+    if node_id in document["nodes"]:
+        return {"id": node_id, "state": "member"}
+    gone = document["removed"].get(node_id)
+    if gone is not None:
+        at = gone.get("removed_at")
+        return {"id": node_id, "state": "removed", "removed_at": at,
+                "detail": str(NodeRemovedError(node_id, at))}
+    return {"id": node_id, "state": "unknown"}
+
+
+def revoked_detail(offered: str | None) -> str | None:
+    """The removal sentence for a credential this controller revoked by removing its Mac, else `None`.
+
+    A revoked node credential used to fall through to a generic 401, which a node cannot tell from
+    a controller that lost its roster. The tombstone keeps the hash, so the refusal can say what
+    happened and the date.
+    """
+    if not offered:
+        return None
+    digest = hash_credential(offered)
+    for node_id, row in _removed().items():
+        stored = str(row.get("revoked_hash") or "")
+        if stored and hmac.compare_digest(stored, digest):
+            return str(NodeRemovedError(node_id, row.get("removed_at")))
+    return None
+
+
+def rename(node_id: str, name: str) -> bool:
+    """Refresh a node's stored label. The roster name is written at join, so a rename on the Mac
+    reached the controller only when that Mac re-joined. Returns whether anything changed."""
+    name = str(name or "").strip()
+    nodes = _read()
+    row = nodes.get(str(node_id or "").lower())
+    if row is None or not 1 <= len(name) <= 120 or row.get("name") == name:
+        return False
+    row["name"] = name
+    _write(nodes)
+    return True
+
+
 def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
     """**Evict** a node: revoke its credential and remember the removal for good.
 
@@ -434,6 +486,10 @@ def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
         "address": row.get("address"),
         "removed_at": time.time(),
         "removed_by": by,
+        # The hash of the credential this removal revoked, kept so the Mac that still holds it is
+        # told it was removed (`revoked_detail`) instead of a bare 401. Never published:
+        # `removed()` strips it.
+        "revoked_hash": row.get("credential_hash"),
         # What the machine was, kept for the operator's benefit: a list of bare ids is not
         # something a person can check against a shelf of Macs.
         "role": row.get("role"),
@@ -589,6 +645,13 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     # roster row with no hash is a row from before per-node credentials existed, and it reads
     # as "the next join of this id has to prove itself" rather than as "trusted".
     row["has_credential"] = bool(node.get("credential_hash"))
+    # Joined more than a day ago and never once answered a probe since. `last_seen_at` is seeded
+    # with the join time, so "never" means it has not moved past it. The row still offers Remove;
+    # this only lets the page say why it is worth removing.
+    joined_at = node.get("joined_at") or 0
+    row["never_connected"] = bool(
+        joined_at and time.time() - joined_at > NEVER_CONNECTED_AFTER_S
+        and (node.get("last_seen_at") or 0) - joined_at < 60)
     snapshot = fresh_snapshot(str(node.get("id") or ""))
     if snapshot is not None:
         return _from_snapshot(row, snapshot)
@@ -651,6 +714,7 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
         for row in rows:
             if row.get("state") == "reachable":
                 row["last_seen_at"] = seen_at
+                row["never_connected"] = False
     # The role this Hub is actually in, not a constant.
     #
     # This was hardcoded to "controller", so a standalone Mac answered "controller" here while

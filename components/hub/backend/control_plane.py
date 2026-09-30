@@ -94,6 +94,28 @@ def defaults() -> dict:
     }
 
 
+def ensure_controller_id() -> None:
+    """Write the derived `controller_id` to disk once, so it stops following the hostname.
+
+    `defaults()` re-derives it from the hostname on every read until a save happens, so renaming
+    the Mac in macOS before then changed the id its controller knows it by. Once written, the
+    saved value wins. The label (`machine_name`) is what people see; this is only the key.
+    """
+    global _settings_cache
+    with _settings_lock:
+        try:
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except OSError:
+            saved = {}
+        except ValueError:
+            return  # a damaged file is not ours to overwrite
+        if not isinstance(saved, dict) or saved.get("controller_id"):
+            return
+        merged = {**defaults(), **saved}
+        _write_private_file(SETTINGS_FILE, json.dumps(merged, indent=2) + "\n")
+        _settings_cache = merged
+
+
 def load_settings() -> dict:
     global _settings_cache
     with _settings_lock:

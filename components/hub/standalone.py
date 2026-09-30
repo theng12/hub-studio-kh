@@ -1003,6 +1003,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # purpose: this is what a controller is given.
     from .backend import peers as _peers
     _peers.fleet_token()
+    # And its node identity, for the same reason: derived from the hostname until the first save,
+    # so a rename in macOS before then would have orphaned the roster row.
+    control_plane.ensure_controller_id()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1613,8 +1616,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         group" reported success while the controller still listed the Mac — and a node removed
         here re-joined on its next start, because nothing had been revoked (B2, B3).
 
-        Removal is an **eviction**: the node credential goes with the row and the id is recorded
-        as removed, so `join` refuses it by name until someone re-admits it deliberately.
+        The operator's removal is an **eviction**: the node credential goes with the row and the id
+        is recorded as removed, so `join` refuses it by name until someone re-admits it
+        deliberately. A node removing **itself** is forgotten with no record (see below).
         """
         from .backend import auth as hub_auth
         from .backend import fleet_nodes as fleet
@@ -1626,12 +1630,43 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 f"a fleet credential may remove only the Mac that holds it. Removing "
                 f"'{node_id}' from this controller is the owner's decision: use this "
                 f"controller's Hub token, or let that Mac leave from its own Connections page.")
-        removed = fleet.remove(node_id,
-                               by="operator" if actor.get("kind") == "hub" else str(node_id))
-        if removed is None:
-            raise HTTPException(404, "unknown node")
+        if actor.get("kind") == "node":
+            # **A Mac leaving on its own is forgetting, not being evicted.** No tombstone: the owner
+            # can put it back by joining again, and nothing stays on this controller to be tidied.
+            # Only the operator's removal (Hub token) is remembered and refuses a re-join.
+            row = fleet._read().get(str(node_id).strip().lower())
+            if row is None or not fleet.leave(str(node_id).strip().lower()):
+                raise HTTPException(404, "unknown node")
+            removed = {"id": row.get("id"), "name": row.get("name")}
+        else:
+            removed = fleet.remove(node_id, by="operator")
+            if removed is None:
+                raise HTTPException(404, "unknown node")
         monitor.reload_registry()
         return {"ok": True, "removed": removed}
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/status")
+    async def fleet_node_status(node_id: str, request: Request,
+                                name: str | None = None) -> dict[str, Any]:
+        """Does this controller still list this Mac? `member`, `removed` (with when) or `unknown`.
+
+        How a removal made here reaches the Mac itself: the node asks on its own tick and clears
+        its membership when the answer is `removed`. Read-only and mints no credential, so it can
+        be asked every minute. A node credential may ask only about its own id.
+
+        `name` is the Mac's current label. Only that Mac may set it (a node credential, its own
+        id): the roster name is written at join, so a rename otherwise never reaches this side.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = hub_auth._fleet_actor(request)
+        asked = node_id.strip().lower()
+        own = actor.get("kind") == "node" and str(actor.get("node_id") or "").lower() == asked
+        if actor.get("kind") == "node" and not own:
+            raise HTTPException(403, "a node credential may ask only about the Mac that holds it")
+        if own and name and fleet.rename(asked, name):
+            monitor.reload_registry()
+        return fleet.status(asked)
 
     @app.post("/api/hub/fleet/nodes/{node_id}/readmit")
     async def fleet_readmit(node_id: str) -> dict[str, Any]:

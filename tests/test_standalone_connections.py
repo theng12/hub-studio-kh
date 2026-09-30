@@ -2417,6 +2417,46 @@ class LeavingAndRemovalAreRealTest(unittest.TestCase):
         self.assertEqual(status, 200, body)
         _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
         self.assertEqual(listing["summary"]["total"], 0)
+        # **Forgotten, not evicted.** A Mac that chose to leave may join again; only the operator's
+        # removal is remembered.
+        self.assertEqual(listing["summary"]["removed"], 0)
+        status, again, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "studio-2", "name": "Studio 2", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        self.assertEqual(status, 201, again)
+
+    def test_a_node_asks_whether_it_is_still_listed_and_a_rename_follows(self) -> None:
+        hub = self._controller(controller_id="controller-mac")
+        fleet = (hub.data / ".fleet_token").read_text().strip()
+        _, joined, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "studio-mac-1102-x", "name": "studio-mac-1102",
+             "address": "http://127.0.0.1:9"}, token=fleet)
+        _, other, _ = hub.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "studio-3", "name": "Studio 3", "address": "http://127.0.0.1:9"},
+            token=fleet)
+        own = joined["credential"]
+        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status", token=own)
+        self.assertEqual((status, body["state"]), (200, "member"))
+        # A node may not ask about another Mac.
+        status, _, _ = hub.request("/api/hub/fleet/nodes/studio-3/status", token=own)
+        self.assertEqual(status, 403)
+        # Its label reaches the controller's roster when it asks; nobody else may set it.
+        hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status?name=studio-mac-1501", token=own)
+        hub.request("/api/hub/fleet/nodes/studio-3/status?name=hijacked", token=fleet)
+        _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
+        names = {row["id"]: row["name"] for row in listing["nodes"]}
+        self.assertEqual(names, {"studio-mac-1102-x": "studio-mac-1501", "studio-3": "Studio 3"})
+        # The operator removes it: the Mac, holding only the group token now, hears `removed`.
+        hub.request("/api/hub/fleet/nodes/studio-mac-1102-x", method="DELETE", token=hub.token)
+        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status", token=fleet)
+        self.assertEqual((status, body["state"]), (200, "removed"))
+        self.assertIn("removed this Mac on", body["detail"])
+        status, body, _ = hub.request("/api/hub/fleet/nodes/nobody/status", token=fleet)
+        self.assertEqual((status, body["state"]), (200, "unknown"))
+        self.assertEqual(other["node"]["id"], "studio-3")
 
     def test_a_node_may_not_remove_a_different_machine(self) -> None:
         hub = self._controller(controller_id="studio-2")
@@ -2481,8 +2521,11 @@ class LeavingAndRemovalAreRealTest(unittest.TestCase):
         status, _, _ = hub.request("/api/hub/settings", token=node_credential)
         self.assertEqual(status, 403)
         hub.request("/api/hub/fleet/nodes/sold-mac", method="DELETE", token=hub.token)
-        status, _, _ = hub.request("/api/hub/fleet/nodes", token=node_credential)
-        self.assertEqual(status, 401, "a revoked node credential must stop authenticating")
+        # Refused, and told why: a bare 401 was indistinguishable from a controller that lost its
+        # roster, so the Mac kept showing "connected" after the owner removed it.
+        status, body, _ = hub.request("/api/hub/fleet/nodes", token=node_credential)
+        self.assertEqual(status, 403, "a revoked node credential must stop authenticating")
+        self.assertIn("removed this Mac on", str(body))
 
     def test_a_node_cannot_re_admit_itself(self) -> None:
         hub = self._controller()
