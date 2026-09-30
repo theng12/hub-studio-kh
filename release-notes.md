@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.121 - 2026-10-01
+
+### Macs can install updates by themselves again
+
+**Updates install by themselves again.** The installer was refusing any release that includes the video
+engine, so Macs quietly skipped the last update and stayed where they were. This release is labelled so the
+installed apps accept it, and from here on the app knows the video engine, so later updates install normally.
+Nothing you made is touched.
+
 ## 0.6.120 - 2026-09-30
 
 ### Lance video is retired; video is LTX-2.3

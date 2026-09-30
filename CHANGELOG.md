@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.121 — 2026-10-01 · Macs can install updates by themselves again
+
+Found in the 0.6.120 rollout: no controller or node updated. `ReleaseInstaller.runtimePaths`
+(`native/UpdateClient.swift`) had no `video`, so `verifyDeclaredComponents` refused, AFTER staging, every
+release whose manifest ships Video with `runtime: "video"`. An idle Mac took the offer, staged it, failed the
+check, set `autoUpdateFailedBuild` and never retried; nothing showed off the Mac. Diagnosis:
+`_orchestra/audit-20260930/update-0120/diag/` (the real 0.6.120 bundle fails the real check; the same bundle with
+the label `voice` swaps).
+- **Fix** (`7031035`): `video` joins `runtimePaths` (`Contents/Resources/runtimes/video/bin/python3`). Tests: the
+  real 0.6.120 `release-manifest.json` is a fixture and must pass `swapStagedApp`; the fake-app helper builds the
+  real layout instead of skipping runtimes missing from the table (that skip kept the old tests green by
+  construction); `video` joins the per-modality missing-worker loop; a Python invariant
+  (`tests/test_installer_knows_shipped_runtimes.py`) checks every runtime `stage_voice.py` writes is one the
+  installer verifies. Mutation-proved (table entry removed -> both fail).
+- **BRIDGE** (`28ad677`): the apps already installed (0.6.119/0.6.120) check a staged update against THEIR table,
+  which has no `video`, so they can never take a release that says `video`. For THIS release only,
+  `packaging/stage_voice.py` labels the video component `'runtime': 'voice'` (nothing reads that label except the
+  installer check; `_video_spec` reads `runtime_sha256`). Verified by running the real 0.6.119 installer source
+  against the staged 0.6.121 app.
+- **NEXT RELEASE (0.6.122) MUST revert the bridge:** set `'runtime': 'video'` back in `_stage_video`, delete the
+  BRIDGE comment, and **delete `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`** in
+  `tests/test_installer_knows_shipped_runtimes.py` (it would fail the revert on purpose). Do that only once the
+  fleet is on 0.6.121 or later.
+
 ## 0.6.120 — 2026-09-30 · Lance video is retired; video is LTX-2.3
 
 Owner: "the Lance one sucks and is terrible" - retired the way ACE-Step 1.5 was (0.6.116). Video is now
