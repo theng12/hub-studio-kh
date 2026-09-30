@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.120 — 2026-09-30 · Lance video is retired; video is LTX-2.3
+
+Owner: "the Lance one sucks and is terrible" - retired the way ACE-Step 1.5 was (0.6.116). Video is now
+**LTX-2.3 22B MLX mixed 2-8 bit (RAM-12GB)** plus its `gemma-3-12b-it-4bit` text encoder, and nothing else
+(it was already the default: `MODELS` lists it first and `MODEL_ID`/`DEFAULTS` read it).
+- **Retired list** (`components/retired_models.py`): `lance-3b-video-bf16`, `mlx-community/Lance-3B-Video-bf16`,
+  `lance-3b-processor-qwen2-5-vl`, `Qwen/Qwen2.5-VL-3B-Instruct`. Never offered, never staged into a kit or
+  listed, refused by name (`MODEL_RETIRED`) even if an old manifest sits on a drive.
+- **Removed** (moved to `_trash/0.6.120-lance-retire/`, never `rm`): both manifests; `lance_runner.py`; the
+  `LANCE_3B` model, `run_lance`, `lance_runtime_python`, the Lance canvases/limits, `VideoModel.lance_steps`/
+  `lance_cfg_scale`/`MemoryPolicy.relay_on_below_bytes` and the `video-lance` engine (from `VIDEO_ENGINES`,
+  `model_packages.ENGINES`, the Hub `_ENGINE_ROUTE`, the video smoke); `packaging/lance-runtime/`; the
+  `--lance-runtime` / `--unqualified-lance-runtime` stage flags, `LANCE_RUNTIME_SHA256` and the
+  `runtimes/video-lance` tree (nothing else read it - Lance was its only user); the Lance capture rows;
+  `qualification/lance-video-worker-run.py`; the Lance reading in `model-readings.json` (record regenerated).
+- Kit/listing: 30 -> **28 model packages, ~103.5 GB** (kit README, `SSD-KIT-README`). The installed app
+  loses `runtimes/video-lance` (~1 GB).
+- Tests: the Lance pins became "Lance is not offered, LTX is the one video model and the default, a Lance
+  manifest left on a drive is not a video manifest"; `test_retired_models` covers all four ids. Mutation-proved:
+  re-adding a Lance manifest fails four tests; dropping the ids from the list fails the retired test.
+- Qualification evidence for Lance (`qualification/lance-video-worker-results-20260927-first/`, the Lance
+  section of `README-video-hardware-test.md`) is kept as history.
+
 ## 0.6.119 — 2026-09-30 · Quit no longer asks when nothing is running
 
 Owner: "if no job is running, quit is quit. if have job, then we should ask." `applicationShouldTerminate`

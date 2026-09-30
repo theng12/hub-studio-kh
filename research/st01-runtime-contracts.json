@@ -8,10 +8,6 @@
       "reason": "Adopted after this record was observed. Its runtime inputs are locked separately at packaging/music-runtime/requirements.lock.txt, which this 2026-09-15 record does not cover.",
       "record": "docs/music-studio-adoption.md"
     },
-    "video-lance": {
-      "reason": "Adopted 2026-09-27, after this record was observed: lance-mlx is pinned at f8ecc5a86d28b94bd8dc688c200c3e22ffafff4a, built into its own Python 3.12 runtime (packaging/lance-runtime, pinned by content in stage_voice.py) and measured twice through the worker's own routes (8.11 GB relay, 20.0 GB parallel). Its runtime story is that tree, not a promise.",
-      "record": "docs/tasks/HANDOFF.md"
-    },
     "voice-vits": {
       "reason": "Adopted 2026-09-24, after this record was observed on 2026-09-15. The two Khmer VITS packages run in the same .build/voice-runtime as voice-mlx with onnxruntime added, so the voice-mlx entry below is their runtime input record.",
       "record": "research/khmer-tts-adoption-2026-09-24.md"
@@ -258,7 +254,7 @@
     },
     {
       "engine": "video-ltx",
-      "family": "LTX-2.3 22B (baa-ai RAM-12GB pack) and Lance 3B will share this tree once its runner is adopted",
+      "family": "LTX-2.3 22B (baa-ai RAM-12GB pack); Lance 3B was retired in 0.6.120",
       "lock_path": "packaging/video-runtime/requirements.lock.txt",
       "native_binary_floor_audit": "The staged tree is built by packaging/video-runtime/build.sh and pinned by content in packaging/stage_voice.py (VIDEO_RUNTIME_SHA256), but no Mach-O load-command audit has been recorded for it yet; the Voice artifact audit is not evidence for this tree.",
       "platform": {

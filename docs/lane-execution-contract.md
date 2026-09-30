@@ -181,8 +181,8 @@ Two notes a gateway must not skip:
     (`VideoModel.generates_audio`). LTX denoises picture and sound together, so unticking it does
     **not** shorten the run — it skips the audio decode and writes an MP4 with no track. The
     parameter's own `note` says so, because a checkbox that looks like a saving it is not is the
-    kind of thing a scheduler would otherwise plan around. Lance's text-to-video is silent and
-    publishes no such parameter, and the artifact gate requires a track only when `audio` was left
+    kind of thing a scheduler would otherwise plan around. A model that is silent publishes no such
+    parameter, and the artifact gate requires a track only when `audio` was left
     on (it also refuses a track that appears when silence was asked for).
 - **Correction, 2026-09-26: the Hub already has an image-to-video path, and it is the one that
   matters.** This bullet said *"there is no image-to-video operation"*. The code says otherwise and

@@ -1,5 +1,9 @@
 # The video lane — scoped plan
 
+> **0.6.120: Lance 3B is retired** (owner, 2026-09-30). Video is LTX-2.3 22B and its gemma-3-12b
+> text encoder only; `lance-3b-video-bf16` and `lance-3b-processor-qwen2-5-vl` are in
+> `components/retired_models.py`. Everything below naming Lance is history.
+
 Written 2026-09-26, after the owner's decisions. Status: **scoped, not started.** This is the last
 gate before distribution, alongside "all known bugs fixed".
 

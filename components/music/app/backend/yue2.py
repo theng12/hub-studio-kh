@@ -4,7 +4,7 @@ The sung-song music engine beside Stable Audio 3, and the one that cannot run in
 worker's interpreter: `mlx-Yue` pins `mlx==0.32.2` while this worker's runtime (the Voice runtime)
 carries `mlx==0.31.2`. So the run happens in
 `runtimes/music-yue2/bin/python3`, through `yue2_runner.py`, and this module is the worker's side of
-that contract — the same shape `video/generation.run_lance` has for its engine.
+that contract.
 
 Why a bridge rather than the port's CLI: the CLI is a whole application. It resolves checkpoint
 revisions, verifies tree digests, writes resource-evidence sidecars beside the output and refuses a

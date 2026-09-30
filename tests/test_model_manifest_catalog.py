@@ -308,7 +308,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "breeze-tts-2-mlx-4bit": "34c94035fdeffa72f8dd6be7351b8d3acd29a07a02e850df324771735a25b2df",
             "pocket-tts-tokenizer": "24fc05ee633df4219c1bec5480742b1ff5c7d067eb42af4ceba0aa8e547692cd",
             "pocket-tts-preset-voices": "b5c804a1ab6346c1f975690c61ac563c6ff3ad862e44012f1bb52097c571a2c7",
-            # ── Video: the LTX pack, its text encoder, and Lance ──
+            # ── Video: the LTX pack and its text encoder (Lance retired 0.6.120) ──
             # Captured 2026-09-26. LTX's manifest is the first in this catalog whose status is
             # `qualified` on the strength of a full generation driven through a *worker*, not a
             # standalone runner, and its `memory_evidence` names both runs.
@@ -320,19 +320,6 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # loads. It has no runtime of its own and no picker row (the Hub marks it a
             # dependency), which is why its floor mirrors the model it serves.
             "gemma-3-12b-it-4bit": "88eb8541a329b20672847e24a9a4ebb2e320205c7a0963960512f2375623c13f",
-            # Lance 3B, the small tier's T2V model: 10 files / 15,631,104,325 bytes.
-            # Refreshed 2026-09-27 with the runner adoption: the defaults are the model's own
-            # (256p square at 12 fps), the qualification carries two measured runs, and the
-            # Qwen2.5-VL processor is declared as a requirement. Refreshed again the same day
-            # (0.6.83) to record the non-square canvas that was tried and is *not* offered:
-            # 512x288 rendered at 11.0 GB and 784 s, and the subject degraded.
-            "lance-3b-video-bf16":
-                "c2a73a97139d8bc27dbd73fac93d9c6e612945d6032fddd2d32457211b1a596a",
-            # Added 2026-09-27 with the Lance runner adoption: the Qwen2.5-VL processor the
-            # pipeline loads by repo id. The weights pack ships only the tokenizer, so this is a
-            # *required* companion — without it the runner reaches for huggingface.co at load.
-            "lance-3b-processor-qwen2-5-vl":
-                "ce2cce97bf552326b5f9469146cec202ee2c80ca2be13f2893dc424837f17171",
             # ── Music: YuE2, the lane's second engine, and its decoder companion ──
             # Captured 2026-09-27 from `vanch007/mlx-Yue2-3B` (9 files / 9,920,168,755 bytes) and
             # `m-a-p/YuE2-Vae` (7 files / 530,542,479 bytes). Both carry a MEASURED tier from three

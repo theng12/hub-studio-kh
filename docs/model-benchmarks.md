@@ -59,8 +59,6 @@ may still run there, and one at or below may still not (see the peak-memory note
 | YuE2 3B Music (8-bit AR + bf16 NAR) | mlx-Yue2 (MLX) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | yue2-vae *(supporting files)* | mlx-Yue2 (MLX) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | **Video** | | | | | | |
-| lance-3b-processor-qwen2-5-vl *(supporting files)* | lance-mlx (MLX) | 16 GB | no | yes | yes | yes |
-| Lance 3B Video MLX bf16 | lance-mlx (MLX) | 16 GB | no | yes | yes | yes |
 | gemma-3-12b-it-4bit *(supporting files)* | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
 | LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB) | ltx-2-mlx (MLX) | 24 GB (recommended 32 GB) | no | no | yes | yes |
 
@@ -77,7 +75,6 @@ section below is where measurements live.
 | Z-Image-Turbo 6B MLX 4-bit | 4-bit mflux pack | 32 GiB · Apple M2 Max | [M] 1280×720, 9 steps, seed 42 — completed in both configurations — generation, default 166 s, generation, low RAM 236 s, peak MLX, default 9.84 GB, peak MLX, low RAM 6.26 GB, peak footprint, default 17.7 GB, peak footprint, low RAM 7.12 GB, swaps 0 | `qualification/z-image-turbo-2026-09-24.md` |
 | FLUX.2 Klein 4B MLX 4-bit | 4-bit MLX | 32 GiB · Apple M2 Max | [M] measured beside Z-Image in the same configuration; no stored runtime of its own — peak MLX, default 12.9 GB, low-RAM mode none — this model has no bounded configuration, weights on disk 4.62 GB | `qualification/z-image-turbo-2026-09-24.md` |
 | LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB) | mixed 2–8 bit MLX (per-tensor, the pack's own loader) | 32 GiB · Apple M2 Max | [M] image-to-video at the true-16:9 canvas the owner accepts — 1024×576, 49 frames at 24 fps, 2.04 s of output with audio, through the Video worker's own job path (job e9caa8c4ce2a4074a29d2349a99193ce) — peak footprint, default 16.92 GB, peak MLX, default 10.05 GB, peak process rss gb 9.25 GB, generation, default 258.0 s, weights on disk 17.81 GB, resolution 1024x576, frames 49, audio yes (one audio track verified in the produced MP4) | `qualification/ltx-video-worker-results-20260928-004554/measurement.json` |
-| Lance 3B Video bf16 (MLX) | bf16 MLX (the pack publishes no quantized variant) | 32 GiB · Apple M2 Max | [M] one run of each memory mode through the Video worker's own job path — relay at 256×256 × 13 frames, parallel at 256×256 × 25 frames; below ~18 GiB the runner resolves to relay, so 8.11 GB is what a 16 GB Mac sees — peak footprint, relay 8.11 GB, peak RSS, relay 6.89 GB, generation, relay 184.9 s, load 9.4 s, peak footprint, default 20.0 GB, generation, default 329.5 s, resolution 256x256, frames 13 relay / 25 parallel | `qualification/lance-video-worker-results-20260927-first/measurement.json` |
 | YuE2 3B Music (8-bit AR + bf16 NAR) | 8-bit AR + bf16 NAR + bf16 VAE (MLX) | 32 GiB · Apple M2 Max | [M] three songs at 24 / 36 / 120 s of 48 kHz stereo, mode off, seed fixed; the 36 s one through this app's own runner bridge and its runtime pinned by content — audio produced 24.0 / 36.0 / 120.0 s, generation 58.6 / 103.2 / 429.8 s, load 6.8 s, peak footprint 10.79 / 11.81 / 11.93 GB, peak RSS 6.23 GB, weights on disk 9.9 GB | `qualification/yue2-music-results-20260927/bridge-run.json` |
 
 `[M]` on every row above: each is a run that left the record named in the last column.
@@ -105,7 +102,7 @@ than a curated one:
 
 ## What is NOT measured
 
-22 of 30 packages have no run behind them — their floor is
+22 of 28 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
@@ -142,4 +139,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 30 manifests, 8 recorded readings and 5 voice runtime rows.
+Generated from 28 manifests, 7 recorded readings and 5 voice runtime rows.

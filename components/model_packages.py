@@ -116,7 +116,7 @@ def _url(value):
 # raised `KeyError` and returned 500, the native refresh read that as "Hub unreachable", and every
 # model picker on every Mac went blank.
 ENGINES = ('image-mflux', 'voice-mlx', 'voice-vits', 'subtitle-mlx', 'music-mlx', 'music-yue2',
-           'chat-mlx', 'video-ltx', 'video-lance')
+           'chat-mlx', 'video-ltx')
 ENGINE_HELP = ("add it to _ENGINE_ROUTE in components/hub/standalone.py and to the engine "
                "allowlist in components/model_packages.py")
 

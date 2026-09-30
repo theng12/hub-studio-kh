@@ -60,7 +60,6 @@ ENGINE_NAMES = {
     "music-mlx": "MLX (audio)",
     "music-yue2": "mlx-Yue2 (MLX)",
     "subtitle-mlx": "MLX (speech-to-text)",
-    "video-lance": "lance-mlx (MLX)",
     "video-ltx": "ltx-2-mlx (MLX)",
     "voice-mlx": "MLX (speech)",
     "voice-vits": "VITS / ONNX",
@@ -84,7 +83,6 @@ MODALITY_OF_ENGINE = {
     "music-mlx": "music",
     "music-yue2": "music",
     "video-ltx": "video",
-    "video-lance": "video",
 }
 
 

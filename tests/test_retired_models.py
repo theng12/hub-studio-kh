@@ -18,8 +18,12 @@ manifests = tmp / 'manifests'
 shutil.copytree(ROOT / 'model-manifests', manifests, ignore=shutil.ignore_patterns('*.md'))
 # An OLD manifest for the seed model, as one left on a drive would be.
 old = json.loads((manifests / 'whisper-base.json').read_text())
-old.update(package_id='ace-step-1-5-turbo', model_id='ACE-Step/Ace-Step1.5')
-(manifests / 'ace-step-1-5-turbo.json').write_text(json.dumps(old))
+RETIRED = {'ace-step-1-5-turbo': 'ACE-Step/Ace-Step1.5',
+           'lance-3b-video-bf16': 'mlx-community/Lance-3B-Video-bf16',
+           'lance-3b-processor-qwen2-5-vl': 'Qwen/Qwen2.5-VL-3B-Instruct'}
+for package_id, model_id in RETIRED.items():
+    old.update(package_id=package_id, model_id=model_id)
+    (manifests / f'{package_id}.json').write_text(json.dumps(old))
 os.environ['STUDIOHUB_MODEL_MANIFESTS'] = str(manifests)
 
 from components import retired_models
@@ -47,13 +51,15 @@ def offered():
         'staged into kits': {p.stem for p in staged.glob('*.json')},
     }
 
-# The seed: ACE-Step stays out even though an old manifest for it is sitting in the catalog folder.
-assert 'ace-step-1-5-turbo' in retired_models.RETIRED_MODELS
-for place, ids in offered().items():
-    assert 'ace-step-1-5-turbo' not in ids and 'ACE-Step/Ace-Step1.5'.lower() not in ids, (place, ids)
-    assert ids, place
-assert standalone._retired_refusal('ace-step-1-5-turbo')['code'] == 'MODEL_RETIRED'
-assert standalone._retired_refusal('ACE-Step/Ace-Step1.5')['code'] == 'MODEL_RETIRED'
+# The seeds: ACE-Step and Lance (video, 0.6.120) stay out even though an old manifest for each is
+# sitting in the catalog folder.
+for package_id, model_id in RETIRED.items():
+    assert package_id in retired_models.RETIRED_MODELS and model_id in retired_models.RETIRED_MODELS
+    for place, ids in offered().items():
+        assert package_id not in ids and model_id.lower() not in ids, (place, package_id, ids)
+        assert ids, place
+    assert standalone._retired_refusal(package_id)['code'] == 'MODEL_RETIRED'
+    assert standalone._retired_refusal(model_id)['code'] == 'MODEL_RETIRED'
 assert standalone._retired_refusal('whisper-base') is None
 
 # One line in the list removes a live model from the catalog, the identity index, the kit listing

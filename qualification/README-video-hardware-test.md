@@ -114,6 +114,10 @@ artifact's checksum.
 
 ## Lance — the owner's verdict, 2026-09-28: not pursued, and no run needed
 
+**Update 0.6.120 (2026-09-30): Lance is retired** - the runner, its runtime, both manifests and the
+whole Lance path were removed from the Hub; the two package ids are in `components/retired_models.py`.
+The measurements below stay as history.
+
 **Decision: Lance is not pursued.** The owner tried the quality himself and it does not hold up
 (*"lance sucks. can't generate good enough quality"*), so **the 16 GB Lance run this file used to ask
 for is cancelled** — do not spend a drive session on it. **Nothing is removed:** the runner stays

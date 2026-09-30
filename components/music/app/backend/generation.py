@@ -918,8 +918,8 @@ class GenerationManager:
 
         **A separate interpreter, not an import.** `mlx-Yue` pins `mlx==0.32.2` and this worker's
         runtime carries `mlx==0.31.2`, so the bridge is spawned with
-        `runtimes/music-yue2/bin/python3` and read one JSON object per line — the same shape the
-        Video lane uses for `lance_runner.py`.
+        `runtimes/music-yue2/bin/python3` and read one JSON object per line — the same shape
+        the Video lane used for its second engine before Lance was retired.
 
         The peak that matters is the bridge's, not this process's: the worker samples its own
         footprint, and for this engine the memory is in the child. The bridge samples itself and

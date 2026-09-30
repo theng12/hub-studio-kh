@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.120 - 2026-09-30
+
+### Lance video is retired; video is LTX-2.3
+
+**Lance is gone. Video is LTX-2.3.** The small Lance video model did not make good enough pictures, so it is
+no longer offered, no longer put on the install drives, and no longer part of the app. The video model is
+LTX-2.3 22B (with its Gemma text encoder) on Macs with 24 GB of memory or more. The app gets about 1 GB smaller
+and the model kit drops from 30 to 28 model packages. Nothing you already made is touched.
+
 ## 0.6.119 - 2026-09-30
 
 ### Quit just quits

@@ -296,11 +296,8 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     # interpreter from the manifest's engine, exactly as the Video lane does for its two.
     "music-yue2": ("music", "music"),
     "chat-mlx": ("chat", "chat"),
-    # Video has two runners and therefore two engines, both served by the one Video worker:
-    # `video-ltx` is the 22B pack this build can run, `video-lance` names the lance-mlx source
-    # runner it cannot yet. A manifest for either is published with the worker's own verdict.
+    # Video is one engine: `video-ltx`, the LTX-2.3 22B pack (Lance was retired in 0.6.120).
     "video-ltx": ("video", "video"),
-    "video-lance": ("video", "video"),
 }
 
 _ENGINE_REGISTRATION_HINT = (

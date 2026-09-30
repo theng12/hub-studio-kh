@@ -3,7 +3,7 @@
 What is asserted here is what the worker *decides*: the memory tier that keeps a model off a
 machine that cannot load it, the bounds its validator enforces (and the ones its contract
 therefore publishes), the artifact checks that stand between a runner and a "done" receipt, and
-the two engine rows — one runnable, one published as not runnable with its adoption step named.
+the engine row: LTX-2.3 is the only video model (Lance was retired in 0.6.120).
 
 Nothing here imports `ltx_pipelines_mlx` or loads a weight: the pipeline is imported lazily by the
 runner, so these run in the Hub's base runtime in milliseconds. The one run that proves the lane
@@ -35,14 +35,6 @@ class MemoryTierTests(unittest.TestCase):
         self.assertFalse(generation.memory_eligible(model, 16 * 1024**3))
         self.assertTrue(generation.memory_eligible(model, 24 * 1024**3))
         self.assertTrue(generation.memory_eligible(model, 32 * 1024**3))
-
-    def test_lance_is_the_16_gb_tier_and_not_an_8_gb_promise(self) -> None:
-        model = generation.LANCE_3B
-        self.assertEqual(model.qualified_minimum_memory_gb, 16.0)
-        # The card groups 8-16 GB together while its own worked example is ~8.7 GB by ri_phys,
-        # which is more than an 8 GB machine's whole RAM. The published tier is the credible side.
-        self.assertFalse(generation.memory_eligible(model, 8 * 1024**3))
-        self.assertTrue(generation.memory_eligible(model, 16 * 1024**3))
 
     def test_the_free_memory_floor_is_a_start_guard_not_the_footprint(self) -> None:
         """The measured footprint is not a free-memory requirement.
@@ -199,16 +191,13 @@ class RequestValidationTests(unittest.TestCase):
         """The audio switch, and the rule that keeps it honest.
 
         LTX denoises picture and sound together and its pack has a real switch for the decode
-        (`generate_audio`, the CLI's `--no-audio`), so the lane publishes `audio`. Lance's t2v is
-        silent, so publishing the same control there would offer a knob the lane ignores — which
-        is the defect this repo calls "a lie with a schema".
+        (`generate_audio`, the CLI's `--no-audio`), so the lane publishes `audio`. A silent model
+        would not publish the control: a knob the lane ignores is "a lie with a schema".
         """
         ltx = {p["name"]: p for p in generation.lane_parameters(generation.LTX_23)}
-        lance = {p["name"]: p for p in generation.lane_parameters(generation.LANCE_3B)}
         self.assertIn("audio", ltx)
         self.assertIs(ltx["audio"]["default"], True)
         self.assertIs(ltx["audio"]["type"], "boolean")
-        self.assertNotIn("audio", lance)
 
     def test_the_audio_switch_defaults_on_and_resolves_both_ways(self) -> None:
         """Absent is not "off": a field nobody sent must read as the model's default."""
@@ -229,8 +218,6 @@ class RequestValidationTests(unittest.TestCase):
         # shorter generation: the joint denoise is untouched.
         self.assertIn("does not change", note)
         self.assertIn("silent", note)
-        self.assertNotIn("audio", [p["name"]
-                                   for p in generation.lane_contract(generation.LANCE_3B)["parameters"]])
 
     def test_a_silent_request_is_not_refused_for_having_no_audio(self) -> None:
         """The artifact gate follows the request rather than the pack.
@@ -299,9 +286,8 @@ class LaneContractTests(unittest.TestCase):
                          "the Hub owns the proxy deadline and adds it on echo")
         self.assertTrue(contract["states"]["discard_supported"])
         self.assertFalse(contract["states"]["uncertain_is_terminal"])
-        # The measured runtime travels with the row that has one, and only that row.
+        # The measured runtime travels with the row that has one.
         self.assertIn("runtime_seconds", contract)
-        self.assertNotIn("runtime_seconds", generation.lane_contract(generation.LANCE_3B))
 
     def test_the_parameters_are_the_validator_s_bounds(self) -> None:
         names = [p["name"] for p in generation.lane_contract(generation.LTX_23)["parameters"]]
@@ -313,70 +299,39 @@ class LaneContractTests(unittest.TestCase):
         for absent in ("negative_prompt", "guidance", "steps", "width", "height"):
             self.assertNotIn(absent, names)
 
-    def test_lance_declares_only_the_task_it_has(self) -> None:
-        contract = generation.lane_contract(generation.LANCE_3B)
-        self.assertEqual(contract["modes"], ["text-to-video"])
-
-
 class EngineRowTests(unittest.TestCase):
-    """The Lance engine is adopted now, and these pin what replaced the refusal.
+    """Video is LTX-2.3 and nothing else: Lance was retired in 0.6.120 and must not come back quietly."""
 
-    Until this release the row published `runnable: false` with a sentence naming the adoption
-    step, and the test here asserted that refusal — the honest measure that the lane was built but
-    the second engine was not. `run_lance` now runs the real thing, so what needs pinning is the
-    shape of its *failure* modes: a node missing the processor companion must be told that, by
-    name, instead of being handed a crash from inside the runner.
-    """
+    def test_ltx_is_the_only_video_model_and_the_default(self) -> None:
+        self.assertEqual(list(generation.MODELS), [generation.LTX_23.repo])
+        self.assertEqual(generation.VIDEO_ENGINES, ("video-ltx",))
+        self.assertEqual(generation.MODEL_ID, generation.LTX_23.repo)
+        self.assertEqual(generation.PACKAGE_ID, "ltx-2-3-22b-ram-12gb-mlx")
+        self.assertEqual(generation.LTX_23.requires, ("gemma-3-12b-it-4bit",))
+        self.assertEqual({m.package_id for m in generation.MODELS.values()},
+                         {"ltx-2-3-22b-ram-12gb-mlx"})
 
-    def test_lance_is_runnable_and_says_which_engine_runs_it(self) -> None:
-        self.assertTrue(generation.LANCE_3B.runnable)
-        self.assertIsNone(generation.LANCE_3B.unavailable_reason)
-        self.assertEqual(generation.LANCE_3B.requires, ("lance-3b-processor-qwen2-5-vl",))
-        self.assertIs(generation.LANCE_3B.generates_audio, False)
+    def test_nothing_of_lance_is_left_to_run(self) -> None:
+        for name in ("LANCE_3B", "LANCE_ENGINE", "run_lance", "lance_runtime_python"):
+            self.assertFalse(hasattr(generation, name), name)
+        self.assertFalse((ROOT / "components/video/app/backend/lance_runner.py").exists())
+        self.assertFalse((ROOT / "packaging/lance-runtime").exists())
+        self.assertEqual(list((ROOT / "model-manifests").glob("*lance*")), [])
 
-    def test_a_missing_processor_companion_is_named_before_anything_loads(self) -> None:
-        with self.assertRaises(RuntimeError) as raised:
-            generation.run_lance(generation.LANCE_3B, None, Path("/nonexistent"), {}, Path("/tmp/x"),
-                                 lambda *_: None)
-        message = str(raised.exception)
-        self.assertIn("lance-3b-processor-qwen2-5-vl", message)
-        self.assertIn("companion", message)
-        # And NOT the old adoption refusal: this build has the runner.
-        self.assertNotIn("MODEL_RUNTIME_UNAVAILABLE", message)
+    def test_a_lance_manifest_left_on_a_drive_is_not_a_video_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            ltx = json.loads((ROOT / "model-manifests/ltx-2-3-22b-ram-12gb-mlx.json").read_text())
+            (folder / "ltx.json").write_text(json.dumps(ltx))
+            (folder / "lance.json").write_text(json.dumps(
+                {"package_id": "lance-3b-video-bf16", "engine": "video-lance",
+                 "model_id": "mlx-community/Lance-3B-Video-bf16"}))
+            manifests, _errors = generation.load_video_manifests(folder, folder / "ltx.json")
+        self.assertEqual(set(manifests), {"ltx-2-3-22b-ram-12gb-mlx"})
 
-    def test_the_lance_engine_resolves_its_own_interpreter(self) -> None:
-        """Two engines, two Pythons: LTX is 3.11 here, lance-mlx declares >= 3.12."""
-        found = generation.lance_runtime_python()
-        self.assertTrue(str(found).endswith("bin/python3"), found)
-        self.assertIn("lance", str(found))
-
-    def test_lance_publishes_its_own_frame_grid_not_ltxs(self) -> None:
-        """12 fps on a `4k+1` grid — measured: 16 frames requested, 13 returned."""
-        self.assertEqual(generation.LANCE_3B.frame_rate, 12)
-        self.assertEqual(generation.frames_for(2, 12, generation.LANCE_3B.frame_grid), 25)
-        self.assertEqual(generation.frames_for(4, 12, generation.LANCE_3B.frame_grid), 49)
-        # LTX is unchanged: 24 fps, 8k+1.
+    def test_ltx_keeps_its_own_frame_grid(self) -> None:
         self.assertEqual(generation.frames_for(2, 24, generation.LTX_23.frame_grid), 49)
         self.assertEqual(generation.frames_for(4, 24, generation.LTX_23.frame_grid), 97)
-
-    def test_lance_canvases_are_square_and_inside_its_card_envelope(self) -> None:
-        canvases = generation.published_canvases(generation.LANCE_3B)
-        self.assertEqual({(c["width"], c["height"]) for c in canvases},
-                         {(256, 256), (512, 512)})
-        # Every published pair is under the card's production ceiling (n_lat 16,128); 768² is the
-        # config it calls degraded, so it is deliberately not offered.
-        for canvas in canvases:
-            for seconds in canvas["durations"]:
-                frames = generation.frames_for(seconds, generation.LANCE_3B.frame_rate,
-                                               generation.LANCE_3B.frame_grid)
-                self.assertLess(
-                    generation.latent_load(generation.LANCE_3B, canvas["width"], canvas["height"],
-                                           frames),
-                    generation.MAX_LANCE_LATENT_TOKENS)
-        self.assertGreaterEqual(
-            generation.latent_load(generation.LANCE_3B, 768, 768, 49),
-            generation.MAX_LANCE_LATENT_TOKENS,
-            "768²x49f is the card's degraded config; the ceiling must actually exclude something")
 
     def test_every_registered_engine_has_a_runner(self) -> None:
         for model in generation.MODELS.values():
@@ -533,13 +488,13 @@ class CompanionRowTests(unittest.TestCase):
             library.mkdir()
             model_manifest = {"package_id": "ltx-test", "engine": "video-ltx",
                               "model_id": "baa-ai/LTX", "revision": "a" * 40}
-            other = {"package_id": "video-lance-thing", "engine": "video-lance",
+            other = {"package_id": "video-other-thing", "engine": "video-ltx",
                      "model_id": "org/other", "revision": "b" * 40}
             manager = generation.GenerationManager(
                 Path(tmp) / "state", library, model_manifest, "c" * 64,
                 manifests={"ltx-test": model_manifest, "other": other})
             rows = {row["package_id"] for row in manager.packages_without_a_runtime_model()}
-        self.assertIn("video-lance-thing", rows,
+        self.assertIn("video-other-thing", rows,
                       "a manifest nothing requires is still reported when no model serves it")
 
 

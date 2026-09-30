@@ -9,6 +9,8 @@ from __future__ import annotations
 
 RETIRED_MODELS = [
     "ace-step-1-5-turbo", "ACE-Step/Ace-Step1.5",   # ACE-Step 1.5, retired 0.6.116
+    "lance-3b-video-bf16", "mlx-community/Lance-3B-Video-bf16",   # Lance 3B Video bf16, retired 0.6.120
+    "lance-3b-processor-qwen2-5-vl", "Qwen/Qwen2.5-VL-3B-Instruct",   # its processor companion
 ]
 
 

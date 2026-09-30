@@ -124,28 +124,6 @@
       "source_path": "qualification/ltx-video-worker-results-20260928-004554/measurement.json"
     },
     {
-      "package_id": "lance-3b-video-bf16",
-      "model": "Lance 3B Video bf16 (MLX)",
-      "quantization": "bf16 MLX (the pack publishes no quantized variant)",
-      "engine": "video-lance",
-      "machine": "32 GiB · Apple M2 Max",
-      "tier_gb": 16,
-      "outcome": "one run of each memory mode through the Video worker's own job path — relay at 256×256 × 13 frames, parallel at 256×256 × 25 frames; below ~18 GiB the runner resolves to relay, so 8.11 GB is what a 16 GB Mac sees",
-      "metrics": {
-        "peak_footprint_gb_relay": 8.11,
-        "peak_process_rss_gb_relay": 6.89,
-        "generation_seconds_relay": 184.9,
-        "load_seconds": 9.4,
-        "peak_footprint_gb_default": 20.0,
-        "generation_seconds_default": 329.5,
-        "resolution": "256x256",
-        "frames": "13 relay / 25 parallel"
-      },
-      "evidence": "M",
-      "source": "the worker's own job receipt for job 0f259095f44a4c03958e64119f435b47 and the Lance section of qualification/README-video-hardware-test.md",
-      "source_path": "qualification/lance-video-worker-results-20260927-first/measurement.json"
-    },
-    {
       "package_id": "yue2-3b-mlx",
       "model": "YuE2 3B Music (8-bit AR + bf16 NAR)",
       "quantization": "8-bit AR + bf16 NAR + bf16 VAE (MLX)",

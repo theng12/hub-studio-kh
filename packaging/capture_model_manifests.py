@@ -94,16 +94,6 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # needed for inference and would multiply the kit size for no benefit.
     {"package_id": "khmer-tts-mms", "model_id": "khmerttsopensource/khmer-tts", "revision": "c9380a9d1c817f2b21980d54f29f7a61b0d626f5", "engine": "voice-vits", "exclude": ("eval/*", "training/*", "UPLOAD.md")},
     {"package_id": "khmer-tts-female-onnx", "model_id": "sengtha/khmer-tts-female-v2", "revision": "c6fde511a839c4f20cdce96e2a35735d493030d2", "engine": "voice-vits", "exclude": ("*.pth", "khmer_tts.onnx", "khmer_tts_ls100.onnx", "khmer_tts_ls115.onnx", "config.json")},
-    # ── The Lance runner's processor: a companion package, not a model ──
-    # `TextToVideoPipeline.from_pretrained` calls `AutoProcessor.from_pretrained`, and the
-    # Lance-3B-Video pack ships only the *tokenizer* (its `tokenizer_config.json` and
-    # `vocab.json` are byte-identical to these). Without a local processor the pipeline
-    # reaches for huggingface.co at load time — which a fleet node may not reach. Six files,
-    # 4.5 MB; the repository's actual weights are deliberately not captured.
-    {"package_id": "lance-3b-processor-qwen2-5-vl", "model_id": "Qwen/Qwen2.5-VL-3B-Instruct",
-     "revision": "66285546d2b821cf421d4f5eb2576359d3770cd3", "engine": "video-lance",
-     "include": ("config.json", "generation_config.json", "merges.txt",
-                 "preprocessor_config.json", "tokenizer_config.json", "vocab.json")},
     # ── YuE2: the Music lane's third engine, and its decoder companion ──
     # The generator pack is the 8-bit AR, the bf16 NAR and the tokenizer. **`ar-bf16.safetensors`
     # is captured even though this lane runs 8-bit**, because the port's `verify_conversion`
@@ -188,14 +178,6 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # and it is listed in the pack's `requires_packages` so the Hub marks it a dependency rather
     # than offering it in a picker as if it were a video model.
     {"package_id": "gemma-3-12b-it-4bit", "model_id": "mlx-community/gemma-3-12b-it-4bit", "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", "engine": "video-ltx"},
-    # ── Video: Lance 3B, the small tier's T2V model ──
-    # The runner (`github.com/xocialize/lance-mlx`, a source repo rather than a package) is
-    # adopted at f8ecc5a86d28b94bd8dc688c200c3e22ffafff4a and has run here, so the defaults,
-    # memory evidence and status below are the measured ones. It also REQUIRES the Qwen2.5-VL
-    # processor: the pipeline loads it by repository id, the pack ships only the tokenizer, and
-    # without it the runner reaches for huggingface.co at load time. The publisher's sample
-    # comparisons are furniture.
-    {"package_id": "lance-3b-video-bf16", "model_id": "mlx-community/Lance-3B-Video-bf16", "revision": "b70ba0a53c14eef573570fe65b31e295bd8216af", "engine": "video-lance", "exclude": ("samples/*",), "requires_packages": ("lance-3b-processor-qwen2-5-vl",)},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -259,15 +241,6 @@ DETAILS: dict[str, dict[str, Any]] = {
     # pipeline loads it, because a machine that cannot hold the 22B model cannot use the encoder
     # either.
     "gemma-3-12b-it-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (24, 32, "Companion of the LTX-2.3 22B pack: the pipeline loads this text encoder for every prompt, and its 5.0 GB of weights are inside that pack's measured 16.38 GB process footprint.")},
-    # [V] The model card's own figures for the *processor*, which is not a model: it carries no
-    # weights, so no run measures it on its own. Its memory is the runner's, measured. The card groups
-    # 8-16 GB together while its own worked example (256x61f, ~8.7 GB by ri_phys) exceeds an
-    # 8 GB machine's whole RAM, so the published floor is the card's credible side.
-    "lance-3b-processor-qwen2-5-vl": {
-        "defaults": {"parameters_source": "model/tokenizer_config.json"},
-        "memory": (16, 16, "Not a model: a tokenizer plus an image-processor config, so it carries no weights of its own. Its memory is MEASURED inside the Lance runner's process: 8.11 GB peak footprint at 256x256, 13 frames, relay mode, 2026-09-27 (_orchestra/evidence/lance-first-run-20260927.json)."),
-        "qualification": {"status": "qualified", "reason": "Required companion of the Lance-3B-Video-bf16 pack: the pipeline loads it by repository id, and the pack ships only the tokenizer. Six files, 4.5 MB, captured at the revision the first measured run used."},
-    },
     "yue2-3b-mlx": {
         "defaults": {"mode": "off", "duration_seconds": 36, "seed": -1, "precision": "8bit",
                      "parameters_source": "components/music/app/backend/catalog.py"},
@@ -278,13 +251,6 @@ DETAILS: dict[str, dict[str, Any]] = {
         "defaults": {"parameters_source": "model/config.json"},
         "memory": (16, 24, "Companion decoder of the YuE2 generator, and not a model: 0.51 GB of FP32 weights with no text tower. MEASURED inside the generator's own runs — it is loaded beside the generator, so it is part of every peak recorded there (10.79 GB at 600 tokens, 11.81 GB through the runner bridge, 11.93 GB at 3000 tokens)."),
         "qualification": {"status": "qualified", "reason": "Required companion of yue2-3b-mlx: the port loads it as `--vae` and the generator pack ships without it. Captured at the revision the three measured runs used, and its single weight file is verified against the `weights_manifest.json` the repository publishes."},
-    },
-    "lance-3b-video-bf16": {
-        "defaults": {"mode": "text-to-video", "aspect_ratio": "1:1", "resolution": "256p",
-                     "duration_seconds": 2, "frame_rate": 12, "seed": -1,
-                     "parameters_source": "components/video/app/backend/generation.py"},
-        "memory": (16, 16, "MEASURED here [M], twice, by sampled `footprint` phys_footprint_peak in the process doing the work: relay at 256x256 13 frames - 8.11 GB peak (RSS 6.89 GB), 184.9 s generating plus 9.4 s loading; parallel through the worker's own routes at 256x256 25 frames - 20.0 GB peak, 329.5 s. Below 18 GiB the runner resolves to relay and above it to parallel, so 8.11 GB is what a 16 GB Mac sees. The card's 16 GB claim stays [V] and 8 GB is doubtful, not promised."),
-        "qualification": {"status": "qualified", "reason": "MEASURED by two local runs of one configuration each: relay at 256x256x13f (8.11 GB peak, 184.9 s) and parallel at 256x256x25f through the worker's own routes (20.0 GB peak, 329.5 s), with the runner adopted at an exact commit and its Qwen2.5-VL processor packaged as a required companion. What is NOT covered and is not claimed: no 16 GB machine has run it - that measurement is the owner's - so the tier is a vendor claim plus this 32 GB measurement's floor, and the card's 512x61f and 768x configs are not offered. A non-square canvas was tried and is NOT offered: 512x288 (16:9) renders at 11.0 GB peak and 784 s, but the subject degrades badly at that width, so only the square 256x256 and 512x512 canvases are published."},
     },
 }
 
