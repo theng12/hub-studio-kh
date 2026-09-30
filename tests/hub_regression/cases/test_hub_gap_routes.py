@@ -74,25 +74,25 @@ def test_model_id_is_the_same_on_a_model_row_and_a_batch_row(hub, monkeypatch):
     )
     client, monitor = hub
     monitor._catalog_cache["music"] = (time.time(), {"models": [{
-        "repo": "ace-step-1-5-turbo", "label": "ACE-Step",
+        "repo": "stable-audio-3-medium", "label": "Stable Audio 3",
         "cache": {"state": "cached"}, "available": True,
         "runtime_ready": True, "memory_eligible": True,
     }]})
-    broker.batches["b-model"] = _broker_batch("b-model", model="ace-step-1-5-turbo")
+    broker.batches["b-model"] = _broker_batch("b-model", model="stable-audio-3-medium")
 
     headers = _fleet_headers()
     models = client.get("/api/hub/models", headers=headers)
     assert models.status_code == 200, models.text
     model_row = next(row for row in models.json()["models"]
-                     if row["repo"] == "ace-step-1-5-turbo")
-    assert model_row["model_id"] == "ACE-Step/Ace-Step1.5"
-    assert model_row["repo"] == "ace-step-1-5-turbo"
+                     if row["repo"] == "stable-audio-3-medium")
+    assert model_row["model_id"] == "stabilityai/stable-audio-3-optimized"
+    assert model_row["repo"] == "stable-audio-3-medium"
 
     jobs = client.get("/api/hub/jobs", headers=headers)
     assert jobs.status_code == 200, jobs.text
     batch_row = next(row for row in jobs.json()["batches"] if row["id"] == "b-model")
     assert batch_row["model_id"] == model_row["model_id"]
-    assert batch_row["model"] == "ace-step-1-5-turbo"
+    assert batch_row["model"] == "stable-audio-3-medium"
 
 
 def test_batch_rows_list_only_items_that_failed(hub):

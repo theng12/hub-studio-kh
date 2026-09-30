@@ -1,10 +1,11 @@
 """The Music worker's model-memory policy: the fleet contract, its refusals, its lifecycle.
 
-Music was the last Studio that keeps a model resident in a long-lived child and published
-no way to let go of it, so Settings showed its row as "Needs an update" while Subtitle,
-Voice and Chat offered Performance / Balanced / Memory Saver / Immediate.  The worker
-enforces its own bounds, so these tests exercise the real ``GenerationManager`` (only the
-package cache is a stand-in that reports every model cached) and the real FastAPI app.
+Music publishes the same memory-policy routes every Studio does, so Settings shows its row with
+Performance / Balanced / Memory Saver / Immediate.  Neither engine keeps a model resident (Stable
+Audio 3 and YuE2 each run per job and exit), so the policy has nothing to release; these tests pin
+that honestly rather than faking a resident child.  The worker enforces its own bounds, so they
+exercise the real ``GenerationManager`` (only the package cache is a stand-in that reports every
+model cached) and the real FastAPI app.
 
 The same fixture carries the worker's *other* per-machine setting — the per-model generation
 defaults (``GET/PUT/DELETE /api/model-defaults``) — because both are routes of this app on this
@@ -41,32 +42,6 @@ class _VerifiedCache:
         return {"state": "cached", "checkpoints_root": str(self.root)}
 
 
-class _ResidentEngine:
-    """A stand-in for ``EngineExecutor`` that is holding a model right now.
-
-    ``released=False`` is the child whose exit was not verified: it survives the discard
-    and must never be reported as freed.
-    """
-
-    def __init__(self, *, released: bool = True, pid: int = 4321):
-        self._pid = pid
-        self._released = released
-        self.discards = 0
-
-    @property
-    def child_pid(self):
-        return self._pid
-
-    def _discard(self):
-        self.discards += 1
-        if self._released:
-            self._pid = None
-        return self._released
-
-    def close(self):
-        self._discard()
-
-
 class MusicMemoryPolicyTests(unittest.TestCase):
     """One manager over a temporary state directory, bound to the real policy module."""
 
@@ -75,7 +50,6 @@ class MusicMemoryPolicyTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "models").mkdir()
-        (self.root / "engine").mkdir()
         self.reset_policy()
         self.manager = self.build_manager()
         memory_policy.start_background(self.manager)
@@ -89,10 +63,9 @@ class MusicMemoryPolicyTests(unittest.TestCase):
     def build_manager(self, data_dir: Path | None = None):
         with mock.patch.object(generation.cache_module, "MusicCache", _VerifiedCache):
             manager = generation.GenerationManager(
-                data_dir or self.root / "data", engine_root=str(self.root / "engine"),
+                data_dir or self.root / "data",
                 library_dir=str(self.root / "models"), runtime_sha256="f" * 64)
         self.addCleanup(manager.close)
-        manager._engine_contract_reason = lambda: None
         return manager
 
     @staticmethod
@@ -107,11 +80,6 @@ class MusicMemoryPolicyTests(unittest.TestCase):
         memory_policy._LAST_ERROR = None
         memory_policy._RELEASE_COUNT = 0
         memory_policy._RELEASING = False
-
-    def resident(self, **kwargs) -> _ResidentEngine:
-        engine = _ResidentEngine(**kwargs)
-        self.manager._executors[catalog.MAIN_REPO] = engine
-        return engine
 
     def running_job(self) -> None:
         self.manager.jobs["job-running"] = {
@@ -172,38 +140,25 @@ class MusicMemoryPolicyTests(unittest.TestCase):
             self.assertEqual(memory_policy.status()["mode"], memory_policy.DEFAULT_MODE)
 
     # -- release -------------------------------------------------------------
-    def test_release_discards_the_resident_engine_child_and_says_so(self) -> None:
-        engine = self.resident()
+    def test_no_music_model_is_ever_resident_so_a_release_frees_nothing(self) -> None:
+        """Both engines run per job and exit with it: the worker holds no model between jobs."""
         status = memory_policy.status()
-        self.assertEqual(status["loaded_models"], [[catalog.MAIN_REPO, "ace-step"]])
-        self.assertEqual(status["mode"], "performance",
-                         "the idle timer is not what released this child")
+        self.assertEqual(status["loaded_models"], [])
+        self.assertFalse(status["resident"])
+        self.assertEqual(self.manager.loaded_model_keys(), [])
         before = self.release_count()
 
         released = memory_policy.release_now()
 
-        self.assertTrue(released["released"])
+        self.assertFalse(released["released"], "nothing was held, so nothing was freed")
+        self.assertEqual(released["models"], [])
+        self.assertEqual(released["actions"], [])
         self.assertEqual(released["reason"], "manual")
-        self.assertEqual(released["models"], [[catalog.MAIN_REPO, "ace-step"]])
-        self.assertEqual(released["actions"][0]["engine_child_pid"], 4321)
-        self.assertEqual(engine.discards, 1)
         self.assertEqual(released["release_count"], before + 1)
-        self.assertEqual(released["last_release_reason"], "manual")
         self.assertEqual(memory_policy.status()["loaded_models"], [])
-
-    def test_a_child_whose_exit_was_not_verified_is_never_reported_as_released(self) -> None:
-        engine = self.resident(released=False)
-        result = memory_policy.release_now()
-
-        self.assertFalse(result["released"])
-        self.assertEqual(engine.discards, 1)
-        self.assertEqual(memory_policy.status()["loaded_models"],
-                         [[catalog.MAIN_REPO, "ace-step"]],
-                         "a model that is still held must still be published as held")
-        self.assertIn("not verified", memory_policy.status()["last_error"])
+        self.assertIsNone(memory_policy.status()["last_error"])
 
     def test_release_refuses_while_a_job_is_running(self) -> None:
-        engine = self.resident()
         self.running_job()
         before = self.release_count()
 
@@ -212,102 +167,41 @@ class MusicMemoryPolicyTests(unittest.TestCase):
 
         self.assertEqual(str(caught.exception),
                          "music generation is active; memory was not released")
-        self.assertEqual(engine.discards, 0, "a running job must not lose its engine")
         self.assertEqual(self.release_count(), before)
         self.assertEqual(memory_policy.status()["active_work"], True)
 
     # -- the idle timer ------------------------------------------------------
-    def test_an_idle_child_is_released_only_after_the_chosen_window(self) -> None:
-        engine = self.resident()
+    def test_the_idle_timer_has_nothing_to_release_in_any_mode(self) -> None:
         idle_since = time.time() - 10_000
         memory_policy._LAST_ACTIVITY = idle_since
+        for mode in ("performance", "balanced", "memory_saver", "immediate", "auto"):
+            with self.subTest(mode=mode):
+                memory_policy.save(mode)
+                self.assertIsNone(
+                    memory_policy.run_due_release(now=idle_since + 10_000_000),
+                    "the timer fired for a worker that holds no model")
+        self.assertEqual(self.release_count(), 0)
 
-        memory_policy.save("balanced")
-        self.assertIsNone(memory_policy.run_due_release(now=idle_since + 599),
-                          "599 s of idle is not 600")
-        self.assertEqual(engine.discards, 0)
-        released = memory_policy.run_due_release(now=idle_since + 600)
-        self.assertIsNotNone(released)
-        self.assertTrue(released["released"])
-        self.assertEqual(released["last_release_reason"], "idle:balanced")
-        self.assertEqual(engine.discards, 1)
-
-    def test_performance_never_releases_and_immediate_releases_at_once(self) -> None:
-        self.resident()
-        idle_since = time.time() - 10_000
-        memory_policy._LAST_ACTIVITY = idle_since
-
-        memory_policy.save("performance")
-        self.assertIsNone(memory_policy.run_due_release(now=idle_since + 10_000_000))
-        self.assertEqual(memory_policy.status()["next_release_at"], None)
-
-        memory_policy.save("immediate")
-        released = memory_policy.run_due_release(now=idle_since)
-        self.assertIsNotNone(released)
-        self.assertEqual(released["last_release_reason"], "idle:immediate")
-
-    def test_auto_releases_on_the_window_this_machine_resolves_to(self) -> None:
-        """`auto` is the shipped default, so these are the two real machine behaviours."""
-        engine = self.resident()
-        idle_since = time.time() - 10_000
-        memory_policy._LAST_ACTIVITY = idle_since
+    def test_auto_resolves_the_window_this_machine_gets(self) -> None:
+        """`auto` is the shipped default, so these are the machine behaviours the row publishes."""
         memory_policy.save("auto")
-
         with mock.patch.object(memory_policy, "machine_bytes", lambda: 32 * 1024**3):
             status = memory_policy.status()
-            self.assertEqual(status["mode"], "auto")
-            self.assertEqual(status["resolved_mode"], "balanced")
-            self.assertEqual(status["idle_seconds"], 600)
-            self.assertIsNone(memory_policy.run_due_release(now=idle_since + 599),
-                              "599 s of idle is not the balanced window")
-            released = memory_policy.run_due_release(now=idle_since + 600)
-            self.assertIsNotNone(released)
-        self.assertEqual(released["last_release_reason"], "idle:auto")
-        self.assertEqual(engine.discards, 1)
-
-    def test_auto_releases_at_once_below_the_balanced_tier(self) -> None:
-        """An 8 GB Mac keeps the old immediate behaviour: no model held between jobs."""
-        engine = self.resident()
-        idle_since = time.time() - 10_000
-        memory_policy._LAST_ACTIVITY = idle_since
-        memory_policy.save("auto")
-
+        self.assertEqual(status["mode"], "auto")
+        self.assertEqual(status["resolved_mode"], "balanced")
+        self.assertEqual(status["idle_seconds"], 600)
+        # An 8 GB Mac keeps the old immediate behaviour.
         with mock.patch.object(memory_policy, "machine_bytes", lambda: 8 * 1024**3):
             status = memory_policy.status()
-            self.assertEqual(status["resolved_mode"], "immediate")
-            self.assertEqual(status["idle_seconds"], 0)
-            released = memory_policy.run_due_release(now=idle_since)
-        self.assertIsNotNone(released)
-        self.assertEqual(released["last_release_reason"], "idle:auto")
-        self.assertEqual(engine.discards, 1)
+        self.assertEqual(status["resolved_mode"], "immediate")
+        self.assertEqual(status["idle_seconds"], 0)
 
     def test_an_unmeasurable_machine_resolves_to_immediate(self) -> None:
         """A Mac that cannot prove it has room must not hold a model."""
-        self.resident()
         memory_policy.save("auto")
         with mock.patch.object(memory_policy, "machine_bytes", lambda: 0):
             self.assertEqual(memory_policy.machine_mode(), "immediate")
             self.assertEqual(memory_policy.status()["idle_seconds"], 0)
-
-    def test_the_idle_timer_never_preempts_a_running_job(self) -> None:
-        engine = self.resident()
-        idle_since = time.time() - 10_000
-        memory_policy._LAST_ACTIVITY = idle_since
-        memory_policy.save("immediate")
-        self.running_job()
-
-        self.assertIsNone(memory_policy.run_due_release(now=idle_since + 10_000))
-        self.assertEqual(engine.discards, 0)
-
-    def test_one_release_per_idle_window(self) -> None:
-        """A child that survived its discard must not make the timer fire every tick."""
-        self.resident(released=False)
-        idle_since = time.time() - 10_000
-        memory_policy._LAST_ACTIVITY = idle_since
-        memory_policy.save("immediate")
-
-        self.assertIsNotNone(memory_policy.run_due_release(now=idle_since + 1))
-        self.assertIsNone(memory_policy.run_due_release(now=idle_since + 2))
 
 
 @unittest.skipIf(importlib.util.find_spec("fastapi") is None,
@@ -323,13 +217,11 @@ class MusicMemoryRouteTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "models").mkdir()
-        (self.root / "engine").mkdir()
         with mock.patch.object(generation.cache_module, "MusicCache", _VerifiedCache):
             self.manager = generation.GenerationManager(
-                self.root / "data", engine_root=str(self.root / "engine"),
+                self.root / "data",
                 library_dir=str(self.root / "models"), runtime_sha256="f" * 64)
         self.addCleanup(self.manager.close)
-        self.manager._engine_contract_reason = lambda: None
         self.addCleanup(self.unbind)
         self.client = TestClient(create_app(self.manager, "secret"))
         self.headers = {"X-Studio-Token": "secret"}
@@ -371,24 +263,12 @@ class MusicMemoryRouteTests(unittest.TestCase):
             self.client.get("/api/memory-policy", headers=self.headers).json()["mode"],
             "memory_saver")
 
-        engine = _ResidentEngine()
-        self.manager._executors[catalog.MAIN_REPO] = engine
-        self.assertEqual(
-            self.client.get("/api/memory-policy", headers=self.headers).json()[
-                "loaded_models"],
-            [[catalog.MAIN_REPO, "ace-step"]])
         released = self.client.post("/api/memory/release", headers=self.headers)
         self.assertEqual(released.status_code, 200)
-        self.assertTrue(released.json()["released"])
-        self.assertEqual(engine.discards, 1)
-        self.assertEqual(
-            self.client.get("/api/memory-policy", headers=self.headers).json()[
-                "loaded_models"],
-            [])
+        self.assertFalse(released.json()["released"], "no model was held, so none was freed")
+        self.assertEqual(released.json()["loaded_models"], [])
 
     def test_release_while_a_job_runs_is_a_named_409(self) -> None:
-        engine = _ResidentEngine()
-        self.manager._executors[catalog.MAIN_REPO] = engine
         self.manager.jobs["job-running"] = {
             "id": "job-running", "state": "running", "created_at": time.time(),
         }
@@ -398,7 +278,6 @@ class MusicMemoryRouteTests(unittest.TestCase):
         self.assertEqual(refused.status_code, 409)
         self.assertEqual(refused.json()["detail"],
                          "music generation is active; memory was not released")
-        self.assertEqual(engine.discards, 0)
 
 
 @unittest.skipIf(importlib.util.find_spec("fastapi") is None,
@@ -420,13 +299,11 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "models").mkdir()
-        (self.root / "engine").mkdir()
         with mock.patch.object(generation.cache_module, "MusicCache", _VerifiedCache):
             self.manager = generation.GenerationManager(
-                self.root / "data", engine_root=str(self.root / "engine"),
+                self.root / "data",
                 library_dir=str(self.root / "models"), runtime_sha256="f" * 64)
         self.addCleanup(self.manager.close)
-        self.manager._engine_contract_reason = lambda: None
         self.addCleanup(self.unbind)
         self.client = TestClient(create_app(self.manager, "secret"))
         self.headers = {"X-Studio-Token": "secret"}
@@ -514,44 +391,44 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
                                          catalog.require_model(row["repo"]))))
 
     def test_put_stores_it_and_get_reflects_it_for_that_model_only(self) -> None:
-        stored = self.put(catalog.MAIN_REPO, {"steps": 5, "duration_seconds": 60.0})
+        stored = self.put(catalog.DEFAULT_REPO, {"steps": 5, "duration_seconds": 60.0})
         self.assertEqual(stored.status_code, 200, stored.text)
         rows = {row["repo"]: row for row in stored.json()["models"]}
-        self.assertEqual(rows[catalog.MAIN_REPO]["chosen"],
+        self.assertEqual(rows[catalog.DEFAULT_REPO]["chosen"],
                          {"duration_seconds": 60.0, "steps": 5})
-        self.assertEqual(rows[catalog.MAIN_REPO]["stated"]["steps"],
-                         self.lane_stated(catalog.MAIN_REPO)["steps"])
-        self.assertEqual(rows[catalog.STABLE_AUDIO_REPO]["chosen"], {},
+        self.assertEqual(rows[catalog.DEFAULT_REPO]["stated"]["steps"],
+                         self.lane_stated(catalog.DEFAULT_REPO)["steps"])
+        self.assertEqual(rows[catalog.YUE2_REPO]["chosen"], {},
                          "a default belongs to one model, never to the lane")
         # A fresh GET and the file itself agree with the PUT's own answer.
-        self.assertEqual(self.rows()[catalog.MAIN_REPO]["defaults"]["steps"], 5)
+        self.assertEqual(self.rows()[catalog.DEFAULT_REPO]["defaults"]["steps"], 5)
         self.assertEqual(json.loads(model_defaults.settings_file(self.manager.data)
                                     .read_text(encoding="utf-8")),
-                         {catalog.MAIN_REPO: {"duration_seconds": 60.0, "steps": 5}})
+                         {catalog.DEFAULT_REPO: {"duration_seconds": 60.0, "steps": 5}})
 
     def test_the_catalog_publishes_the_same_numbers_the_route_holds(self) -> None:
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5}).status_code, 200)
-        published = self.catalog_contract(catalog.MAIN_REPO)
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5}).status_code, 200)
+        published = self.catalog_contract(catalog.DEFAULT_REPO)
         self.assertEqual(published["steps"]["default"],
-                         self.rows()[catalog.MAIN_REPO]["defaults"]["steps"])
+                         self.rows()[catalog.DEFAULT_REPO]["defaults"]["steps"])
         # The bounds stay the model's own, whatever the operator chose.
         self.assertEqual(published["steps"]["minimum"],
-                         self.published(catalog.MAIN_REPO)["steps"]["minimum"])
+                         self.published(catalog.DEFAULT_REPO)["steps"]["minimum"])
         self.assertEqual(published["steps"]["maximum"],
-                         self.published(catalog.MAIN_REPO)["steps"]["maximum"])
+                         self.published(catalog.DEFAULT_REPO)["steps"]["maximum"])
         # And a model nobody chose for publishes what it always did.
-        self.assertEqual(self.catalog_contract(catalog.STABLE_AUDIO_REPO)["steps"]["default"],
-                         self.lane_stated(catalog.STABLE_AUDIO_REPO)["steps"])
+        self.assertEqual(self.catalog_contract(catalog.YUE2_REPO)["steps"]["default"],
+                         self.lane_stated(catalog.YUE2_REPO)["steps"])
 
     def test_delete_with_a_body_or_a_query_returns_the_model_to_the_lanes_own(self) -> None:
         for use_query in (False, True):
             with self.subTest(query=use_query):
-                self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5}).status_code, 200)
-                cleared = self.delete(catalog.MAIN_REPO, query=use_query)
+                self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5}).status_code, 200)
+                cleared = self.delete(catalog.DEFAULT_REPO, query=use_query)
                 self.assertEqual(cleared.status_code, 200, cleared.text)
-                row = {item["repo"]: item for item in cleared.json()["models"]}[catalog.MAIN_REPO]
-                self.assertEqual(row["defaults"], self.lane_stated(catalog.MAIN_REPO))
-                self.assertEqual(self.rows()[catalog.MAIN_REPO]["chosen"], {})
+                row = {item["repo"]: item for item in cleared.json()["models"]}[catalog.DEFAULT_REPO]
+                self.assertEqual(row["defaults"], self.lane_stated(catalog.DEFAULT_REPO))
+                self.assertEqual(self.rows()[catalog.DEFAULT_REPO]["chosen"], {})
 
     def test_every_offered_control_default_is_a_value_the_worker_accepts(self) -> None:
         """The catalog cannot advertise a number ``model_defaults`` would refuse.
@@ -560,7 +437,7 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
         control the editor would render, at its published default, is fed straight back through
         the route and must be accepted.
         """
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5, "shift": 4.0}).status_code, 200)
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5}).status_code, 200)
         for repo, row in self.rows().items():
             settable = {parameter["name"]: row["defaults"][parameter["name"]]
                         for parameter in row["parameters"]}
@@ -599,15 +476,15 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
                                      "a refused value must not be stored")
 
     def test_every_bad_value_is_reported_at_once_and_none_of_them_is_stored(self) -> None:
-        published = self.published(catalog.MAIN_REPO)
-        refused = self.put(catalog.MAIN_REPO, {
+        published = self.published(catalog.DEFAULT_REPO)
+        refused = self.put(catalog.DEFAULT_REPO, {
             "steps": published["steps"]["maximum"] + 1,
             "duration_seconds": published["duration_seconds"]["maximum"] + 1,
-            "shift": published["shift"]["maximum"] + 1,
+            "guidance_scale": published["guidance_scale"]["maximum"] + 1,
         })
         self.assertEqual(refused.status_code, 422)
         self.assertEqual(sorted(refused.json()["detail"]),
-                         ["duration_seconds", "shift", "steps"],
+                         ["duration_seconds", "guidance_scale", "steps"],
                          "an operator who typed three bad values should not have to press Save "
                          "three times to find out")
         self.assertFalse(model_defaults.settings_file(self.manager.data).exists())
@@ -618,61 +495,61 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
             with self.subTest(status=response.status_code):
                 self.assertEqual(response.status_code, 422)
                 self.assertIn("not-registered", response.json()["detail"])
-                self.assertIn(catalog.MAIN_REPO, response.json()["detail"],
+                self.assertIn(catalog.DEFAULT_REPO, response.json()["detail"],
                               "the refusal names the models this worker does serve")
         self.assertFalse(model_defaults.settings_file(self.manager.data).exists())
 
     def test_a_control_one_runtime_discards_has_nothing_to_default_for_it(self) -> None:
         """Stable Audio 3 forces instrumental output, so it publishes no such control."""
-        stable = self.published(catalog.STABLE_AUDIO_REPO)
+        stable = self.published(catalog.DEFAULT_REPO)
         for name, value in (("shift", 3.0), ("instrumental", False), ("lyrics", "la"),
                             ("vocal_language", "en")):
             with self.subTest(parameter=name):
                 self.assertNotIn(name, stable)
-                refused = self.put(catalog.STABLE_AUDIO_REPO, {name: value})
+                refused = self.put(catalog.DEFAULT_REPO, {name: value})
                 self.assertEqual(refused.status_code, 422)
                 self.assertIn(name, refused.json()["detail"])
                 self.assertIn("publishes no such settable parameter",
                               refused.json()["detail"][name])
-        # Control: the same names are settable for the engine that does accept them.
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"shift": 3.5, "instrumental": True,
-                                                      "lyrics": "la", "vocal_language": "en"})
+        # Control: the engine that does have its own controls accepts them.
+        self.assertEqual(self.put(catalog.YUE2_REPO, {"mode": "melody", "precision": "bf16"})
                          .status_code, 200)
 
     # -- what is applied -----------------------------------------------------
     def test_a_parameter_the_request_supplies_is_untouched_by_a_stored_default(self) -> None:
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5, "duration_seconds": 60.0})
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5, "duration_seconds": 60.0})
                          .status_code, 200)
         applied = generation.validate_request(
-            {"repo": catalog.MAIN_REPO, "prompt": "rain", "steps": 3, "duration_seconds": 12.0},
+            {"repo": catalog.DEFAULT_REPO, "prompt": "rain", "steps": 3, "duration_seconds": 12.0},
             data_dir=self.manager.data)
         self.assertEqual((applied["steps"], applied["duration_seconds"]), (3, 12.0))
         # The control in the other direction: the same request with those two omitted.
         omitted = generation.validate_request(
-            {"repo": catalog.MAIN_REPO, "prompt": "rain"}, data_dir=self.manager.data)
+            {"repo": catalog.DEFAULT_REPO, "prompt": "rain"}, data_dir=self.manager.data)
         self.assertEqual((omitted["steps"], omitted["duration_seconds"]), (5, 60.0))
 
     def test_a_parameter_the_request_omits_gets_the_stored_default(self) -> None:
-        self.assertEqual(self.put(catalog.STABLE_AUDIO_REPO, {"steps": 4}).status_code, 200)
+        self.assertEqual(self.put(catalog.YUE2_REPO, {"steps": 12}).status_code, 200)
         applied = generation.validate_request(
-            {"repo": catalog.STABLE_AUDIO_REPO, "prompt": "rain"}, data_dir=self.manager.data)
-        self.assertEqual(applied["steps"], 4)
+            {"repo": catalog.YUE2_REPO, "prompt": "rain", "lyrics": "[Verse]\nrain"},
+            data_dir=self.manager.data)
+        self.assertEqual(applied["steps"], 12)
         self.assertEqual(applied["duration_seconds"],
-                         self.lane_stated(catalog.STABLE_AUDIO_REPO)["duration_seconds"],
+                         self.lane_stated(catalog.YUE2_REPO)["duration_seconds"],
                          "everything the operator did not choose stays the model's own")
 
     def test_what_is_applied_is_what_the_catalog_publishes_as_that_default(self) -> None:
         """Read both and compare: one number in the setting, the catalog and the validator."""
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5, "duration_seconds": 60.0})
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5, "duration_seconds": 60.0})
                          .status_code, 200)
-        published = self.catalog_contract(catalog.MAIN_REPO)
+        published = self.catalog_contract(catalog.DEFAULT_REPO)
         applied = generation.validate_request(
-            {"repo": catalog.MAIN_REPO, "prompt": "rain"}, data_dir=self.manager.data)
+            {"repo": catalog.DEFAULT_REPO, "prompt": "rain"}, data_dir=self.manager.data)
         for name in ("steps", "duration_seconds"):
             with self.subTest(parameter=name):
                 self.assertEqual(published[name]["default"], applied[name])
                 self.assertEqual(published[name]["default"],
-                                 self.rows()[catalog.MAIN_REPO]["defaults"][name])
+                                 self.rows()[catalog.DEFAULT_REPO]["defaults"][name])
 
     def test_generation_defaults_and_the_lane_contract_are_one_answer(self) -> None:
         """The catalog says the same number twice, and the job that omits it gets that number.
@@ -682,10 +559,10 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
         answers to one question is how a stored default reaches one of them and not the other.
         """
         stored = {"steps": 5, "duration_seconds": 60.0, "guidance_scale": 2.5, "seed": 7}
-        self.assertEqual(self.put(catalog.MAIN_REPO, stored).status_code, 200)
-        entry = self.catalog_entry(catalog.MAIN_REPO)
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, stored).status_code, 200)
+        entry = self.catalog_entry(catalog.DEFAULT_REPO)
         defaults = entry["generation_defaults"]
-        published = self.catalog_contract(catalog.MAIN_REPO)
+        published = self.catalog_contract(catalog.DEFAULT_REPO)
         for name, value in stored.items():
             with self.subTest(parameter=name):
                 self.assertEqual(defaults[name], value)
@@ -696,7 +573,7 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
         self.assertEqual(entry["inference_steps"], defaults["steps"])
         self.assertEqual(entry["guidance_scale"], defaults["guidance_scale"])
         # ...and what a job that omits them carries is exactly those numbers.
-        job = self.submitted({"repo": catalog.MAIN_REPO, "prompt": "rain"})
+        job = self.submitted({"repo": catalog.DEFAULT_REPO, "prompt": "rain"})
         for name, value in stored.items():
             with self.subTest(parameter=name, where="job"):
                 self.assertEqual(job["params"][name], value)
@@ -706,30 +583,30 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
 
     def test_a_model_nobody_has_chosen_for_still_uses_its_own_defaults(self) -> None:
         """The control for the tests above: with nothing stored, nothing moves."""
-        entry = self.catalog_entry(catalog.MAIN_REPO)
-        for name, value in self.lane_stated(catalog.MAIN_REPO).items():
+        entry = self.catalog_entry(catalog.DEFAULT_REPO)
+        for name, value in self.lane_stated(catalog.DEFAULT_REPO).items():
             with self.subTest(parameter=name):
                 self.assertEqual(entry["generation_defaults"][name], value)
-        job = self.submitted({"repo": catalog.MAIN_REPO, "prompt": "rain"})
+        job = self.submitted({"repo": catalog.DEFAULT_REPO, "prompt": "rain"})
         self.assertEqual(job["params"]["steps"],
-                         self.lane_stated(catalog.MAIN_REPO)["steps"])
+                         self.lane_stated(catalog.DEFAULT_REPO)["steps"])
         applied = generation.validate_request(
-            {"repo": catalog.MAIN_REPO, "prompt": "rain"}, data_dir=self.manager.data)
+            {"repo": catalog.DEFAULT_REPO, "prompt": "rain"}, data_dir=self.manager.data)
         self.assertEqual(applied["steps"], catalog.CATALOG[0].defaults["steps"])
         self.assertEqual(applied["duration_seconds"],
                          catalog.CATALOG[0].defaults["duration_seconds"])
 
     def test_a_stored_default_does_not_make_an_out_of_bound_request_acceptable(self) -> None:
-        published = self.published(catalog.MAIN_REPO)["steps"]
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5}).status_code, 200)
+        published = self.published(catalog.DEFAULT_REPO)["steps"]
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5}).status_code, 200)
         with self.assertRaises(ValueError):
             generation.validate_request(
-                {"repo": catalog.MAIN_REPO, "prompt": "rain",
+                {"repo": catalog.DEFAULT_REPO, "prompt": "rain",
                  "steps": published["maximum"] + 1}, data_dir=self.manager.data)
 
     # -- the two axes --------------------------------------------------------
     def test_neither_setting_changes_the_other(self) -> None:
-        self.assertEqual(self.put(catalog.MAIN_REPO, {"steps": 5}).status_code, 200)
+        self.assertEqual(self.put(catalog.DEFAULT_REPO, {"steps": 5}).status_code, 200)
         self.assertFalse(memory_policy.settings_file().exists(),
                          "choosing a generation default must not write the memory policy")
         self.assertEqual(memory_policy.status()["mode"], "auto")
@@ -737,14 +614,14 @@ class MusicModelDefaultsRouteTests(unittest.TestCase):
         changed = self.client.put("/api/memory-policy", json={"mode": "memory_saver"},
                                   headers=self.headers)
         self.assertEqual(changed.status_code, 200)
-        row = self.rows()[catalog.MAIN_REPO]
+        row = self.rows()[catalog.DEFAULT_REPO]
         self.assertEqual(row["defaults"]["steps"], 5,
                          "changing when the engine gives memory back must not change what the "
                          "request asks it for")
         self.assertEqual(row["chosen"], {"steps": 5})
         self.assertEqual(json.loads(model_defaults.settings_file(self.manager.data)
                                     .read_text(encoding="utf-8")),
-                         {catalog.MAIN_REPO: {"steps": 5}})
+                         {catalog.DEFAULT_REPO: {"steps": 5}})
 
 
 if __name__ == "__main__":

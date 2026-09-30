@@ -98,8 +98,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
 
         `packaging/capture_model_manifests.py` is how the catalog is produced, so a manifest it
         has no spec for is a package a re-capture silently drops. Seven shipped packages were in
-        exactly that state (`ace-step-1-5-turbo`, `chatterbox-{4,8}bit`, `fish-audio-s2-pro-*`,
-        `s3tokenizerv2`, `stable-audio-3-medium`) while this file asserted their names from a
+        exactly that state (`chatterbox-{4,8}bit`, `fish-audio-s2-pro-*`,
+        `s3tokenizerv2`, `stable-audio-3-medium`, and `ace-step-1-5-turbo`, since retired) while this file asserted their names from a
         hand-written table - the one thing a membership test cannot notice.
 
         `catalog_problems` is the same check the tool runs before it touches the network, so the
@@ -254,7 +254,6 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # one field changed every manifest's canonical bytes.
             #
             # The three Video packages were captured in the same pass.
-            "ace-step-1-5-turbo": "686efcfb99f2f9765e222dc4fb49c2d7eec90a52a040999ee50480c5955da28a",
             "flux2-klein-4b-mlx-4bit": "32825a10e1812bef71a546560dc69c5d83dde8cc09f52a76f79eb538ca6a35dc",
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example

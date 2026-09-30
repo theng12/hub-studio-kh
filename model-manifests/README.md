@@ -1,7 +1,7 @@
 # Studio Hub model manifests
 
-This catalog contains **31** bounded model packages. The files describe
-**126,848,510,089 expected bytes** across the packages; Qwen Base
+This catalog contains **30** bounded model packages. The files describe
+**119,139,132,477 expected bytes** across the packages; Qwen Base
 packages reference the shared `whisper-turbo` package for their internal
 quality check and do not copy its weights again.
 
@@ -24,8 +24,9 @@ Whisper models include their required tokenizer/processor assets only at
 `companions/processor/<upstream path>`. Companion files intentionally have no
 root-folder fallback: a root `config.json` is ambiguous and must not satisfy a
 processor requirement. The `source.layout` mapping identifies every source
-repository/revision. The Music package assembles its Turbo model and 0.6B
-planner beneath the same installer-owned `model/` checkpoint root.
+repository/revision. The Music packages are Stable Audio 3 Medium (its MLX
+weights beneath the installer-owned `model/mlx/`) and YuE2 (a generator and its `yue2-vae`
+decoder). ACE-Step 1.5 was retired in 0.6.116.
 
 The catalog excludes model cards, Git attributes, licenses and example audio;
 it keeps only required generation weights, indexes, configuration and

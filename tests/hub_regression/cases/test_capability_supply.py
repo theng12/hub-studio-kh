@@ -80,7 +80,7 @@ def test_a_serving_studio_publishes_models_operations_and_supply(fixture_monitor
 
 def test_a_modality_maps_to_the_peer_operation_vocabulary(fixture_monitor):
     monitor = fixture_monitor
-    _serve(monitor, "music", [_row("ACE-Step/Ace-Step1.5")])
+    _serve(monitor, "music", [_row("stabilityai/stable-audio-3-optimized")])
     # A Voice row as the worker publishes it now: `modes` is the producer's own fact.
     _serve(monitor, "voice", [_row("mlx-community/VoxCPM2-4bit", modes=["cloning", "design"])])
     _serve(monitor, "subtitle", [_row("mlx-community/whisper-base-mlx")],

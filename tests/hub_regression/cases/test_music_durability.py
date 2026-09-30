@@ -54,7 +54,7 @@ def music_attempt(fixture_monitor):
         "id": "music-durability-proof",
         "client_request_id": "music-durability-request",
         "modality": "music",
-        "model": "ACE-Step/Ace-Step1.5",
+        "model": "stabilityai/stable-audio-3-optimized",
         "shared_params": {},
         "cancelled": False,
         "routing": "pool",

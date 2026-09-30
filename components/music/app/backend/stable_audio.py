@@ -1,6 +1,6 @@
 """Stable Audio 3 (MLX) generation for the Music worker.
 
-A second music engine beside ACE-Step. It runs Stability's vendored pure-MLX CLI
+A music engine (instrumental only). It runs Stability's vendored pure-MLX CLI
 (`components/music/engines/stable_audio_3/scripts/sa3_mlx.py`) as a short-lived
 subprocess against the weights of the imported `stable-audio-3-medium` package.
 

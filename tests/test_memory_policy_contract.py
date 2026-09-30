@@ -1046,26 +1046,6 @@ class _VerifiedPackageCache:
         return {"state": "cached", "checkpoints_root": str(self.root)}
 
 
-class _MusicResidentEngine:
-    """A stand-in for the Music worker's resident engine child."""
-
-    def __init__(self):
-        self._pid = 2468
-        self.discards = 0
-
-    @property
-    def child_pid(self):
-        return self._pid
-
-    def _discard(self):
-        self.discards += 1
-        self._pid = None
-        return True
-
-    def close(self):
-        self._discard()
-
-
 class MusicRowThroughTheHubController(PackagedMachine):
     """`GET /api/hub/memory/policy` must show the Music row as ready, with its four modes.
 
@@ -1080,23 +1060,19 @@ class MusicRowThroughTheHubController(PackagedMachine):
         if importlib.util.find_spec("fastapi") is None:
             self.skipTest("FastAPI is not installed in the system test interpreter")
         from fastapi.testclient import TestClient
-        from components.music.app.backend import catalog, generation, memory_policy
+        from components.music.app.backend import generation, memory_policy
         from components.music.app.backend.main import create_app
 
-        self.catalog = catalog
         self.memory_policy = memory_policy
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name)
         (root / "models").mkdir()
-        (root / "engine").mkdir()
         with patch.object(generation.cache_module, "MusicCache", _VerifiedPackageCache):
             self.manager = generation.GenerationManager(
-                root / "data", engine_root=str(root / "engine"),
-                library_dir=str(root / "models"), runtime_sha256="f" * 64)
+                root / "data", library_dir=str(root / "models"), runtime_sha256="f" * 64)
         self.addCleanup(self.manager.close)
         self.addCleanup(self._unbind_policy)
-        self.manager._engine_contract_reason = lambda: None
         self.client = TestClient(create_app(self.manager, "secret"))
 
     def _unbind_policy(self) -> None:
@@ -1167,13 +1143,12 @@ class MusicRowThroughTheHubController(PackagedMachine):
         self.assertEqual(row["policy"]["mode"], "memory_saver")
         self.assertEqual(row["policy"]["idle_seconds"], 120)
 
-    def test_release_through_the_hub_discards_the_resident_engine(self) -> None:
-        engine = _MusicResidentEngine()
-        self.manager._executors[self.catalog.MAIN_REPO] = engine
+    def test_release_through_the_hub_finds_nothing_resident(self) -> None:
+        """Both Music engines run per job and exit with it, so the worker holds no model."""
+        self.assertEqual(self.manager.loaded_model_keys(), [])
         result = asyncio.run(self.control().release())
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["result"], "released")
-        self.assertEqual(engine.discards, 1)
         self.assertEqual(result["results"][0]["policy"]["loaded_models"], [])
 
 

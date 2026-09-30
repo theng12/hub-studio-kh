@@ -1,7 +1,7 @@
-"""Installer-owned ACE-Step package resolution.
+"""Installer-owned Music package resolution.
 
 Music never guesses a checkpoint directory. The trusted model-package receipt
-selects the installed revision folder, and the engine loads its model child.
+selects the installed revision folder, and the engine loads its model from it.
 This keeps import, verification, Hub readiness, and inference on one identity.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from components import model_packages
 from . import catalog
 
 
-MANIFEST_NAME = catalog.manifest_name_for(catalog.MAIN_REPO)
+MANIFEST_NAME = catalog.manifest_name_for(catalog.DEFAULT_REPO)
 LIBRARY_ENV = "STUDIOHUB_MUSIC_LIBRARY_DIR"
 MANIFEST_ENV = "STUDIOHUB_MUSIC_MANIFEST"
 ALLOW_DOWNLOAD_ENV = "STUDIOHUB_MUSIC_ALLOW_DOWNLOAD"
@@ -66,7 +66,7 @@ class MusicCache:
             raise ValueError(
                 "External Music checkpoint roots are unsupported; install the "
                 "package in the selected model library")
-        self.repo = repo or catalog.MAIN_REPO
+        self.repo = repo or catalog.DEFAULT_REPO
         self.library = resolve_library_root(library)
         self.manifest_path = resolve_manifest_path(
             manifest_path, catalog.manifest_name_for(self.repo))
@@ -177,7 +177,7 @@ class MusicCache:
     def download_plan(self, model: Optional[catalog.ModelEntry] = None) -> dict:
         by_repo: dict[str, dict] = {}
         for entry in self.entries():
-            repo = str(entry.get("repo") or (model.repo if model else catalog.MAIN_REPO))
+            repo = str(entry.get("repo") or (model.repo if model else catalog.DEFAULT_REPO))
             bucket = by_repo.setdefault(
                 repo, {"repo": repo, "files": 0, "bytes": 0,
                        "revision": entry.get("revision")})

@@ -57,7 +57,7 @@ class StableAudioRunnerTests(unittest.TestCase):
     def test_a_broken_stable_audio_package_does_not_stop_the_other_engine(self):
         # A missing or unreadable Stable Audio package must not take the Music worker
         # down; the per-model cache records the failure and preflight reports it while
-        # ACE-Step keeps working.
+        # the other engine keeps working.
         from components.music.app.backend import catalog, generation  # noqa: PLC0415
         manager = object.__new__(generation.GenerationManager)
         manager._model_caches = {}

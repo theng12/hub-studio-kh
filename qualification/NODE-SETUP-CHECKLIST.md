@@ -2,7 +2,7 @@
 
 Version being deployed: the one this kit's own `focused-release-manifest.json` records (its
 `version` and `implementation_commit` — a version pinned in this sentence went stale every
-build), with **31** model packages (ACE-Step 1.5 Turbo and Stable Audio 3 Medium included).
+build), with **30** model packages (Stable Audio 3 Medium and YuE2 3B are the music models).
 
 ## What I have verified
 

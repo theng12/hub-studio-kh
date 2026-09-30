@@ -113,7 +113,7 @@ EVIDENCE = r'''
         }) {
             for fact in subtitle.facts { print("SUBTITLE fact          : \(fact.line)") }
         }
-        if let music = store.models.first(where: { $0.repo == "ACE-Step/Ace-Step1.5" }) {
+        if let music = store.models.first(where: { $0.repo == "fixture/sung-music" }) {
             let wanted = ["duration_seconds", "duration_seconds ladder", "steps", "guidance_scale",
                           "shift", "Single-pass render", "Vocals & lyrics", "Sample rate"]
             for fact in music.facts where wanted.contains(fact.label) {

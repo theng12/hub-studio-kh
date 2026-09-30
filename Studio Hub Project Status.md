@@ -167,7 +167,7 @@ Current packet: **all four SSDs carry the full library and pass their kit verifi
 - Nothing deleted: Pinokio/TerraNash kits moved to `_trash/` on UGREEN, ATLAS and
   ORICO. `My Stuff`/`Documents` untouched; NOVA's 153 GB plain archive untouched.
 - `.build/prepare-kit.sh <volume>` prepares any future drive in one step.
-Also complete this session: two music engines (ACE-Step + Stable Audio 3), the
+Also complete this session: two music engines (ACE-Step + Stable Audio 3; ACE-Step was retired in 0.6.116, music is now YuE2 + Stable Audio 3), the
 UI/UX pass, P0 stabilisation (SA3 progress/cancel, log rotation, auto-discard,
 no-transcript clones), the progress-stage polish, the R08 owner pass, and the
 owner-facing R08 checklist (`docs/R08-click-through-checklist.md`).

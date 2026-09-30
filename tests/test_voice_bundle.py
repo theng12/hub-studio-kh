@@ -602,6 +602,10 @@ class StagingTests(unittest.TestCase):
                 # list as the rest so a sixth component cannot repeat this.
                 'components/chat/app/backend/main.py': '# chat fixture',
                 'packaging/chat_worker.py': '# chat worker',
+                # Music runs on the Voice runtime (no overlay of its own since ACE-Step 1.5 was
+                # retired), so every Hub bundle stages it and the fixture has to carry it.
+                'components/music/app/backend/main.py': '# music fixture',
+                'packaging/music_worker.py': '# music worker',
             }
             for name, content in files.items():
                 path = repo / name

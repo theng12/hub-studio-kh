@@ -2,8 +2,8 @@
 
 A worker catalogue row's ``repo`` and a job batch's stored ``model`` are usually
 the same string, but a packaged model may be named either by its manifest
-``model_id`` (e.g. ``ACE-Step/Ace-Step1.5``) or by its ``package_id`` (e.g.
-``ace-step-1-5-turbo``).  Every route that carries a model publishes the
+``model_id`` (e.g. ``stabilityai/stable-audio-3-optimized``) or by its ``package_id`` (e.g.
+``stable-audio-3-medium``).  Every route that carries a model publishes the
 manifest's ``model_id`` under the key ``model_id`` so a peer can join rows
 across routes on one string.
 

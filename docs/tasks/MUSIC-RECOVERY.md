@@ -1,5 +1,9 @@
 # Music recovery card
 
+> **0.6.116 — ACE-Step 1.5 is retired** (owner decision, 2026-09-30). The package, engine source,
+> runtime overlay and `engine_child.py` this card describes were removed; music is YuE2 and Stable
+> Audio 3. Kept as the record of how the package contract was built.
+
 ## Status
 
 [MEASURED] Package/engine source contract implemented on

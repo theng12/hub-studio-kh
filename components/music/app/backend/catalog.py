@@ -1,59 +1,21 @@
-"""Static catalogue of music-generation models for MusicStudio (ACE-Step 1.5).
+"""Static catalogue of music-generation models for MusicStudio (Stable Audio 3 and YuE2).
 
 This mirrors the shape the Voice catalogue already uses — frozen dataclass
 entries, a ``CATALOG`` tuple, ``get_model`` and ``families`` — rather than
 inventing a second descriptor format.
 
-Facts in this file are read from the ACE-Step 1.5 checkout that produced the
-working 30 s generation (``~/Projects/ace-step-probe/ACE-Step-1.5``), not
-guessed:
-
-* the per-tier duration caps come from ``acestep/gpu_config.py:GPU_TIER_CONFIGS``;
-* the checkpoint names and repo ids come from
-  ``acestep/model_downloader.py:MAIN_MODEL_REPO`` / ``SUBMODEL_REGISTRY``;
-* the output format comes from the checkpoint VAE config
-  (``checkpoints/vae/config.json``: ``sampling_rate 48000``,
-  ``audio_channels 2``);
-* the licence name is the first line of the checkout's ``LICENSE``
-  ("MIT License"), which the model card repeats as ``License: MIT``.
-
-Per-tier duration policy is not a single number: the engine clamps whatever
-duration is requested to the cap for the tier the host memory lands in. On the
-owner's 11.8 GB Mac the probe landed in ``tier4`` and the log recorded
-"constrained decoding max_duration to 480s based on GPU config (tier: tier4)",
-so 480 s is the working single-pass ceiling here and 600 s is the theoretical
-one for a machine with enough memory.
+The Hub offers exactly two music models: Stable Audio 3 (instrumental) and YuE2
+(sung songs). ACE-Step 1.5 was retired in 0.6.116; nothing here names it as an
+engine, a package or a default.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Exact source revisions.  Both were read from the local Hugging Face cache
-# refs written when the checkpoints were fetched, and confirmed against the
-# Hub API; every local checkpoint file was hashed and matches the LFS oid the
-# Hub publishes at these revisions.
-# ---------------------------------------------------------------------------
-MAIN_REPO = "ACE-Step/Ace-Step1.5"
-MAIN_REVISION = "19671f406d603126926c1b7e2adc169acbcade22"
-LM_06B_REPO = "ACE-Step/acestep-5Hz-lm-0.6B"
-LM_06B_REVISION = "148d8ea0225bdab342ee1ae3a354275ccd60ca80"
-ENGINE_REPO = "ace-step/ACE-Step-1.5"
-ENGINE_REVISION = "ca1e85fe9430179831e6bc6be790c332190a3866"
-ENGINE_SOURCE_SHA256 = "a55b4bf166464a690e967b4a31862e39efc6bd954ef0214ac91030d99e97cb33"
-ENGINE_MODEL_CODE_SHA256 = {
-    "acestep/models/turbo/configuration_acestep_v15.py":
-        "5f15aa79fe793bba3c00b6992dd193a269954950603d5031ecd7703b0fa69da1",
-    "acestep/models/turbo/modeling_acestep_v15_turbo.py":
-        "71b22e01b490bd9e149e4c0c5da2e1f512126f3ab3316e0ae97779af84d19512",
-}
-
 ENGINE = "music-mlx"
 
-# ---------------------------------------------------------------------------
-# Tier table — verbatim from acestep/gpu_config.py:GPU_TIER_CONFIGS
-# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
 class TierLimit:
     """One row of the engine's hardware tier table.
@@ -113,38 +75,14 @@ class Checkpoint:
     note: str
 
 
-# The first package contains only the Turbo DiT used by the historical probe.
-TURBO_DIT = Checkpoint(
-    name="acestep-v15-turbo", kind="dit", repo=MAIN_REPO, revision=MAIN_REVISION,
-    size_gb=4787825604 / 1e9, size_bytes=4787825604, parameters_b=2.0,
-    repo_path="acestep-v15-turbo",
-    note="2B DiT, CFG-distilled (guidance forced to 1.0), 8 diffusion steps. "
-         "Very High quality tier in the upstream model zoo.")
-VAE = Checkpoint(
-    name="vae", kind="vae", repo=MAIN_REPO, revision=MAIN_REVISION,
-    size_gb=337431388 / 1e9, size_bytes=337431388, parameters_b=None,
-    repo_path="vae",
-    note="AutoencoderOobleck; 48 kHz stereo, decoded with tiled VAE decode on "
-         "this class of machine.")
-TEXT_ENCODER = Checkpoint(
-    name="Qwen3-Embedding-0.6B", kind="text-encoder", repo=MAIN_REPO,
-    revision=MAIN_REVISION, size_gb=1191586416 / 1e9, size_bytes=1191586416,
-    parameters_b=0.6, repo_path="Qwen3-Embedding-0.6B",
-    note="Prompt/lyric text encoder bundled inside the main repo.")
-LM_06B = Checkpoint(
-    name="acestep-5Hz-lm-0.6B", kind="lm", repo=LM_06B_REPO,
-    revision=LM_06B_REVISION, size_gb=1325804024 / 1e9, size_bytes=1325804024,
-    parameters_b=0.6, repo_path="acestep-5Hz-lm-0.6B",
-    note="5 Hz semantic-token LM (Qwen3-0.6B base). The only LM tier usable at "
-         "tier4; responsible for the ~8 s audio-code phase in the probe.")
 # ── Stable Audio 3 (MLX) ────────────────────────────────────────────────────
-# A second music engine: Stability's latent-diffusion model, run through the
+# Stability's latent-diffusion model, run through the
 # vendored pure-MLX runtime under ``components/music/engines/stable_audio_3``.
 # Instrumental only (no vocals); 44.1 kHz stereo; 380 s absolute maximum.
-# ── The third engine: YuE2, in its own pinned runtime ─────────────────────
+# ── YuE2, in its own pinned runtime ───────────────────────────────────────
 #
-# `mlx-Yue` pins `mlx==0.32.2` while this worker's own runtime (the Voice runtime plus the Music
-# overlay) carries `mlx==0.31.2`, so the engine runs in a separate interpreter and this worker
+# `mlx-Yue` pins `mlx==0.32.2` while this worker's own runtime (the Voice runtime) carries
+# `mlx==0.31.2`, so the engine runs in a separate interpreter and this worker
 # spawns it — the same shape the Video lane uses for its two engines. The tier below is MEASURED on
 # this Mac, not read from a card: the model card publishes no memory table at all.
 YUE2_REPO = "vanch007/mlx-Yue2-3B"
@@ -164,6 +102,9 @@ YUE2_PORT_COMMIT = "9253ed133343406947bde7b67d43c7a63fb39d99"
 YUE2_TOKENS_PER_SECOND = 25
 
 STABLE_AUDIO_REPO = "stabilityai/stable-audio-3-optimized"
+# The worker's default model: what a request that names no repo runs, and what the package cache
+# resolves when it is not told which package to verify.
+DEFAULT_REPO = STABLE_AUDIO_REPO
 STABLE_AUDIO_REVISION = "da6edc54ddba10bfd79a077102ded687f80e882b"
 SA3_MAX_DURATION_SECONDS = 380
 
@@ -171,7 +112,6 @@ SA3_MAX_DURATION_SECONDS = 380
 # model itself (``ModelEntry.runtime``), not of a per-repo table.  generation.py maps
 # these values to a request validator and a runner, and refuses an unknown value by
 # naming the model and this file; add the engine there when you add the model.
-RUNTIME_ACE_STEP = "ace-step"
 RUNTIME_STABLE_AUDIO = "stable-audio"
 # The engine's manifest token, so the Hub resolves its worker and modality the way it does for every
 # other package, and the worker picks the interpreter from it.
@@ -217,57 +157,6 @@ SA3_LONG_FORM = LongFormStrategy(
     note="Stable Audio 3 does not extend past 380 s in one request.",
 )
 
-TIERS: tuple[TierLimit, ...] = (
-    TierLimit("tier1", "tier1 (<=4 GB)", 0, 240, 360, 1, 1, (),
-              "", True, True,
-              "Offload mode; VAE decode falls back to CPU; no LM available."),
-    TierLimit("tier2", "tier2 (4-6 GB)", 4, 480, 600, 1, 1, (),
-              "", True, True, "Offload mode; no LM available."),
-    TierLimit("tier3", "tier3 (6-8 GB)", 6, 480, 600, 2, 2,
-              ("acestep-5Hz-lm-0.6B",), "acestep-5Hz-lm-0.6B", True, True,
-              "First tier that can hold the 0.6B LM."),
-    TierLimit("tier4", "tier4 (8-12 GB)", 8, 480, 600, 2, 4,
-              ("acestep-5Hz-lm-0.6B",), "acestep-5Hz-lm-0.6B", True, True,
-              "This Mac (11.8 GB unified) — the probe's tier. 480 s with LM."),
-    TierLimit("tier5", "tier5 (12-16 GB)", 12, 480, 600, 4, 4,
-              ("acestep-5Hz-lm-0.6B",),
-              "acestep-5Hz-lm-0.6B", False, True,
-              "Keeps DiT resident; this package still uses its verified 0.6B LM."),
-    TierLimit("tier6a", "tier6a (16-20 GB)", 16, 480, 600, 4, 8,
-              ("acestep-5Hz-lm-0.6B",),
-              "acestep-5Hz-lm-0.6B", False, True, "Batch up to 8 without LM."),
-    TierLimit("tier6b", "tier6b (20-24 GB)", 20, 480, 480, 8, 8,
-              ("acestep-5Hz-lm-0.6B",),
-              "acestep-5Hz-lm-0.6B", False, False,
-              "No offload and no quantization; only the packaged 0.6B LM is offered."),
-    TierLimit("unlimited", "unlimited (>=24 GB)", 24, 600, 600, 8, 8,
-              ("acestep-5Hz-lm-0.6B",),
-              "acestep-5Hz-lm-0.6B", False, False,
-              "600 s is the engine's absolute supported maximum."),
-)
-
-# The long-form policy the engine itself implements: one pass at a duration up
-# to the tier cap, then ``task_type="repaint"`` with an explicit window and a
-# latent-level crossfade to extend past it.  Values are the engine's documented
-# defaults (GenerationParams in acestep/inference.py).
-LONG_FORM = LongFormStrategy(
-    single_pass_max_seconds=480,
-    single_pass_cap_source="acestep/gpu_config.py:GPU_TIER_CONFIGS[tier4]"
-                           ".max_duration_with_lm (log: 'constrained decoding "
-                           "max_duration to 480s based on GPU config (tier: tier4)')",
-    beyond_cap="Repaint: generate the first window, then task_type='repaint' over "
-               "repainting_start/repainting_end windows with chunk_mask_mode='auto', "
-               "blending the boundary in latent space and (optionally) in the waveform.",
-    repaint_task_type="repaint",
-    repaint_mode="balanced",
-    repaint_strength=0.5,
-    repaint_latent_crossfade_frames=10,
-    repaint_wav_crossfade_sec=0.0,
-    note="The worker only implements the single pass today; the catalogue records "
-         "the repaint strategy so a long-form request is never promised as one pass.",
-)
-
-
 @dataclass(frozen=True)
 class Family:
     id: str
@@ -277,24 +166,6 @@ class Family:
 
 
 FAMILIES: dict[str, Family] = {
-    "ace-step-1.5": Family(
-        id="ace-step-1.5",
-        label="ACE-Step 1.5",
-        summary=(
-            "Open-source text-to-music foundation model from ACE Studio and "
-            "StepFun. A CFG-distilled DiT generates the audio while a 5 Hz "
-            "semantic LM plans duration, structure and, when asked, lyrics and "
-            "metadata. MIT licensed, trained on licensed, royalty-free and "
-            "synthetic audio."
-        ),
-        how_to_use=(
-            "Describe the music in a caption (genre, instruments, mood, tempo). "
-            "Instrumentals set instrumental=true with lyrics='[Instrumental]'. "
-            "Request a duration up to the tier cap; anything longer needs the "
-            "repaint strategy documented on the entry. First generation on a "
-            "cold worker pays a one-time ~3 minute model load."
-        ),
-    ),
     "stable-audio-3": Family(
         id="stable-audio-3",
         label="Stable Audio 3",
@@ -308,8 +179,8 @@ FAMILIES: dict[str, Family] = {
             "Describe the music in a caption (genre, instruments, mood, tempo). "
             "This engine is instrumental only - there is nothing to sing. Pick a "
             "duration up to 380 s; longer pieces need to be rendered in sections. "
-            "It is much faster than ACE-Step: 30 s renders in about 9 s and 380 s "
-            "in about 62 s on an M2 Max."
+            "30 s renders in about 9 s and 380 s in about 62 s on an M2 Max. "
+            "For a sung song with lyrics, use YuE2."
         ),
     ),
 }
@@ -324,7 +195,7 @@ class ModelEntry:
     ``package_id``/``package_root`` (``cache.MusicCache`` -> ``package_id_for`` /
     ``package_root_for``) and enforces the entry's own ``limits``.  A third model
     therefore cannot be added without its own package identity, revision and
-    contract, and cannot inherit ACE-Step's.
+    contract, and cannot inherit another model's.
 
     ``manifest_name`` is derived: the installer-owned manifest for a package is
     ``<package_id>.json`` (``cache.resolve_manifest_path``), and ``MusicCache``
@@ -364,11 +235,11 @@ class ModelEntry:
     # ── The token this model's **manifest** declares as `engine` ──
     #
     # A different fact from `runtime`, and conflating the two broke the second engine: `runtime`
-    # names the executor inside this worker ("ace-step", "stable-audio"), while the manifest's
-    # `engine` is the Hub's routing vocabulary ("music-mlx", "music-yue2"). ACE-Step and Stable
-    # Audio share `music-mlx`; YuE2 runs in its own pinned interpreter and its manifest says so. A
-    # single global constant therefore verified every package against ACE-Step's engine, and
-    # YuE2's package — correctly installed, correctly hashed — was reported as unreadable.
+    # names the executor inside this worker ("stable-audio", "music-yue2"), while the manifest's
+    # `engine` is the Hub's routing vocabulary ("music-mlx", "music-yue2"). YuE2 runs in its own
+    # pinned interpreter and its manifest says so. A single global constant therefore verified
+    # every package against Stable Audio's engine, and YuE2's package — correctly installed,
+    # correctly hashed — was reported as unreadable.
     manifest_engine: str = ENGINE
     recommended_hardware: str = ""
     best_for: str = ""
@@ -390,94 +261,6 @@ class ModelEntry:
 
 
 CATALOG: tuple[ModelEntry, ...] = (
-    ModelEntry(
-        repo=MAIN_REPO,
-        label="ACE-Step 1.5 Turbo (2B DiT)",
-        family="ace-step-1.5",
-        checkpoint="acestep-v15-turbo",
-        # Exact manifest byte total: Turbo DiT, VAE, text encoder and the
-        # separately published 0.6B planner.
-        size_gb=7709377612 / 1e9,
-        gated=False,
-        # The package the local manifest describes. Periods are normalized to
-        # hyphens to match the model package identifier contract.
-        package_id="ace-step-1-5-turbo",
-        package_root="model",
-        revision=MAIN_REVISION,
-        runtime=RUNTIME_ACE_STEP,
-        defaults={
-            "duration_seconds": 30.0,
-            "steps": 8,
-            "guidance_scale": 1.0,
-            "shift": 3.0,
-            "seed": -1,
-            "instrumental": True,
-            "lyrics": "[Instrumental]",
-            "vocal_language": "unknown",
-            "dit_model": "acestep-v15-turbo",
-            "lm_model": "acestep-5Hz-lm-0.6B",
-        },
-        limits={
-            "min_duration_seconds": 1.0,
-            # The engine's absolute supported maximum
-            # (acestep/gpu_config.py:GPU_TIER_CONFIGS["unlimited"]); the per-tier cap
-            # this host gets is 480 s at tier4 (see TIERS).
-            "max_duration_seconds": 600.0,
-            "single_pass_max_seconds": LONG_FORM.single_pass_max_seconds,
-            "min_steps": 1,
-            "max_steps": 50,
-            "min_guidance": 0.0,
-            "max_guidance": 30.0,
-            "min_seed": -1,
-            "max_seed": 2 ** 32 - 1,
-        },
-        qualification={
-            "historical_source_workload":
-                "30 s instrumental, 8 steps, turbo DiT + 0.6B LM, MLX backend, tier4",
-            "packaged_inference": "unqualified; source contract only",
-        },
-        # Measured, not estimated: `qualification/evidence/r07-2026-09-21/` holds one JSON per
-        # run with its own wall time. Published as the lane contract's `runtime_seconds` so a
-        # scheduler sets its deadline from a number this hardware actually produced — the
-        # per-run detail stays in the evidence, the contract carries the shape of it.
-        measured_runtime={
-            "measured": [
-                {"duration_seconds": 30.0, "seconds": 97.35},
-                {"duration_seconds": 60.0, "seconds": 104.71},
-                {"duration_seconds": 360.0, "seconds": 256.41},
-                {"duration_seconds": 20.0, "seconds": 106.65, "note": "with vocals"},
-            ],
-            "measured_on": "M2 Max 32 GB, ACE-Step 1.5 Turbo, 8 steps",
-            "evidence": "measured",
-        },
-        min_unified_memory_gb=8,
-        recommended_hardware=(
-            "Apple Silicon with 16 GB unified memory; runs at tier4 on this "
-            "11.8 GB Mac, which is also where the 30 s probe succeeded."),
-        capabilities=("music", "instrumental", "text-to-music", "repaint",
-                      "cover", "lyrics", "long-form"),
-        best_for=(
-            "Text-to-music and instrumental beds with a small footprint: the "
-            "2B turbo DiT plus the 0.6B planner fits tier4 and completes a 30 s "
-            "clip in ~89 s of generation after a one-time model load. 8 diffusion "
-            "steps, guidance forced to 1.0 because turbo is CFG-distilled."),
-        sample_rate_hz=48000,
-        channels=2,
-        license_name="MIT License",
-        license_source="LICENSE, line 1: 'MIT License'; model card: 'License: MIT'",
-        checkpoints=(TURBO_DIT, VAE, TEXT_ENCODER, LM_06B),
-        dit_tiers=(TURBO_DIT,),
-        lm_tiers=(LM_06B,),
-        tiers=TIERS,
-        long_form=LONG_FORM,
-        default_lm_model="acestep-5Hz-lm-0.6B",
-        inference_steps=8,
-        guidance_scale=1.0,
-        # The two executable model files that upstream normally synchronizes
-        # are package members instead. Studio Hub's adapter verifies equality
-        # and refuses a mismatch; it never writes into the installed package.
-        ignore_patterns=(),
-    ),
     ModelEntry(
         repo=STABLE_AUDIO_REPO,
         label="Stable Audio 3 Medium (1.4B)",
@@ -520,16 +303,15 @@ CATALOG: tuple[ModelEntry, ...] = (
         capabilities=("music", "instrumental", "text-to-music"),
         best_for=(
             "Fast instrumental music at 44.1 kHz stereo, up to 380 s (6 min 20 s). "
-            "Measured 30 s in 9.3 s and 380 s in 61.6 s on an M2 Max - several "
-            "times faster than ACE-Step - but it cannot sing. Pick ACE-Step when "
-            "you need vocals or more than 380 s."),
+            "Measured 30 s in 9.3 s and 380 s in 61.6 s on an M2 Max - but it "
+            "cannot sing. Pick YuE2 when you need vocals."),
         sample_rate_hz=44100,
         channels=2,
         license_name="Stability AI Community License",
         license_source=(
             "stabilityai/stable-audio-3-optimized model card; license text at "
             "https://stability.ai/license"),
-        # Measured on the same host as the ACE-Step runs, recorded in
+        # Measured on a 32 GB M2 Max, recorded in
         # `qualification/evidence/sa3-2026-09-22/proof.json` with each artifact's own SHA-256.
         measured_runtime={
             "measured": [
@@ -612,7 +394,7 @@ CATALOG: tuple[ModelEntry, ...] = (
         capabilities=("music", "text-to-music", "lyrics", "long-form"),
         best_for=(
             "Sung songs with lyrics, up to about six minutes, at 48 kHz stereo. This is the only "
-            "engine here that writes a vocal; ACE-Step 1.5 also sings, and Stable Audio 3 cannot. "
+            "engine here that writes a vocal; Stable Audio 3 cannot. "
             "Measured: 36 s of song in 103 s on an M2 Max."),
         sample_rate_hz=48000,
         channels=2,
@@ -718,7 +500,7 @@ def require_model(identifier: str) -> ModelEntry:
 
     Every per-model fact the worker publishes, verifies or loads is read from the
     returned entry.  There is deliberately no fallback to the first model: that
-    fallback is how a newly added model used to be published with ACE-Step's
+    fallback is how a newly added model used to be published with another model's
     manifest, package id and package root.
     """
     model = get_model(identifier)

@@ -57,7 +57,7 @@ registry = [
 
 def snapshot(studio, *, job_id, operation, state, observed_at):
     item = {
-        "id": job_id, "state": state, "model": "ace-step-1-5-turbo",
+        "id": job_id, "state": state, "model": "stable-audio-3-medium",
         "operation": operation, "source": "direct", "origin": "local_ui",
         "created_at": observed_at - 4, "started_at": observed_at - 4,
         "updated_at": observed_at,
@@ -87,7 +87,7 @@ statuses = {
 # A Hub-owned Music batch, the shape `broker.batches` really holds: no `operation` key.
 broker.batches.clear()
 broker.batches["music-batch"] = {
-    "model": "ace-step-1-5-turbo",
+    "model": "stable-audio-3-medium",
     "items": [{
         "studio": "music", "studio_job_id": "music-owned-1",
         "state": "running", "started_at": now - 3, "progress": 0.5,

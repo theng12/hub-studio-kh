@@ -140,20 +140,6 @@ class ThePublishedNumbersTraceToEvidenceTests(unittest.TestCase):
                     self.assertGreater(row["seconds"], 0)
                     self.assertGreater(row["duration_seconds"], 0)
 
-    def test_ace_step_runtimes_match_the_stored_probe_results(self) -> None:
-        ace = next(model for model in catalog.CATALOG
-                   if model.runtime == catalog.RUNTIME_ACE_STEP)
-        published = {row["duration_seconds"]: row["seconds"]
-                     for row in generation.lane_contract(ace)["runtime_seconds"]["measured"]}
-        for name in ("ace-step-turbo", "ace-step-turbo-60s", "ace-step-turbo-6min",
-                     "ace-step-turbo-vocal"):
-            record = json.loads((EVIDENCE / "r07-2026-09-21" / f"{name}.json").read_text())
-            with self.subTest(probe=name):
-                seconds = float(record["params"]["duration_seconds"])
-                self.assertEqual(
-                    published[seconds], record["generate_seconds"],
-                    f"the contract's runtime for {name} does not match the stored probe result")
-
     def test_stable_audio_runtimes_match_the_stored_proof(self) -> None:
         stable = next(model for model in catalog.CATALOG
                       if model.runtime == catalog.RUNTIME_STABLE_AUDIO)

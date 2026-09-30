@@ -1,8 +1,8 @@
 """YuE2 (MLX) generation for the Music worker — the engine's own runtime, driven by a bridge.
 
-A third music engine beside ACE-Step and Stable Audio 3, and the first one that cannot run in this
-worker's interpreter: `mlx-Yue` pins `mlx==0.32.2` while this worker's runtime (the Voice runtime
-plus the Music overlay) carries `mlx==0.31.2`. So the run happens in
+The sung-song music engine beside Stable Audio 3, and the one that cannot run in this
+worker's interpreter: `mlx-Yue` pins `mlx==0.32.2` while this worker's runtime (the Voice runtime)
+carries `mlx==0.31.2`. So the run happens in
 `runtimes/music-yue2/bin/python3`, through `yue2_runner.py`, and this module is the worker's side of
 that contract — the same shape `video/generation.run_lance` has for its engine.
 

@@ -2,7 +2,7 @@
 """Run one YuE2 music job — executed **by the YuE2 runtime's own interpreter**.
 
 Why a separate process rather than a function in the worker: ``mlx-Yue`` pins ``mlx==0.32.2`` while
-the Music worker's runtime (the Voice runtime plus the Music overlay) carries ``mlx==0.31.2``. One
+the Music worker's runtime (the Voice runtime) carries ``mlx==0.31.2``. One
 tree cannot hold two MLX versions, so the worker spawns this script with
 ``runtimes/music-yue2/bin/python3`` and reads its stdout, exactly as the Video worker already does
 for its two engines.

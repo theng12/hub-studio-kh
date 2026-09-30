@@ -12,7 +12,7 @@ Capability vocabulary:
 - "multilingual"    — supports more than English
 - "expressive"      — emotion / style tags or control sliders
 - "streaming"       — supports real-time / streaming generation (low-latency)
-- "lyrics"          — can sing (rare in open-source; ACE-Step does it elsewhere)
+- "lyrics"          — can sing (rare in open-source)
 """
 from __future__ import annotations
 

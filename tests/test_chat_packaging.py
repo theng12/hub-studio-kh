@@ -64,11 +64,6 @@ class WorkerSpecTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             if binary:
                 path.write_text("")
-        for relative in ("engines/ace-step-1-5/studiohub-engine.json",
-                         "runtimes/music/manifest/music-runtime.json"):
-            path = resources / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("{}\n")
         # The named manifest the Video spec pins itself to, beside the whole catalog the bundle
         # ships. A build that stages the worker without it is refused by name.
         (resources / "model-manifests" / "ltx-2-3-22b-ram-12gb-mlx.json").write_text(

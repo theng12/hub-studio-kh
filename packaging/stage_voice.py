@@ -13,18 +13,10 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-MUSIC_ENGINE_REPO = 'ace-step/ACE-Step-1.5'
-MUSIC_ENGINE_REVISION = 'ca1e85fe9430179831e6bc6be790c332190a3866'
-MUSIC_ENGINE_SOURCE_SHA256 = 'a55b4bf166464a690e967b4a31862e39efc6bd954ef0214ac91030d99e97cb33'
-# The audited 177-file overlay, re-pinned on 2026-09-23 when tree_digest stopped including file
-# permissions. The tree is unchanged; only the algorithm is, so this was re-derived from the
-# same source rather than re-vendored.
-MUSIC_OVERLAY_SHA256 = 'f17b81b9bc9feb8e055c6c76ef6ccb78461c991be3727d59c86959d7361d6a67'
 
-# The Image runtime this build is qualified against, pinned by content the same way the Music
-# overlay is. It is **mflux 0.20.0** - the engine
-# `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on, and the one
-# the image catalogue publishes in `measured_on`.
+# The Image runtime this build is qualified against, pinned by content. It is **mflux 0.20.0** -
+# the engine `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on,
+# and the one the image catalogue publishes in `measured_on`.
 #
 # Nothing pinned this before, and the release loop in `docs/tasks/HANDOFF.md` named
 # `.build/st03-image-runtime-worker` - which is the **superseded 0.17.5** runtime preserved for the
@@ -44,12 +36,6 @@ IMAGE_RUNTIME_SUPERSEDED = {
     '7b9b9ff831caa254b928c9d5d05c86df776fbc0fc459a4725cc969c898cba243':
         '.build/st03-image-runtime-worker (mflux 0.17.5, preserved for the ST-03 receipt)',
 }
-MUSIC_OVERLAY_PACKAGES = {
-    'diskcache': '5.6.3', 'einops': '0.8.2', 'einx': '0.3.0',
-    'frozendict': '2.4.7', 'loguru': '0.7.3', 'toml': '0.10.2',
-    'vector-quantize-pytorch': '1.27.20',
-}
-
 # The Video runtime this build is qualified against, pinned by content the same way the Image
 # runtime is. It is **Python 3.11 + ltx-2-mlx at 3b2e77fd73af5f08961f4436ae979c0579d5deed + MLX
 # 0.32.2**, because that is the interpreter `qualification/ltx-video-measure.py` measured the
@@ -75,8 +61,8 @@ VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db5
 # while LTX's pipeline needs 3.11.
 LANCE_RUNTIME_SHA256 = '48dd2bd2d34ea9561cc66a02461505220889651983bd6b7e3430d14b5d31ff40'
 # The Music lane's second engine. YuE2 needs its own interpreter because `mlx-Yue` pins
-# `mlx==0.32.2` while the Music overlay carries `mlx==0.31.2`; the worker spawns the bridge with
-# this tree, resolved as the sibling of its own.
+# `mlx==0.32.2` while the Voice runtime the Music worker uses carries `mlx==0.31.2`; the worker
+# spawns the bridge with this tree, resolved as the sibling of its own.
 YUE2_RUNTIME_SHA256 = '75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4'
 
 
@@ -155,90 +141,6 @@ def copy_tracked_tree(source: Path, destination: Path, suffix: str | None = None
         target = destination / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
-
-
-def _music_source_names(source: Path) -> list[str]:
-    output = subprocess.check_output([
-        'git', '-C', str(source), 'ls-files', '-z', '--',
-        'acestep', 'LICENSE', 'pyproject.toml'])
-    names = sorted(filter(None, output.decode().split('\0')))
-    if not names:
-        raise ValueError('ACE-Step source inventory is empty')
-    return names
-
-
-def music_source_digest(source: Path) -> str:
-    digest = hashlib.sha256()
-    for name in _music_source_names(source):
-        path = source / name
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f'ACE-Step source must contain regular files only: {name}')
-        size = path.stat().st_size
-        digest.update(name.encode() + b'\0' + str(size).encode() + b'\0')
-        with path.open('rb') as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                digest.update(chunk)
-        digest.update(b'\0')
-    return digest.hexdigest()
-
-
-def validate_music_overlay(overlay: Path) -> dict:
-    overlay = overlay.resolve()
-    manifest = overlay / 'manifest/music-runtime.json'
-    try:
-        value = json.loads(manifest.read_text())
-    except (OSError, ValueError) as exc:
-        raise ValueError('Music runtime overlay manifest is unavailable') from exc
-    if value != {'schema': 'studiohub.music-runtime-overlay', 'schema_version': 1,
-                 'packages': MUSIC_OVERLAY_PACKAGES}:
-        raise ValueError('Music runtime overlay identity is invalid')
-    for path in overlay.rglob('*'):
-        if path.is_symlink():
-            raise ValueError(f'Music runtime overlay cannot contain symlinks: {path}')
-    if tree_digest(overlay) != MUSIC_OVERLAY_SHA256:
-        raise ValueError('Music runtime overlay digest does not match the pinned build')
-    return value
-
-
-def stage_music_assets(engine_source: Path, overlay: Path, resources: Path,
-                       base_runtime_sha256: str) -> dict:
-    engine_source = engine_source.expanduser().resolve()
-    overlay = overlay.expanduser().resolve()
-    validate_music_overlay(overlay)
-    revision = subprocess.check_output(
-        ['git', '-C', str(engine_source), 'rev-parse', 'HEAD'], text=True).strip()
-    changed = subprocess.check_output([
-        'git', '-C', str(engine_source), 'status', '--porcelain',
-        '--untracked-files=all', '--', 'acestep', 'LICENSE', 'pyproject.toml'],
-        text=True).strip()
-    source_digest = music_source_digest(engine_source)
-    if revision != MUSIC_ENGINE_REVISION or changed or source_digest != MUSIC_ENGINE_SOURCE_SHA256:
-        raise ValueError('ACE-Step source is not the exact clean pinned revision')
-    destination = resources / 'engines/ace-step-1-5'
-    for name in _music_source_names(engine_source):
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(engine_source / name, target)
-    provenance = {
-        'schema': 'studiohub.music-engine-source', 'schema_version': 1,
-        'repo': MUSIC_ENGINE_REPO, 'revision': MUSIC_ENGINE_REVISION,
-        'source_sha256': MUSIC_ENGINE_SOURCE_SHA256,
-    }
-    (destination / 'studiohub-engine.json').write_text(json.dumps(provenance, indent=2) + '\n')
-    staged_overlay = resources / 'runtimes/music'
-    shutil.copytree(overlay, staged_overlay)
-    overlay_digest = tree_digest(staged_overlay)
-    runtime_digest = hashlib.sha256(
-        (base_runtime_sha256 + '\0' + overlay_digest).encode()).hexdigest()
-    return {
-        'engine_repo': MUSIC_ENGINE_REPO,
-        'engine_revision': MUSIC_ENGINE_REVISION,
-        'engine_source_sha256': MUSIC_ENGINE_SOURCE_SHA256,
-        'runtime': 'voice+music-overlay',
-        'base_runtime_sha256': base_runtime_sha256,
-        'overlay_sha256': overlay_digest,
-        'runtime_sha256': runtime_digest,
-    }
 
 
 def _stage_voice(context: dict) -> dict:
@@ -329,16 +231,17 @@ def _stage_chat(context: dict) -> dict | None:
 
 
 def _stage_music(context: dict) -> dict | None:
-    if not (context['include_hub'] and context['music_runtime'] is not None):
+    if not context['include_hub']:
         return None
     resources = context['resources']
     music_source = resources / 'components/music'
     copy_tracked_tree(ROOT / 'components/music', music_source)
     shutil.copyfile(ROOT / 'packaging/music_worker.py', resources / 'music_worker.py')
+    # Stable Audio 3 runs in the shared Voice runtime and YuE2 in its own (`runtimes/music-yue2`),
+    # so Music carries no runtime of its own: its identity is the base runtime's.
     return {
-        'source_sha256': tree_digest(music_source),
-        **stage_music_assets(context['music_engine'], context['music_runtime'],
-                             resources, context['runtime_hash']),
+        'source_sha256': tree_digest(music_source), 'runtime': 'voice',
+        'runtime_sha256': context['runtime_hash'],
     }
 
 
@@ -601,8 +504,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           unqualified_image_runtime: str | None = None,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
           lance_runtime: Path | None = None, unqualified_lance_runtime: str | None = None,
-          yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None,
-          music_runtime: Path | None = None, music_engine: Path | None = None) -> Path:
+          yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None) -> Path:
     output = output.expanduser().absolute()
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
@@ -618,13 +520,6 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     if yue2_runtime is not None:
         yue2_runtime = yue2_runtime.expanduser().resolve()
         validate_runtime(video_runtime)
-        include_hub = True
-    if (music_runtime is None) != (music_engine is None):
-        raise ValueError('Music runtime overlay and engine source must be supplied together')
-    if music_runtime is not None:
-        music_runtime = music_runtime.expanduser().resolve()
-        music_engine = music_engine.expanduser().resolve()
-        validate_music_overlay(music_runtime)
         include_hub = True
     if native_shell is not None:
         native_shell = native_shell.expanduser().resolve()
@@ -695,7 +590,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     runtime_hash = tree_digest(resources / 'runtimes/voice')
     context = {
         'resources': resources, 'runtime_hash': runtime_hash, 'include_hub': include_hub,
-        'image_runtime': image_runtime, 'music_runtime': music_runtime,
+        'image_runtime': image_runtime,
         'unqualified_image_runtime': unqualified_image_runtime,
         'video_runtime': video_runtime,
         'unqualified_video_runtime': unqualified_video_runtime,
@@ -703,7 +598,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'yue2_runtime': yue2_runtime,
         'unqualified_yue2_runtime': unqualified_yue2_runtime,
         'unqualified_lance_runtime': unqualified_lance_runtime,
-        'music_engine': music_engine, 'provenance': provenance,
+        'provenance': provenance,
         'hub_provenance': hub_provenance, 'image_provenance': image_provenance,
     }
     # `release['components']` is the data every consumer reads - the Hub spawns exactly these
@@ -818,10 +713,6 @@ if __name__ == '__main__':
                         help='Stage a non-qualified YuE2 runtime anyway, recording this reason')
     parser.add_argument('--unqualified-video-runtime', metavar='REASON',
                         help='Stage a non-qualified Video runtime anyway, recording this reason')
-    parser.add_argument('--music-runtime', type=Path,
-                        help='Include the pinned Music dependency overlay')
-    parser.add_argument('--music-engine', type=Path,
-                        help='Include the exact pinned ACE-Step source checkout')
     parser.add_argument('--hub', action='store_true', help='Include the local Hub service (always enabled for native app builds)')
     args = parser.parse_args()
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
@@ -830,5 +721,4 @@ if __name__ == '__main__':
                 video_runtime=args.video_runtime, lance_runtime=args.lance_runtime,
         yue2_runtime=args.yue2_runtime,
         unqualified_yue2_runtime=args.unqualified_yue2_runtime,
-                unqualified_video_runtime=args.unqualified_video_runtime,
-                music_runtime=args.music_runtime, music_engine=args.music_engine))
+                unqualified_video_runtime=args.unqualified_video_runtime))

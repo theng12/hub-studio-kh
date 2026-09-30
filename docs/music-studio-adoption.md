@@ -1,5 +1,10 @@
 # Music Studio: adopting a local generator into Studio Hub
 
+> **Update, 2026-09-30 (0.6.116) — ACE-Step 1.5 is retired.** The owner's decision: the Hub offers
+> two music models, **YuE2** (sung songs) and **Stable Audio 3** (instrumental, the default). Its
+> manifest, engine child, staged source and runtime overlay are gone; everything below that names
+> ACE-Step 1.5 as the chosen or shipped model is the survey as it was written, not the product.
+
 > **Update, 2026-09-27 — YuE2 is no longer a rejection; it is the lane's third engine.** This
 > document was written 2026-09-20 as a survey, and its last table was read as current long after it
 > stopped being so. `vanch007/mlx-Yue` — an MLX port of YuE2 — is adopted at

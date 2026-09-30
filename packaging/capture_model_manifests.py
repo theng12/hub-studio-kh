@@ -168,14 +168,8 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # ships it - `keep` is the per-package override, so the next capture does not lose the file.
     {"package_id": "fish-audio-s2-pro-bf16", "model_id": "mlx-community/fish-audio-s2-pro-bf16", "revision": "eccd57bf5c1ebc13cb2f993df867f4e49931a36a", "engine": "voice-mlx", "exclude": ("*.gitignore",), "keep": ("LICENSE.md",)},
     {"package_id": "s3tokenizerv2", "model_id": "mlx-community/S3TokenizerV2", "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec", "engine": "voice-mlx", "exclude": ("*.gitignore",)},
-    # ── Music: the two engines the Music Studio ships ──
-    # `ace-step-1-5-turbo` is the one package whose shipped manifest this tool cannot rebuild
-    # byte for byte: its planner comes from a second repository
-    # (`ACE-Step/acestep-5Hz-lm-0.6B`) and two files come from GitHub, and `capture()` speaks to
-    # one Hugging Face snapshot per package. The spec still pins every identity field a reader
-    # uses - repo, revision, engine, defaults, memory floor - and the catalog check below
-    # compares them, so a stale spec is a failure rather than a quiet rewrite.
-    {"package_id": "ace-step-1-5-turbo", "model_id": "ACE-Step/Ace-Step1.5", "revision": "19671f406d603126926c1b7e2adc169acbcade22", "engine": "music-mlx", "exclude": ("*.gitignore",)},
+    # ── Music: the engines the Music Studio ships (Stable Audio 3 and YuE2; ACE-Step 1.5 was
+    # retired in 0.6.116) ──
     # The publisher keeps this bundle under `MLX/`; the shipped manifest records the
     # lower-case `model/mlx/` destination, which is the same file on macOS's
     # case-insensitive volume and is why the file-selection check compares case-insensitively.
@@ -245,8 +239,7 @@ DETAILS: dict[str, dict[str, Any]] = {
     "fish-audio-s2-pro-8bit": {"defaults": {"parameters_source": "model/codec.safetensors"}, "memory": (24, 24, "Memory floor taken from the Voice catalogue's declared minimum.")},
     "fish-audio-s2-pro-bf16": {"defaults": {"parameters_source": "model/LICENSE.md"}, "memory": (32, 32, "Memory floor taken from the Voice catalogue's declared minimum.")},
     "s3tokenizerv2": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
-    # ── Music: the ACE-Step 1.5 Turbo and Stable Audio 3 Medium engines ──
-    "ace-step-1-5-turbo": {"defaults": {"dit_model": "acestep-v15-turbo", "lm_model": "acestep-5Hz-lm-0.6B", "inference_steps": 8, "guidance_scale": 1, "shift": 3, "audio_format": "wav", "sample_rate_hz": 48000, "channels": 2}, "memory": (8, 16, "Probe peak process-tree RSS 4.645 GiB; peak system used 14.552 GiB of 16 GiB.")},
+    # ── Music: the Stable Audio 3 Medium engine ──
     "stable-audio-3-medium": {"defaults": {"dit_model": "dit_medium", "decoder": "same-l", "inference_steps": 8, "guidance_scale": 1.0, "audio_format": "wav", "sample_rate_hz": 44100, "channels": 2, "max_duration_seconds": 380}, "memory": (8, 16, "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s.")},
     # ── Video: the LTX-2.3 22B pack and the text encoder it loads ──
     # MEASURED here [M] on the 32 GB M2 Max: 704x448, 97 frames, seed 42, 298.5 s wall,
@@ -691,10 +684,9 @@ def unreproducible_problems(manifests: list[dict[str, Any]],
 
     `catalog_problems` compares the fields a spec declares before anything is fetched; this
     compares what the capture actually selected against what ships. They are not the same check:
-    two packages - `ace-step-1-5-turbo`, whose planner lives in a second repository and whose two
-    code files come from GitHub, and `stable-audio-3-medium`, whose lower-case `model/mlx/`
-    destinations name the publisher's `MLX/` directory - ship a manifest this single-source
-    capture cannot rebuild file for file. Naming them and leaving their manifests untouched is the
+    a package like `stable-audio-3-medium`, whose lower-case `model/mlx/` destinations name the
+    publisher's `MLX/` directory, ships a manifest this single-source capture cannot rebuild file
+    for file. Naming them and leaving their manifests untouched is the
     only honest outcome: replacing them would quietly delete files the catalog still lists, and
     silently writing a different catalog is the defect this whole check exists to stop.
     """

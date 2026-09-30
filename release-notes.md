@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.116 - 2026-09-30
+
+### ACE-Step 1.5 is retired; music is YuE2 and Stable Audio 3
+
+**ACE-Step 1.5 is retired; music is YuE2 and Stable Audio 3.** The Music page now offers two models:
+**Stable Audio 3 Medium (1.4B)** for instrumental music, which is the one it opens on, and
+**YuE2 3B (8-bit AR + bf16 NAR)** for songs with sung lyrics. ACE-Step 1.5 Turbo is gone from the
+model list, from the drive kits, and from the app itself, so the app is about 12 MB smaller and the
+model library is about 7.7 GB smaller on a drive.
+
+**Nothing changes for what you already made.** Music you generated with ACE-Step stays where it is.
+Models you already copied to a Mac are not touched; the model step moves a model the kit no longer
+carries into `_trash` the next time you run it, and never deletes it.
+
+**This is the first small update.** Going from 0.6.115 to 0.6.116 copies the previous version and
+downloads only the files that changed.
+
 ## 0.6.115 — 2026-09-30
 
 ### Work goes to the right Mac, removing a Mac works from both ends, and updates get much smaller

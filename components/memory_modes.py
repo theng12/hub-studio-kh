@@ -14,8 +14,7 @@ machines below the memory guard's 3.2 GB floor with 1.5-4.4 GB of swap burned; a
 2026-08-09 five-machine run measured the following Voice job on an M4 16 GB falling from
 52.7 s to 4.0 s once the prior Studio released immediately).  That answer is wrong on a
 16/24/32 GB Mac, where it buys a full model reload per job to free memory nobody was
-short of — the ACE-Step 1.5 Turbo 2B first-render cost is the loudest example
-(``qualification/evidence/r07-2026-09-21/ace-step-warm-timing.json``).  ``auto`` is the
+short of.  ``auto`` is the
 one default that is right on both: the machine answers for itself.
 
 **The rule, identical everywhere.**  At 16 GiB of unified memory and above, ``auto``

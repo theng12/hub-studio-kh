@@ -1,4 +1,4 @@
-"""Private standalone Music API for the pinned ACE-Step 1.5 turbo package.
+"""Private standalone Music API for the Stable Audio 3 and YuE2 packages.
 
 Surface and conventions are copied from the Image and Voice workers: the same
 owner credential on every route, the same ``{"job": ...}`` envelope, and the
@@ -26,9 +26,10 @@ from .generation import (GenerationManager, defaults_in_force, final_matches, la
 from components import app_version, model_defaults
 
 
-# The 30 s probe ran on this 11.8 GB Mac at tier4, so 8 GB is a working floor
-# rather than a guess.  The Hub's admission governor still owns the live
-# dispatch decision; this only refuses a host that cannot run the engine at all.
+# Stable Audio 3 peaks at 3.9-5.1 GB (measured), so 8 GB is a working floor rather than a
+# guess.  Each model states its own `min_unified_memory_gb` (YuE2's is 16), and the Hub's
+# admission governor still owns the live dispatch decision; this only refuses a host that
+# cannot run the default engine at all.
 QUALIFIED_MINIMUM_MEMORY_BYTES = 8_000_000_000
 
 
@@ -48,13 +49,12 @@ def _host_eligibility() -> dict:
     state = {"eligible": True, "macos": version, "unified_memory_bytes": memory,
              "qualified_minimum_memory_bytes": QUALIFIED_MINIMUM_MEMORY_BYTES,
              "memory_warning": None,
-             "qualification": "single 30 s text2music generation on 16 GB Apple "
-                              "Silicon (tier4, 480 s cap) from the ACE-Step probe"}
+             "qualification": "Stable Audio 3 Medium: 30 s in 9.3 s and 380 s in 61.6 s, "
+                              "3.89-5.05 GB peak, on a 32 GB M2 Max (measured)"}
     if memory < QUALIFIED_MINIMUM_MEMORY_BYTES:
         state["memory_warning"] = (
             f"This Mac has {memory / 1024 ** 3:.0f} GB of unified memory. "
-            "ACE-Step is qualified at 8 GB and above; below that the 2B DiT and "
-            "0.6B planner may not both fit.")
+            "Stable Audio 3 is qualified at 8 GB and above; YuE2 needs 16 GB.")
     return state
 
 
@@ -62,10 +62,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     if not token:
         raise ValueError("Private Music worker requires its owning Hub credential")
     app = FastAPI(title="Studio Hub Music", version="1")
-    # One resident ACE-Step engine child, released when the operator's policy says so.
-    # Before this module existed the only things that stopped that child were a cancel and
-    # the worker exiting, so its DiT and planner stayed in unified memory between jobs -
-    # the residency a machine shared by several Studios cannot afford.
+    # The fleet memory-policy contract every Studio publishes. This worker keeps no model
+    # resident between jobs (each engine runs per job), so it reports nothing loaded.
     memory_policy.start_background(manager)
 
     @app.middleware("http")
@@ -104,9 +102,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             "queued": sum(job["state"] == "queued" for job in active),
             "running": sum(job["state"] == "running" for job in active),
             "runtime_revision": manager.runtime_sha256,
-            "checkpoints": files["state"],
-            "engine_loaded": bool(getattr(manager.executor, "child_pid", None)),
-            "engine_child_pid": getattr(manager.executor, "child_pid", None)}}
+            "checkpoints": files["state"]}}
 
     @app.get("/api/catalog")
     def catalog_route() -> dict:
@@ -121,7 +117,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             ready = cached and host["eligible"]
             # Every published fact below is this model's own; nothing here falls
             # back to the first catalog entry, so a newly added model cannot be
-            # advertised with ACE-Step's revision, caps or qualification.
+            # advertised with another model's revision, caps or qualification.
             revision = model.revision
             # The values this worker will actually render with on this Mac: what the model
             # states, overridden per parameter by what the operator chose (`model_defaults.json`).
@@ -150,7 +146,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                 "qualified_minimum_memory_gb": QUALIFIED_MINIMUM_MEMORY_BYTES / 1e9,
                 "memory_warning": host.get("memory_warning"),
                 # The package's own state, not a flattening of it. Every failure above already
-                # named itself — `manifest_unavailable`, `engine_root_missing`, `invalid` — and
+                # named itself — `manifest_unavailable`, `runtime_unsupported`, `invalid` — and
                 # collapsing them all to "missing" told the operator to download a package that
                 # was installed, hashed and verified, whenever the real problem was a manifest
                 # the worker could not read.
@@ -287,8 +283,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
 
     # ── per-model generation defaults (`model_defaults`) ───────────────────
     # Which numbers the next job renders *with*: `duration_seconds`, `steps`, `guidance_scale`,
-    # `seed` — plus the controls only a runtime that accepts them publishes (`shift`,
-    # `instrumental`, `lyrics`, `vocal_language` for ACE-Step; none for Stable Audio 3) — stored
+    # `seed` — plus the controls only a runtime that accepts them publishes (`mode`,
+    # `lyrics`, `precision` for YuE2; none for Stable Audio 3) — stored
     # per model and per Mac, validated against the very bounds `lane_contract` publishes, and
     # applied by `validate_request` to a parameter the request **omits** (an explicitly supplied
     # parameter always wins).
@@ -347,10 +343,6 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         model_defaults.clear(manager.data, model.repo)
         return model_defaults_status()
 
-    # A stopped worker must not leave a 4-5 GB engine child holding the model.
-    # Uvicorn runs shutdown handlers on SIGTERM/SIGINT before the process ends.
-    app.router.add_event_handler("shutdown", manager.close)
-
     @app.get("/api/cache/{repo:path}")
     def cache_route(repo: str) -> dict:
         model = catalog.get_model(repo)
@@ -383,7 +375,6 @@ def from_environment() -> FastAPI:
     manager = GenerationManager(
         data,
         outputs=Path(outputs) if outputs else None,
-        engine_root=os.environ.get("STUDIOHUB_MUSIC_ENGINE_ROOT"),
         manifest_path=os.environ.get("STUDIOHUB_MUSIC_MANIFEST"),
         library_dir=os.environ.get("STUDIOHUB_MUSIC_LIBRARY_DIR"),
         runtime_sha256=os.environ.get("STUDIOHUB_MUSIC_RUNTIME_SHA256"),

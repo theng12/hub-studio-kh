@@ -135,17 +135,13 @@ def _subtitle_spec(release: dict, data: Path, runtime: Path, resources: Path) ->
 
 def _music_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
     music_id = release['components']['music'].get('runtime_sha256')
-    engine = resources / 'engines/ace-step-1-5'
     if (not (resources / 'music_worker.py').is_file()
             or not (resources / 'components/music/app/backend/main.py').is_file()
-            or not (resources / 'runtimes/music/manifest/music-runtime.json').is_file()
-            or not (engine / 'studiohub-engine.json').is_file()
             or not _runtime_id(music_id)):
         raise ValueError('Incomplete Music worker or release identity')
     return {
         'id': 'music', 'modality': 'music', 'python': runtime / 'bin/python3',
-        'runtime_id': music_id, 'outputs': data / 'music/outputs',
-        'extra_args': ['--engine-root', str(engine)],
+        'runtime_id': music_id, 'outputs': data / 'music/outputs', 'extra_args': [],
     }
 
 

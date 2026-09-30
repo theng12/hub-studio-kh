@@ -6,7 +6,7 @@ built on.
 
 - **App:** `Studio Hub.app` — its version and build are in `focused-release-manifest.json`,
   written beside it when the kit was staged (a pinned version here goes stale the next build)
-- **Models:** `model-library/` — 31 verified packages, ~126.8 GB
+- **Models:** `model-library/` — 30 verified packages, ~119.1 GB
 - **Receipts:** `focused-release-manifest.json`, `Studio Hub.app.tree-sha256`
 **Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)

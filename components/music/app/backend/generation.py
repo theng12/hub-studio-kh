@@ -1,78 +1,56 @@
-"""The Music job runner: state, one spawned engine child, and the WAV artifact.
+"""The Music job runner: durable job state and the audio artifact.
 
 The parent owns everything durable — job records, output files, cancellation
-intent.  The engine runs in a separate *spawned* child (``engine_child.py``) so
-that:
-
-* a cancel can actually stop a native call that will not return;
-* a crash or a fatal MLX/torch abort in the engine cannot take the HTTP worker
-  down with it.
-
-The child is kept resident between jobs because loading the 2B DiT + 0.6B LM
-takes ~3 minutes on this class of Mac; it is destroyed only when a cancel
-requires a forced stop, and the next submit starts a fresh one.
+intent.  Both engines run outside this process: Stable Audio 3 as a short-lived
+MLX subprocess per job (``stable_audio.py``) and YuE2 in its own pinned runtime
+through a bridge (``yue2.py``).  A cancel stops that subprocess, and a crash or a
+fatal MLX abort in an engine cannot take the HTTP worker down with it.  Neither
+keeps a model resident between jobs, so there is nothing for an idle timer to
+release.
 """
 from __future__ import annotations
 
 from hashlib import sha256
 import importlib.metadata
-import importlib.util
 import json
 import math
-import multiprocessing
 import os
 from pathlib import Path
 import platform
-import queue
 import random
 import resource
-import signal
 import subprocess
 import threading
 import time
 from uuid import uuid4
-import wave
-
-try:
-    import psutil
-except ImportError:  # pragma: no cover - psutil ships with the engine venv
-    psutil = None
 
 from components import model_defaults
 
-from . import catalog, yue2, cache as cache_module, engine_child, stable_audio
+from . import catalog, yue2, cache as cache_module, stable_audio
 
 
-# The worker's default model and the engine it keeps resident.  Every value is read
-# from that model's own catalog entry, so the default engine's identity and the
-# contract this module enforces cannot drift apart.  A request naming another model
-# is validated and run from *that* model's entry (_VALIDATORS, _runner_for).
-DEFAULT_MODEL = catalog.require_model(catalog.MAIN_REPO)
+# The worker's default model.  Every value is read from that model's own catalog
+# entry, so the default engine's identity and the contract this module enforces
+# cannot drift apart.  A request naming another model is validated and run from
+# *that* model's entry (_VALIDATORS, _runner_for).
+DEFAULT_MODEL = catalog.require_model(catalog.DEFAULT_REPO)
 MODEL_ID = DEFAULT_MODEL.repo
-ENGINE = catalog.ENGINE
 AUDIO_FORMAT = "wav"
 MEDIA_TYPE = "audio/wav"
 
-# Single-pass ceiling a caller gets when it does not name the host's tier cap.  The
-# Hub canonicalises a Music request before a worker sees it, so both sides need one
+# Single-pass ceiling a caller gets when it does not name the host's cap.  The Hub
+# canonicalises a Music request before a worker sees it, so both sides need one
 # agreed number; ``submit`` always passes the model's own cap for this host
-# (_tier_cap_for_this_host).  This is a documented conservative default, not a claim
-# about any model's maximum.
-DEFAULT_TIER_CAP_SECONDS = 480
+# (_tier_cap_for_this_host).  This is Stable Audio 3's own maximum, the default
+# model's, not a claim about any other model's.
+DEFAULT_TIER_CAP_SECONDS = catalog.SA3_MAX_DURATION_SECONDS
 TERMINAL = {"done", "error", "cancelled"}
-# How long a cooperatively-cancelled child gets to notice the shared event
-# before the parent stops being polite.  Native diffusion steps on this class
-# of Mac take ~8 s, so the grace has to exceed one step or every cancel becomes
-# a forced kill.
-CANCEL_GRACE_SECONDS = 12.0
-# Model load is ~3 minutes here; leave generous headroom for a cold disk.
-LOAD_TIMEOUT_SECONDS = 1800.0
 
 
 def runtime_identity() -> str:
     """Deterministic digest of the exact engine packages actually installed."""
     facts = {"python": platform.python_version()}
-    for name in ("ace-step", "mlx", "mlx-lm", "torch", "transformers"):
+    for name in ("mlx", "mlx-lm", "torch", "transformers"):
         try:
             facts[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -95,7 +73,7 @@ def _default(model: catalog.ModelEntry, key: str):
     """One model's own generation default, refused by name when it omits it.
 
     The alternative — falling back to the worker's default model — is how a newly
-    added model used to be published with ACE-Step's numbers.
+    added model used to be published with another model's numbers.
     """
     if key not in model.defaults:
         raise ValueError(
@@ -198,8 +176,7 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
     if not isinstance(lyrics, str) or not lyrics.strip():
         raise ValueError(
             "YuE2 sings from lyrics: send a lyric sheet with [Verse] and [Chorus] markers. It has "
-            "no instrumental switch — use Stable Audio 3 or ACE-Step with instrumental on for a "
-            "piece without a vocal.")
+            "no instrumental switch — use Stable Audio 3 for a piece without a vocal.")
     if len(lyrics) > LYRICS_MAX_CHARACTERS:
         raise ValueError(f"Lyrics must contain at most {LYRICS_MAX_CHARACTERS} characters")
     mode = raw.get("mode", raw.get("cot", defaults["mode"]))
@@ -242,94 +219,12 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
         "mode": mode, "lyrics": lyrics, "precision": precision,
         "max_tokens": max_tokens,
         "min_tokens": max(1, min(max_tokens, int(round(duration * 0.5 * catalog.YUE2_TOKENS_PER_SECOND)))),
-        # YuE2 always renders its own stereo 48 kHz output; the shared job shape carries the two
-        # fields the ACE-Step path uses for its vocal controls, and both are meaningless here.
+        # YuE2 always renders its own stereo 48 kHz output; the shared job shape carries two
+        # vocal-control fields, and both are meaningless here.
         "instrumental": False, "vocal_language": "unknown",
         "dit_model": "", "lm_model": "",
         "tier_cap_seconds": int(_limit(model, "single_pass_max_seconds")),
         "exceeds_single_pass": False,
-    }
-
-
-def _validate_ace_step(raw: dict, model: catalog.ModelEntry, *,
-                       tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
-                       data_dir=None) -> dict:
-    """ACE-Step parameters, bounded by this model's own defaults and limits.
-
-    ``data_dir`` is this Studio's state directory. A parameter the request **omits** takes the
-    value in force for this model — the operator's stored default over what the model states —
-    and a parameter the request supplies always wins verbatim.
-    """
-    defaults = defaults_in_force(model, data_dir)
-    revision = raw.get("model_revision")
-    if revision is not None and revision != model.revision:
-        raise ValueError(f"Only the pinned {model.label} revision is available")
-    prompt = raw.get("prompt")
-    if (not isinstance(prompt, str) or not prompt.strip()
-            or len(prompt) > PROMPT_MAX_CHARACTERS):
-        raise ValueError(f"Prompt must contain 1-{PROMPT_MAX_CHARACTERS} characters")
-
-    duration = raw.get("duration_seconds",
-                       raw.get("duration", defaults["duration_seconds"]))
-    if duration is None:
-        duration = defaults["duration_seconds"]
-    duration = _finite_number(duration, name="duration",
-                              low=float(_limit(model, "min_duration_seconds")),
-                              high=float(_limit(model, "max_duration_seconds")))
-
-    steps = raw.get("steps", raw.get("inference_steps", defaults["steps"]))
-    if (type(steps) is not int or not _limit(model, "min_steps")
-            <= steps <= _limit(model, "max_steps")):
-        raise ValueError(
-            f"Steps must be an integer between {_limit(model, 'min_steps')} and "
-            f"{_limit(model, 'max_steps')}")
-
-    guidance = _finite_number(
-        raw.get("guidance_scale", defaults["guidance_scale"]),
-        name="guidance_scale", low=float(_limit(model, "min_guidance")),
-        high=float(_limit(model, "max_guidance")))
-    # The shift control is the ACE-Step engine's own parameter, not a value this
-    # catalogue publishes per model; its bounds are the engine's, named once here and
-    # published on the lane contract from the same constants.
-    shift = _finite_number(raw.get("shift", defaults["shift"]),
-                           name="shift", low=SHIFT_MINIMUM, high=SHIFT_MAXIMUM)
-
-    seed = raw.get("seed", defaults["seed"])
-    if seed is None:
-        seed = -1
-    if (type(seed) is not int
-            or not _limit(model, "min_seed") <= seed <= _limit(model, "max_seed")):
-        raise ValueError("Seed must be -1 or a 32-bit unsigned integer")
-
-    instrumental = raw.get("instrumental", defaults["instrumental"])
-    if not isinstance(instrumental, bool):
-        raise ValueError("instrumental must be a boolean")
-    lyrics = raw.get("lyrics", defaults["lyrics"])
-    if not isinstance(lyrics, str) or len(lyrics) > LYRICS_MAX_CHARACTERS:
-        raise ValueError("Lyrics must be a string of at most 8000 characters")
-    if instrumental and not lyrics.strip():
-        lyrics = defaults["lyrics"]
-    language = raw.get("vocal_language", defaults["vocal_language"])
-    if not isinstance(language, str) or len(language) > 32:
-        raise ValueError("vocal_language must be a short string")
-
-    dit_model = str(raw.get("dit_model") or _default(model, "dit_model"))
-    lm_model = str(raw.get("lm_model") or _default(model, "lm_model"))
-    if dit_model != _default(model, "dit_model"):
-        raise ValueError(
-            f"Only the {_default(model, 'dit_model')} checkpoint is installed")
-    if lm_model != _default(model, "lm_model"):
-        raise ValueError(
-            f"Only the {_default(model, 'lm_model')} checkpoint is installed")
-
-    return {
-        "repo": model.repo, "model_revision": model.revision, "prompt": prompt.strip(),
-        "duration_seconds": duration, "steps": steps, "guidance_scale": guidance,
-        "shift": shift, "seed": seed, "instrumental": instrumental,
-        "lyrics": lyrics, "vocal_language": language,
-        "dit_model": dit_model, "lm_model": lm_model,
-        "tier_cap_seconds": int(tier_cap_seconds),
-        "exceeds_single_pass": duration > tier_cap_seconds,
     }
 
 
@@ -356,8 +251,8 @@ def yue2_runtime_python() -> Path:
     candidates = []
     if override:
         candidates.append(_Path(override) / "bin" / "python3")
-    # The worker's runtime is `.../runtimes/music/bin/python3` (or the Voice runtime when the
-    # Music overlay is layered on it), so its *parent* is where the sibling runtimes live.
+    # The worker's runtime is the Voice runtime, `.../runtimes/voice/bin/python3`, so its
+    # *parent* is where the sibling runtimes live.
     candidates.append(_Path(_sys.executable).resolve().parents[1] / "music-yue2" / "bin" / "python3")
     candidates.append(_Path(__file__).resolve().parents[4] / "runtimes" / "music-yue2" / "bin" / "python3")
     # A development checkout keeps its built runtimes in `.build/`, which is where
@@ -370,9 +265,8 @@ def yue2_runtime_python() -> Path:
 
 
 # runtime -> request validator.  A model whose runtime is missing here is refused by
-# name in validate_request instead of being validated as ACE-Step.
+# name in validate_request instead of being validated as another engine.
 _VALIDATORS = {
-    catalog.RUNTIME_ACE_STEP: _validate_ace_step,
     catalog.RUNTIME_STABLE_AUDIO: _validate_stable_audio,
     catalog.RUNTIME_YUE2: _validate_yue2,
 }
@@ -380,12 +274,6 @@ _VALIDATORS = {
 LANE_CONTRACT_SCHEMA = "studiohub.lane-contract.v1"
 PROMPT_MAX_CHARACTERS = 4000
 LYRICS_MAX_CHARACTERS = 8000
-# The shift control's bounds are the ACE-Step engine's own, not a value this catalogue states per
-# model. Named once and read by both the validator and the published contract, so the bound a
-# caller is offered and the bound that refuses the request cannot drift apart.
-SHIFT_MINIMUM = 0.0
-SHIFT_MAXIMUM = 20.0
-
 # runtime -> the parameters that runtime's validator accepts *in addition to* the shared ones.
 # Keyed the same way `_VALIDATORS` is, and `tests/test_music_lane_contract.py` asserts the two
 # tables cover the same runtimes, so a runtime added to one and not the other fails loudly rather
@@ -395,16 +283,6 @@ SHIFT_MAXIMUM = 20.0
 # is published with the value this model states for it, and the operator's stored value overrides
 # it, exactly as for the shared parameters.
 _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
-    catalog.RUNTIME_ACE_STEP: (
-        {"name": "shift", "type": "number", "required": False,
-         "minimum": SHIFT_MINIMUM, "maximum": SHIFT_MAXIMUM,
-         "note": "the engine's own control; its bounds are the engine's, not this model's"},
-        {"name": "instrumental", "type": "boolean", "required": False,
-         "note": "false asks for sung lyrics; this engine is the only one that can sing"},
-        {"name": "lyrics", "type": "string", "required": False,
-         "max_characters": LYRICS_MAX_CHARACTERS},
-        {"name": "vocal_language", "type": "string", "required": False, "max_characters": 32},
-    ),
     # Stable Audio 3 can only produce instrumentals: `_validate_stable_audio` forces
     # `instrumental=True` and `lyrics="[Instrumental]"` whatever is sent, so offering those
     # parameters would be offering controls the lane discards.
@@ -436,8 +314,8 @@ def duration_ladder(model: catalog.ModelEntry) -> list[dict]:
     """The durations this model itself offers, built from its own generation limits.
 
     A ladder has to be the model's, not the worker's. The single-pass cap and the absolute
-    maximum differ per model — ACE-Step 1.5 renders up to 480 s in one pass and 600 s with
-    sections, Stable Audio 3 stops at 380 s — so a fixed list of rungs would offer one of them a
+    maximum differ per model — YuE2 renders up to 360 s in one pass, Stable Audio 3
+    stops at 380 s — so a fixed list of rungs would offer one of them a
     duration it refuses. Every rung here is therefore inside this model's own
     ``min_duration_seconds``..``max_duration_seconds``; the model's stated default, its
     single-pass maximum and its absolute maximum are always rungs, and the rest are that default
@@ -498,8 +376,8 @@ def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
     bounds, enums and character limits. A second copy would be free to disagree with the code
     that rejects the request — which is the thing a published bound exists to prevent.
 
-    The per-runtime split is real, not cosmetic: ACE-Step accepts lyrics, a vocal language and a
-    shift control, and Stable Audio 3 accepts none of them. A contract that listed the union
+    The per-runtime split is real, not cosmetic: YuE2 accepts lyrics, a mode and a precision, and
+    Stable Audio 3 accepts none of them. A contract that listed the union
     would invite a scheduler to send parameters one of the two silently discards.
 
     A fresh list of fresh dicts on every call: the caller may set a resolved ``default`` on a
@@ -649,137 +527,6 @@ def _activity_text(value: object, limit: int) -> str | None:
     return value.strip()[:limit] or None
 
 
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def source_tree_digest(root: Path) -> str:
-    """Content identity for a staged ACE-Step source tree."""
-    root = Path(root)
-    digest = sha256()
-    for path in sorted(root.rglob("*")):
-        if path.is_dir() and not path.is_symlink():
-            continue
-        relative = path.relative_to(root).as_posix()
-        if relative == "studiohub-engine.json":
-            continue
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"ACE-Step source contains a non-regular file: {relative}")
-        size = path.stat().st_size
-        digest.update(relative.encode() + b"\0" + str(size).encode() + b"\0")
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def engine_contract_reason(engine_root: str) -> str | None:
-    """Return why the supplied checkout is not the exact runnable engine."""
-    root = Path(engine_root)
-    required = (
-        root / "acestep" / "handler.py",
-        root / "acestep" / "inference.py",
-        root / "acestep" / "llm_inference.py",
-        *(root / relative for relative in catalog.ENGINE_MODEL_CODE_SHA256),
-    )
-    if not all(path.is_file() and not path.is_symlink() for path in required):
-        return "pinned ACE-Step source is incomplete"
-    provenance = root / "studiohub-engine.json"
-    if provenance.is_file() and not provenance.is_symlink():
-        try:
-            identity = json.loads(provenance.read_text())
-            observed_source = source_tree_digest(root)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return f"bundled ACE-Step source could not be verified: {exc}"
-        expected_identity = {
-            "schema": "studiohub.music-engine-source", "schema_version": 1,
-            "repo": catalog.ENGINE_REPO, "revision": catalog.ENGINE_REVISION,
-            "source_sha256": catalog.ENGINE_SOURCE_SHA256,
-        }
-        if identity != expected_identity:
-            return "bundled ACE-Step provenance does not match the pinned source"
-        if observed_source != catalog.ENGINE_SOURCE_SHA256:
-            return "bundled ACE-Step source digest does not match its pinned identity"
-    else:
-        git = Path("/usr/bin/git")
-        if not git.is_file():
-            return "system Git is unavailable for ACE-Step source verification"
-        try:
-            revision = subprocess.run(
-                [str(git), "-C", str(root), "rev-parse", "HEAD"],
-                text=True, capture_output=True, timeout=10, check=True).stdout.strip()
-            changed = subprocess.run(
-                [str(git), "-C", str(root), "status", "--porcelain",
-                 "--untracked-files=all", "--", "acestep"],
-                text=True, capture_output=True, timeout=10, check=True).stdout.strip()
-        except (OSError, subprocess.SubprocessError) as exc:
-            return f"ACE-Step source revision could not be verified: {exc}"
-        if revision != catalog.ENGINE_REVISION:
-            return f"ACE-Step source revision is {revision or 'unknown'}, not the pinned revision"
-        if changed:
-            return "ACE-Step source has tracked or untracked changes"
-    for relative, expected in catalog.ENGINE_MODEL_CODE_SHA256.items():
-        try:
-            observed = _file_sha256(root / relative)
-        except OSError as exc:
-            return f"ACE-Step model code could not be hashed: {exc}"
-        if observed != expected:
-            return f"ACE-Step model code digest mismatch: {relative}"
-    try:
-        spec = importlib.util.find_spec("acestep")
-        if spec is None:
-            return "ACE-Step is not installed in the Music runtime"
-    except (ImportError, AttributeError, ValueError) as exc:
-        return f"ACE-Step runtime could not be inspected: {exc}"
-    locations = list(spec.submodule_search_locations or ())
-    if spec.origin:
-        locations.append(spec.origin)
-    try:
-        if not locations or any(
-                not Path(location).resolve().is_relative_to(root.resolve())
-                for location in locations):
-            return "ACE-Step runtime import resolves outside the pinned engine root"
-    except OSError as exc:
-        return f"ACE-Step runtime import path could not be verified: {exc}"
-    return None
-
-
-def inspect_wav(path: Path) -> dict:
-    """Read the real PCM facts out of the artifact, not the request."""
-    if path.is_symlink() or not path.is_file():
-        raise RuntimeError("engine did not produce a WAV file")
-    data = path.read_bytes()
-    if not data.startswith(b"RIFF") or data[8:12] != b"WAVE":
-        raise RuntimeError("engine artifact is not a RIFF/WAVE file")
-    try:
-        with wave.open(str(path), "rb") as audio:
-            if audio.getcomptype() != "NONE":
-                raise RuntimeError("compressed WAV is not supported")
-            frames = audio.getnframes()
-            sample_rate = audio.getframerate()
-            channels = audio.getnchannels()
-            sample_width = audio.getsampwidth()
-            payload = audio.readframes(frames)
-    except (EOFError, wave.Error) as exc:
-        raise RuntimeError(f"invalid WAV artifact: {exc}") from exc
-    if frames <= 0 or sample_rate <= 0 or channels not in (1, 2):
-        raise RuntimeError("WAV has invalid duration, sample rate, or channel count")
-    expected_payload = frames * channels * sample_width
-    if len(payload) != expected_payload:
-        raise RuntimeError(
-            f"WAV payload is truncated: expected {expected_payload} PCM bytes, "
-            f"found {len(payload)}")
-    return {"bytes": len(data), "sha256": sha256(data).hexdigest(),
-            "frames": frames, "sample_rate_hz": sample_rate, "channels": channels,
-            "sample_width_bytes": sample_width,
-            "audio_duration_s": round(frames / sample_rate, 6)}
-
-
 def final_matches(job: dict, path: Path) -> bool:
     try:
         if path.is_symlink() or not path.is_file():
@@ -792,253 +539,10 @@ def final_matches(job: dict, path: Path) -> bool:
         return False
 
 
-class EngineExecutor:
-    """One spawned engine child, reused until a cancel forces a restart."""
-
-    def __init__(self, engine: dict, *, load_timeout: float = LOAD_TIMEOUT_SECONDS,
-                 cancel_grace: float = CANCEL_GRACE_SECONDS) -> None:
-        self.engine = dict(engine)
-        self.load_timeout = load_timeout
-        self.cancel_grace = cancel_grace
-        self._ctx = multiprocessing.get_context("spawn")
-        self._process = None
-        self._commands = None
-        self._events = None
-        self._cancel = None
-        self._generation = 0
-        self._loaded = False
-        self._blocked_reason: str | None = None
-        # Peak RSS observed for the engine child during the most recent run.
-        self.peak_rss_bytes = 0
-        self._rss_process = None
-        self._rss_sampled_at = 0.0
-
-    # -- child lifecycle -----------------------------------------------------
-    @property
-    def child_pid(self) -> int | None:
-        return self._process.pid if self._process is not None and self._process.is_alive() else None
-
-    def _discard(self) -> bool:
-        process = self._process
-        self._loaded = False
-        if process is None:
-            return True
-        if process.is_alive() and os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                process.terminate()
-        elif process.is_alive():
-            process.terminate()
-        process.join(5.0)
-        if process.is_alive():
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    process.kill()
-            else:
-                process.kill()
-            process.join(5.0)
-        dead = not process.is_alive()
-        if not dead:
-            return False
-        process.close()
-        self._process = None
-        self._commands = None
-        self._events = None
-        self._cancel = None
-        return dead
-
-    def _spawn(self) -> None:
-        self._generation += 1
-        self._commands = self._ctx.Queue()
-        self._events = self._ctx.Queue()
-        self._cancel = self._ctx.Event()
-        self._rss_process = None
-        self._rss_sampled_at = 0.0
-        self._process = self._ctx.Process(
-            target=engine_child.main,
-            args=(self._commands, self._events, self._cancel, self.engine),
-            name=f"music-engine-{self._generation}",
-            daemon=True,
-        )
-        self._process.start()
-
-    def _sample_rss(self, force: bool = False) -> None:
-        """Track the engine child's peak resident size during a run."""
-        if psutil is None or self._process is None or not self._process.is_alive():
-            return
-        now = time.monotonic()
-        if not force and now - self._rss_sampled_at < 1.0:
-            return
-        self._rss_sampled_at = now
-        try:
-            if self._rss_process is None or self._rss_process.pid != self._process.pid:
-                self._rss_process = psutil.Process(self._process.pid)
-            rss = self._rss_process.memory_info().rss
-            for child in self._rss_process.children(recursive=True):
-                try:
-                    rss += child.memory_info().rss
-                except psutil.Error:
-                    pass
-            self.peak_rss_bytes = max(self.peak_rss_bytes, rss)
-        except psutil.Error:
-            return
-
-    def _await_ready(self, cancel_event: threading.Event | None = None) -> bool:
-        """Wait for the child to finish loading.  False means load was cancelled."""
-        deadline = time.monotonic() + self.load_timeout
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
-                if not self._discard():
-                    self._blocked_reason = "engine child exit was not verified"
-                    raise RuntimeError(self._blocked_reason)
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._discard()
-                raise RuntimeError("engine did not finish loading before the timeout")
-            try:
-                event = self._events.get(timeout=min(2.0, remaining))
-            except queue.Empty:
-                event = None
-            self._sample_rss()
-            if event is not None:
-                if event.get("kind") == "ready":
-                    self._loaded = True
-                    return True
-                if event.get("kind") == "error":
-                    detail = event.get("error") or "engine failed to load"
-                    trace = event.get("traceback") or ""
-                    self._discard()
-                    raise RuntimeError(f"{detail}\n{trace.strip()}" if trace else detail)
-            if self._process is None or not self._process.is_alive():
-                self._discard()
-                raise RuntimeError("engine process exited during model load")
-
-    def _ensure_child(self, cancel_event: threading.Event | None = None) -> bool:
-        if self._blocked_reason is not None:
-            raise RuntimeError(self._blocked_reason)
-        if self._process is not None and self._process.is_alive() and self._loaded:
-            return True
-        if self._process is not None:
-            self._discard()
-        self._spawn()
-        return self._await_ready(cancel_event)
-
-    # -- job execution -------------------------------------------------------
-    def run(self, job_id: str, payload: dict, cancel_event: threading.Event,
-            on_progress=None) -> dict:
-        """Run one job.  Returns a dict with ``state`` done/error/cancelled.
-
-        A cancel always destroys the child, even when the engine notices the
-        shared event and stops by itself: after an interrupted diffusion the
-        sampler/MLX state is not something the next job should inherit, and the
-        caller asked for the process to stop.  The price is that the next submit
-        pays the model load again.
-        """
-        self.peak_rss_bytes = 0
-        self._rss_process = None
-        self._rss_sampled_at = 0.0
-
-        def result(state: str, **extra) -> dict:
-            return {"state": state, "peak_rss_bytes": self.peak_rss_bytes, **extra}
-
-        def stop_for_cancel() -> dict:
-            dead = self._discard()
-            if not dead:
-                self._blocked_reason = "engine child exit was not verified"
-                return result("error", error=self._blocked_reason,
-                              error_code="ENGINE_CHILD_EXIT_UNVERIFIED",
-                              terminated=False, resumed=False)
-            return result("cancelled", error=None, terminated=True, resumed=False)
-
-        try:
-            if cancel_event.is_set():
-                return result("cancelled", error=None, terminated=False, resumed=False)
-            if not self._ensure_child(cancel_event):
-                return result("cancelled", error=None, terminated=True, resumed=False)
-            assert (self._commands is not None and self._events is not None
-                    and self._cancel is not None)
-            # Drain anything the previous job or the load phase left behind so a
-            # stale terminal event can never be mistaken for this job's result.
-            while True:
-                try:
-                    self._events.get_nowait()
-                except queue.Empty:
-                    break
-            self._cancel.clear()
-            self._commands.put({"job_id": job_id, "payload": payload})
-            cancel_at: float | None = None
-            while True:
-                if cancel_event.is_set() and cancel_at is None:
-                    cancel_at = time.monotonic()
-                    self._cancel.set()
-                try:
-                    event = self._events.get(timeout=0.2)
-                except queue.Empty:
-                    event = None
-                self._sample_rss()
-                if event is not None and event.get("job_id") == job_id:
-                    kind = event.get("kind")
-                    if kind == "progress":
-                        if on_progress is not None:
-                            on_progress(event.get("ratio"), event.get("desc"))
-                    elif kind == "done":
-                        if cancel_at is not None:
-                            return stop_for_cancel()
-                        return result("done", path=event.get("path"),
-                                      sample_rate=event.get("sample_rate"),
-                                      engine_seconds=event.get("engine_seconds"),
-                                      terminated=False, resumed=True)
-                    elif kind == "cancelled":
-                        return stop_for_cancel()
-                    elif kind == "error":
-                        detail = event.get("error") or "engine error"
-                        trace = event.get("traceback") or ""
-                        if cancel_at is not None:
-                            return stop_for_cancel()
-                        return result("error",
-                                      error=f"{detail}\n{trace.strip()}" if trace else detail,
-                                      terminated=False, resumed=True)
-                if cancel_event.is_set() and cancel_at is not None:
-                    if time.monotonic() - cancel_at >= self.cancel_grace:
-                        self._sample_rss(force=True)
-                        dead = self._discard()
-                        if not dead:
-                            self._blocked_reason = "engine child exit was not verified"
-                        return result("cancelled" if dead else "error",
-                                      error=None if dead else self._blocked_reason,
-                                      error_code=(None if dead else
-                                                  "ENGINE_CHILD_EXIT_UNVERIFIED"),
-                                      terminated=dead, resumed=False)
-                if self._process is None or not self._process.is_alive():
-                    self._discard()
-                    return result("error",
-                                  error="engine process exited without a result",
-                                  terminated=True, resumed=False)
-        except BaseException as exc:  # noqa: BLE001 - never kill the job thread
-            dead = self._discard()
-            if not dead:
-                self._blocked_reason = "engine child exit was not verified"
-                return result("error", error=self._blocked_reason,
-                              error_code="ENGINE_CHILD_EXIT_UNVERIFIED",
-                              terminated=False, resumed=False)
-            if cancel_event.is_set() and self._blocked_reason is None:
-                return result("cancelled", error=None, terminated=True, resumed=False)
-            return result("error", error=f"{type(exc).__name__}: {exc}",
-                          terminated=True, resumed=False)
-
-    def close(self) -> None:
-        self._discard()
-
-
 class GenerationManager:
     """Durable job state for one Music worker."""
 
     def __init__(self, data: Path, *, outputs: Path | None = None,
-                 engine_root: str | None = None,
                  manifest_path: str | None = None, library_dir: str | None = None,
                  runtime_sha256: str | None = None, machine: str = "local") -> None:
         self.data = Path(data)
@@ -1047,16 +551,8 @@ class GenerationManager:
         self.outputs.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.outputs.is_symlink():
             raise ValueError("Music output directory cannot be a symlink")
-        self.staging = self.outputs / ".staging"
-        self.staging.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.engine_state = self.data / "engine-state"
-        if self.engine_state.is_symlink():
-            raise ValueError("Music engine state cannot be a symlink")
-        self.engine_state.mkdir(exist_ok=True, mode=0o700)
         self.state_file = self.data / "jobs.json"
         self.machine = machine
-        env_root = os.environ.get("STUDIOHUB_MUSIC_ENGINE_ROOT")
-        self.engine_root = str(engine_root or env_root or "").strip()
         self.manifest_path = manifest_path
         self.library_dir = library_dir
         # The worker's default engine is built eagerly, so a broken default
@@ -1066,16 +562,10 @@ class GenerationManager:
         # Every other model's package view is built from its own catalog entry on
         # first use (see _cache_for).  One broken package is recorded against its
         # own model instead of raised, because it must not stop the others: a
-        # missing Stable Audio package used to raise here and take the whole
-        # Music worker, ACE-Step included, down with it.
+        # missing YuE2 package must not take the whole Music worker down with it.
         self._model_caches: dict[str, object] = {DEFAULT_MODEL.repo: self.cache}
         self._model_cache_errors: dict[str, str] = {}
-        package = self.cache.status()
         self.runtime_sha256 = runtime_sha256 or runtime_identity()
-        self._executors: dict[str, EngineExecutor] = {
-            DEFAULT_MODEL.repo: self._build_executor(
-                DEFAULT_MODEL, package.get("checkpoints_root", "")),
-        }
         self.jobs: dict[str, dict] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.lock = threading.RLock()
@@ -1112,61 +602,9 @@ class GenerationManager:
         _atomic_json(self.state_file, self.jobs)
 
     # -- readiness / cache ---------------------------------------------------
-    def _engine_contract_reason(self) -> str | None:
-        return engine_contract_reason(self.engine_root)
-
-    @property
-    def executor(self) -> EngineExecutor:
-        """The default model's resident engine child; ``/api/health`` reports it."""
-        return self._executors[DEFAULT_MODEL.repo]
-
-    def _build_executor(self, model: catalog.ModelEntry,
-                        checkpoints_root: str) -> EngineExecutor:
-        """One child, configured from one model's own catalog entry."""
-        return EngineExecutor({
-            "repo": model.repo,
-            "engine_root": self.engine_root,
-            "state_root": str(self.engine_state),
-            "checkpoints_dir": checkpoints_root,
-            "dit_model": _default(model, "dit_model"),
-            "lm_model": _default(model, "lm_model"),
-            "backend": os.environ.get("STUDIOHUB_MUSIC_BACKEND", "mlx"),
-            "device": os.environ.get("STUDIOHUB_MUSIC_DEVICE", "auto"),
-            "parent_pid": os.getpid(),
-        })
-
-    def _executor_for(self, model: catalog.ModelEntry) -> EngineExecutor:
-        """This model's own resident child, built on first use.
-
-        One child holds one model's weights, so a model that shares the ACE-Step
-        runtime with the default engine gets its own checkpoint directory, DiT and
-        LM instead of inheriting the ones already loaded.
-        """
-        if model.runtime != catalog.RUNTIME_ACE_STEP:
-            raise ValueError(
-                f"{model.repo} declares runtime {model.runtime!r}, which this worker "
-                "has no resident engine for; add one in "
-                "components/music/app/backend/generation.py")
-        executor = self._executors.get(model.repo)
-        if executor is not None:
-            return executor
-        files = self.preflight(model.repo)
-        if files["state"] != "cached":
-            raise RuntimeError(
-                f"MODEL_FILES_UNAVAILABLE: {files.get('reason') or files['state']}")
-        # Two submits can race here; the second must join the first's child rather
-        # than spawn one nobody closes.
-        with self.lock:
-            executor = self._executors.get(model.repo)
-            if executor is None:
-                executor = self._build_executor(model, files["checkpoints_root"])
-                self._executors[model.repo] = executor
-        return executor
-
     def _runner_for(self, model: catalog.ModelEntry):
         """The job runner for this model's runtime, refused by name when unknown."""
         runners = {
-            catalog.RUNTIME_ACE_STEP: self._run,
             catalog.RUNTIME_STABLE_AUDIO: self._run_sa3,
             catalog.RUNTIME_YUE2: self._run_yue2,
         }
@@ -1182,7 +620,7 @@ class GenerationManager:
         """``(cache, error)`` for one model, resolved from its own catalog entry.
 
         The manifest name, package id and package root all come from that entry, so
-        a model added later can never be verified or loaded from ACE-Step's package.
+        a model added later can never be verified or loaded from another model's package.
         A package that cannot be read is recorded against its own model rather than
         raised, so one broken package cannot stop the others.
         """
@@ -1218,27 +656,15 @@ class GenerationManager:
             status = cache.status()
         except (OSError, ValueError, KeyError) as exc:
             return {"state": "manifest_unavailable", "reason": str(exc)}
-        if model.runtime in (catalog.RUNTIME_STABLE_AUDIO, catalog.RUNTIME_YUE2):
-            # Both of these ship their own runtime and have no ACE engine root to verify: Stable
-            # Audio 3 vendors its MLX implementation, and YuE2 runs in its own pinned interpreter
-            # (`packaging/yue2-runtime`, staged as `runtimes/music-yue2`) because its port pins a
-            # different MLX. The package's files are the whole question here, and a runtime that is
-            # genuinely absent is named when a job resolves it.
-            return status
-        if model.runtime != catalog.RUNTIME_ACE_STEP:
+        if model.runtime not in (catalog.RUNTIME_STABLE_AUDIO, catalog.RUNTIME_YUE2):
             return {"state": "runtime_unsupported",
                     "reason": (f"{model.repo} declares runtime {model.runtime!r}, which "
                                "this worker has no executor for; add one in "
                                "components/music/app/backend/generation.py")}
-        if not self.engine_root:
-            return {**status, "state": "engine_root_missing",
-                    "reason": "STUDIOHUB_MUSIC_ENGINE_ROOT is not set"}
-        if not Path(self.engine_root).is_dir():
-            return {**status, "state": "engine_root_missing",
-                    "reason": f"engine root does not exist: {self.engine_root}"}
-        engine_reason = self._engine_contract_reason()
-        if engine_reason:
-            return {**status, "state": "engine_source_invalid", "reason": engine_reason}
+        # Both engines ship their own runtime: Stable Audio 3 vendors its MLX implementation, and
+        # YuE2 runs in its own pinned interpreter (`packaging/yue2-runtime`, staged as
+        # `runtimes/music-yue2`) because its port pins a different MLX. The package's files are the
+        # whole question here, and a runtime that is genuinely absent is named when a job resolves it.
         return status
 
     # -- queries -------------------------------------------------------------
@@ -1333,8 +759,6 @@ class GenerationManager:
         if files["state"] != "cached":
             raise RuntimeError(f"MODEL_FILES_UNAVAILABLE: {files.get('reason') or files['state']}")
         runner = self._runner_for(model)
-        if model.runtime == catalog.RUNTIME_ACE_STEP:
-            self._executor_for(model).engine["checkpoints_dir"] = files["checkpoints_root"]
         job_id = uuid4().hex
         job = {
             "id": job_id, "mode": "txt2music", "params": params, "state": "queued",
@@ -1401,159 +825,6 @@ class GenerationManager:
             return {"ok": True, "job_id": job_id, "sha256": job["sha256"]}
 
     # -- the run -------------------------------------------------------------
-    def _run(self, job_id: str) -> None:
-        staging = self.staging / job_id
-        final = self.outputs / f"{job_id}.wav"
-        sidecar = self.outputs / f"{job_id}.json"
-        with self.inference_lock:
-            job = None
-            try:
-                with self.lock:
-                    event = self.cancel_events.get(job_id)
-                    job = self.jobs.get(job_id)
-                    if job is None:
-                        return
-                    if event is not None and event.is_set():
-                        job.update(state="cancelled", finished_at=time.time())
-                        self._persist()
-                        return
-                    job.update(state="running", progress=0.01, started_at=time.time())
-                    try:
-                        self._persist()
-                    except Exception as exc:
-                        raise _JobPersistenceFailed(str(exc)) from exc
-                staging.mkdir(parents=True, exist_ok=True, mode=0o700)
-                params = job["params"]
-                model = catalog.require_model(params["repo"])
-                seed = params["seed"]
-                if seed == -1:
-                    seed = random.randint(0, 2 ** 32 - 1)
-                with self.lock:
-                    job["resolved_seed"] = seed
-                    self._persist()
-                payload = {
-                    "prompt": params["prompt"], "lyrics": params["lyrics"],
-                    "instrumental": params["instrumental"],
-                    "vocal_language": params["vocal_language"],
-                    "duration": params["duration_seconds"], "steps": params["steps"],
-                    "guidance_scale": params["guidance_scale"], "shift": params["shift"],
-                    "seed": seed, "staging_dir": str(staging),
-                }
-                outcome = self._executor_for(model).run(
-                    job_id, payload, self.cancel_events[job_id],
-                    on_progress=lambda ratio, desc: self._progress(job_id, ratio, desc))
-                if outcome["state"] != "done":
-                    raise _JobFailed(outcome)
-                produced = Path(str(outcome["path"]))
-                try:
-                    produced.resolve().relative_to(staging.resolve())
-                except ValueError as exc:
-                    raise RuntimeError("engine wrote outside the staging directory") from exc
-                facts = inspect_wav(produced)
-                if facts["sample_rate_hz"] != outcome.get("sample_rate"):
-                    raise RuntimeError(
-                        f"engine reported {outcome.get('sample_rate')} Hz but wrote "
-                        f"{facts['sample_rate_hz']} Hz")
-                if facts["sample_width_bytes"] != 2:
-                    raise RuntimeError(
-                        f"expected 16-bit PCM, got {facts['sample_width_bytes'] * 8}-bit")
-                with self.lock:
-                    os.replace(produced, final)
-                    now = time.time()
-                    created_at = job["created_at"]
-                    sidecar_value = {
-                        "schema": "studiohub.music-artifact", "schema_version": 1,
-                        "job_id": job_id, "created_at": created_at,
-                        "generated_at": now,
-                        "request": {
-                            "repo": params["repo"], "prompt": params["prompt"],
-                            "lyrics": params["lyrics"],
-                            "instrumental": params["instrumental"],
-                            "vocal_language": params["vocal_language"],
-                            "duration_seconds": params["duration_seconds"],
-                            "steps": params["steps"],
-                            "guidance_scale": params["guidance_scale"],
-                            "shift": params["shift"],
-                            "seed": params["seed"],
-                            "resolved_seed": seed,
-                            "tier_cap_seconds": params["tier_cap_seconds"],
-                            "exceeds_single_pass": params["exceeds_single_pass"],
-                        },
-                        "model": {"repo": model.repo, "revision": model.revision,
-                                  "package_id": model.package_id, "engine": ENGINE,
-                                  "dit_model": params["dit_model"],
-                                  "lm_model": params["lm_model"]},
-                        "engine_seconds": outcome.get("engine_seconds"),
-                        "runtime_seconds": round(now - job["started_at"], 3),
-                        "artifact": {
-                            "file": final.name, "bytes": facts["bytes"],
-                            "sha256": facts["sha256"], "media_type": MEDIA_TYPE,
-                            "format": "wav", "sample_width_bytes": facts["sample_width_bytes"],
-                            "sample_rate_hz": facts["sample_rate_hz"],
-                            "channels": facts["channels"], "frames": facts["frames"],
-                            "audio_duration_s": facts["audio_duration_s"],
-                        },
-                    }
-                    _atomic_json(sidecar, sidecar_value)
-                    if self.cancel_events[job_id].is_set():
-                        discarded, remaining = self._discard_published((final, sidecar))
-                        if discarded:
-                            job.update(state="cancelled", finished_at=time.time())
-                        else:
-                            job.update(
-                                state="error", finished_at=time.time(), output_url=None,
-                                unverified_artifact_paths=remaining,
-                                error="Cancelled Music artifacts could not be removed; "
-                                      "reconcile before retry",
-                                error_code="JOB_PERSISTENCE_UNCERTAIN")
-                    else:
-                        job.update(
-                            state="done", progress=1.0, finished_at=now, generated_at=now,
-                            duration_seconds=now - job["started_at"],
-                            engine_seconds=outcome.get("engine_seconds"),
-                            output_path=str(final),
-                            output_url=f"/api/generate/jobs/{job_id}/audio",
-                            sidecar_path=str(sidecar), sha256=facts["sha256"],
-                            bytes=facts["bytes"], media_type=MEDIA_TYPE,
-                            sample_rate_hz=facts["sample_rate_hz"],
-                            channels=facts["channels"],
-                            audio_duration_s=facts["audio_duration_s"],
-                            frames=facts["frames"],
-                            engine_peak_rss_bytes=outcome.get("peak_rss_bytes"),
-                            peak_process_rss_bytes=resource.getrusage(
-                                resource.RUSAGE_SELF).ru_maxrss)
-                    self._persist()
-            except _JobFailed as failure:
-                self._finish_failure(job, failure.outcome)
-            except _JobPersistenceFailed as exc:
-                self._finish_failure(job, {
-                    "state": "error", "error": f"Music job state could not be persisted: {exc}",
-                    "error_code": "JOB_PERSISTENCE_FAILED",
-                })
-            except Exception as exc:  # noqa: BLE001 - report the engine's own text
-                published = [path for path in (final, sidecar)
-                             if path.exists() or path.is_symlink()]
-                if published:
-                    discarded, remaining = self._discard_published(published)
-                    outcome = {
-                        "state": "error",
-                        "error": ("Final Music artifact could not be persisted; "
-                                  "artifacts were discarded" if discarded else
-                                  "Final Music artifact could not be persisted; "
-                                  "reconcile before retry"),
-                        "error_code": ("JOB_PERSISTENCE_FAILED" if discarded else
-                                       "JOB_PERSISTENCE_UNCERTAIN"),
-                        "clear_artifacts": discarded,
-                        "unverified_artifact_paths": remaining,
-                    }
-                else:
-                    outcome = {"state": "error",
-                               "error": f"{type(exc).__name__}: {exc}"}
-                self._finish_failure(job, outcome)
-            finally:
-                self._cleanup_staging(staging)
-                self.cancel_events.pop(job_id, None)
-
     def _run_sa3(self, job_id: str) -> None:
         """Render one Stable Audio 3 clip; a short-lived MLX subprocess per job."""
         final = self.outputs / f"{job_id}.wav"
@@ -1634,8 +905,11 @@ class GenerationManager:
             except Exception as exc:  # noqa: BLE001 - report the engine's own text
                 final.unlink(missing_ok=True)
                 sidecar.unlink(missing_ok=True)
+                # The artifact is gone, so the record must stop pointing at it: a persist failure
+                # after the job was marked done otherwise leaves an `output_url` for a missing file.
                 self._finish_failure(job, {
-                    "state": "error", "error": f"{type(exc).__name__}: {exc}"})
+                    "state": "error", "error": f"{type(exc).__name__}: {exc}",
+                    "clear_artifacts": True})
             finally:
                 self.cancel_events.pop(job_id, None)
 
@@ -1799,33 +1073,12 @@ class GenerationManager:
             except Exception:
                 pass
 
-    @staticmethod
-    def _cleanup_staging(staging: Path) -> None:
-        try:
-            if staging.is_dir() and not staging.is_symlink():
-                for child in staging.iterdir():
-                    child.unlink(missing_ok=True)
-                staging.rmdir()
-        except OSError:
-            pass
-
-    @staticmethod
-    def _discard_published(paths) -> tuple[bool, list[str]]:
-        remaining = []
-        for path in paths:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            if path.exists() or path.is_symlink():
-                remaining.append(str(path))
-        return not remaining, remaining
-
     # -- memory policy -------------------------------------------------------
-    # `memory_policy.py` reads the manager through these three methods and releases
-    # through the fourth, the way the Voice and Subtitle workers' policies do.  They are
-    # the single definition of "active" and "resident" for this worker, so a status probe
-    # and a release can never disagree about what is being held.
+    # `memory_policy.py` reads the manager through these methods, the way the Voice and
+    # Subtitle workers' policies do, so the fleet contract (`GET /api/memory-policy`,
+    # `POST /api/memory/release`) is the same shape on every Studio.  Stable Audio 3 runs a
+    # fresh MLX subprocess per job and YuE2 a bridge per job, and both exit with the job, so this
+    # worker never holds a model between jobs and has nothing to release.
     def has_active_jobs(self) -> bool:
         """Is a job queued or running? A release must never preempt one."""
         with self.lock:
@@ -1833,67 +1086,17 @@ class GenerationManager:
                        for job in self.jobs.values())
 
     def loaded_model_keys(self) -> list[tuple[str, str]]:
-        """Every model this worker is holding, as ``(repo, runtime)`` pairs.
-
-        One spawned engine child holds one model's weights, so a live child *is* resident
-        memory - during its load as much as after it.  Stable Audio 3 never appears here:
-        it runs a fresh subprocess per job and exits, so it has no residency to report.
-        """
-        loaded: list[tuple[str, str]] = []
-        with self.lock:
-            executors = list(self._executors.items())
-        for repo, executor in executors:
-            if getattr(executor, "child_pid", None) is None:
-                continue
-            model = catalog.get_model(repo)
-            loaded.append((repo, model.runtime if model is not None else catalog.ENGINE))
-        return loaded
-
-    def has_loaded_model(self) -> bool:
-        """Is any engine child resident right now? One definition, used by both paths."""
-        return bool(self.loaded_model_keys())
+        """Every model this worker is holding, as ``(repo, runtime)`` pairs: always none."""
+        return []
 
     def release_memory_locked(self, reason: str = "manual") -> dict:
-        """Discard every resident engine child, refusing while work is active.
-
-        This is the only lifecycle that exists: ``EngineExecutor._discard()`` stops the
-        child, and the next submit's ``_ensure_child`` spawns a fresh one that loads the
-        model again.  A child whose exit was not verified stays resident and is reported
-        as ``released: False`` for its own model - a release that did not happen is never
-        reported as one.
-        """
+        """Nothing is resident, so nothing is released; still refuses while work is active."""
         if self.has_active_jobs():
             raise RuntimeError("music generation is active; memory was not released")
-        released = False
-        models: list[list[str]] = []
-        actions: list[dict] = []
-        with self.lock:
-            executors = list(self._executors.items())
-        for repo, executor in executors:
-            pid = getattr(executor, "child_pid", None)
-            if pid is None:
-                continue
-            model = catalog.get_model(repo)
-            models.append([repo, model.runtime if model is not None else catalog.ENGINE])
-            action = {"model": repo, "engine_child_pid": pid}
-            try:
-                discarded = bool(executor._discard())
-            except Exception as exc:  # noqa: BLE001 - report the failure, not a release
-                discarded = False
-                action["error"] = f"{type(exc).__name__}: {exc}"
-            action["released"] = discarded
-            actions.append(action)
-            released = released or discarded
-        return {"released": released, "models": models, "actions": actions,
-                "reason": reason}
+        return {"released": False, "models": [], "actions": [], "reason": reason}
 
     def close(self) -> None:
-        for executor in self._executors.values():
-            executor.close()
-
-
-class _JobPersistenceFailed(RuntimeError):
-    pass
+        """No engine child outlives its job, so there is nothing to stop."""
 
 
 class _JobFailed(RuntimeError):
@@ -1905,15 +1108,9 @@ class _JobFailed(RuntimeError):
 def _tier_cap_for_this_host(model: catalog.ModelEntry) -> int:
     """The model's own single-pass cap for the tier this Mac lands in.
 
-    The authoritative selection happens inside the engine from real GPU memory;
-    this mirrors the same boundaries from the model's own tier table, so the
-    catalogue, the request validation and the job record agree on the number the
-    probe observed (480 s at tier4 for ACE-Step).  Note the engine measures MPS
-    working-set memory (~11.8 GB here) while this reads total unified memory (16 GB
-    here); both land on a 480 s cap, and the engine remains the one that enforces it.
-
-    A model that publishes no tier table falls back to its own single-pass limit —
-    never to ACE-Step's host tier.
+    Mirrors the boundaries of the model's own tier table, so the catalogue, the request
+    validation and the job record agree on one number.  A model that publishes no tier table
+    falls back to its own single-pass limit.
     """
     try:
         raw = subprocess.check_output(["/usr/sbin/sysctl", "-n", "hw.memsize"],

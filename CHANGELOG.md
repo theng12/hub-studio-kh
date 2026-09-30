@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.116 — 2026-09-30 · ACE-Step 1.5 is retired; music is YuE2 and Stable Audio 3
+
+**Owner decision (2026-09-30):** ACE-Step 1.5 Turbo (2B DiT) is not offered any more. The Hub's music
+models are **Stable Audio 3 Medium (1.4B)** (instrumental, now the default) and **YuE2 3B (8-bit AR +
+bf16 NAR)** (sung songs, with the 0.6.115 decoder fix).
+
+- **Removed:** `model-manifests/ace-step-1-5-turbo.json` (to `_trash/`), so the drive kits and the
+  Models list no longer carry it (catalog 31 -> 30 packages, 126.8 -> 119.1 GB, the 7.7 GB ACE-Step package);
+  `components/music/app/backend/engine_child.py`, `generation.EngineExecutor`, `_validate_ace_step`,
+  `_run`, the ACE source-tree verification (`source_tree_digest`, `engine_contract_reason`) and the
+  now-unused `inspect_wav`; the ACE catalog entry, tier table, long-form strategy, checkpoints and
+  family; `packaging/music-runtime/` (the ACE-only Python overlay, 1.7 MB); the staged
+  `engines/ace-step-1-5` source (11 MB) and `--music-runtime` / `--music-engine` in
+  `packaging/stage_voice.py`; `--engine-root` and the overlay check in `packaging/music_worker.py`
+  and `_music_spec`.
+- **Stable Audio 3 is the default music model:** `catalog.DEFAULT_REPO` (was `MAIN_REPO`, ACE) is what
+  `generation.DEFAULT_MODEL`, the package cache and the worker's own manifest resolve. It is first in
+  `/api/catalog`, so the app's music picker opens on it.
+- **Music no longer has a runtime of its own.** Both engines already ran outside it (Stable Audio 3
+  as a subprocess on the Voice runtime, YuE2 in `runtimes/music-yue2`); the overlay carried
+  `vector-quantize-pytorch` and friends only for ACE (checked: every Stable Audio 3 module imports
+  without it). The release manifest's `music` record is now `runtime: "voice"` with the Voice
+  runtime's digest, which every deployed update client already accepts.
+- **Nothing is resident, so the memory policy has nothing to release.** `/api/memory-policy` and
+  `/api/memory/release` still answer the fleet contract; `loaded_models` is always empty.
+  `/api/health` no longer reports `engine_loaded` / `engine_child_pid` (nothing read them).
+- **A Stable Audio 3 job that fails after it was marked done** (a persist failure) now clears the
+  record's artifact fields, as the ACE path did, instead of leaving an `output_url` for a deleted file.
+- Docs and listings: `docs/model-benchmarks.md` (regenerated), `model-manifests/README.md`, the kit
+  README, `SSD-KIT-README.md`, the node checklist, the runtime contract count and the R08 checklist.
+- **Tests:** rewritten to assert ACE-Step is *not* offered and Stable Audio 3 + YuE2 are
+  (`test_music_package_contract`, `test_music_memory_policy`, `test_memory_policy_contract`,
+  `test_music_bundle`, `test_music_lane_contract`, `test_model_manifest_catalog`,
+  `test_chat_packaging`, `test_activity_operations`, four hub-regression cases, the native fixture).
+  The ACE-only tests (engine child, source digest, resident-child release) went with their code.
+- **Rollout:** 0.6.115 -> 0.6.116 is the first delta update. Measured from the two stages' file
+  manifests: **20 files changed (about 0.8 MB), 0 added, 798 removed (about 11.5 MB)** - the Music
+  worker source, `hub_worker.py`, `music_worker.py`, `model_ids.py`, `memory_modes.py`, the Voice
+  catalog, the release manifest and notes; the native binary and all six runtimes are byte-identical.
+  The app is about 11.6 MB smaller (5,197,040,792 bytes of files down to about 5,185,460,000).
+
 ## 0.6.115 — 2026-09-30 · Scarcest-first scheduling, node removal from either side, delta updates
 
 Three reviewed branches (`wave2-sched`, `wave2-fleet`, `wave2-delta`) merged into one release.

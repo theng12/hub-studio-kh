@@ -40,9 +40,8 @@ message on screen — that is enough to act on.
 - [ ] **Export…** saves each format; the files open and the words are correct.
 - [ ] The transcript survives switching away and back to the page.
 
-## 4. Music (both models)
-- [ ] Pick **ACE-Step 1.5 Turbo**, generate a 30 s clip, **Save Audio…**.
-- [ ] Pick **Stable Audio 3 Medium** — the **Lyrics** and **Vocal language**
+## 4. Music (Stable Audio 3 Medium and YuE2)
+- [ ] Pick **Stable Audio 3 Medium** — it is the default. The **Lyrics** and **Vocal language**
       controls are gone and a short note says it is instrumental only.
 - [ ] Generate a 30 s SA3 clip — the progress bar **moves through stages** rather
       than jumping from 0 to done.
