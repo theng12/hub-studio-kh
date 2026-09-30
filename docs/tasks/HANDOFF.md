@@ -43,6 +43,14 @@ Last updated: **0.6.115** (scarcest-first scheduling, node removal from either s
 > and ~14 tests still ship ACE-Step. `generation.py` makes ACE the default model
 > (`DEFAULT_MODEL = require_model(MAIN_REPO)`), so it needs SA3 as the new default.
 >
+> **Built, NOT installed, NOT on the drives.** `dist/StudioHub-0.6.115-c317f3b.dmg` (1.8 GB, SHA-256
+> `711aeaa748b92b05586ce5d354ce6121d66a8f0db491d58339859109a8d48902`, `hdiutil verify` valid; built
+> from the `c317f3b` stage, later commits are docs-only). The installable app is
+> `.build/StudioHub-0115b/Studio Hub.app` (manifest `0.6.115` / `c317f3b`, `file-manifest/` present).
+> `.build/StudioHub-0115/` is a superseded stage of 2887747 (before the YuE2 fix) - do not install it.
+> `make-dmg.sh` was run from a copy **without its prune step**, so nothing was moved to a drive and both
+> 0.6.115 stages plus 0113 are still in `.build/`.
+>
 > **Merge notes.** One conflict, `components/hub/backend/auth.py`: fleet and delta both extended
 > `FLEET_ALLOWED` and `NODE_ALLOWED`; every entry from both is kept. `standalone.py`, `StudioAPI.swift`
 > (`pollOnce` runs `membershipTick` then `releaseTick`), `tests/native/api_main.swift` and `broker.py`
