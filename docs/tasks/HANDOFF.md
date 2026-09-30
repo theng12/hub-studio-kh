@@ -58,6 +58,15 @@ Last updated: **0.6.114** (the app says what the Hub already knew; 2026-09-30).
 > and six view wirings. ⚠ **Two of these have two independent guards** (idle check before *and* after the
 > download; error-cache settled check on write *and* read), so mutating one alone survives by design —
 > the test only bites when both go, which is what `e2`/`f2` did.
+>
+> **Built, NOT installed, NOT on the drives.** `dist/StudioHub-0.6.114-4ec6832.dmg` (1.8 GB, SHA-256
+> `8a4da97e097e4d041d534d6abb486e88a6b4042f67afe30e709220a68bf68b42`, `hdiutil verify` valid); the
+> staged bundle's manifest reads `0.6.114` / `4ec6832…`. ⚠ **`make-dmg.sh`'s automatic scratch prune
+> moved the fresh stage** `StudioHub-0114` to
+> `/Volumes/KH-STUDIO-ATLAS/_build-archive/studio-hub-kh/StudioHub-0114` (and kept the *0.6.113* stage
+> in `.build/`, because it keeps the stage named in `VERSION` at the time it ran). Install and the
+> kit refresh need the 0.6.114 stage: copy it back, or restage from `4ec6832`. This is the documented
+> prune, not a manual write, but it did put a 5 GB directory on ATLAS.
 
 > **0.6.113 — the reason a node did not answer was only ever in a sentence, spelled two ways.**
 >
