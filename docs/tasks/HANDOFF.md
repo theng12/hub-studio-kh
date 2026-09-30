@@ -3,7 +3,46 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.120** (Lance video retired; video is LTX-2.3; 2026-10-01).
+Last updated: **0.6.121** (installer knows the Video runtime + bridge label; 2026-10-01).
+
+> **0.6.121 - Macs can install updates by themselves again (installer fix + ONE-RELEASE BRIDGE)** (0.6.120 rollout,
+> 2026-10-01: no controller or node updated). Read `CHANGELOG.md` 0.6.121 and
+> `_orchestra/audit-20260930/update-0120/diag/`; what to know:
+>
+> - **Cause:** `ReleaseInstaller.runtimePaths` (`native/UpdateClient.swift`) had no `video`, so the app's own pre-swap
+>   check (`verifyDeclaredComponents`) refused, AFTER staging, every release whose manifest says
+>   `components.video.runtime == "video"` (0.6.120 did). `autoUpdateFailedBuild` then stopped retries; nothing showed.
+>   **Fix** (`7031035`): `video` is in the table; tests use the real 0.6.120 manifest as a fixture, the fake-app helper
+>   builds the real layout, `tests/test_installer_knows_shipped_runtimes.py` pins "every runtime `stage_voice.py`
+>   writes is verifiable".
+> - **BRIDGE (`28ad677`) - REVERT IN 0.6.122:** installed 0.6.119/0.6.120 apps verify with THEIR table (no `video`),
+>   so this release labels `components.video.runtime` **`'voice'`** in `packaging/stage_voice.py` `_stage_video`.
+>   Nothing else reads that label (`_video_spec` reads `runtime_sha256`). **Next release: set it back to `'video'`,
+>   delete the BRIDGE comment and DELETE `test_bridge_release_video_is_verifiable_by_the_apps_already_installed`**
+>   (only once the fleet is on >= 0.6.121). Until then the staged manifest says `voice` for video on purpose.
+> - **Verified (the point of the release):** the REAL 0.6.119 installer (`git show 5417087:native/UpdateClient.swift`
+>   compiled with `diag/harness-swap-verify.swift`, version/build edited to 0.6.121/451b613) ran `swapStagedApp` on an
+>   APFS clone of the staged 0.6.121 app over a clone of the 0.6.120 app: **`SWAP OK, landed: 451b613`**. Control, same
+>   clone with video relabelled `video`: `SWAP FAILED ... component 'video' with runtime 'video', which this installer
+>   does not know`. Staged manifest: hub/subtitle/chat/music/video -> `voice`, image -> `image` (all in the 0.6.119
+>   table: voice, image, voice+music-overlay). The staged native binary contains `runtimes/video/bin/python3` (0.6.120's
+>   does not). Harness scratch: the session scratchpad `v119/`.
+> - **Gate:** `unittest discover` -> **1597 tests, OK (13 skipped), 607 s, exit 0**; `native/build.sh` green
+>   (boundary, API contract, lifecycle).
+> - **Delta (stage file manifests, `release_delta.Plan`/`fetch_bytes`):** **0.6.120 -> 0.6.121: 6 files, 6 blobs,
+>   13,492,018 B to send** (native binary 12.99 MB, `Info.plist`, `release-manifest.json`, `release-notes.md`,
+>   `voice/CHANGELOG.md`, `voice/VERSION`; 0 added, 0 removed). **0.6.119 -> 0.6.121: 12 files, 12 blobs, 13,872,589 B
+>   to send**, 0 added, 15,577 removed (983,228,606 B, the Lance tree; removals send nothing). Totals 77,466 files,
+>   4,202,326,528 B (app 4,286,596 KB on disk).
+> - **DMG** `dist/StudioHub-0.6.121-451b613.dmg` (1,567,432,437 B, SHA-256
+>   `bd7ba0da204e1d597273cfe6a753a2fabe33b5c3d0dc4fe60a97263996f51e6b`, `hdiutil verify` valid, `bytes-wasted: 0`),
+>   built with `.build/make-dmg-noprune.sh`. **Its first output again carried 587 MB of dead space** (2.15 GB);
+>   re-compacted with `hdiutil convert -format UDZO`, the wasted copy is `_trash/dist/StudioHub-0.6.121-451b613-wasted587MB.dmg`.
+>   Do this every time. The 0.6.120 DMG moved to `_trash/dist/`. Installable app:
+>   `.build/StudioHub-0121/Studio Hub.app` (manifest `0.6.121` / `451b61398715683844cea52dc831a78e60c94423`).
+>   **Not installed, not on the drives, nothing pushed to controllers.** `.build/StudioHub-0119`/`-0120` untouched.
+> - **Rollout note:** a Mac still on 0.6.119/0.6.120 takes this release through its own (unfixed) check because of
+>   the bridge label; once on 0.6.121 its table knows `video`, so 0.6.122 (label back to `video`) also installs.
 
 > **0.6.120 - Lance video is retired; video is LTX-2.3** (owner, 2026-09-30: "the Lance one sucks and is
 > terrible ... remove it like the ace 1.5"). Read `CHANGELOG.md` 0.6.120; what to know:
