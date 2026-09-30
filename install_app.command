@@ -37,9 +37,14 @@ fi
 
 # Applications needs an administrator password. If that is a problem, install for this user only,
 # which needs no password and works just as well.
-TARGET="/Applications"
+# Applications needs an administrator password. If that is a problem, install for this user only,
+# which needs no password and works just as well.
+# `STUDIOHUB_INSTALL_TARGET` is for testing this script against a scratch folder; nobody sets it in
+# real use. Overriding it also means the running app is not asked to quit, because the copy that is
+# running is not the one being replaced.
+TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications}"
 NEEDS_ADMIN=1
-if [ -w /Applications ]; then NEEDS_ADMIN=0; fi
+if [ -w "$TARGET" ]; then NEEDS_ADMIN=0; fi
 
 echo "  This will replace any Studio Hub already installed."
 echo
@@ -64,64 +69,74 @@ else
 fi
 
 echo
-echo "  Copying... (this takes a few seconds)"
+echo "  Updating... (a few seconds when this Mac already has an older Studio Hub)"
 # A running copy holds its own files open, and replacing one underneath itself is how an install
 # half-lands - the old process keeps serving from deleted files while the folder on disk changes.
-osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
-osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
-sleep 2
-# The app ships read-only runtimes, so a plain `rm -rf` of an older install fails with
-# "Permission denied" and leaves the old copy in place - the swap then nests the new app inside it.
-# Make the tree writable first, and refuse to swap unless the old copy is really gone.
+if [ -z "${STUDIOHUB_INSTALL_TARGET:-}" ]; then
+  osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
+  osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
+  sleep 2
+fi
+# **The new app is built beside the old one and swapped in only when it is complete.** Two things
+# this used to get wrong: it deleted the installed app before the new one was in place (so a failed
+# move left the Mac with no app at all), and it copied all ~5 GB even when a release differs from
+# the last by a handful of files. Now the installed app is cloned (APFS: seconds, almost no extra
+# disk), what differs is brought across with rsync, and the old app is kept until the new one has
+# landed and been checked - and put back if it did not. Without an installed app, or off APFS, it
+# falls back to a plain copy. The steps are one script so the administrator prompt shows once.
+SWAP="$(mktemp -t studiohub-install)"
+trap 'rm -f "$SWAP"' EXIT
+cat > "$SWAP" <<'STEPS'
+#!/bin/sh
+# usage: <kit app> <target folder> <app name>
+APP="$1"; TARGET="$2"; NAME="$3"
 STAGING="$TARGET/.studiohub-incoming"
-rm -rf "$STAGING" 2>/dev/null
-REMOVE_OLD="if [ -e '$TARGET/$NAME' ]; then chmod -R u+w '$TARGET/$NAME' 2>/dev/null || true; rm -rf '$TARGET/$NAME'; fi"
-REPLACE="$REMOVE_OLD && test ! -e '$TARGET/$NAME' && mv '$STAGING' '$TARGET/$NAME'"
-if [ "$NEEDS_ADMIN" = "1" ]; then
-  # One administrator prompt, the normal macOS way.
-  if ! osascript -e "do shell script \"rm -rf '$STAGING' && /bin/cp -Rp '$APP' '$STAGING' && test -x '$STAGING/Contents/Resources/runtimes/voice/bin/python3' && $REPLACE\" with administrator privileges" 2>/dev/null; then
-    echo
-    echo "  That did not work, and nothing was changed: the copy is made beside the installed app"
-    echo "  and only swapped in once it is complete."
-    echo
-    echo "  Try again and enter your password, or run this file again and answer 'n' to install"
-    echo "  into your own Applications folder."
-    echo
-    echo "  Press Return to close."
-    read _ || true
-    exit 1
+OLD="$TARGET/.studiohub-previous"
+LIVE="$TARGET/$NAME"
+RUNTIME="Contents/Resources/runtimes/voice/bin/python3"
+# The app ships read-only runtimes, so a plain `rm -rf` fails with "Permission denied".
+gone() { if [ -e "$1" ]; then chmod -R u+w "$1" 2>/dev/null; rm -rf "$1"; fi; return 0; }
+gone "$STAGING"; gone "$OLD"        # leftovers of an interrupted run
+if [ -d "$LIVE" ] && /bin/cp -c -R "$LIVE" "$STAGING" 2>/dev/null; then
+  # The clone is read-only like the original; rsync has to write into it.
+  if ! { chmod -R u+w "$STAGING" && /usr/bin/rsync -a --delete "$APP/" "$STAGING/"; }; then
+    gone "$STAGING"
+    /bin/cp -Rp "$APP" "$STAGING" || { gone "$STAGING"; exit 1; }
   fi
 else
-  if ! /bin/cp -Rp "$APP" "$STAGING" \
-     || [ ! -x "$STAGING/Contents/Resources/runtimes/voice/bin/python3" ]; then
-    echo
-    echo "  The copy failed or arrived incomplete. This Mac still has whatever was installed"
-    echo "  before; nothing was replaced."
-    echo
-    echo "  Check free space, then run this file again."
-    echo
+  gone "$STAGING"
+  /bin/cp -Rp "$APP" "$STAGING" || { gone "$STAGING"; exit 1; }
+fi
+[ -x "$STAGING/$RUNTIME" ] || { gone "$STAGING"; exit 2; }
+if [ -e "$LIVE" ]; then mv "$LIVE" "$OLD" || { gone "$STAGING"; exit 3; }; fi
+if ! mv "$STAGING" "$LIVE" || [ ! -x "$LIVE/$RUNTIME" ]; then
+  gone "$LIVE"
+  if [ -e "$OLD" ]; then mv "$OLD" "$LIVE"; fi
+  gone "$STAGING"
+  exit 4
+fi
+gone "$OLD"
+exit 0
+STEPS
+if [ "$NEEDS_ADMIN" = "1" ]; then
+  # One administrator prompt, the normal macOS way.
+  /usr/bin/osascript -e "do shell script \"/bin/sh '$SWAP' '$APP' '$TARGET' '$NAME'\" with administrator privileges" >/dev/null 2>&1
+else
+  /bin/sh "$SWAP" "$APP" "$TARGET" "$NAME"
+fi
+if [ "$?" != "0" ]; then
+  echo
+  echo "  That did not work, and the app that was installed before is still there: the new copy is"
+  echo "  made beside it and only swapped in once it is complete, and swapped back if it is not."
+  echo
+  echo "  Check free space and try again (enter your password if asked), or run this file again"
+  echo "  and answer 'n' to install into your own Applications folder."
+  echo
+  if [ "${STUDIOHUB_UNATTENDED:-}" != "1" ]; then
     echo "  Press Return to close."
-    rm -rf "$STAGING" 2>/dev/null
     read _ || true
-    exit 1
   fi
-  if [ -e "$TARGET/$NAME" ]; then
-    chmod -R u+w "$TARGET/$NAME" 2>/dev/null || true
-    rm -rf "$TARGET/$NAME" 2>/dev/null || true
-  fi
-  if [ -e "$TARGET/$NAME" ]; then
-    echo "  Could not remove the previously installed copy, so nothing was replaced."
-    echo "  Close Studio Hub, then run this file again."
-    echo
-    rm -rf "$STAGING" 2>/dev/null
-    read _ || true
-    exit 1
-  fi
-  mv "$STAGING" "$TARGET/$NAME" || {
-    echo "  Could not move the new copy into place. The previous app is gone; run this again."
-    read _ || true
-    exit 1
-  }
+  exit 1
 fi
 
 # macOS blocks an unsigned app the first time. Clear the flag so a double-click just works.
