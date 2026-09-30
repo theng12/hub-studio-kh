@@ -46,6 +46,16 @@ no delta path. The first delta update is 0.6.115 → 0.6.116.
 - **The kit installer keeps the old app until the new one is verified.**
 - Wire contract: `_orchestra/audit-20260930/CONTRACT-hub-release-delta.md`.
 
+**Music**
+- **YuE2 music works again on every Mac.** Every YuE2 job failed with *"the YuE2 decoder (yue2-vae)
+  is not installed"* although the decoder was installed and verified. `_run_yue2` read a `requires`
+  key from the generator's preflight report; that report has never had one, so the lookup was `None`
+  everywhere. The decoder's folder now comes from the decoder package's own verified receipt
+  (`MusicCache.companion_root`, from its manifest's layout destination), and the dead `requires` read
+  and `_companion_root` are gone. Pinned by `DecoderResolvesFromARealLayoutTests` in
+  `tests/test_music_yue2.py`, which builds the library the way the installer does from the two shipped
+  manifests (no hand-written `requires`); reverting the fix fails it with the owner's error text.
+
 **Merge note.** `auth.py`: both fleet and delta added allow-list entries; all are kept (fleet's
 `/fleet/nodes/{id}/status` in `FLEET_ALLOWED` and `NODE_ALLOWED`; delta's release files/blob/need in
 `FLEET_ALLOWED` and the five read-only release routes in `NODE_ALLOWED`).

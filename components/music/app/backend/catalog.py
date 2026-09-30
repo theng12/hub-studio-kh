@@ -150,6 +150,8 @@ LM_06B = Checkpoint(
 YUE2_REPO = "vanch007/mlx-Yue2-3B"
 YUE2_REVISION = "fa66d203dd56d7e033e05ee8b32269768984c4cc"
 YUE2_VAE_REPO = "m-a-p/YuE2-Vae"
+# The package the generator requires (`requires_packages`) and the port loads by path as `--vae`.
+YUE2_VAE_PACKAGE_ID = "yue2-vae"
 YUE2_VAE_REVISION = "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a"
 # The port's own source, pinned at an exact commit — it is the runner, so its revision is part of
 # this model's identity the way a package revision is for an MLX engine.

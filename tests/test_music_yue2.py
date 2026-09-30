@@ -163,6 +163,111 @@ class SecondEngineIsReadableTests(unittest.TestCase):
         self.assertNotIn('"state": "cached" if cached else "missing"', source)
 
 
+class DecoderResolvesFromARealLayoutTests(unittest.TestCase):
+    """The decoder is found where a staged Mac keeps it, not where a fixture said it would be.
+
+    The defect this pins: every YuE2 job failed with "the YuE2 decoder (yue2-vae) is not
+    installed" although the decoder was installed and verified. The worker read a `requires` key
+    off the generator's preflight report; that report has never carried one, so the lookup was
+    `None` on every Mac and no test noticed, because the only fixture that filled `requires` was
+    hand-written. Here the library is laid out the way the installer lays it out - both shipped
+    manifests, one-byte stand-in files, receipts written by `verify_installed` - and nothing in
+    it names the decoder's location for the worker.
+    """
+
+    def setUp(self):
+        import hashlib
+        from components import model_packages
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        work = Path(self.temp.name)
+        root = Path(__file__).resolve().parents[1]
+        self.library, self.manifests = work / "library", work / "model-manifests"
+        self.library.mkdir()
+        self.manifests.mkdir()
+        # Every shipped manifest, so a worker built against this folder can construct its default
+        # engine too; only the two YuE2 packages are installed.
+        for path in (root / "model-manifests").glob("*.json"):
+            (self.manifests / path.name).write_text(path.read_text())
+        stand_in = b"x"
+        digest = hashlib.sha256(stand_in).hexdigest()
+        for name in ("yue2-3b-mlx", "yue2-vae"):
+            manifest = json.loads((root / "model-manifests" / f"{name}.json").read_text())
+            for entry in manifest["files"]:
+                entry["size"] = len(stand_in)
+                entry["sha256"] = digest
+                entry.pop("urls", None)
+            (self.manifests / f"{name}.json").write_text(json.dumps(manifest))
+            installed = self.library / manifest["package_id"] / manifest["revision"]
+            for entry in manifest["files"]:
+                target = installed / entry["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(stand_in)
+            if name == "yue2-vae":
+                self.vae_folder = installed
+        catalog_map = model_packages.load_catalog(self.manifests)
+        for name in ("yue2-vae", "yue2-3b-mlx"):
+            verified = model_packages.verify_installed(
+                json.loads((self.manifests / f"{name}.json").read_text()), self.library,
+                catalog=catalog_map)
+            self.assertEqual(verified["state"], "files_verified", verified)
+
+    def cache(self):
+        return generation.cache_module.MusicCache(
+            library=self.library, manifest_path=self.manifests / "yue2-3b-mlx.json",
+            repo=catalog.YUE2_REPO)
+
+    def test_the_decoder_directory_is_the_one_holding_the_weights_and_the_module(self):
+        vae_dir = self.cache().companion_root(catalog.YUE2_VAE_PACKAGE_ID)
+        self.assertIsNotNone(vae_dir, "an installed, verified decoder was not found")
+        self.assertEqual(vae_dir.resolve(), (self.vae_folder / "model").resolve())
+        self.assertTrue((vae_dir / "modeling_vae.py").is_file())
+        self.assertTrue((vae_dir / "model.safetensors").is_file())
+
+    def test_a_decoder_that_is_not_installed_is_not_found(self):
+        import shutil
+
+        shutil.rmtree(self.library / "yue2-vae")
+        self.assertIsNone(self.cache().companion_root(catalog.YUE2_VAE_PACKAGE_ID))
+
+    def test_a_song_job_hands_the_port_that_directory(self):
+        """Through the real bridge call, so a missing decoder fails with the owner's own words."""
+        import time
+
+        stub = Path(self.temp.name) / "stub-python"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'spec="$4"\n'
+            'out=$(sed -n \'s/.*"output": "\\([^"]*\\)".*/\\1/p\' "$spec")\n'
+            'vae=$(sed -n \'s/.*"vae_dir": "\\([^"]*\\)".*/\\1/p\' "$spec")\n'
+            # The port loads the decoder by path, so the stub demands what the port would.
+            'if [ ! -f "$vae/modeling_vae.py" ] || [ ! -f "$vae/model.safetensors" ]; then\n'
+            '  printf \'{"status": "failed", "error": "no decoder at %s"}\\n\' "$vae"; exit 1\n'
+            "fi\n"
+            'printf "fLaC0000" > "$out"\n'
+            'printf \'{"status": "ok", "seconds": 36.0, "sample_rate": 48000, "channels": 2}\\n\'\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+        def candidates(name=generation.cache_module.MANIFEST_NAME):
+            return [self.manifests / name]
+
+        with tempfile.TemporaryDirectory() as data, \
+                mock.patch.object(generation.cache_module, "_candidate_manifests", candidates), \
+                mock.patch.object(generation, "yue2_runtime_python", lambda: stub):
+            manager = generation.GenerationManager(
+                Path(data), library_dir=str(self.library))
+            job = manager.submit({"repo": catalog.YUE2_REPO, "prompt": "warm ballad",
+                                  "lyrics": "[Verse]\nmorning light\n", "duration_seconds": 36})
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                state = manager.get(job["id"])
+                if state["state"] in generation.TERMINAL:
+                    break
+                time.sleep(0.05)
+        self.assertEqual(state["state"], "done", state.get("error"))
+
+
 class TierAndCatalogTests(unittest.TestCase):
     def test_the_tier_is_measured_and_says_so(self):
         model = yue2_model()

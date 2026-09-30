@@ -30,6 +30,9 @@ the full disk image. Nodes fetch the update from their own controller, and **a C
 an offered update by itself once it has nothing running or waiting**, just as a Node does. The kit
 installer keeps the old app until the new one has been checked.
 
+**YuE2 music works again on every Mac** - the decoder was installed but the Hub looked for it in the
+wrong place.
+
 **One thing to know:** going from 0.6.114 to 0.6.115 is still a full update, because the older app
 cannot do the small kind. The first small update will be 0.6.115 to 0.6.116.
 

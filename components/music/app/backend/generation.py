@@ -369,20 +369,6 @@ def yue2_runtime_python() -> Path:
     return candidates[-1]
 
 
-def _companion_root(companion: dict, package_id: str):
-    """Where an installed companion package lives, from the preflight's own record."""
-    from pathlib import Path as _Path
-
-    entry = companion.get(package_id) if isinstance(companion, dict) else None
-    if isinstance(entry, str) and entry:
-        return _Path(entry)
-    if isinstance(entry, dict):
-        root = entry.get("checkpoints_root") or entry.get("root")
-        if isinstance(root, str) and root:
-            return _Path(root)
-    return None
-
-
 # runtime -> request validator.  A model whose runtime is missing here is refused by
 # name in validate_request instead of being validated as ACE-Step.
 _VALIDATORS = {
@@ -1700,11 +1686,9 @@ class GenerationManager:
                                   + str(files.get("reason") or files["state"])),
                         "error_code": "MODEL_FILES_UNAVAILABLE"})
                 # The decoder is a companion package: the port loads it by path, and a run without
-                # it fails at load rather than making quiet audio. Resolve it the same way the
-                # generator's own folder was resolved.
-                companion = files.get("requires") or {}
-                vae_root = _companion_root(companion, catalog.YUE2_VAE_REPO) \
-                    or _companion_root(companion, "yue2-vae")
+                # it fails at load rather than making quiet audio. It is resolved from that
+                # package's own verified receipt, the way the generator's folder was.
+                vae_root = self.cache_for(model.repo).companion_root(catalog.YUE2_VAE_PACKAGE_ID)
                 interpreter = yue2_runtime_python()
                 facts = yue2.generate(
                     model_dir=Path(files["checkpoints_root"]),

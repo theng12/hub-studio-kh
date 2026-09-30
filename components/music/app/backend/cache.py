@@ -132,6 +132,28 @@ class MusicCache:
                     "reason": "Verified Music package has no safe model checkpoint root"}
         return {**base, "state": "cached", "checkpoints_root": str(checkpoints)}
 
+    def companion_root(self, package_id: str) -> Optional[Path]:
+        """The model directory of one companion package, or ``None`` when it is not verified here.
+
+        A companion is named by *another* manifest and lives in its own folder of the library
+        (``<library>/<package_id>/<revision>/<layout destination>``), so it is resolved the way
+        this package's own folder is: through that package's preflight receipt, never through a
+        key on this package's report. YuE2's decoder is the case - its files are installed and
+        verified, and the port loads them by path.
+        """
+        catalog_map = model_packages.load_catalog(self.manifest_path.parent)
+        companion = catalog_map.get(package_id)
+        if companion is None:
+            return None
+        report = model_packages.preflight(companion, self.library, catalog=catalog_map)
+        if report["state"] != "files_verified":
+            return None
+        layout = (companion.get("source") or {}).get("layout") or {}
+        destination = str((layout.get("model") or {}).get("destination") or "").strip("/")
+        root = Path(report["folder"]).joinpath(*destination.split("/")) if destination \
+            else Path(report["folder"])
+        return root if root.is_dir() and not root.is_symlink() else None
+
     @property
     def checkpoints(self) -> Path:
         status = self.status()
