@@ -3,7 +3,57 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.115** (scarcest-first scheduling, node removal from either side, delta updates; 2026-09-30).
+Last updated: **0.6.116** (ACE-Step 1.5 retired; 2026-09-30).
+
+> **0.6.116 — ACE-Step 1.5 is retired. Music is YuE2 and Stable Audio 3, nothing else** (owner
+> decision 2026-09-30, confirmed in chat: *"i wont' want ace 1.5 either… we only offer 2 music model,
+> the yue2 and the stable audio3"*). Read `CHANGELOG.md` 0.6.116 for the list; what to know:
+>
+> - **Stable Audio 3 Medium (1.4B) is the default music model** (`catalog.DEFAULT_REPO`, was `MAIN_REPO`
+>   = ACE). It is first in `/api/catalog`, so the app's music picker (first supported music model)
+>   opens on it. YuE2 3B (8-bit AR + bf16 NAR) and its 0.6.115 decoder fix are untouched.
+> - **Deleted, not hidden:** `model-manifests/ace-step-1-5-turbo.json`, `engine_child.py`,
+>   `EngineExecutor`, `_validate_ace_step`, `_run`, the ACE source-tree verification, the ACE catalog
+>   entry/tiers/family, `packaging/music-runtime/` (the ACE-only overlay; **verified SA3 imports without
+>   it** — every `models.defs.*` module and `sa3_mlx.py --help` load on the bare Voice runtime; a real
+>   SA3 render was NOT run here, no SA3 weights are on this Mac), and the staged
+>   `engines/ace-step-1-5`. All moved to `_trash/ace-step-retire-0.6.116/` (removed files) — nothing `rm`ed.
+> - **The stage command lost `--music-runtime` / `--music-engine`** (the flags no longer exist). Music is
+>   staged with every Hub bundle and its release record is `runtime: "voice"` + the Voice runtime's
+>   digest. That name is in every deployed update client's `runtimePaths` table, so a 0.6.115 node
+>   accepts this release. `native/UpdateClient.swift` still lists `voice+music-overlay` (dead entry,
+>   deliberately left: changing Swift was out of scope).
+> - **Nothing is resident in Music now**, so the memory policy has nothing to release
+>   (`loaded_models` always `[]`, release answers `released: false`); the fleet routes still exist.
+>   `/api/health` dropped `engine_loaded`/`engine_child_pid`. `GenerationManager` no longer takes
+>   `engine_root`; `STUDIOHUB_MUSIC_ENGINE_ROOT` is ignored.
+> - **Behaviour kept honest:** an SA3 job that fails after being marked done now clears its artifact
+>   fields (the ACE path used to; SA3 did not). The ACE-only `JOB_PERSISTENCE_UNCERTAIN` path (discard
+>   itself failing) went with `_run` — SA3/YuE2 never had it.
+> - **Not done / for the coordinator:** the drive kits still carry the ACE package in their model
+>   libraries until the next kit refresh (the copy step moves a model the kit no longer offers into
+>   `_trash`, never deletes); `.build/prepare-ssds.sh` (old one-off) still names `ace-step-1-5-turbo`;
+>   `catalog.FAMILIES` has no `yue2` entry (pre-existing: YuE2's row names family `yue2`).
+>   `.build/music-runtime` and `.build/music-engine-source` are now unused scratch.
+> - **Delta rollout (the first one).** 0.6.115 -> 0.6.116 measured from the two stages' file manifests:
+>   **20 files changed (784,972 bytes), 0 added, 798 removed (11,527,708 bytes)**; the native binary and
+>   all six runtimes are byte-identical. Total files 93,839 -> 93,041; 5,197,040,792 -> 5,185,460,742
+>   bytes. The 798 removed are `engines/ace-step-1-5` (619), `runtimes/music` (177), the manifest (1)
+>   and `components/music/app/backend/engine_child.py` (1).
+> - **Gate: `unittest discover -s tests -p 'test_*.py'` -> 1581 tests, OK (13 skipped), 612 s, exit 0**
+>   (`.build/hub-gate/bin/python`, `PYTHONPATH=$PWD/.build/test-deps`; 15 fewer than 0.6.115's 1596 —
+>   the ACE-only tests went with their code). `native/build.sh` green (boundary, API contract,
+>   lifecycle), exit 0. Mutation-proved: re-adding the ACE manifest, flipping `DEFAULT_REPO` to YuE2, and
+>   dropping the SA3 `clear_artifacts` each fail on an assertion.
+> - **Built, NOT installed, NOT on the drives.** `dist/StudioHub-0.6.116-5af759a.dmg` (1,948,134,094
+>   bytes, SHA-256 `d74c70a8b2edca8cba112a75c0c126c860ced3b81736cbc1a32d9d0a0b78ca44`, `hdiutil verify`
+>   valid), built from the `5af759a` stage. Installable app: `.build/StudioHub-0116/Studio Hub.app`
+>   (manifest `0.6.116` / `5af759a5435ce6ab42e525a14869f02832b97435`, `file-manifest/` present). Later
+>   commits are docs-only. `make-dmg.sh` was run from a copy **without its prune step**
+>   (`.build/make-dmg-noprune.sh`), so nothing moved to a drive and `.build/StudioHub-0115b` is still
+>   there. Two earlier 0.6.116 stages (from pre-amend commits) are in `_trash/build-stages/` and their
+>   DMG is in `_trash/dist/`.
+
 
 > **0.6.115 — three reviewed branches merged (`wave2-sched`, `wave2-fleet`, `wave2-delta`), kept as
 > merge commits. Read `CHANGELOG.md` for the list; this is what you must know before touching them.**
@@ -35,7 +85,7 @@ Last updated: **0.6.115** (scarcest-first scheduling, node removal from either s
 > `MusicCache.companion_root("yue2-vae")` resolves it from the decoder package's own receipt +
 > manifest layout destination. `DecoderResolvesFromARealLayoutTests` (tests/test_music_yue2.py)
 > builds the library from the shipped manifests; reverting the fix reproduces the owner's sentence.
-> ⚠ **NOT done: retiring ACE-Step 1.5** (owner decision relayed by the coordinator: the Hub offers
+> ⚠ **(Done in 0.6.116 — see the block above.) Was: NOT done: retiring ACE-Step 1.5** (owner decision relayed by the coordinator: the Hub offers
 > only YuE2 and Stable Audio 3). The removal was started and **blocked by the tool's permission
 > classifier**, so nothing of it is in this release: `model-manifests/ace-step-1-5-turbo.json`,
 > the ACE paths in `components/music/app/backend/{catalog,generation,cache,main,memory_policy,
@@ -1894,8 +1944,6 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
      --video-runtime .build/video-runtime \
      --lance-runtime .build/lance-runtime \
      --yue2-runtime .build/yue2-runtime \
-     --music-runtime .build/music-runtime \
-     --music-engine .build/music-engine-source \
      --output ".build/StudioHub-<n>/Studio Hub.app"
    ```
 
@@ -1930,8 +1978,7 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
 | Build runtime (Python, holds `cryptography`) | `.build/voice-runtime` |
 | Native shell binary | `.build/StudioHub` |
 | Image runtime (**the only one to stage**) | `.build/image-runtime-mflux020` — mflux 0.20.0, digest pinned in `packaging/stage_voice.py` as `IMAGE_RUNTIME_SHA256` (`c3acf766…`), which now **refuses any other tree**. `.build/st03-image-runtime-worker` is the superseded 0.17.5, kept for the ST-03 receipt and never staged |
-| Music overlay (177 files) | `.build/music-runtime`, digest pinned in `packaging/stage_voice.py` as `MUSIC_OVERLAY_SHA256` |
-| Music engine source | `.build/music-engine-source` |
+| Music overlay / ACE-Step engine source | **retired in 0.6.116** — `.build/music-runtime` and `.build/music-engine-source` are unused scratch; the stage command no longer takes them |
 | The Mac's model library | `~/StudioHubModels` |
 | Hub data (settings, jobs DB, keys) | `~/Library/Application Support/StudioHub Standalone/` |
 
