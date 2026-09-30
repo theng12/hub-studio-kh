@@ -1,0 +1,54 @@
+{
+  "schema": "studiohub.standalone-release",
+  "schema_version": 1,
+  "version": "0.6.120",
+  "implementation_commit": "c439bbf9a94ff01b66af45958290db38058ffb6a",
+  "development_build": false,
+  "qualification": "unqualified-local-proof",
+  "components": {
+    "voice": {
+      "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+      "upstream_version": "2.7.2",
+      "source_sha256": "7c074d5155bde5004873dae342ad262fc75e2fce3d155ac7c3af1ce88d9f00c5"
+    },
+    "hub": {
+      "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+      "upstream_version": "2.22.0",
+      "source_sha256": "6acba800656c8e40d6b329d4d28dfffcf23da9bb1b893b0c4d137ef68d5fd109",
+      "runtime": "voice"
+    },
+    "subtitle": {
+      "source_sha256": "e69b798836ce04635d4a3f92e6a770be282855b02bdc31ccc03adab7505411e7",
+      "runtime": "voice",
+      "runtime_sha256": "d3350a58da2ac96a1048e61a63afc01c44680364e12f76b98e24ad5508f055ba"
+    },
+    "chat": {
+      "source_sha256": "e621255f62e2536922c9d5be6ddd8f16a80598d5878b53e422575bf51f908aa6",
+      "runtime": "voice",
+      "runtime_sha256": "d3350a58da2ac96a1048e61a63afc01c44680364e12f76b98e24ad5508f055ba"
+    },
+    "music": {
+      "source_sha256": "084f2da8f53cee646b05b7b10a00112effff09a4931150ba9e4638f1b79aa3e8",
+      "runtime": "voice",
+      "runtime_sha256": "d3350a58da2ac96a1048e61a63afc01c44680364e12f76b98e24ad5508f055ba"
+    },
+    "image": {
+      "runtime_qualified": true,
+      "upstream_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
+      "upstream_version": "1.32.2",
+      "source_sha256": "475a7b85a609e9e771632f6f0e20b70a6793079f66e8cb0f389f7a353824ea0b",
+      "runtime": "image",
+      "runtime_sha256": "c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f"
+    },
+    "video": {
+      "runtime_qualified": true,
+      "yue2_runtime_sha256": "75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4",
+      "yue2_runtime_qualified": true,
+      "runtime": "video",
+      "runtime_sha256": "27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db513cc2ad7",
+      "source_sha256": "c76585269b447656eb56b711ab0f2574a4e64110b8f9b4103fb56165b59d2174"
+    }
+  },
+  "runtime_sha256": "d3350a58da2ac96a1048e61a63afc01c44680364e12f76b98e24ad5508f055ba",
+  "payload_sha256": "384ab1a9e514ecb4ad495009f00f04ae6fa3a4bc64237424a7517029e7df2fbb"
+}

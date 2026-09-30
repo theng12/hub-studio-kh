@@ -535,6 +535,10 @@ struct ReleaseInstaller {
     static let runtimePaths: [String: [String]] = [
         "voice": ["Contents/Resources/runtimes/voice/bin/python3"],
         "image": ["Contents/Resources/runtimes/image/bin/python3"],
+        // The Video lane's own Python 3.11 tree (`packaging/stage_voice.py` `_stage_video`). Missing
+        // from this table, every release that ships Video failed its own pre-swap check, so no Mac
+        // ever updated itself or was updated by hand from the app.
+        "video": ["Contents/Resources/runtimes/video/bin/python3"],
         // The Music overlay rides on the base runtime and adds its own engine manifest, which the
         // Hub's own `_music_spec` requires before it will start the worker.
         "voice+music-overlay": ["Contents/Resources/runtimes/voice/bin/python3",
