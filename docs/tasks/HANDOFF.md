@@ -3,7 +3,35 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.118** (drain for update, unattended key pin, blob-push fix; 2026-09-30).
+Last updated: **0.6.119** (Quit only asks when a job is running; 2026-09-30).
+
+> **0.6.119 — Quit asks only when a job is running** (owner, 2026-09-30: "if no job is running. quit is quit.
+> if have job, then we should ask."). Read `CHANGELOG.md` 0.6.119; what to know:
+>
+> - `AppDelegate.applicationShouldTerminate` (`native/StudioHub.swift`) no longer asks whenever the engine
+>   runs. It reads **fresh** work (`NativeWorkspaceStore.activeWorkNow()` = `refresh` + `refreshMemoryPolicy`
+>   + the same `activeWorkCount` the updater's drain uses; a hidden window does not poll, so the stored lists
+>   can be stale; bounded to 3 s so a hung Hub cannot hold Quit). Zero -> stop the engine and quit, no alert.
+>   Above zero -> the old "Keep Running / Quit and Stop" question. `relaunching` (update) never asks.
+> - After Quit is decided, `forceStopWithoutAsking = true` (`stopThenQuit`), so a stop that hangs 15 s is
+>   force-stopped by itself - no second "Force Stop?" dialog. The in-app Stop Engine / Force Stop buttons
+>   (`confirmStop`, `confirmForceStop`) are unchanged and not reachable from Quit.
+> - Seams on `AppDelegate`: `activeWork`, `confirmQuitWhileBusy`, `relaunching` (internal, for the test).
+> - **Tests:** `tests/native/lifecycle_main.swift` `quit` (idle / busy-keep / busy-quit / relaunch) and
+>   `api_main.swift` (`activeWorkNow` reads fresh); Python `test_update_unattended`,
+>   `test_native_operator_surfaces` pin the source. Mutation-proved, each failing on an assertion: idle asks,
+>   busy never asks, relaunch asks, no force flag, `activeWorkNow` stale.
+> - **Gate:** `unittest discover` -> **1597 tests, OK (13 skipped), 594 s, exit 0** (an earlier run had one
+>   load-related failure, `FleetCancelTests.test_cancelling_on_the_controller_stops_the_node`, green 3/3 alone
+>   and on the old tree); `native/build.sh` green.
+> - **Delta 0.6.118 -> 0.6.119** (stage file manifests): 6 files changed (13,487,044 B: native binary
+>   12,990,856 B, `release-notes.md`, `voice/CHANGELOG.md`, `voice/VERSION`, `Info.plist`, `release-manifest.json`),
+>   0 added, 0 removed. Totals 93,043 files; 5,185,558,591 -> 5,185,566,996 B.
+> - **DMG** `dist/StudioHub-0.6.119-96fef8c.dmg` (1,941,922,463 B, SHA-256
+>   `749097b3eedf93de4183dab6683fcdf5d88959e43546e9830605083a5a680f61`, `hdiutil verify` valid), built with
+>   `.build/make-dmg-noprune.sh`; the 0.6.118 DMG moved to `_trash/dist/`. Installable app:
+>   `.build/StudioHub-0119/Studio Hub.app` (manifest `0.6.119` / `96fef8c9e300a29998e68c16cb460e289a084d8b`).
+>   **Not installed, not on the drives.** `.build/StudioHub-0116`/`-0117`/`-0118` untouched.
 
 > **0.6.118 — a Mac that never goes idle still updates itself (drain for update); the unattended tick pins
 > its own key; a blob push no longer stalls the controller** (live pilot findings, 2026-09-30). Read
