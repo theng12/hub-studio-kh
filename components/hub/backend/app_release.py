@@ -49,12 +49,15 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from . import ed25519
+from . import file_manifest as fm
+from . import release_delta
 from .registry import DATA_DIR
 
 # Release data lives beside the other per-machine state, not inside the app
@@ -65,6 +68,10 @@ RELEASE_FILE = RELEASE_DIR / "release.json"
 CONTROLLER_KEY_FILE = DATA_DIR / ".release_controller_key"
 TRUST_FILE = DATA_DIR / ".release_publisher_trust.json"
 
+FILES_FIELDS = ("files_sha256", "files_count", "files_bytes")
+# The last two releases' manifests, and the blobs they name, are kept; everything older is garbage.
+KEEP_RELEASES = 2
+
 SCHEMA = "studiohub.app-release.v1"
 SCHEMA_VERSION = 1
 CONTROLLER_SIGNATURE_FIELD = "controller_signature"
@@ -74,6 +81,8 @@ CONTROLLER_KEY_ID_FIELD = "controller_key_id"
 MAX_ARTIFACT_BYTES = 16 * 1024**3
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 _LOCK = threading.RLock()
+_manifest_cache: dict[str, tuple[dict, dict[str, dict[str, fm.Entry]]]] = {}
+_size_cache: dict[str, dict[str, int]] = {}
 _identity_cache: dict[str, str] | None = None
 
 
@@ -279,6 +288,19 @@ def set_trusted_publisher(body: Any) -> dict[str, Any]:
             "publisher_key_id": key_id, "fingerprint": key_id}
 
 
+def pin_publisher(public_key: str, publisher_id: str | None = None) -> dict[str, Any] | None:
+    """Trust a gateway key a controller presented, if this Mac trusts none yet (a node, at its
+    first poll). Never replaces an existing pin: that is the owner's action, ``POST /trust``."""
+    existing = trusted_publisher()
+    if existing is not None:
+        return existing
+    try:
+        set_trusted_publisher({"public_key": public_key, "publisher_id": publisher_id})
+    except ReleaseRefused:
+        return None
+    return trusted_publisher()
+
+
 # ── descriptor validation ──────────────────────────────────────────────────
 
 
@@ -329,6 +351,18 @@ def validate_descriptor(descriptor: Any) -> None:
              "descriptor.publisher_key_id must be the 64-hex key fingerprint")
     _require(_decode_signature(descriptor.get("signature")) is not None, 400,
              "descriptor.signature must be base64 of a 64-byte Ed25519 signature")
+    # The per-file manifest the delta update is checked against. Optional, but all or none: a
+    # descriptor that names one number without the others is a half-made release.
+    if any(name in descriptor for name in FILES_FIELDS):
+        _require(all(name in descriptor for name in FILES_FIELDS), 400,
+                 "descriptor.files_sha256, files_count and files_bytes go together")
+        files_sha = descriptor["files_sha256"]
+        _require(isinstance(files_sha, str) and _HEX64.fullmatch(files_sha) is not None, 400,
+                 "descriptor.files_sha256 must be 64 hex characters")
+        for name in ("files_count", "files_bytes"):
+            value = descriptor[name]
+            _require(isinstance(value, int) and not isinstance(value, bool) and value > 0, 400,
+                     f"descriptor.{name} must be a positive integer")
 
 
 # ── accept / store ─────────────────────────────────────────────────────────
@@ -341,19 +375,8 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     os.replace(temporary, path)
 
 
-def accept_release(body: Any) -> dict[str, Any]:
-    """Verify then store a pushed release; the first failure refuses it.
-
-    Order is the contract's: (a) schema, (b) gateway signature against the
-    trusted key (a key that was never set is an error, not a pass), (c) the
-    artifact's sha256 and byte length, (d) only then store and countersign.
-    Nothing is written until (a)-(c) all pass.
-    """
-    _require(isinstance(body, dict), 400, "body must be a JSON object")
-    artifact_b64 = body.get("artifact_base64")
-    _require(isinstance(artifact_b64, str) and bool(artifact_b64.strip()), 400,
-             "artifact_base64 must be a non-empty base64 string")
-
+def _verified_descriptor(body: Mapping[str, Any]) -> dict[str, Any]:
+    """Steps (a) and (b) of the contract: the schema, then the gateway signature."""
     descriptor = body.get("descriptor")
     # (a) the descriptor matches the schema in the design doc.
     validate_descriptor(descriptor)
@@ -369,37 +392,280 @@ def accept_release(body: Any) -> dict[str, Any]:
     _require(verify(descriptor, descriptor["signature"],
                     bytes.fromhex(trusted["public_key"])), 400,
              "the gateway signature does not verify against the trusted gateway key")
+    return descriptor
 
-    # (c) the artifact matches the signed sha256 and byte length.
-    compact = "".join(artifact_b64.split())
-    try:
-        artifact = base64.b64decode(compact, validate=True)
-    except (binascii.Error, ValueError):
-        raise ReleaseRefused(400, "artifact_base64 is not valid base64")
-    _require(len(artifact) == descriptor["bytes"], 400,
-             f"artifact is {len(artifact)} bytes but the descriptor says "
-             f"{descriptor['bytes']}")
-    digest = hashlib.sha256(artifact).hexdigest()
-    _require(digest == descriptor["sha256"].lower(), 400,
-             f"artifact sha256 {digest} does not match descriptor.sha256 "
-             f"{descriptor['sha256']}")
 
-    # (d) store exactly what was received, plus the controller countersignature.
-    merged = dict(descriptor)
+def _countersigned(descriptor: Mapping[str, Any]) -> dict[str, Any]:
+    """This Mac's own key over the descriptor. A node that mirrors a controller's release signs
+    it again with its own key, which is the one its app pinned - so the app keeps reading its own
+    Hub and never needs to know the controller's."""
+    merged = {key: value for key, value in descriptor.items()
+              if key not in (CONTROLLER_KEY_ID_FIELD, CONTROLLER_SIGNATURE_FIELD)}
     merged[CONTROLLER_KEY_ID_FIELD] = controller_identity()["fingerprint"]
     merged[CONTROLLER_SIGNATURE_FIELD] = countersign(merged, controller_private_key())
+    return merged
+
+
+def _decode_manifest(descriptor: Mapping[str, Any], pushed: Any) -> dict[str, bytes]:
+    """The pushed ``file_manifest`` proved against the signed ``files_sha256``; returns the gzipped
+    group bytes to store. Anything short of an exact match is a refusal."""
+    _require("files_sha256" in descriptor, 400,
+             "a file manifest was pushed but the descriptor carries no files_sha256")
+    _require(isinstance(pushed, dict) and isinstance(pushed.get("groups"), dict), 400,
+             "file_manifest must be {index, groups}")
+    try:
+        index = fm.check_index(pushed.get("index"))
+        _require(index["files_sha256"] == descriptor["files_sha256"]
+                 and index["files_count"] == descriptor["files_count"]
+                 and index["files_bytes"] == descriptor["files_bytes"], 400,
+                 "the file manifest is not the one the signed descriptor names")
+        _require(set(pushed["groups"]) == set(index["groups"]), 400,
+                 "file_manifest.groups must hold exactly the groups the index names")
+        stored: dict[str, bytes] = {}
+        for name, encoded in pushed["groups"].items():
+            _require(isinstance(encoded, str), 400, f"group {name} must be base64")
+            try:
+                compressed = base64.b64decode("".join(encoded.split()), validate=True)
+            except (binascii.Error, ValueError):
+                raise ReleaseRefused(400, f"group {name} is not valid base64")
+            fm.check_group(index, name, fm.gunzip_limited(compressed))
+            stored[name] = compressed
+    except fm.ManifestError as exc:
+        raise ReleaseRefused(400, str(exc)) from exc
+    stored[fm.INDEX_NAME] = fm.index_bytes(index)
+    return stored
+
+
+def manifest_dir(files_sha256: str) -> Path:
+    return RELEASE_DIR / "manifests" / files_sha256
+
+
+def blob_dir() -> Path:
+    return RELEASE_DIR / "blobs"
+
+
+def _store_manifest(files_sha256: str, files: Mapping[str, bytes]) -> None:
+    """``manifests/<files_sha256>/`` - complete or absent, never half-written."""
+    target = manifest_dir(files_sha256)
+    if target.is_dir():
+        os.utime(target)          # the same release pushed again is the newest again
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{files_sha256}.{secrets.token_hex(8)}.tmp")
+    temporary.mkdir()
+    for name, data in files.items():
+        filename = name if name == fm.INDEX_NAME else f"{name}.tsv.gz"
+        (temporary / filename).write_bytes(data)
+    os.replace(temporary, target)
+
+
+def held_manifest(descriptor: Mapping[str, Any] | None = None
+                  ) -> tuple[dict, dict[str, dict[str, fm.Entry]]] | None:
+    """The verified manifest of the held release, or None when there is none (or it is damaged)."""
+    descriptor = descriptor or load_release()
+    files_sha = (descriptor or {}).get("files_sha256")
+    if not isinstance(files_sha, str):
+        return None
+    cached = _manifest_cache.get(files_sha)
+    if cached is not None:
+        return cached
+    try:
+        index, groups = fm.load_dir(manifest_dir(files_sha))
+    except fm.ManifestError:
+        return None
+    if index["files_sha256"] != files_sha:
+        return None
+    _manifest_cache.clear()
+    _manifest_cache[files_sha] = (index, groups)
+    return index, groups
+
+
+def _held_blob_sizes() -> dict[str, int]:
+    held = held_manifest()
+    if not held:
+        return {}
+    files_sha = held[0]["files_sha256"]
+    if files_sha not in _size_cache:
+        _size_cache.clear()
+        _size_cache[files_sha] = {
+            digest: size for kind, _x, size, digest in fm.flatten(held[1]).values() if kind == "f"}
+    return _size_cache[files_sha]
+
+
+def missing_blobs() -> list[str]:
+    """The blobs of the held release this controller can neither serve from its store nor from
+    its own installed app. What a gateway is asked to send, and nothing it does not have to."""
+    wanted = _held_blob_sizes()
+    try:
+        stored = set(os.listdir(blob_dir()))
+    except OSError:
+        stored = set()
+    app = release_delta.installed_app_root()
+    installed = release_delta.installed_by_sha(app).keys() if app else ()
+    return sorted(sha for sha in wanted if sha not in stored and sha not in installed)
+
+
+def blob_file(sha: str) -> Path | None:
+    """Where the bytes for ``sha`` live, for a release this Mac holds: its store, else the same
+    file in its own installed app (a controller that already updated is the source for its nodes)."""
+    if not isinstance(sha, str) or not _HEX64.fullmatch(sha) or sha not in _held_blob_sizes():
+        return None
+    stored = blob_dir() / sha
+    if stored.is_file():
+        return stored
+    app = release_delta.installed_app_root()
+    relative = release_delta.installed_by_sha(app).get(sha) if app else None
+    if relative:
+        candidate = app / relative
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate
+    return None
+
+
+class BlobUpload:
+    """One pushed blob, checked as it arrives and stored only if it is exactly what the held
+    release lists under that sha256."""
+
+    def __init__(self, sha: str) -> None:
+        _require(isinstance(sha, str) and _HEX64.fullmatch(sha) is not None, 400,
+                 "a blob is named by its 64-hex sha256")
+        sizes = _held_blob_sizes()
+        _require(bool(sizes), 409, "no release manifest is held, so there is nothing to send blobs for")
+        _require(sha in sizes, 404, "the held release does not list that blob")
+        self.sha, self.size = sha, sizes[sha]
+        self.received = 0
+        self.digest = hashlib.sha256()
+        blob_dir().mkdir(parents=True, exist_ok=True)
+        self.path = blob_dir() / f".{sha}.{secrets.token_hex(8)}.part"
+        self.handle = self.path.open("wb")
+
+    def write(self, chunk: bytes) -> None:
+        self.received += len(chunk)
+        if self.received > self.size:
+            self.abort()
+            raise ReleaseRefused(413, f"the blob is larger than the {self.size} bytes the release lists")
+        self.digest.update(chunk)
+        self.handle.write(chunk)
+
+    def commit(self) -> None:
+        self.handle.close()
+        if self.received != self.size or self.digest.hexdigest() != self.sha:
+            self.abort()
+            raise ReleaseRefused(400, "the blob's bytes are not the sha256 it was sent under")
+        os.replace(self.path, blob_dir() / self.sha)
+
+    def abort(self) -> None:
+        try:
+            self.handle.close()
+        finally:
+            self.path.unlink(missing_ok=True)
+
+
+def collect_garbage() -> None:
+    """Keep the newest ``KEEP_RELEASES`` manifests and the blobs they name; drop the rest."""
+    root = RELEASE_DIR / "manifests"
+    try:
+        directories = sorted((entry for entry in root.iterdir()
+                              if entry.is_dir() and not entry.name.startswith(".")),
+                             key=lambda entry: entry.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    referenced: set[str] = set()
+    for old in directories[KEEP_RELEASES:]:
+        shutil.rmtree(old, ignore_errors=True)
+    for kept in directories[:KEEP_RELEASES]:
+        try:
+            _index, groups = fm.load_dir(kept)
+        except fm.ManifestError:
+            continue
+        referenced |= {digest for kind, _x, _s, digest in fm.flatten(groups).values() if kind == "f"}
+    try:
+        for blob in blob_dir().iterdir():
+            if blob.name.startswith("."):
+                # An upload in flight: left alone unless it was abandoned hours ago.
+                if time.time() - blob.stat().st_mtime > 3600:
+                    blob.unlink(missing_ok=True)
+            elif blob.name not in referenced:
+                blob.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def store_release(descriptor: Mapping[str, Any], *, artifact: bytes | None = None,
+                  manifest: Mapping[str, bytes] | None = None) -> dict[str, Any]:
+    """Countersign and store a release that has already been proved. The descriptor file is
+    written last, so a reader never sees a release whose parts are not all there."""
+    merged = _countersigned(descriptor)
     with _LOCK:
-        _atomic_write_bytes(ARTIFACT_FILE, artifact)
+        if manifest is not None:
+            _store_manifest(descriptor["files_sha256"], manifest)
+        if artifact is not None:
+            _atomic_write_bytes(ARTIFACT_FILE, artifact)
+        else:
+            # A held image belongs to the release that pushed it; serving it under this
+            # descriptor would hand out the wrong build.
+            ARTIFACT_FILE.unlink(missing_ok=True)
         _atomic_write_bytes(
             RELEASE_FILE,
             (json.dumps(merged, indent=2) + "\n").encode("utf-8"),
         )
+        collect_garbage()
     return merged
 
 
+def accept_release(body: Any) -> dict[str, Any]:
+    """Verify then store a pushed release; the first failure refuses it.
+
+    Order is the contract's: (a) schema, (b) gateway signature against the
+    trusted key (a key that was never set is an error, not a pass), (c) the
+    artifact's sha256 and byte length and/or the per-file manifest against the
+    signed ``files_sha256``, (d) only then store and countersign.
+    Nothing is written until (a)-(c) all pass.
+
+    The release may arrive as the disk image (``artifact_base64``), as its file manifest
+    (``file_manifest``, answered with the blobs still to send), or both.
+    """
+    _require(isinstance(body, dict), 400, "body must be a JSON object")
+    artifact_b64 = body.get("artifact_base64")
+    pushed_manifest = body.get("file_manifest")
+    _require(artifact_b64 is not None or pushed_manifest is not None, 400,
+             "a release needs artifact_base64, file_manifest, or both")
+    _require(artifact_b64 is None or (isinstance(artifact_b64, str) and bool(artifact_b64.strip())),
+             400, "artifact_base64 must be a non-empty base64 string")
+    descriptor = _verified_descriptor(body)
+
+    # (c) the artifact matches the signed sha256 and byte length.
+    artifact = None
+    if artifact_b64 is not None:
+        compact = "".join(artifact_b64.split())
+        try:
+            artifact = base64.b64decode(compact, validate=True)
+        except (binascii.Error, ValueError):
+            raise ReleaseRefused(400, "artifact_base64 is not valid base64")
+        _require(len(artifact) == descriptor["bytes"], 400,
+                 f"artifact is {len(artifact)} bytes but the descriptor says "
+                 f"{descriptor['bytes']}")
+        digest = hashlib.sha256(artifact).hexdigest()
+        _require(digest == descriptor["sha256"].lower(), 400,
+                 f"artifact sha256 {digest} does not match descriptor.sha256 "
+                 f"{descriptor['sha256']}")
+    manifest = None if pushed_manifest is None else _decode_manifest(descriptor, pushed_manifest)
+
+    # (d) store exactly what was received, plus the controller countersignature.
+    merged = store_release(descriptor, artifact=artifact, manifest=manifest)
+    if manifest is None:
+        return merged
+    # The answer to a manifest push: what is stored, and what the sender still has to send.
+    return {"descriptor": merged, "need": missing_blobs()}
+
+
 def load_release() -> dict[str, Any] | None:
-    """The held descriptor, or None when nothing (or no artifact) is held."""
-    if not RELEASE_FILE.is_file() or not ARTIFACT_FILE.is_file():
+    """The held descriptor, or None when none is held.
+
+    A release no longer needs its disk image to be held: a controller that received it as a
+    manifest, and a node that mirrored it, hold the files and not the image.
+    """
+    if not RELEASE_FILE.is_file():
         return None
     try:
         value = json.loads(RELEASE_FILE.read_text(encoding="utf-8"))
@@ -415,6 +681,10 @@ def reset_for_tests() -> None:
     global _identity_cache
     with _LOCK:
         _identity_cache = None
+        _manifest_cache.clear()
+        _size_cache.clear()
+        shutil.rmtree(RELEASE_DIR / "manifests", ignore_errors=True)
+        shutil.rmtree(blob_dir(), ignore_errors=True)
         RELEASE_FILE.unlink(missing_ok=True)
         ARTIFACT_FILE.unlink(missing_ok=True)
         CONTROLLER_KEY_FILE.unlink(missing_ok=True)

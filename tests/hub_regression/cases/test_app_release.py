@@ -16,6 +16,8 @@ import stat
 import pytest
 
 SCHEMA = "studiohub.app-release.v1"
+# What GET /api/hub/release says about the delta update when no manifest is held.
+NO_DELTA = {"schema": "studiohub.file-manifest.v1", "manifest": False}
 
 
 @pytest.fixture
@@ -164,6 +166,7 @@ def test_good_release_is_accepted_stored_and_countersigned(hub):
     assert fetched.json()["trusted_publisher"] == {
         "publisher_id": "gatewaykh",
         "fingerprint": hashlib.sha256(ed25519.public_key(gateway_seed)).hexdigest(),
+        "public_key": ed25519.public_key(gateway_seed).hex(),
     }
 
     # The private key stays private, on disk 0600.
@@ -332,7 +335,7 @@ def test_trust_is_hub_only_and_get_routes_are_fleet_readable(hub):
     seed, public = _keypair()
     empty = hub.get("/api/hub/release", headers=_fleet_headers())
     assert empty.status_code == 200
-    assert empty.json() == {"release": None, "trusted_publisher": None}
+    assert empty.json() == {"release": None, "trusted_publisher": None, "delta": NO_DELTA}
 
     refused = hub.post("/api/hub/release/trust", headers=_fleet_headers(),
                        json={"public_key": public.hex(), "publisher_id": "gatewaykh"})
@@ -383,7 +386,7 @@ def test_get_release_reports_the_installed_trusted_publisher(hub):
     # Before any trust install the key is absent, reported as an explicit null.
     before = hub.get("/api/hub/release", headers=_fleet_headers())
     assert before.status_code == 200, before.text
-    assert before.json() == {"release": None, "trusted_publisher": None}
+    assert before.json() == {"release": None, "trusted_publisher": None, "delta": NO_DELTA}
     assert "trusted_publisher" in before.json()
 
     # After the owner installs one, GET reports it verbatim.
@@ -393,7 +396,10 @@ def test_get_release_reports_the_installed_trusted_publisher(hub):
     assert after.json() == {
         "release": None,
         "trusted_publisher": {"publisher_id": "gatewaykh",
-                              "fingerprint": fingerprint},
+                              "fingerprint": fingerprint,
+                              # the key itself, so a node can pin it trust-on-first-use
+                              "public_key": public.hex()},
+        "delta": NO_DELTA,
     }
 
     # Setting a second key replaces the reported one; the old key is never kept.
@@ -403,6 +409,7 @@ def test_get_release_reports_the_installed_trusted_publisher(hub):
     assert replaced.json()["trusted_publisher"] == {
         "publisher_id": "gatewaykh-two",
         "fingerprint": hashlib.sha256(other_public).hexdigest(),
+        "public_key": other_public.hex(),
     }
 
     # The "release" key still carries exactly the held descriptor (null here).
@@ -419,7 +426,7 @@ def test_get_release_release_key_is_unchanged_by_the_added_field(hub):
                       json=_body(descriptor, artifact)).json()
 
     answer = hub.get("/api/hub/release", headers=_fleet_headers()).json()
-    assert set(answer) == {"release", "trusted_publisher"}
+    assert set(answer) == {"release", "trusted_publisher", "delta"}
     assert answer["release"] == stored
     # The descriptor itself gained nothing from the additive response field.
     assert set(answer["release"]) == set(stored)
@@ -438,4 +445,5 @@ def test_trust_accepts_an_omitted_publisher_id(hub):
     assert reported["trusted_publisher"] == {
         "publisher_id": None,
         "fingerprint": hashlib.sha256(public).hexdigest(),
+        "public_key": public.hex(),
     }

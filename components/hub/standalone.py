@@ -28,7 +28,7 @@ from starlette.background import BackgroundTask
 
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, chat_jobs, shared_voices, transcription_jobs, vocabulary
+from .backend import app_release, chat_jobs, release_sync, shared_voices, transcription_jobs, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -1027,6 +1027,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             pass
         storage_sweep = None
         peer_lease_sweep = None
+        release_mirror = None
         if start_background:
             # 50 GB or 30 days, whichever comes first, enforced for every studio - not only in
             # development. See job_storage.budget_loop.
@@ -1035,6 +1036,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
             peer_lease_sweep = _asyncio.create_task(_peer_lease_loop())
+            # A node fetches the release its controller holds; a no-op on any Mac that is not one.
+            release_mirror = _asyncio.create_task(release_sync.loop())
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
@@ -1068,6 +1071,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     try:
                         await peer_lease_sweep
                     except Exception:
+                        pass
+                if release_mirror is not None:
+                    release_mirror.cancel()
+                    try:
+                        await release_mirror
+                    except BaseException:
                         pass
                 await shared_voices.stop()
                 await broker.stop_dispatcher()
@@ -1832,15 +1841,22 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         The ``release`` key is unchanged.  ``trusted_publisher`` is additive: the
         gateway key the owner installed with ``POST /api/hub/release/trust``, or
         null when none has been installed - so a Mac reading this route can say
-        plainly whether it can accept a pushed release at all.
+        plainly whether it can accept a pushed release at all.  It carries the key
+        itself (``public_key``) so a node can pin it at join.  ``delta`` says this
+        controller takes manifest-only pushes (a gateway that finds no ``delta`` key
+        pushes the whole disk image) and whether it holds this release's manifest.
         """
         trusted = app_release.trusted_publisher()
+        release = app_release.load_release()
         return {
-            "release": app_release.load_release(),
+            "release": release,
             "trusted_publisher": None if trusted is None else {
                 "publisher_id": trusted.get("publisher_id"),
                 "fingerprint": trusted.get("fingerprint"),
+                "public_key": trusted.get("public_key"),
             },
+            "delta": {"schema": app_release.fm.SCHEMA,
+                      "manifest": app_release.held_manifest(release) is not None},
         }
 
     @app.post("/api/hub/release")
@@ -1851,15 +1867,106 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(exc.status_code, exc.message) from exc
 
     @app.get("/api/hub/release/artifact")
-    def release_artifact() -> FileResponse:
+    async def release_artifact(request: Request):
         descriptor = app_release.load_release()
         if descriptor is None:
             raise HTTPException(404, "no release is held")
-        return FileResponse(
-            app_release.ARTIFACT_FILE,
-            media_type="application/octet-stream",
-            headers={"X-Content-SHA256": str(descriptor.get("sha256") or "")},
-        )
+        if app_release.ARTIFACT_FILE.is_file():
+            return FileResponse(
+                app_release.ARTIFACT_FILE,
+                media_type="application/octet-stream",
+                headers={"X-Content-SHA256": str(descriptor.get("sha256") or "")},
+            )
+        # Held as files, not as an image. A node relays its controller's image, when that holds
+        # one, so the full install stays available as the fallback without a second copy here.
+        target = release_sync.controller_target()
+        if target is None:
+            raise HTTPException(404, "this Mac holds the release as files, not as a disk image")
+        base, headers = target
+        upstream = {**headers, **({"Range": request.headers["range"]} if "range" in request.headers else {})}
+        client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=5.0))
+        try:
+            answer = await client.send(
+                client.build_request("GET", f"{base}/api/hub/release/artifact", headers=upstream),
+                stream=True)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise HTTPException(502, f"the controller could not be reached for the disk image: {exc}") from exc
+        if answer.status_code not in (200, 206):
+            await answer.aclose()
+            await client.aclose()
+            raise HTTPException(404 if answer.status_code == 404 else 502,
+                                "the controller holds no disk image for this release")
+
+        async def close() -> None:
+            await answer.aclose()
+            await client.aclose()
+        kept = ("content-length", "content-range", "accept-ranges", "x-content-sha256")
+        return StreamingResponse(
+            answer.aiter_raw(), status_code=answer.status_code, media_type="application/octet-stream",
+            headers={name: answer.headers[name] for name in kept if name in answer.headers},
+            background=BackgroundTask(close))
+
+    def _held_manifest_or_404():
+        held = app_release.held_manifest()
+        if held is None:
+            raise HTTPException(404, "no file manifest is held for the release")
+        return held
+
+    @app.get("/api/hub/release/files")
+    def release_files() -> Response:
+        """The manifest index: the groups, each with its sha256, and the digest the descriptor signs."""
+        return Response(app_release.fm.index_bytes(_held_manifest_or_404()[0]),
+                        media_type="application/json")
+
+    @app.get("/api/hub/release/files/{group}")
+    def release_files_group(group: str) -> FileResponse:
+        _held_manifest_or_404()
+        path = app_release.manifest_dir(app_release.load_release()["files_sha256"]) / f"{group}.tsv.gz"
+        if not re.fullmatch(r"[A-Za-z0-9_.+-]+", group) or not path.is_file():
+            raise HTTPException(404, "the release has no such manifest group")
+        return FileResponse(path, media_type="application/gzip")
+
+    @app.get("/api/hub/release/need")
+    def release_need() -> dict[str, Any]:
+        """The blobs a gateway still has to send for the held release (resumes an interrupted push)."""
+        _held_manifest_or_404()
+        return {"need": app_release.missing_blobs()}
+
+    @app.get("/api/hub/release/blob/{sha256}")
+    def release_blob(sha256: str) -> FileResponse:
+        path = app_release.blob_file(sha256)
+        if path is None:
+            raise HTTPException(404, "this Mac holds no such blob for the release")
+        return FileResponse(path, media_type="application/octet-stream")
+
+    @app.put("/api/hub/release/blob/{sha256}")
+    async def put_release_blob(sha256: str, request: Request) -> dict[str, Any]:
+        try:
+            upload = app_release.BlobUpload(sha256)
+            try:
+                async for chunk in request.stream():
+                    upload.write(chunk)
+                upload.commit()
+            except BaseException:
+                upload.abort()
+                raise
+        except app_release.ReleaseRefused as exc:
+            raise HTTPException(exc.status_code, exc.message) from exc
+        return {"ok": True, "stored": sha256, "need": len(app_release.missing_blobs())}
+
+    @app.post("/api/hub/release/stage", status_code=202)
+    def stage_release() -> dict[str, Any]:
+        """Start building the held release as a copy of this app plus the changed files. Hub token
+        only (the app on this Mac); progress is ``GET`` of the same path."""
+        try:
+            return release_sync.start_stage()
+        except app_release.ReleaseRefused as exc:
+            raise HTTPException(exc.status_code, exc.message) from exc
+
+    @app.get("/api/hub/release/stage")
+    def stage_release_status() -> dict[str, Any]:
+        return release_sync.stage_status()
 
     @app.get("/api/hub/release/identity")
     def release_identity() -> dict[str, Any]:

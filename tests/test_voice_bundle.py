@@ -536,7 +536,7 @@ class StagingTests(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text())
             self.assertTrue(manifest['development_build'])
             self.assertEqual(manifest['payload_sha256'],
-                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json')}))
+                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
             with (artifact/'Contents/Info.plist').open('rb') as stream:
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHubVoice')
@@ -545,7 +545,7 @@ class StagingTests(unittest.TestCase):
             self.assertEqual((base/'Proof.app.tree-sha256').read_text().strip(), module.tree_digest(artifact))
             (resources/'voice_worker.py').write_text('# changed worker')
             self.assertNotEqual(manifest['payload_sha256'],
-                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json')}))
+                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
 
     def test_native_shell_stage_keeps_cli_and_creates_foreground_app(self):
         self._native_stage()
@@ -668,10 +668,19 @@ class StagingTests(unittest.TestCase):
             else:
                 self.assertNotIn('image', manifest['components'])
             self.assertEqual(manifest['payload_sha256'], module.tree_digest(
-                contents, exclude={Path('Resources/release-manifest.json')}))
+                contents, exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
+            # The per-file manifest a delta update is diffed against: present, self-consistent, and
+            # describing exactly the bytes on disk (it lists release-manifest.json, not itself).
+            hub_backend = ROOT / 'components/hub/backend'
+            sys.path.insert(0, str(hub_backend.parent.parent.parent))
+            from components.hub.backend import file_manifest
+            index, groups = file_manifest.load_dir(contents.parent / 'Contents/Resources/file-manifest')
+            self.assertEqual(file_manifest.flatten(groups), file_manifest.scan(contents.parent))
+            self.assertIn('Contents/Resources/release-manifest.json', file_manifest.flatten(groups))
+            self.assertIn('Contents/MacOS/StudioHub', file_manifest.flatten(groups))
             (contents / 'MacOS/StudioHub').write_bytes(b'changed-native-shell')
             self.assertNotEqual(manifest['payload_sha256'], module.tree_digest(
-                contents, exclude={Path('Resources/release-manifest.json')}))
+                contents, exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
             return manifest
 
     def test_native_shell_stage_rejects_missing_binary(self):

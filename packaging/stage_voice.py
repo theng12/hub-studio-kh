@@ -10,6 +10,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MUSIC_ENGINE_REPO = 'ace-step/ACE-Step-1.5'
@@ -82,8 +83,11 @@ YUE2_RUNTIME_SHA256 = '75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     digest = hashlib.sha256()
     for path in sorted(root.rglob('*')):
-        if exclude and path.relative_to(root) in exclude:
-            continue
+        # An excluded path may name a directory: it and everything below it are left out.
+        if exclude:
+            relative = path.relative_to(root)
+            if relative in exclude or any(parent in exclude for parent in relative.parents):
+                continue
         if path.is_dir() and not path.is_symlink():
             continue
         digest.update(path.relative_to(root).as_posix().encode() + b'\0')
@@ -101,6 +105,22 @@ def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
                     digest.update(chunk)
             digest.update(b'\0')
     return digest.hexdigest()
+
+
+def write_file_manifest(app: Path) -> dict:
+    """Write ``Contents/Resources/file-manifest/`` into a staged app; returns its index.
+
+    The format lives in the Hub's own ``file_manifest`` module - the same code the Hub uses to read
+    it - loaded by path because `components.hub.backend` is not importable from here.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'studiohub_file_manifest',
+        Path(__file__).resolve().parents[1] / 'components/hub/backend/file_manifest.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.write(app)
 
 
 def validate_runtime(runtime: Path) -> None:
@@ -769,6 +789,9 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)
     (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
+    # The per-file manifest that lets a Mac fetch only the files that changed. Written last so it
+    # lists release-manifest.json too, and *after* payload_sha256 so that hash cannot depend on it.
+    write_file_manifest(output)
     output.with_name(output.name + '.tree-sha256').write_text(tree_digest(output) + '\n')
     return output
 

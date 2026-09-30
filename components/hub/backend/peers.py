@@ -49,7 +49,6 @@ _DISPATCH_MODALITY = "_dispatch_modality"
 _cache: dict[str, tuple[float, dict]] = {}
 _peer_alert_state: dict[str, dict] = {}
 PEER_FAILURES_TO_ALERT = 3
-release_reconciler = None
 
 
 def fleet_token() -> str | None:
@@ -199,7 +198,6 @@ async def _refresh_stale(machines, stale, client, now):
             machine, {"failures": 0, "alerted": False},
         )
         if snapshot.get("reachable") and snapshot.get("auth", True):
-            recovered = state["failures"] > 0
             if state["alerted"]:
                 from . import alerts
                 alerts.emit(
@@ -207,11 +205,6 @@ async def _refresh_stale(machines, stale, client, now):
                     f"Agent Hub on {machine} is reachable again",
                     {"machine": machine, "status": snapshot.get("status")},
                 )
-            if recovered and release_reconciler is not None:
-                try:
-                    release_reconciler.wake_peer(machine)
-                except Exception:
-                    pass
             state.update(failures=0, alerted=False)
             return
         state["failures"] += 1

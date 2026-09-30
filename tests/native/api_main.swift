@@ -289,6 +289,11 @@ final class FixtureProtocol: URLProtocol {
     /// when the key parses, replaces this value the way the real Hub would.
     static var releaseTrustedPublisher: [String: Any]?
     static var releaseTrustBodies: [[String: Any]] = []
+    /// The delta stage job the Hub reports: each `POST`/`GET /api/hub/release/stage` answers the next
+    /// scripted status (the last one repeats), and the count says whether the app asked at all.
+    /// `nil` means the Hub predates the route (404).
+    static var releaseStageScript: [[String: Any]]?
+    static var releaseStageRequests = 0
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -392,7 +397,13 @@ final class FixtureProtocol: URLProtocol {
         releaseTrustBodies = []
         releaseArtifactRangeMode = .honour
         releaseArtifactRangeHeaders = []
+        releaseStageScript = nil
+        releaseStageRequests = 0
     }
+    static func setStageScript(_ script: [[String: Any]]?) {
+        lock.lock(); defer { lock.unlock() }; releaseStageScript = script; releaseStageRequests = 0
+    }
+    static func stageRequests() -> Int { lock.lock(); defer { lock.unlock() }; return releaseStageRequests }
     static func releaseReads() -> Int { lock.lock(); defer { lock.unlock() }; return releaseArtifactReads }
     static func setArtifactRangeMode(_ mode: ArtifactRangeMode) {
         lock.lock(); defer { lock.unlock() }; releaseArtifactRangeMode = mode
@@ -1266,6 +1277,18 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json",
                       (try? JSONSerialization.data(withJSONObject: answer))
                           ?? Data(#"{"release":null,"trusted_publisher":null}"#.utf8))
+        case ("POST", "/api/hub/release/stage"), ("GET", "/api/hub/release/stage"):
+            Self.lock.lock()
+            let script = Self.releaseStageScript
+            let index = Self.releaseStageRequests
+            Self.releaseStageRequests += 1
+            Self.lock.unlock()
+            if let script, !script.isEmpty {
+                result = (method == "POST" ? 202 : 200, "application/json",
+                          (try? JSONSerialization.data(withJSONObject: script[min(index, script.count - 1)])) ?? Data())
+            } else {
+                result = (404, "application/json", Data(#"{"detail":"Not Found"}"#.utf8))
+            }
         case ("POST", "/api/hub/release/trust"):
             let body = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]) ?? [:]
             Self.lock.lock()
@@ -1773,7 +1796,8 @@ private func makeReleaseDescriptor(version: String = "0.6.50",
                                    controllerKeyId: String? = nil,
                                    filename: String = "StudioHub-0.6.50-abc1234.dmg",
                                    sha256: String? = nil,
-                                   bytes: Int? = nil) -> [String: Any] {
+                                   bytes: Int? = nil,
+                                   filesSha256: String? = nil) -> [String: Any] {
     var descriptor: [String: Any] = [
         "schema": "studiohub.app-release.v1",
         "schema_version": 1,
@@ -1786,6 +1810,12 @@ private func makeReleaseDescriptor(version: String = "0.6.50",
         "publisher_id": "gatewaykh",
         "publisher_key_id": releaseSha256(gateway.publicKey.rawRepresentation),
     ]
+    if let filesSha256 {
+        // What a release with a per-file manifest adds, inside the signed bytes.
+        descriptor["files_sha256"] = filesSha256
+        descriptor["files_count"] = 93_798
+        descriptor["files_bytes"] = 5_200_000_000
+    }
     descriptor["signature"] = releaseSign(descriptor, removing: "signature", key: gateway)
     descriptor["controller_key_id"] = controllerKeyId
         ?? releaseSha256(controllerSigning.publicKey.rawRepresentation)
@@ -5256,8 +5286,8 @@ struct NativeAPITests {
                 "a partial file larger than the signed size must be discarded, not appended to")
         require(!FixtureProtocol.artifactRangeHeaders().contains(where: { $0.hasPrefix("bytes=") }),
                 "an oversized fragment must not be used as a resume offset: \(FixtureProtocol.artifactRangeHeaders())")
-        // ── An idle joined node takes an offered update itself; a controller only badges it ──
-        // (owner decision 2026-09-30). The installer is stubbed, so nothing touches /Applications.
+        // ── An idle Mac takes an offered update itself, controller or node ──
+        // (owner decision 2026-09-30, extended to controllers by the unified update). The installer is stubbed, so nothing touches /Applications.
         let autoDescriptor = makeReleaseDescriptor(version: "0.6.60", build: "autobuild", artifact: artifact,
                                                    gateway: gatewayKey, controllerSigning: controllerKey)
         FixtureProtocol.setRelease(identity: identity, body: releaseBody(autoDescriptor), artifact: artifact)
@@ -5270,13 +5300,27 @@ struct NativeAPITests {
         FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // every Studio idle
         var tick = Date(timeIntervalSince1970: 2_000_000_000)
+        // A controller updates itself too - once it is drained. A busy one waits and keeps the badge.
         FixtureProtocol.currentRole = "controller"
+        FixtureProtocol.setMemoryPolicyOverride(nil)                                  // the voice Studio is busy
         await updateStore.refreshConnection()
         await updateStore.releaseTick(now: tick)
-        require(updateStore.showingUpdateBanner, "a controller must show the update badge")
+        require(updateStore.showingUpdateBanner, "a busy controller must show the update badge")
         tick += 120
         await updateStore.releaseTick(now: tick)
-        require(autoSwaps == 0, "a controller is never updated unattended")
+        require(autoSwaps == 0, "a busy controller must wait, not interrupt its work")
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // drained
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(autoSwaps == 1 && autoRelaunches == 1,
+                "a drained controller must install the offered update and relaunch once: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        // Back to an un-updated app, so the node cases below start from the same offer.
+        autoSwaps = 0
+        autoRelaunches = 0
+        updateStore.currentAppBuild = "currentbuild"
+        updateStore.currentAppVersion = "0.6.50"
+        await updateStore.refreshRelease()
+        require(updateStore.updateOffered, "the release is offered again for the node cases: \(updateStore.releaseRefusal ?? "nil")")
         FixtureProtocol.currentRole = "agent"
         await updateStore.refreshConnection()
         FixtureProtocol.setMemoryPolicyOverride(nil)                                  // the voice Studio is busy
@@ -5310,6 +5354,108 @@ struct NativeAPITests {
         FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = false }
         FixtureProtocol.currentRole = "standalone"
         FixtureProtocol.clearRelease()
+
+        // ── The delta update: built on the Hub from the changed files, else the disk image ──────
+        // The Hub is scripted; the installer and the staged swap are stubbed, so nothing touches /Applications.
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        FixtureProtocol.currentRole = "agent"
+        func offerDelta(_ build: String) async -> ReleaseDescriptor {
+            let json = makeReleaseDescriptor(version: "0.6.70", build: build, artifact: artifact,
+                                             gateway: gatewayKey, controllerSigning: controllerKey,
+                                             filesSha256: String(repeating: "d", count: 64))
+            FixtureProtocol.setRelease(identity: identity, body: releaseBody(json), artifact: artifact)
+            updateStore.currentAppBuild = "currentbuild"
+            updateStore.currentAppVersion = "0.6.50"
+            await updateStore.refreshRelease()
+            require(updateStore.updateOffered, "the delta release must be offered: \(updateStore.releaseRefusal ?? "nil")")
+            return ReleaseDescriptor(json: json)!
+        }
+        let deltaStagedHolder = temporary.appendingPathComponent(".studiohub-staged-fixture")
+        let deltaStagedApp = deltaStagedHolder.appendingPathComponent("Studio Hub.app")
+        try FileManager.default.createDirectory(at: deltaStagedApp, withIntermediateDirectories: true)
+        var stagedSwaps = 0
+        var imageInstalls = 0
+        updateStore.installStagedApp = { staged, _ in
+            stagedSwaps += 1
+            require(staged.standardizedFileURL.path == deltaStagedApp.standardizedFileURL.path, "the swap must be given the bundle the Hub staged: \(staged.path)")
+            return "deltabuild"
+        }
+        updateStore.installVerifiedArtifact = { _, _ in imageInstalls += 1; return "deltabuild" }
+
+        // 1. The Hub builds it: installed from the staged bundle, the disk image is never downloaded,
+        //    and the staging folder is removed afterwards.
+        _ = await offerDelta("deltabuild")
+        FixtureProtocol.setStageScript([["state": "running", "phase": "downloading", "done_bytes": 10, "total_bytes": 100],
+                                        ["state": "staged", "phase": "staged", "staged_app": deltaStagedApp.path]])
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        require(stagedSwaps == 1 && imageInstalls == 0,
+                "a staged release installs from the staged bundle, not the image: \(stagedSwaps) staged, \(imageInstalls) image")
+        require(FixtureProtocol.releaseReads() == 0, "a staged release must not download the disk image")
+        require(FixtureProtocol.stageRequests() >= 2, "the app must poll the stage job: \(FixtureProtocol.stageRequests())")
+        require(!FileManager.default.fileExists(atPath: deltaStagedHolder.path), "the staging folder must be removed after the swap")
+        require(updateStore.connectionNotice?.kind == .success, "the staged install must succeed: \(updateStore.connectionNotice?.text ?? "nil")")
+
+        // 2. The Hub says it cannot (no manifest, a file it could not verify): the disk image, as before.
+        stagedSwaps = 0
+        _ = await offerDelta("deltabuild")
+        // (a stale staged_app left in the answer must not be mistaken for a bundle to install)
+        FixtureProtocol.setStageScript([["state": "fallback", "code": "corrupt", "message": "a file did not hash",
+                                         "staged_app": deltaStagedApp.path]])
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        require(stagedSwaps == 0 && imageInstalls == 1 && FixtureProtocol.releaseReads() >= 1,
+                "a fallback must download and install the disk image: \(stagedSwaps) staged, \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+
+        // 3. A Hub that does not know the route (404) is a fallback too, never an error.
+        imageInstalls = 0
+        _ = await offerDelta("deltabuild")
+        FixtureProtocol.setStageScript(nil)
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        require(imageInstalls == 1 && stagedSwaps == 0, "an older Hub falls back to the image: \(imageInstalls) image installs")
+
+        // 4. A release with no files_sha256 never even asks the Hub to stage it.
+        imageInstalls = 0
+        let plainJSON = makeReleaseDescriptor(version: "0.6.71", build: "plainbuild", artifact: artifact,
+                                              gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(plainJSON), artifact: artifact)
+        FixtureProtocol.setStageScript([["state": "staged", "staged_app": deltaStagedApp.path]])
+        updateStore.installVerifiedArtifact = { _, _ in imageInstalls += 1; return "plainbuild" }
+        await updateStore.refreshRelease()
+        await updateStore.installOfferedRelease()
+        require(FixtureProtocol.stageRequests() == 0 && imageInstalls == 1,
+                "a release without a manifest goes straight to the image: \(FixtureProtocol.stageRequests()) stage requests")
+
+        // 5. A staged bundle that fails its swap is not kept: the next attempt asks the Hub again.
+        try FileManager.default.createDirectory(at: deltaStagedApp, withIntermediateDirectories: true)
+        updateStore.installStagedApp = { _, _ in throw ReleaseError("fixture: the staged app did not verify") }
+        _ = await offerDelta("badstaged")
+        FixtureProtocol.setStageScript([["state": "staged", "staged_app": deltaStagedApp.path]])
+        await updateStore.installOfferedRelease()
+        require(updateStore.connectionNotice?.kind == .failure, "a failed staged swap must be reported")
+        require(!FileManager.default.fileExists(atPath: deltaStagedHolder.path), "a failed staged bundle must be removed")
+
+        // 6. An uncertain job counts only while it is younger than the longest lane deadline; after
+        //    that the Hub has given up on it and it must not keep the Mac from ever updating.
+        FixtureProtocol.setUncertainImage(true)
+        await updateStore.refresh()
+        let uncertainJobs = updateStore.imageJobs.filter { $0.state == "uncertain" }
+        require(!uncertainJobs.isEmpty, "the fixture must present an uncertain Image job")
+        let created = uncertainJobs[0].createdAt ?? 0
+        let young = updateStore.countActiveWork(now: Date(timeIntervalSince1970: created + 60), deadline: 3600)
+        let aged = updateStore.countActiveWork(now: Date(timeIntervalSince1970: created + 7200), deadline: 3600)
+        require(young - aged == uncertainJobs.count,
+                "an uncertain job older than the lane deadline must stop counting as work: \(young) young, \(aged) aged")
+        require(updateStore.countActiveWork(now: Date(timeIntervalSince1970: created + 7200), deadline: nil) >= young - 0,
+                "with no published deadline an uncertain job still counts")
+        FixtureProtocol.setUncertainImage(false)
+        await updateStore.refresh()
+        FixtureProtocol.setStageScript(nil)
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = false }
+        FixtureProtocol.clearRelease()
+        FixtureProtocol.currentRole = "standalone"
 
         // ── The owner's publisher-key front door ───────────────────────────────────────────
         // A separate store and connection, exercised on its own. Every key below is generated here
@@ -5439,6 +5585,41 @@ struct NativeAPITests {
             options: [], format: nil) as? [String: Any]
         require(landedPlist?["StudioHubBuild"] as? String == "newbuild",
                 "the target must hold the new build after the swap")
+
+        // The full-image install refuses up front when the volume cannot hold the new app beside the
+        // old one, names the numbers, and leaves nothing staged and the installed app untouched.
+        let roomyParent = installParent.appendingPathComponent("space-check")
+        let roomyTarget = roomyParent.appendingPathComponent("Studio Hub.app")
+        try makeFakeApp(at: roomyTarget, build: "currentbuild")
+        var spaceCheckInstalled = false
+        let tightInstaller = ReleaseInstaller(
+            targetApp: roomyTarget,
+            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
+            detach: { _ in },
+            availableCapacity: { _ in 1024 })
+        let roomyInstaller = ReleaseInstaller(
+            targetApp: roomyTarget,
+            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
+            detach: { _ in },
+            availableCapacity: { _ in Int64.max / 2 })
+        let placeholderImage = temporary.appendingPathComponent("space-check.dmg")
+        try Data("dmg".utf8).write(to: placeholderImage)
+        do {
+            _ = try tightInstaller.install(artifact: placeholderImage, descriptor: swapDescriptor)
+            spaceCheckInstalled = true
+        } catch {
+            require(error.localizedDescription.contains("not enough free space"),
+                    "a full disk must be named as such, got: \(error.localizedDescription)")
+        }
+        require(!spaceCheckInstalled, "an install with no room must be refused, not attempted")
+        let parentAfter = (try? FileManager.default.contentsOfDirectory(atPath: roomyParent.path)) ?? []
+        require(parentAfter == ["Studio Hub.app"], "a refused install must stage nothing: \(parentAfter)")
+        let stillCurrent = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: roomyTarget.appendingPathComponent("Contents/Info.plist")),
+            options: [], format: nil) as? [String: Any]
+        require(stillCurrent?["StudioHubBuild"] as? String == "currentbuild", "a refused install must leave the installed app alone")
+        let roomyLanded = try roomyInstaller.install(artifact: placeholderImage, descriptor: swapDescriptor)
+        require(roomyLanded == "newbuild", "with room, the same install proceeds")
 
         // An app whose manifest declares a runtime it does not carry is refused before anything is
         // moved. Each modality is checked, not just Voice: a release missing the Image runtime used

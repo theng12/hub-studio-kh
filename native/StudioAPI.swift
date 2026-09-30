@@ -3027,6 +3027,13 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Performs the swap of a verified artifact. Injectable so the download-and-verify path can be
     /// driven in tests without writing to /Applications.
     var installVerifiedArtifact: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.install
+    /// Builds the offered release on this Mac's own Hub as a copy of the installed app plus only
+    /// the files that changed, and returns the staged bundle - or nil, meaning "use the disk image".
+    /// Injectable so the choice between the two can be driven without a Hub.
+    var stageDeltaRelease: ((ReleaseDescriptor) async -> URL?)?
+    /// Verifies a staged bundle and swaps it in, restoring the old app on failure. Returns the build
+    /// that landed. Injectable for the same reason as `installVerifiedArtifact`.
+    var installStagedApp: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.swapStagedApp
 
     /// Record the outcome of a connection action.
     ///
@@ -3247,10 +3254,22 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Work an update, or a relaunch, would interrupt: jobs of every kind that are waiting or
     /// running, downloads, a transcription, and any Studio that reports itself busy (which is how a
     /// job a controller sent to this Mac shows, since it is not one of this Hub's own batches).
-    var activeWorkCount: Int {
+    ///
+    /// An **uncertain** job (the Hub lost sight of it) counts only while it is younger than the longest
+    /// deadline any lane publishes: after that the Hub has given up on it, and counting it for ever
+    /// would keep a Mac from ever installing an update. With no deadline published it still counts.
+    var activeWorkCount: Int { countActiveWork(now: Date()) }
+
+    func countActiveWork(now: Date, deadline published: Double? = nil) -> Int {
         let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused", "uncertain", "recovery_pending"]
+        let deadline = published ?? models.compactMap { $0.laneContract?.deadlineSeconds }.max()
+        func counts(_ job: NativeJob) -> Bool {
+            guard states.contains(job.state) else { return false }
+            guard job.state == "uncertain", let deadline, let created = job.createdAt else { return true }
+            return now.timeIntervalSince1970 - created < deadline
+        }
         let jobs = [audioJobs, imageJobs, musicJobs, videoJobs, subtitleJobs, chatJobs]
-            .reduce(0) { $0 + $1.filter { states.contains($0.state) }.count }
+            .reduce(0) { $0 + $1.filter(counts).count }
         let transfers = downloads.filter { states.contains($0.state) }.count
         let busy = memoryInventory?.studios.filter { $0.policy?.busy == true || $0.policy?.activeWork == true }.count ?? 0
         return jobs + transfers + busy + (transcribing ? 1 : 0)
@@ -7127,13 +7146,25 @@ final class NativeWorkspaceStore: ObservableObject {
             if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
                 throw ReleaseError(reason)
             }
-            releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
-            // `downloadReleaseArtifact` returns only a file it has already verified against the
-            // signed size and SHA-256, so the bytes are not hashed a second time here.
-            let artifact = try await downloadReleaseArtifact(descriptor: descriptor)
+            // A release that carries a file manifest is first built from the installed app and the
+            // few files that changed (seconds, not a 1.8 GB download); anything that cannot be
+            // proved on the Hub's side comes back as nil and the disk image is used as before.
+            var staged: URL?
+            if descriptor.raw["files_sha256"] != nil {
+                releaseProgress = "Preparing the update from the files that changed…"
+                staged = await (stageDeltaRelease ?? { await self.requestDeltaStage($0) })(descriptor)
+            }
+            var artifact: URL?
+            if staged == nil {
+                releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
+                // `downloadReleaseArtifact` returns only a file it has already verified against the
+                // signed size and SHA-256, so the bytes are not hashed a second time here.
+                artifact = try await downloadReleaseArtifact(descriptor: descriptor)
+            }
             if automatic {
-                // The check that started this was minutes ago. Work that arrived while the file was
-                // downloading is not interrupted; the file is kept and the next idle check installs.
+                // The check that started this was minutes ago. Work that arrived while the update was
+                // being prepared is not interrupted; what was built is kept and the next idle check
+                // installs it.
                 await refresh(reportErrors: false)
                 await refreshMemoryPolicy()
                 guard memoryInventory != nil, activeWorkCount == 0 else {
@@ -7142,11 +7173,27 @@ final class NativeWorkspaceStore: ObservableObject {
                     return
                 }
             }
-            releaseProgress = "Installing \(descriptor.version) (\(descriptor.build)) — copying the app, which takes a minute or two…"
-            // Mounting the image and copying a multi-gigabyte bundle is blocking work; on the main
-            // actor it froze the whole window, including the progress line above.
-            let install = installVerifiedArtifact
-            let landed = try await Task.detached(priority: .userInitiated) { try install(artifact, descriptor) }.value
+            let landed: String
+            if let staged {
+                releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
+                let swap = installStagedApp
+                do {
+                    landed = try await Task.detached(priority: .userInitiated) { try swap(staged, descriptor) }.value
+                } catch {
+                    // A staged app that would not verify or swap is not offered again as it is.
+                    Self.removeStagingFolder(of: staged)
+                    throw error
+                }
+                Self.removeStagingFolder(of: staged)
+            } else if let artifact {
+                releaseProgress = "Installing \(descriptor.version) (\(descriptor.build)) — copying the app, which takes a minute or two…"
+                // Mounting the image and copying a multi-gigabyte bundle is blocking work; on the main
+                // actor it froze the whole window, including the progress line above.
+                let install = installVerifiedArtifact
+                landed = try await Task.detached(priority: .userInitiated) { try install(artifact, descriptor) }.value
+            } else {
+                throw ReleaseError("There was nothing to install.")
+            }
             guard landed == descriptor.build else {
                 throw ReleaseError("The app that landed reports build \(landed), not \(descriptor.build).")
             }
@@ -7158,8 +7205,10 @@ final class NativeWorkspaceStore: ObservableObject {
             releaseRefusal = nil
             // Only a completed install makes the artifact disposable. Every failure above leaves it
             // in place, so the next press reuses or resumes it rather than re-downloading.
-            try? FileManager.default.removeItem(at: artifact)
-            try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent())
+            if let artifact {
+                try? FileManager.default.removeItem(at: artifact)
+                try? FileManager.default.removeItem(at: artifact.deletingLastPathComponent())
+            }
             note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Relaunching Studio Hub now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
@@ -7172,6 +7221,59 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// The folder the Hub staged an update in (`.studiohub-staged-<id>`, beside the installed app),
+    /// removed once the app inside has been swapped in or has failed to be. Only a folder with that
+    /// name is touched, whatever path a Hub answers with.
+    private static func removeStagingFolder(of staged: URL) {
+        let folder = staged.deletingLastPathComponent()
+        guard folder.lastPathComponent.hasPrefix(".studiohub-staged-") else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    /// Ask this Mac's own Hub to build the offered release from the installed app plus the files
+    /// that changed, and wait for it. Returns the staged bundle, or nil for "use the disk image":
+    /// the Hub said it cannot (no manifest, a file it could not fetch or verify, too much changed),
+    /// it did not know the route (an older Hub), or it did not finish in time.
+    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async -> URL? {
+        func status(_ data: Data) -> [String: Any] {
+            ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+        }
+        do {
+            var start = try makeRequest(["api", "hub", "release", "stage"], method: "POST")
+            start.timeoutInterval = 30
+            var answer = status(try await performData(start))
+            let deadline = Date().addingTimeInterval(45 * 60)
+            while answer["state"] as? String == "running" {
+                guard installingRelease, Date() < deadline else { return nil }
+                releaseProgress = Self.deltaProgress(answer)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                answer = status(try await performData(makeRequest(["api", "hub", "release", "stage"])))
+            }
+            guard answer["state"] as? String == "staged", let path = answer["staged_app"] as? String,
+                  path.hasPrefix("/") else {
+                let why = (answer["message"] as? String) ?? "the Hub did not say why"
+                releaseProgress = "The update could not be built from the changed files (\(why)); downloading the full image instead…"
+                return nil
+            }
+            return URL(fileURLWithPath: path)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func deltaProgress(_ status: [String: Any]) -> String {
+        let done = (status["done_bytes"] as? NSNumber)?.int64Value ?? 0
+        let total = (status["total_bytes"] as? NSNumber)?.int64Value ?? 0
+        switch status["phase"] as? String {
+        case "copying": return "Copying the installed app…"
+        case "downloading" where total > 0:
+            return "Fetching the changed files… \(sizeDisplay(done)) of \(sizeDisplay(total))"
+        case "applying": return "Applying the changed files…"
+        case "verifying": return "Checking the new app…"
+        default: return "Preparing the update from the files that changed…"
+        }
+    }
+
     // MARK: - Checking for, and taking, updates without the Connections page open
 
     static let releaseCheckInterval: TimeInterval = 600
@@ -7180,12 +7282,15 @@ final class NativeWorkspaceStore: ObservableObject {
     private var lastAutoUpdateAttempt: Date?
     private var autoUpdateFailedBuild: String?
 
-    /// A joined node updates itself when it has nothing to do; a controller only says so.
+    /// Every Mac - node or controller - updates itself when it has nothing to do.
     ///
-    /// The owner's decision (2026-09-30): a node that is idle installs an offered update and
-    /// relaunches, and a busy one waits until it is. A controller stays manual because it is the one
-    /// thing 50 Macs depend on; it gets the sidebar badge. Both are checked every ten minutes here,
-    /// where the offer used to be read only when someone opened Connections on that Mac.
+    /// The owner's decision (2026-09-30) was that a node installs an offered update when idle; the
+    /// unified update extends it to controllers, which install once they are **drained**: no job
+    /// running or queued, no download, no Studio busy (`activeWorkCount == 0`, read fresh). A busy
+    /// Mac waits and is asked again a minute later; the sidebar badge is still there for whoever
+    /// wants to install by hand. Controllers go first only because a node is offered a release once
+    /// its own controller is running it. Both are checked every ten minutes here, where the offer
+    /// used to be read only when someone opened Connections on that Mac.
     ///
     /// **Verification is unchanged.** Nothing is read or installed unless a controller key is already
     /// pinned on this Mac (at join, or by the operator), so this can never be the read that pins one.
@@ -7200,7 +7305,6 @@ final class NativeWorkspaceStore: ObservableObject {
             await refreshRelease()
         }
         guard updateOffered, let build = offeredRelease?.build, build != autoUpdateFailedBuild,
-              controllerIdentity?.settings.role == "agent",
               lastAutoUpdateAttempt.map({ now.timeIntervalSince($0) >= Self.autoUpdateRetryInterval }) ?? true
         else { return }
         lastAutoUpdateAttempt = now

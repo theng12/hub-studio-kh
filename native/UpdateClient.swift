@@ -443,15 +443,38 @@ struct ReleaseInstaller {
     var fileManager: FileManager
     var attach: (URL, URL) throws -> Void
     var detach: (URL) throws -> Void
+    /// Free bytes on the volume holding a folder, or nil when it cannot be read. Injectable so the
+    /// free-space guard can be exercised without filling a disk.
+    var availableCapacity: (URL) -> Int64?
 
     init(targetApp: URL = URL(fileURLWithPath: "/Applications/Studio Hub.app"),
          fileManager: FileManager = .default,
          attach: @escaping (URL, URL) throws -> Void = ReleaseInstaller.attachImage,
-         detach: @escaping (URL) throws -> Void = ReleaseInstaller.detachImage) {
+         detach: @escaping (URL) throws -> Void = ReleaseInstaller.detachImage,
+         availableCapacity: @escaping (URL) -> Int64? = ReleaseInstaller.volumeAvailableCapacity) {
         self.targetApp = targetApp
         self.fileManager = fileManager
         self.attach = attach
         self.detach = detach
+        self.availableCapacity = availableCapacity
+    }
+
+    /// Room to keep the old app, stage the new one beside it, and leave the volume usable.
+    static let freeSpaceMargin: Int64 = 1 << 30
+
+    static func volumeAvailableCapacity(_ folder: URL) -> Int64? {
+        (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
+    }
+
+    /// Total bytes of the files under `root` (the size the staged copy will occupy).
+    static func treeBytes(_ root: URL, fileManager: FileManager) -> Int64 {
+        guard let walker = fileManager.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in walker {
+            total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return total
     }
 
     static let live = ReleaseInstaller()
@@ -523,6 +546,14 @@ struct ReleaseInstaller {
         let apps = contents.filter { $0.pathExtension.lowercased() == "app" }
         guard apps.count == 1, let source = apps.first else {
             throw ReleaseError("The disk image holds \(apps.count) app bundles; exactly one is expected, so nothing was installed.")
+        }
+        // The old app stays until the new one has landed, so both are on the volume at once. A full
+        // disk half-way through a 5 GB copy is the failure this refuses up front, by name.
+        let needed = Self.treeBytes(source, fileManager: fileManager)
+        if let free = availableCapacity(targetApp.deletingLastPathComponent()), free < needed + Self.freeSpaceMargin {
+            let size = ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)
+            let have = ByteCountFormatter.string(fromByteCount: free, countStyle: .file)
+            throw ReleaseError("There is not enough free space to install this update: the new app is \(size), the current one stays until it has landed, and only \(have) is free. Free some space and try again. Nothing was changed.")
         }
         // Stage beside the target so the move into place is a same-volume rename, not a copy.
         let stagingDirectory = targetApp.deletingLastPathComponent()
