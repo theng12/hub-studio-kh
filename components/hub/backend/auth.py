@@ -540,6 +540,14 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/release/artifact$"),
     # The controller's publisher public key and fingerprint, so a joining node can pin it.
     ("GET", r"^/api/hub/release/identity$"),
+    # The delta update: the per-file manifest (index, then one gzipped TSV per group), the blobs
+    # it names (Range-capable) and the ones still missing. A gateway pushes blobs with PUT; each is
+    # verified against the sha256 it is sent under, so the credential grants no way to plant a file.
+    ("GET", r"^/api/hub/release/files$"),
+    ("GET", r"^/api/hub/release/files/[A-Za-z0-9_.+-]+$"),
+    ("GET", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
+    ("GET", r"^/api/hub/release/need$"),
+    ("PUT", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
     # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub
@@ -567,6 +575,14 @@ NODE_ALLOWED = (
     ("GET", r"^/api/hub/fleet/nodes$"),
     ("GET", r"^/api/hub/fleet/overview$"),
     ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
+    # **Reading the release its controller holds** - the descriptor, the file manifest and the
+    # blobs it names, or (as a last resort) the disk image. Read-only: publishing stays with the
+    # gateway's Fleet token, and a node can only ever install what the gateway signed.
+    ("GET", r"^/api/hub/release$"),
+    ("GET", r"^/api/hub/release/artifact$"),
+    ("GET", r"^/api/hub/release/files$"),
+    ("GET", r"^/api/hub/release/files/[A-Za-z0-9_.+-]+$"),
+    ("GET", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
 )
 _NODE_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in NODE_ALLOWED)
 
