@@ -5234,7 +5234,9 @@ struct NativeAPITests {
         // 2. The Hub says it cannot (no manifest, a file it could not verify): the disk image, as before.
         stagedSwaps = 0
         _ = await offerDelta("deltabuild")
-        FixtureProtocol.setStageScript([["state": "fallback", "code": "corrupt", "message": "a file did not hash"]])
+        // (a stale staged_app left in the answer must not be mistaken for a bundle to install)
+        FixtureProtocol.setStageScript([["state": "fallback", "code": "corrupt", "message": "a file did not hash",
+                                         "staged_app": deltaStagedApp.path]])
         FixtureProtocol.resetArtifactRequests()
         await updateStore.installOfferedRelease()
         require(stagedSwaps == 0 && imageInstalls == 1 && FixtureProtocol.releaseReads() >= 1,
