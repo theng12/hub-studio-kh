@@ -155,6 +155,17 @@ final class FixtureProtocol: URLProtocol {
         selfRemovalStatus = status
         selfRemovalDetail = detail
     }
+    /// What `GET /api/hub/fleet/nodes/<id>/status` answers: a status and a JSON body. Nil is the
+    /// real answer for a Mac that is still listed (200, member). Each call is logged as
+    /// `<credential>|<query>` so the suite can see what went on the wire.
+    static var statusAnswer: (Int, String)?
+    static var statusCallsList: [String] = []
+    static func setStatus(_ status: Int?, body: String = "") {
+        lock.lock(); defer { lock.unlock() }
+        statusAnswer = status.map { ($0, body) }
+    }
+    static func statusCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return statusCallsList }
+    static func resetStatusCalls() { lock.lock(); defer { lock.unlock() }; statusCallsList = [] }
     static func setJoinRemoval(_ detail: String?) {
         lock.lock(); defer { lock.unlock() }; joinRemovalDetail = detail
     }
@@ -504,6 +515,15 @@ final class FixtureProtocol: URLProtocol {
                 finish((200, "application/json", Data(#"{"ok":true,"removed":{"id":"controller-local"}}"#.utf8)))
                 return
             }
+            if method == "GET", parts.count == 2, parts[1] == "status" {
+                Self.lock.lock()
+                Self.statusCallsList.append("\(offered)|\(request.url?.query ?? "")")
+                let answer = Self.statusAnswer
+                Self.lock.unlock()
+                let (status, body) = answer ?? (200, #"{"id":"\#(parts[0])","state":"member"}"#)
+                finish((status, "application/json", Data(body.utf8)))
+                return
+            }
             if method == "POST", parts.count == 2, parts[1] == "readmit" {
                 Self.lock.lock(); Self.readmitCalls.append(parts[0]); Self.fleetCalls.append("readmit:\(parts[0])"); Self.lock.unlock()
                 finish((200, "application/json", Data(#"{"ok":true,"readmitted":{"id":"\#(parts[0])"}}"#.utf8)))
@@ -768,7 +788,7 @@ final class FixtureProtocol: URLProtocol {
             // `studios`, `version`, `joined_at`, `last_seen_at`, the credential's own dates, the
             // `unauthorized` count and the evicted machines. A roster of name-and-address was what
             // the page showed while all of it was on the wire.
-            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","role":"agent","studios":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"}],"joined_at":1750000000.0,"last_seen_at":1750003600.0,"credential_issued_at":1750000000.0,"has_credential":true},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"role":"agent","studios":[],"joined_at":1750000100.0,"last_seen_at":null,"credential_issued_at":1750000100.0,"has_credential":true},{"id":"studio-4","name":"Studio 4","address":"http://192.168.1.23:8080","state":"unauthorized","detail":"the node answered but rejected this controller's credential (HTTP 401) - re-join it with the current Fleet Token","version":"0.4.1","role":"agent","studios":[{"id":"image","modality":"image"}],"joined_at":1750000200.0,"last_seen_at":null,"credential_issued_at":1750000200.0,"has_credential":true}],"removed":[{"id":"sold-mac","name":"Sold Mac","address":"http://192.168.1.30:8080","removed_at":1790563000.0,"removed_by":"operator","role":"agent","studios":[{"id":"voice","modality":"voice"}],"joined_at":1740000000.0}],"summary":{"total":3,"reachable":1,"unreachable":1,"unauthorized":1,"error":0,"removed":1}}"#.utf8))
+            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","role":"agent","studios":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"}],"joined_at":1750000000.0,"last_seen_at":1750003600.0,"credential_issued_at":1750000000.0,"has_credential":true},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"role":"agent","studios":[],"joined_at":1750000100.0,"last_seen_at":null,"credential_issued_at":1750000100.0,"has_credential":true,"never_connected":true},{"id":"studio-4","name":"Studio 4","address":"http://192.168.1.23:8080","state":"unauthorized","detail":"the node answered but rejected this controller's credential (HTTP 401) - re-join it with the current Fleet Token","version":"0.4.1","role":"agent","studios":[{"id":"image","modality":"image"}],"joined_at":1750000200.0,"last_seen_at":null,"credential_issued_at":1750000200.0,"has_credential":true}],"removed":[{"id":"sold-mac","name":"Sold Mac","address":"http://192.168.1.30:8080","removed_at":1790563000.0,"removed_by":"operator","role":"agent","studios":[{"id":"voice","modality":"voice"}],"joined_at":1740000000.0}],"summary":{"total":3,"reachable":1,"unreachable":1,"unauthorized":1,"error":0,"removed":1}}"#.utf8))
         case ("GET", "/studio/voice/api/voices"):
             Self.lock.lock()
             Self.voiceListCalls += 1
@@ -2480,6 +2500,11 @@ struct NativeAPITests {
         require(store.routingPin == "machine:studio-3",
                 "a pin on an unreachable Mac that is still in the fleet must survive")
 
+        require(store.fleetNodes!.nodes.first { $0.id == "studio-3" }?.neverConnected == true,
+                "the roster's never_connected flag must be decoded")
+        require(store.fleetNodes!.nodes.first { $0.id == "studio-2" }?.neverConnected == nil,
+                "a row that does not carry the flag reads as nil, not false")
+
         // Removing the pinned Mac is the other way a pin loses its machine.
         await store.leaveNode(store.fleetNodes!.nodes.first { $0.id == "studio-3" }!)
         require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
@@ -2727,6 +2752,142 @@ struct NativeAPITests {
         FixtureProtocol.setSelfRemoval(nil)
         refusedLeaveStore.disconnect()
 
+        // ---------------------------------------------------------------------------------------
+        // Symmetric removal. A removal on the controller reaches this Mac on its own tick; a leave
+        // this Mac could not deliver is kept and retried until the controller answers.
+        // ---------------------------------------------------------------------------------------
+        func nodeStore(_ name: String) async -> NativeWorkspaceStore {
+            let store = NativeWorkspaceStore(sessionConfiguration: configuration)
+            await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                dataDirectory: temporary.appendingPathComponent(name),
+                                token: "native-test-token")
+            FixtureProtocol.setCredentialOrigin("adopted")
+            FixtureProtocol.setJoinRemoval(nil)
+            await store.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+                controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+                boundHosts: LocalAddresses.current().map(\.address),
+                nodeCredential: FixtureProtocol.issuedNodeCredential))
+            return store
+        }
+        let t0 = Date()
+        let tickStore = await nodeStore("membership-tick")
+        FixtureProtocol.setSelfRemoval(nil)
+        FixtureProtocol.setStatus(nil)
+        FixtureProtocol.resetStatusCalls()
+        await tickStore.membershipTick(now: t0)
+        require(FixtureProtocol.statusCalls().count == 1,
+                "the tick must ask the controller once: \(FixtureProtocol.statusCalls())")
+        require(FixtureProtocol.statusCalls().first?.hasPrefix(FixtureProtocol.issuedNodeCredential + "|") == true,
+                "the tick must present this Mac's own credential: \(FixtureProtocol.statusCalls())")
+        require(FixtureProtocol.statusCalls().first?.contains("name=") == true,
+                "the tick carries the current label so a rename reaches the roster: \(FixtureProtocol.statusCalls())")
+        require(tickStore.storedMembership != nil && tickStore.controllerRemoval == nil,
+                "a Mac that is still listed stays a member")
+        await tickStore.membershipTick(now: t0.addingTimeInterval(10))
+        require(FixtureProtocol.statusCalls().count == 1, "the check is once a minute, not every poll")
+        // A blip: an unreadable answer or a server error is not evidence of anything.
+        FixtureProtocol.setStatus(503, body: #"{"detail":"busy"}"#)
+        for step in 1...5 { await tickStore.membershipTick(now: t0.addingTimeInterval(Double(step) * 60)) }
+        require(tickStore.storedMembership != nil, "a controller that errors must not clear a membership")
+        // `unknown` clears only after three in a row, and a `member` in between starts the count over.
+        let unknown = #"{"id":"controller-local","state":"unknown"}"#
+        FixtureProtocol.setStatus(200, body: unknown)
+        await tickStore.membershipTick(now: t0.addingTimeInterval(400))
+        await tickStore.membershipTick(now: t0.addingTimeInterval(460))
+        require(tickStore.storedMembership != nil, "two unknown answers must not clear the membership")
+        FixtureProtocol.setStatus(nil)
+        await tickStore.membershipTick(now: t0.addingTimeInterval(520))
+        FixtureProtocol.setStatus(200, body: unknown)
+        await tickStore.membershipTick(now: t0.addingTimeInterval(580))
+        await tickStore.membershipTick(now: t0.addingTimeInterval(640))
+        require(tickStore.storedMembership != nil, "a member answer in between must reset the unknown count")
+        await tickStore.membershipTick(now: t0.addingTimeInterval(700))
+        require(tickStore.storedMembership == nil && tickStore.controllerRemoval != nil,
+                "three unknown answers in a row must leave the group")
+        require(tickStore.controllerHealthNote?.contains("no longer lists this Mac") == true,
+                "the Mac says why it left: \(tickStore.controllerHealthNote ?? "nil")")
+        tickStore.disconnect()
+
+        // The poll tick is what carries the check: without the hook a Mac would never ask.
+        let pollStore = await nodeStore("membership-poll")
+        FixtureProtocol.setStatus(nil)
+        FixtureProtocol.resetStatusCalls()
+        await pollStore.pollOnce(now: t0)
+        require(FixtureProtocol.statusCalls().count == 1,
+                "pollOnce must run the membership check: \(FixtureProtocol.statusCalls())")
+        pollStore.disconnect()
+
+        // Removed on the controller: gone here too, with the controller's own date, on the next tick.
+        let removedStore = await nodeStore("membership-removed")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.setStatus(200, body: #"{"id":"controller-local","state":"removed","detail":"\#(FixtureProtocol.removalSentence)"}"#)
+        await removedStore.membershipTick(now: t0)
+        require(removedStore.controllerRemoval?.date == "2026-09-28",
+                "a removal on the controller must reach this Mac: \(String(describing: removedStore.controllerRemoval))")
+        require(FixtureProtocol.fleetRequests().contains("leave"),
+                "a removed Mac must stop being a node locally: \(FixtureProtocol.fleetRequests())")
+        require(removedStore.storedMembership == nil && removedStore.nodeCredential == nil,
+                "a removed Mac must hold neither credential")
+        removedStore.disconnect()
+
+        // A revoked node credential is refused 403 with the removal sentence (not a bare 401).
+        let revokedStore = await nodeStore("membership-revoked")
+        FixtureProtocol.setStatus(403, body: #"{"detail":"\#(FixtureProtocol.removalSentence)"}"#)
+        await revokedStore.membershipTick(now: t0)
+        require(revokedStore.controllerRemoval != nil, "a 403 removal sentence must clear the membership")
+        revokedStore.disconnect()
+        FixtureProtocol.setStatus(nil)
+
+        // A leave the controller did not hear is kept, survives a restart, and is retried each tick
+        // until the controller answers (2xx/401/403/404).
+        let leaverStore = await nodeStore("pending-leave")
+        FixtureProtocol.setSelfRemoval(503, detail: "controller busy")
+        await leaverStore.leaveGroup()
+        require(leaverStore.pendingLeave?.nodeID == "controller-local",
+                "an undelivered leave must be kept: \(String(describing: leaverStore.pendingLeave))")
+        require(leaverStore.fleetNote?.contains("keep telling it") == true,
+                "the owner is told it will be retried: \(leaverStore.fleetNote ?? "nil")")
+        let pendingFile = temporary.appendingPathComponent("pending-leave").appendingPathComponent("native-pending-leave.json")
+        require(FileManager.default.fileExists(atPath: pendingFile.path), "the pending leave must be on disk")
+        leaverStore.disconnect()
+        let restarted = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await restarted.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                dataDirectory: temporary.appendingPathComponent("pending-leave"),
+                                token: "native-test-token")
+        require(restarted.pendingLeave?.credential == FixtureProtocol.issuedNodeCredential,
+                "the pending leave must survive a restart")
+        FixtureProtocol.resetFleetRequests()
+        await restarted.membershipTick(now: t0)
+        require(restarted.pendingLeave != nil, "a controller that still errors keeps the leave pending")
+        FixtureProtocol.setSelfRemoval(nil)
+        await restarted.membershipTick(now: t0.addingTimeInterval(61))
+        require(FixtureProtocol.fleetRequests().contains("dropped-from-controller"),
+                "the retry must reach the controller: \(FixtureProtocol.fleetRequests())")
+        require(restarted.pendingLeave == nil && !FileManager.default.fileExists(atPath: pendingFile.path),
+                "a delivered leave is dropped, in memory and on disk")
+        restarted.disconnect()
+
+        // 404 is an answer too (already gone), and a leave past its lifetime is abandoned unsent.
+        let goneStore = await nodeStore("pending-gone")
+        FixtureProtocol.setSelfRemoval(503, detail: "down")
+        await goneStore.leaveGroup()
+        FixtureProtocol.setSelfRemoval(404, detail: "unknown node")
+        await goneStore.membershipTick(now: t0)
+        require(goneStore.pendingLeave == nil, "a 404 means the controller no longer lists it: retry stops")
+        FixtureProtocol.setSelfRemoval(503, detail: "down")
+        await goneStore.adoptStartupMembership(NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: FixtureProtocol.issuedNodeCredential))
+        await goneStore.leaveGroup()
+        require(goneStore.pendingLeave != nil, "precondition: a leave is pending")
+        FixtureProtocol.resetFleetRequests()
+        await goneStore.membershipTick(now: t0.addingTimeInterval(15 * 24 * 3600))
+        require(goneStore.pendingLeave == nil && !FixtureProtocol.fleetRequests().contains("delete:controller-local"),
+                "a leave past its 14 days is dropped without another attempt")
+        FixtureProtocol.setSelfRemoval(nil)
+        goneStore.disconnect()
+
         // The fixture's own fidelity, so the next test cannot be green by construction: the
         // controller refuses a removal of a machine that is not the one asking.
         var foreign = URLRequest(url: URL(string: "http://192.168.1.21:8080/api/hub/fleet/nodes/studio-9")!)
@@ -2827,6 +2988,10 @@ struct NativeAPITests {
                 "a partial rotation must not be reported as success")
         require(groupStore.fleetMachineName("studio-3") == "Studio 3",
                 "a machine id in the result must be shown as its name")
+        require(groupStore.fleetMachineName("controller-local") == "Studio Mini",
+                "this Mac's own id must be shown as its label, never as the key")
+        require(groupStore.fleetMachineName("never-heard-of") == "never-heard-of",
+                "an id nobody has a label for is the only case that falls back to the id")
         require(FixtureProtocol.fleetRequests().contains("rotate"),
                 "the rotation must go to this Mac's own Hub: \(FixtureProtocol.fleetRequests())")
 

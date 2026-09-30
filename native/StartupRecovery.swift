@@ -156,6 +156,13 @@ enum FleetCopy {
             + "and no longer holds the group's credential."
     }
 
+    /// What a Mac says when its controller no longer lists it at all (not removed, just gone from
+    /// the roster): the group is left, and joining again is one action.
+    static func forgottenNotice(address: String) -> String {
+        "The controller at \(address) no longer lists this Mac, so this Mac has left the group and "
+            + "no longer holds its credential. Join again from Connections if it should be a node."
+    }
+
     /// The date out of the controller's refusal, which reads
     /// `this controller removed this Mac on 2026-09-28; re-admit it from Connections to join again`.
     ///
