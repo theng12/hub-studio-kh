@@ -35,9 +35,15 @@ class NoDialogOnTheUnattendedPath(unittest.TestCase):
         force = _body(hub, "private func scheduleForceStop")
         self.assertRegex(force, r"if self\.forceStopWithoutAsking \{ self\.forceStop\(\) \} else \{ self\.confirmForceStop\(\) \}")
 
-    def test_the_quit_prompt_is_skipped_while_relaunching(self):
+    def test_quit_asks_only_over_running_work_and_never_while_relaunching(self):
         hub = (NATIVE / "StudioHub.swift").read_text()
-        self.assertRegex(_body(hub, "func applicationShouldTerminate"), r"if !relaunching \{\s+let alert")
+        quit_ = _body(hub, "func applicationShouldTerminate")
+        quit_ = quit_[:quit_.index("\n    }\n")]
+        self.assertRegex(quit_, r"if relaunching \{ stopThenQuit\(\)")             # relaunch: no question
+        self.assertIn("if busy, !confirmQuitWhileBusy()", quit_)                    # idle: no question
+        self.assertNotIn("NSAlert", quit_)
+        stop = _body(hub, "private func stopThenQuit()")
+        self.assertIn("controller.forceStopWithoutAsking = true", stop[:400])      # a hung stop is never asked about
 
 
 if __name__ == "__main__":

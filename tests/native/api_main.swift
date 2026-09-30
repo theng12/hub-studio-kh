@@ -5372,10 +5372,19 @@ struct NativeAPITests {
         require(updateStore.nextPollDelay == 10, "a hidden window does not poll at the busy rate")
         updateStore.isWindowVisible = { true }
         require(updateStore.activeWorkCount >= 1, "a busy Studio is active work: \(updateStore.activeWorkCount)")
+        let busyNow = await updateStore.activeWorkNow()
+        require(busyNow >= 1, "Quit reads fresh work and must see a busy Studio: \(busyNow)")
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
         tick += 120
         await updateStore.releaseTick(now: tick)
         require(updateStore.activeWorkCount == 0, "the fixture node is idle: \(updateStore.activeWorkCount)")
+        let idleNow = await updateStore.activeWorkNow()
+        require(idleNow == 0, "Quit over an idle Mac must not ask: \(idleNow)")
+        FixtureProtocol.setMemoryPolicyOverride(nil)                                  // work starts; no poll has seen it
+        let startedNow = await updateStore.activeWorkNow()
+        require(startedNow >= 1, "Quit must read fresh, not the last poll: \(startedNow)")
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        _ = await updateStore.activeWorkNow()
         require(autoSwaps == 1 && autoRelaunches == 1,
                 "an idle node must install the offered update and relaunch once: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
         // A failed unattended install is not retried for the same build (it would re-copy 5 GB a minute).

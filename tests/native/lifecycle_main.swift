@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import AppKit
 
 func requireLifecycle(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
@@ -356,6 +357,44 @@ struct NativeLifecycleTests {
                              "a failed migration must keep the app running and say where to remove the old entry, got: \(failing.failure ?? "nil")")
             requireLifecycle(failing.configuration.loginMigrationComplete,
                              "a caught failure is still an attempt and must be recorded so it is reported once")
+        }
+
+        // Quit asks only when work is in progress. An alert cannot be answered headless, so the
+        // question is a seam (`confirmQuitWhileBusy`); a watchdog fails a Quit that never returns.
+        if runs("quit") {
+            let server = try LocalHubFixture(); defer { server.stop() }
+            for (name, busy, relaunching, answer) in [("idle", 0, false, true), ("busy-keep", 2, false, false),
+                                                       ("busy-quit", 2, false, true), ("relaunch", 2, true, true)] {
+                let controller = try makeController(root: temporary.appendingPathComponent("quit-\(name)"),
+                                                    server: server, now: Date.init)
+                controller.start()
+                let started = await waitUntil { readyPID(controller) != nil && controller.running }
+                requireLifecycle(started, "\(name): the service did not start")
+                let pid = readyPID(controller)!
+                var asked = 0
+                let delegate = AppDelegate()
+                delegate.controller = controller
+                delegate.relaunching = relaunching
+                delegate.activeWork = { busy }
+                delegate.confirmQuitWhileBusy = { asked += 1; return answer }
+                let reply = delegate.applicationShouldTerminate(NSApplication.shared)
+                requireLifecycle(reply == .terminateLater, "\(name): Quit must answer later, got \(reply)")
+                if answer {
+                    let gone = await waitUntil { !controller.running && kill(pid, 0) != 0 }
+                    requireLifecycle(gone, "\(name): Quit did not stop the engine")
+                    requireLifecycle(controller.forceStopWithoutAsking,
+                                     "\(name): a hung stop after Quit must be force-stopped, not asked about")
+                } else {
+                    _ = await waitUntil { asked == 1 }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    requireLifecycle(controller.running && !controller.forceStopWithoutAsking,
+                                     "\(name): Keep Running must leave the engine running")
+                    controller.stop()
+                    _ = await waitUntil { !controller.running }
+                }
+                requireLifecycle(asked == (busy > 0 && !relaunching ? 1 : 0),
+                                 "\(name): asked \(asked) times; only Quit over running work asks, once")
+            }
         }
 
         print("Native lifecycle checks passed")

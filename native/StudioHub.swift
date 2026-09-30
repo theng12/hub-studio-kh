@@ -838,7 +838,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var quitPending = false
     /// True while quitting only to reopen after an update, which must not stop to ask.
-    private var relaunching = false
+    var relaunching = false
+    /// True while Quit is deciding whether to ask; a second Quit waits for the first.
+    private var quitAsking = false
+    /// Fresh count of running work, and the question asked only when it is not zero. Seams for the lifecycle test.
+    /// Bounded: a hung Hub must not hold Quit for the length of a request timeout.
+    lazy var activeWork: () async -> Int = { [unowned self] in
+        let read = Task { await self.controller.workspace.activeWorkNow() }
+        let cut = Task { try? await Task.sleep(for: .seconds(3)); read.cancel() }
+        defer { cut.cancel() }
+        return await read.value
+    }
+    var confirmQuitWhileBusy: () -> Bool = {
+        let alert = NSAlert()
+        alert.messageText = "Quit Studio Hub and stop its engine?"
+        alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
+        alert.addButton(withTitle: "Keep Running")
+        alert.addButton(withTitle: "Quit and Stop")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
     private var statusObserver: AnyCancellable?
     private var failureObserver: AnyCancellable?
 
@@ -979,18 +997,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard controller?.running == true || controller?.recoveryPending == true else { return .terminateNow }
-        if quitPending { return .terminateLater }
-        if !relaunching {
-            let alert = NSAlert()
-            alert.messageText = "Quit Studio Hub and stop its engine?"
-            alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
-            alert.addButton(withTitle: "Keep Running")
-            alert.addButton(withTitle: "Quit and Stop")
-            guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        if quitPending || quitAsking { return .terminateLater }
+        // Nothing running: Quit just quits. Only work in progress is worth a question. An update's
+        // relaunch never asks (its drain guarantees no work, and nobody is there to answer).
+        if relaunching { stopThenQuit(); return controller.running ? .terminateLater : .terminateNow }
+        quitAsking = true
+        Task { @MainActor in
+            let busy = await activeWork() > 0
+            quitAsking = false
+            if busy, !confirmQuitWhileBusy() { NSApp.reply(toApplicationShouldTerminate: false); return }
+            stopThenQuit()
+            if !controller.running { NSApp.reply(toApplicationShouldTerminate: true) }
         }
+        return .terminateLater
+    }
+    /// A stop that hangs after Quit is ended by force: the answer was already given (or none was needed).
+    private func stopThenQuit() {
         quitPending = true
+        controller.forceStopWithoutAsking = true
         controller.stop()
-        return controller.running ? .terminateLater : .terminateNow
     }
 }
 

@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.119 - 2026-09-30
+
+### Quit just quits
+
+**Quit no longer asks when nothing is running - it only asks if a job is in progress.** Choose Quit
+(Command-Q, the menu or the Dock) while the Mac is idle and Studio Hub stops its engine and closes
+straight away. If something is generating, transcribing or downloading, you still get the question, so a
+job is never cut off by accident. Closing the window still keeps everything running in the background.
+
 ## 0.6.118 - 2026-09-30
 
 ### Updates now install by themselves even on a Mac that is always busy

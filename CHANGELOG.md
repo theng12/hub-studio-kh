@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.119 — 2026-09-30 · Quit no longer asks when nothing is running
+
+Owner: "if no job is running, quit is quit. if have job, then we should ask." `applicationShouldTerminate`
+(`native/StudioHub.swift`) used to raise "Quit Studio Hub and stop its engine?" whenever the engine ran.
+Now it reads **fresh** active work (`NativeWorkspaceStore.activeWorkNow()`: refresh + memory policy, then
+the same `activeWorkCount` the updater's drain uses; bounded to 3 s so a hung Hub cannot hold Quit) and
+asks **only if that is above zero**. Idle: the engine stops and the app quits at once. Busy: the same
+"Keep Running / Quit and Stop" question. An update relaunch (`relaunching`) never asks. Once Quit is
+decided (answered or not needed) `forceStopWithoutAsking` is set, so a stop that hangs 15 s is force-stopped
+by itself - no second "Force Stop?" dialog. The in-app Stop Engine / Force Stop buttons are unchanged.
+Tests: `tests/native/lifecycle_main.swift` `quit` (idle, busy-keep, busy-quit, relaunch; the question is the
+`confirmQuitWhileBusy` seam) and `api_main.swift` (`activeWorkNow` reads fresh). Mutation-proved.
+
 ## 0.6.118 — 2026-09-30 · A Mac that never goes idle still updates itself; a push no longer stalls the controller
 
 The live pilot (gateway pushed 0.6.117 to controller 1500) showed two gaps that kept every Mac on the

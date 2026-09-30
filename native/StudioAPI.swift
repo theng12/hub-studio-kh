@@ -3289,6 +3289,14 @@ final class NativeWorkspaceStore: ObservableObject {
     /// would keep a Mac from ever installing an update. With no deadline published it still counts.
     var activeWorkCount: Int { countActiveWork(now: Date()) }
 
+    /// The same count from fresh reads: a hidden window does not poll, so the stored lists can be
+    /// stale, and Quit must not decide from them whether something is running.
+    func activeWorkNow() async -> Int {
+        await refresh(reportErrors: false)
+        await refreshMemoryPolicy()
+        return activeWorkCount
+    }
+
     func countActiveWork(now: Date, deadline published: Double? = nil, excludingQueued: Bool? = nil) -> Int {
         let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused", "uncertain", "recovery_pending"]
         let deadline = published ?? models.compactMap { $0.laneContract?.deadlineSeconds }.max()

@@ -108,7 +108,7 @@ class UpdateTests(unittest.TestCase):
         self.assertIn("onRelaunchRequested", HUB)
         relaunch = body(HUB, "func relaunchAfterUpdate()", 1200)
         self.assertIn("relaunching = true", relaunch)
-        self.assertIn("if !relaunching {", HUB)
+        self.assertIn("if relaunching { stopThenQuit()", HUB)
 
     def test_the_sidebar_badges_an_offered_update(self):
         self.assertIn('.badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)', VIEWS)
