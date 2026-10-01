@@ -1233,14 +1233,19 @@ struct StudioContent: View {
                             Button("Open Audio") { studio.select(.audio) }.hubRowControl()
                         }
                     } else {
+                        // One divider between rows, none after the last: the card draws its own edge.
+                        let rows: [AnyView] = activeAudio.map { job in AnyView(jobRow(job, compact: true)) }
+                            + activeImages.map { AnyView(imageJobRow($0)) }
+                            + activeMusic.map { AnyView(musicJobRow($0)) }
+                            + activeVideo.map { AnyView(videoJobRow($0)) }
+                            + activeSubtitles.map { AnyView(subtitleJobRow($0)) }
+                            + (workspace.transcribing ? [AnyView(transcriptionActivity)] : [])
+                            + activeDownloads.map { download in AnyView(downloadRow(download)) }
                         VStack(alignment: .leading, spacing: HubSpace.m) {
-                            ForEach(activeAudio) { job in jobRow(job, compact: true) }
-                            ForEach(activeImages) { imageJobRow($0) }
-                            ForEach(activeMusic) { musicJobRow($0) }
-                            ForEach(activeVideo) { videoJobRow($0) }
-                            ForEach(activeSubtitles) { subtitleJobRow($0) }
-                            if workspace.transcribing { transcriptionActivity }
-                            ForEach(activeDownloads) { download in downloadRow(download) }
+                            ForEach(rows.indices, id: \.self) { index in
+                                if index > 0 { Divider() }
+                                rows[index]
+                            }
                         }
                     }
                 }
@@ -5364,12 +5369,15 @@ struct StudioContent: View {
     /// The table's column widths. The two flexible columns (the Mac, and what it is doing) share what
     /// is left; the rest are fixed so every row's cells line up under the header.
     private enum NodeColumn {
-        static let state: CGFloat = 124
+        static let state: CGFloat = 140
         static let meter: CGFloat = 84
         static let actions: CGFloat = 104
         static let gap: CGFloat = 10
+        /// The Mac column takes what it needs up to this; "Doing now" takes the rest, so header and rows
+        /// share one set of column edges at any width.
+        static let macMaximum: CGFloat = 360
         /// The narrowest width the one-line-per-Mac table is drawn at; below it each Mac is a small card.
-        static let wideMinimum: CGFloat = 780
+        static let wideMinimum: CGFloat = 796
     }
 
     /// Every Mac in the group, in one table: is it there, what is it doing, how full is its disk and
@@ -5475,7 +5483,7 @@ struct StudioContent: View {
 
     private var nodeTableHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: NodeColumn.gap) {
-            Text("Mac").frame(minWidth: 170, maxWidth: .infinity, alignment: .leading)
+            Text("Mac").frame(minWidth: 170, maxWidth: NodeColumn.macMaximum, alignment: .leading).layoutPriority(1)
             Text("State").frame(width: NodeColumn.state, alignment: .leading)
             Text("Doing now").frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
             Text("Disk free").frame(width: NodeColumn.meter, alignment: .leading)
@@ -5488,7 +5496,7 @@ struct StudioContent: View {
 
     private func wideNodeRow(_ row: NativeFleetRow) -> some View {
         HStack(alignment: .top, spacing: NodeColumn.gap) {
-            nodeIdentity(row).frame(minWidth: 170, maxWidth: .infinity, alignment: .leading)
+            nodeIdentity(row).frame(minWidth: 170, maxWidth: NodeColumn.macMaximum, alignment: .leading).layoutPriority(1)
             nodeStateCell(row).frame(width: NodeColumn.state, alignment: .leading)
             nodeDoingNow(row).frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
             resourceCell(text: row.machine?.diskText, tier: row.machine?.diskTier ?? .unknown,
@@ -5541,6 +5549,10 @@ struct StudioContent: View {
             if let facts = nodeFactsLine(row) {
                 Text(facts).font(HubType.caption).foregroundStyle(.secondary)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if let address = row.address, !address.isEmpty {
+                Text(address).font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
             }
             HStack(spacing: HubSpace.xs) {
                 if let startup = row.startupText {
@@ -5668,12 +5680,11 @@ struct StudioContent: View {
         return role == "agent" ? "Node" : role.capitalized
     }
 
-    /// "Apple M4 · 24 GB memory · 100.64.0.21:47873 · 0.6.126".
+    /// "Apple M4 · 24 GB · 0.6.126" (the address is its own line under it).
     private func nodeFactsLine(_ row: NativeFleetRow) -> String? {
         var parts: [String] = []
         if let chip = row.machine?.chip, !chip.isEmpty { parts.append(chip) }
         if let memory = row.machine?.memoryGb { parts.append(String(format: "%.0f GB", memory)) }
-        if let address = row.address, !address.isEmpty { parts.append(address) }
         if let version = row.version, !version.isEmpty { parts.append(version) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -5844,10 +5855,10 @@ struct StudioContent: View {
         }
         let peers = overview.machines.filter { !$0.isLocal && $0.machine != controller.machine }.count
         let reach = controller.isReachable ? "answering" : "not answering right now"
-        let beside = peers == 0 ? "" : " \(peers) other Mac\(peers == 1 ? "" : "s") share the group."
+        let beside = peers == 0 ? "" : " \(peers) other Mac\(peers == 1 ? " shares" : "s share") the group."
         return "No Mac joins this one: this Mac is a Node in the group run by \(controller.label) at "
             + "\(controller.address ?? "an address this Mac did not record"), which is \(reach)."
-            + "\(beside) The whole group is listed in the table above."
+            + "\(beside) The whole group is listed in the table below."
     }
 
     /// Join another Mac that is running as a controller.

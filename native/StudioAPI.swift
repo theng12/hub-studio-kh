@@ -7875,7 +7875,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard elapsed >= 0 else { return "just now" }
         switch elapsed {
         case ..<45: return "just now"
-        case ..<3600: return "\(Int(elapsed / 60)) min ago"
+        case ..<3600: return "\(max(1, Int(elapsed / 60))) min ago"
         case ..<86_400: return "\(Int(elapsed / 3600)) h ago"
         default: return "\(Int(elapsed / 86_400)) day\(Int(elapsed / 86_400) == 1 ? "" : "s") ago"
         }

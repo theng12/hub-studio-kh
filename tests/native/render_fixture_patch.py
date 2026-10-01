@@ -41,6 +41,10 @@ text = text.replace(
     needle,
     'private var connected: Bool { ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" '
     '|| (studio.readyURL != nil && !studio.stopping && workspace.isReachable) }', 1)
+needle = "@State private var selectedModel: String?"
+assert needle in text, "selectedModel moved; update render_fixture_patch.py"
+text = text.replace(
+    needle, '@State private var selectedModel: String? = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_MODEL"]', 1)
 needle = "@State private var imageModalID: String?"
 assert needle in text, "imageModalID moved; update render_fixture_patch.py"
 text = text.replace(

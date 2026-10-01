@@ -289,6 +289,28 @@ struct PageRenderHarness {
                 """)
         }
         workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
+        // One job in every live or failed state, so the badges and progress lines are looked at too.
+        func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
+                  stage: String? = nil, error: String? = nil, stalled: Double? = nil) -> NativeJob {
+            var item = NativeJob(id: id, state: state, progress: progress, text: prompt, model: model,
+                                 createdAt: Date().timeIntervalSince1970 - 90, outputURL: nil, error: error)
+            item.progressStage = stage
+            item.stalledSeconds = stalled
+            item.machine = "local"
+            return item
+        }
+        workspace.imageJobs = [
+            live("image-run", "running", "black-forest-labs/FLUX.2-klein-4B", "A lighthouse in a storm, long exposure",
+                 progress: 0.45, stage: "DiT sampling", stalled: 140),
+            live("image-queue", "queued", "black-forest-labs/FLUX.2-klein-4B", "A quiet harbour at first light"),
+            live("image-fail", "error", "black-forest-labs/FLUX.2-klein-4B", "A glass city under a copper sky",
+                 error: "The worker ran out of memory while loading the model."),
+            live("image-unsure", "uncertain", "black-forest-labs/FLUX.2-klein-4B", "A red kite over a salt flat"),
+        ] + workspace.imageJobs
+        workspace.audioJobs = [
+            live("audio-run", "running", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "Welcome back. Your previous session is exactly where you left it.",
+                 progress: 0.6, stage: "section 3 of 5"),
+        ] + workspace.audioJobs
         // A model chosen on every page, so the primary buttons render enabled, as they do on a Mac that has one.
         workspace.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
         workspace.transcriptionModel = "mlx-community/whisper-large-v3-turbo"

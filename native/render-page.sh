@@ -6,6 +6,12 @@
 # STUDIOHUB_RENDER_LIVE=1 connects the page to the Hub already running on this Mac, so the render
 # shows real jobs and history instead of empty lists. Read-only and safe to run while the app is up.
 #
+# STUDIOHUB_RENDER_FIXTURES=1 seeds jobs in every state, models, voices and a controller with four Macs;
+# STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone renders each page once per role;
+# STUDIOHUB_RENDER_APPEARANCE=light|dark|both (files end -light / -dark); STUDIOHUB_RENDER_BORDERLESS=1 drops
+# the title bar for a tall render; STUDIOHUB_RENDER_NOTES=release-notes.md fills What's New;
+# STUDIOHUB_RENDER_MODEL=<repo> opens that model's detail on Models.
+#
 # Defaults: audio, /tmp/studiohub-render, 1920x1053 and 980x620 (this Mac's usual window and the
 # window's own minimum). Pages are named by the sidebar: overview, audio, subtitle, image, music,
 # video, chat, models, voices, jobs, connections, whats-new, settings - and several at once, which
