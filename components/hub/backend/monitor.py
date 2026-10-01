@@ -28,6 +28,11 @@ HEALTH_TIMEOUT_S = 3.0
 CATALOG_TIMEOUT_S = 10.0
 CATALOG_TTL_S = 60.0
 CATALOG_REFRESH_INTERVAL_S = 60.0
+# After a failed catalog read, a plain (non-forced) caller is answered from the last good copy for
+# this long instead of asking the worker again. Only a success was ever remembered, so a worker whose
+# /api/catalog kept answering 500 (video, since 0.6.120) was hit - with a traceback in the log - on
+# every `/api/hub/catalog` read: 8,000+ times in six hours on one Mac.
+CATALOG_ERROR_RETRY_S = 15.0
 CATALOG_STALE_S = 5 * 60.0
 HEALTH_FAILURES_TO_DOWN = 3
 HEALTH_SUCCESSES_TO_RECOVER = 2
@@ -854,6 +859,10 @@ class StudioMonitor:
             return cached[1]
         meta = self._catalog_meta.setdefault(sid, {})
         attempt_at = time.time()
+        if (not force and meta.get("catalog_last_error")
+                and 0 <= attempt_at - float(meta.get("catalog_last_attempt_at") or 0)
+                < CATALOG_ERROR_RETRY_S):
+            return cached[1] if cached else None
         meta["last_attempt_at"] = attempt_at
         meta["catalog_last_attempt_at"] = attempt_at
         try:
@@ -910,6 +919,10 @@ class StudioMonitor:
             return cached[1] if cached else None
         meta = self._catalog_meta.setdefault(sid, {})
         attempt_at = time.time()
+        if (not force and meta.get("transcription_last_error")
+                and 0 <= attempt_at - float(meta.get("transcription_last_attempt_at") or 0)
+                < CATALOG_ERROR_RETRY_S):
+            return cached[1] if cached else None
         meta["last_attempt_at"] = attempt_at
         meta["transcription_last_attempt_at"] = attempt_at
         try:
