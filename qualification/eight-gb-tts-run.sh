@@ -1,0 +1,562 @@
+#!/bin/bash
+# Text-to-speech on an 8 GB Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit, OmniVoice bf16.
+#
+#   bash eight-gb-tts-run.sh                 the whole test (two voices x S2 and S4, three models)
+#   bash eight-gb-tts-run.sh --quick         a short check (S2, Chris only) - the script's own self-test
+#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, voxcpm2, omnivoice)
+#   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not 8 GB
+#
+# (Easier: double-click RUN-8GB-TTS.command, which runs this.)
+#
+# It sends each clip to the Studio Hub that is already running on THIS Mac, through the same route
+# the Gateway and the Voice studio use (POST /api/hub/jobs, modality "voice"), so the Hub's own
+# scheduler, section splitting and joins apply exactly as in production. It uses the same two texts
+# (tts-script-S2.txt, about 175 words; tts-script-S4.txt, about 3 minutes) and the same two owner
+# voices as the 32 GB Mac measurement, one job at a time, in this order:
+#   Qwen3-TTS 0.6B 8-bit -> VoxCPM2 4-bit -> OmniVoice bf16.
+#
+# It measures per clip: finished or failed (and why), wall time, audio length, real-time factor,
+# the biggest memory the voice worker used (macOS `footprint`, sampled every second), memory
+# pressure, swap before/after/peak, and whether the Mac stayed responsive. A clip that takes more
+# than 3x the 32 GB time is flagged. It writes a timestamped folder beside this script (or on the
+# Desktop when the drive is read-only): the WAVs, results.csv and a short plain-English summary.txt.
+#
+# It changes nothing: no setting, no install, no delete. It only asks the Hub for audio (and keeps
+# the Mac awake while it runs). Safe to run again; each run gets its own folder.
+#
+# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=2700 (seconds per clip), TTS8_OUT=<folder>
+# (where the results folder goes), TTS8_READY_FILE=<hub-ready.json>, STUDIOHUB_APP=<app>.
+set -u
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+SELF="${BASH_SOURCE[0]}"
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+
+# The Python that goes with the installed app: the machine may have no other, and the system
+# /usr/bin/python3 can pop up a developer-tools installer.
+APP=""
+for candidate in "${STUDIOHUB_APP:-}" "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
+  [ -n "$candidate" ] && [ -x "$candidate/Contents/Resources/runtimes/voice/bin/python3" ] && { APP="$candidate"; break; }
+done
+if [ -z "$APP" ]; then
+  cat >&2 <<EOF
+STOPPED: Studio Hub is not installed on this Mac, so there is nothing to test.
+
+  Install it from the kit: double-click "1 - Install the app" (or "Update this Mac") at the kit's
+  root, open Studio Hub once, then run this again. If it is installed somewhere unusual, set
+  STUDIOHUB_APP to its path.
+
+Nothing was run and nothing was written.
+EOF
+  exit 3
+fi
+# The program is the Python below (the app's own interpreter runs it); the here-document marker keeps
+# the file valid shell, and sed cuts it out between the two markers.
+exec "$APP/Contents/Resources/runtimes/voice/bin/python3" -c \
+  "$(sed -e "1,/^: <<'__PYTHON__'\$/d" -e '/^__PYTHON__$/,$d' "$SELF")" "$HERE" "$APP" "$@"
+exit 3
+: <<'__PYTHON__'
+import csv, json, os, re, subprocess, sys, threading, time, urllib.error, urllib.request, uuid
+from pathlib import Path
+
+HERE, APP, ARGS = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3:]
+QUICK = "--quick" in ARGS or os.environ.get("TTS8_QUICK") == "1"
+ALLOW_NON_TARGET = "--allow-non-target" in ARGS or os.environ.get("TTS8_ALLOW_NON_TARGET") == "1"
+ONLY = None
+for i, a in enumerate(ARGS):
+    if a == "--models" and i + 1 < len(ARGS):
+        ONLY = [x.strip() for x in ARGS[i + 1].split(",") if x.strip()]
+    elif a.startswith("--models="):
+        ONLY = [x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()]
+TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "2700"))
+MIN_VERSION = (0, 6, 122)
+SLOW_FACTOR = 3.0
+STALL_S = 20.0           # a poll or a sampling pass that takes this long means the Mac was not responsive
+
+# Order matters: smallest first. `repo` is the id the Hub's jobs name the model by.
+MODELS = [
+    dict(key="qwen3", name="Qwen3-TTS 0.6B 8-bit", csv_model="Qwen3-TTS 0.6B", quant="8bit",
+         pkg="qwen3-tts-12hz-0-6b-base-8bit", repo="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
+    dict(key="voxcpm2", name="VoxCPM2 4-bit", csv_model="VoxCPM2", quant="4bit",
+         pkg="voxcpm2-4bit", repo="mlx-community/VoxCPM2-4bit"),
+    dict(key="omnivoice", name="OmniVoice bf16", csv_model="OmniVoice", quant="bf16",
+         pkg="omnivoice-bfloat16", repo="mlx-community/OmniVoice-bfloat16"),
+]
+VOICES = [("chris", "cd07b21a2ccf", "Chris - Soft and Soothing"),
+          ("christian", "0616aec33b41", "Christian - Slow & Calming")]
+SCRIPT_FILES = [("S2", "tts-script-S2.txt", "about 175 words"), ("S4", "tts-script-S4.txt", "about 3 minutes")]
+# Generation seconds on the 32 GB M2 Max (audit-20260930/tts-samples/summary.csv), same texts and voices.
+REF32 = {("qwen3", "chris", "S2"): 42.5, ("qwen3", "chris", "S4"): 105.1,
+         ("qwen3", "christian", "S2"): 44.4, ("qwen3", "christian", "S4"): 126.0,
+         ("voxcpm2", "chris", "S2"): 97.0, ("voxcpm2", "chris", "S4"): 270.5,
+         ("voxcpm2", "christian", "S2"): 94.7, ("voxcpm2", "christian", "S4"): 303.7,
+         ("omnivoice", "chris", "S2"): 80.3, ("omnivoice", "chris", "S4"): 198.9,
+         ("omnivoice", "christian", "S2"): 86.3, ("omnivoice", "christian", "S4"): 243.1}
+COLUMNS = ["model", "quant", "voice", "script", "audio_seconds", "generation_seconds", "rtf", "peak_memory_gb",
+           "timing_clean", "chunks", "join_notes", "file", "timing_note", "source",
+           "status", "error", "memory_pressure", "swap_before_gb", "swap_after_gb", "swap_peak_gb",
+           "machine_ram_gb", "macos_version", "app_version", "chip",
+           "ref_32gb_seconds", "vs_32gb", "slow_flag", "cold_start", "responsive", "max_stall_s",
+           "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min"]
+
+LOG = None
+def say(msg=""):
+    print(msg, flush=True)
+    if LOG:
+        LOG.write(msg + "\n"); LOG.flush()
+
+def run(cmd, timeout=15):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+
+def stop(code, title, *lines):
+    print(f"\nSTOPPED: {title}\n", file=sys.stderr)
+    for l in lines:
+        print(f"  {l}" if l else "", file=sys.stderr)
+    print("\nNothing was run and no results were written.", file=sys.stderr)
+    sys.exit(code)
+
+# ---------------------------------------------------------------- this Mac
+MEM_BYTES = int((run(["sysctl", "-n", "hw.memsize"]).strip() or 0))
+RAM_GB = round(MEM_BYTES / 1073741824, 1) if MEM_BYTES else None
+OSV = run(["sw_vers", "-productVersion"]).strip() or "unknown"
+CHIP = run(["sysctl", "-n", "machdep.cpu.brand_string"]).strip() or run(["sysctl", "-n", "hw.model"]).strip() or "unknown"
+ON_TARGET = bool(MEM_BYTES) and MEM_BYTES <= 9 * 1073741824
+
+def swap_gb():
+    m = re.search(r"used = ([\d.]+)([MG])", run(["sysctl", "-n", "vm.swapusage"]))
+    return None if not m else round(float(m[1]) / (1024 if m[2] == "M" else 1), 3)
+
+def pressure_level():   # 1 normal, 2 warning, 4 critical (kern.memorystatus_vm_pressure_level)
+    try:
+        return int(run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"]).strip())
+    except ValueError:
+        return None
+PRESSURE_NAME = {1: "normal", 2: "warning", 4: "critical"}
+
+def free_pct():
+    m = re.search(r"free percentage: (\d+)%", run(["memory_pressure", "-Q"]))
+    return int(m[1]) if m else None
+
+def ver_tuple(v):
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(v or ""))
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+def app_version():
+    out = run(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", str(APP / "Contents/Info.plist")]).strip()
+    return out or "unknown"
+
+# ---------------------------------------------------------------- the local Hub
+READY = Path(os.environ.get("TTS8_READY_FILE") or Path.home() / "Library/Application Support/StudioHub Standalone/hub-ready.json")
+
+class HubDown(Exception):
+    pass
+
+def call(method, path, body=None, raw=False, timeout=60):
+    """One call to the local Hub. The token is read from the Hub's own file on every call and is never printed."""
+    try:
+        r = json.loads(READY.read_text())
+        req = urllib.request.Request(r["url"] + path, method=method,
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"X-Hub-Token": r["token"], "Content-Type": "application/json"})
+    except (OSError, ValueError, KeyError):
+        raise HubDown("the Hub's ready file is missing or unreadable")
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")[:600]
+    except (urllib.error.URLError, OSError) as e:
+        raise HubDown(str(getattr(e, "reason", e)))
+    data = resp.read()
+    return (resp.status, data) if raw else (resp.status, json.loads(data))
+
+def hub_get(path, timeout=30):
+    s, d = call("GET", path, timeout=timeout)
+    return d if s == 200 and isinstance(d, dict) else None
+
+def active_jobs():
+    d = hub_get("/api/hub/jobs") or {}
+    return [b for b in d.get("batches", [])
+            if sum(int(b.get(k) or 0) for k in ("queued", "running", "retrying", "cancel_requested")) > 0]
+
+def describe(b):
+    return f"{b.get('modality', '?')} job '{b.get('label') or b.get('id')}' ({b.get('model') or '?'})"
+
+def wait_idle(max_wait=1800):
+    """Never measure while the Mac is doing fleet work: it would be timing someone else's job."""
+    t0, last = time.time(), -999
+    while True:
+        busy = active_jobs()
+        if not busy:
+            return True
+        if time.time() - last >= 60:
+            say(f"  This Mac is busy with Hub work right now ({'; '.join(describe(b) for b in busy[:3])}). "
+                f"Waiting for it to finish - close this window to stop. ({int(time.time() - t0)} s so far)")
+            last = time.time()
+        if time.time() - t0 > max_wait:
+            return False
+        time.sleep(10)
+
+# ---------------------------------------------------------------- pre-checks
+def precheck():
+    if not ON_TARGET and not QUICK and not ALLOW_NON_TARGET:
+        stop(4, f"this Mac has {RAM_GB} GB of memory, and this test is about 8 GB Macs.",
+             "On a bigger Mac the system has room to spare, so the memory numbers would describe this Mac, not an 8 GB one.",
+             "", "  - Run it on the 8 GB Mac - that is the whole point.",
+             "  - A short self-check on this Mac:   bash eight-gb-tts-run.sh --quick",
+             "  - Run the full test here anyway (the summary will say it is not 8 GB evidence):",
+             "        bash eight-gb-tts-run.sh --allow-non-target")
+    try:
+        d = json.loads(READY.read_text())
+        if not hub_get("/api/hub/model-health", timeout=10):
+            raise HubDown("no answer")
+    except (OSError, ValueError, HubDown):
+        stop(3, "Studio Hub is not running on this Mac.",
+             "Open Studio Hub (Applications > Studio Hub), wait until its window says it is ready, then run this again.")
+    hub_ver = d.get("version") or app_version()
+    if ver_tuple(hub_ver) < MIN_VERSION:
+        stop(3, f"the Studio Hub running here is version {hub_ver}; this test needs 0.6.122 or later.",
+             "Update this Mac from the kit (double-click 'Update this Mac'), open Studio Hub, then run this again.")
+    models = [m for m in MODELS if ONLY is None or m["key"] in ONLY]
+    if not models:
+        stop(3, "--models named no known model.", "Use any of: " + ", ".join(m["key"] for m in MODELS))
+    packs = {p.get("package_id"): p for p in (hub_get("/api/hub/model-packages") or {}).get("models", [])}
+    health = {h.get("model_id"): h for h in (hub_get("/api/hub/model-health") or {}).get("models", [])}
+    bad = []
+    for m in models:
+        p = packs.get(m["pkg"])
+        if not p:
+            bad.append(f"{m['name']}: this Hub does not list the package '{m['pkg']}'.")
+        elif p.get("files_state") != "files_verified" or p.get("dispatch_state") != "eligible":
+            bad.append(f"{m['name']}: not ready here (files: {p.get('files_state')}, usable: {p.get('dispatch_state')})."
+                       + (f" {p.get('reason')}" if p.get("reason") else ""))
+        h = health.get(m["repo"], {})
+        if not bad and h.get("state") not in (None, "ready"):
+            say(f"  Note: the Hub reports {m['name']} as '{h.get('state')}' ({h.get('reason') or 'no reason given'}).")
+    if bad:
+        stop(3, "a model this test needs is missing or not verified on this Mac.", *bad, "",
+             "The kit's copy step puts these in place: double-click '2 - Copy the models' (or 'Update this Mac') from the kit,",
+             "then open Studio Hub > Models and let it finish checking them. This test never copies or repairs anything itself.")
+    voices = {v.get("id"): v for v in (hub_get("/studio/voice/api/voices") or {}).get("voices", [])}
+    missing = [f"{n} ({i})" for _, i, n in VOICES if i not in voices]
+    if missing:
+        stop(3, "the owner voices are not on this Mac: " + "; ".join(missing) + ".",
+             "The kit copies the voices as well: run 'Update this Mac' (or '2 - Copy the models') from the kit,",
+             "then run this again. The same two voices are used for every model so the numbers can be compared.")
+    texts = {}
+    for key, fname, _ in SCRIPT_FILES:
+        f = HERE / fname
+        if not f.is_file():
+            stop(3, f"{fname} is not beside this script.", "Keep it in the same folder (the kit's Technical folder has it).",
+                 f"Looked in: {HERE}")
+        texts[key] = f.read_text(encoding="utf-8").strip()
+    return hub_ver, models, texts
+
+# ---------------------------------------------------------------- measurement
+def process_rows():
+    rows = []
+    for l in run(["ps", "-axo", "pid=,ppid=,pcpu=,command="]).splitlines():
+        m = re.match(r"\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)", l)
+        if m:
+            rows.append((int(m[1]), int(m[2]), float(m[3]), m[4]))
+    return rows
+
+def voice_pids(rows):
+    kids = {}
+    for p, pp, _, _ in rows:
+        kids.setdefault(pp, []).append(p)
+    todo = [p for p, _, _, c in rows if c.strip().startswith("Voice Studio Mac") or "voice_worker.py" in c]
+    seen = []
+    while todo:
+        p = todo.pop()
+        if p not in seen:
+            seen.append(p); todo += kids.get(p, [])
+    return seen
+
+UNIT = {"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9}
+def footprint(pid):
+    out = run(["footprint", str(pid)], timeout=30)
+    cur = peak = None
+    m = re.search(r"Footprint:\s*([\d.]+)\s*(\w+)", out)
+    if m:
+        cur = float(m[1]) * UNIT.get(m[2].upper(), 1)
+    m = re.search(r"phys_footprint_peak:\s*([\d.]+)\s*(\w+)", out)
+    if m:
+        peak = float(m[1]) * UNIT.get(m[2].upper(), 1)
+    return cur, peak
+
+def worker_footprint_now():
+    return sum((footprint(p)[0] or 0) for p in voice_pids(process_rows()))
+
+class Sampler(threading.Thread):
+    """Every second while a clip runs: the voice worker tree's phys_footprint, swap, memory pressure."""
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.halt = False
+        self.max_total = 0.0; self.lifetime_peak = 0.0; self.max_level = 1
+        self.swap_peak = swap_gb() or 0.0; self.min_free = None
+        self.max_stall = 0.0; self.other_cpu = []
+    def run(self):
+        while not self.halt:
+            t0 = time.time()
+            rows = process_rows(); pids = voice_pids(rows); total = 0.0
+            for p in pids:
+                cur, peak = footprint(p)
+                total += cur or 0
+                self.lifetime_peak = max(self.lifetime_peak, peak or 0)
+            self.max_total = max(self.max_total, total)
+            self.other_cpu.append(sum(c for p, _, c, _ in rows if p not in pids))
+            s = swap_gb()
+            if s is not None:
+                self.swap_peak = max(self.swap_peak, s)
+            lv = pressure_level()
+            if lv:
+                self.max_level = max(self.max_level, lv)
+            f = free_pct()
+            if f is not None:
+                self.min_free = f if self.min_free is None else min(self.min_free, f)
+            self.max_stall = max(self.max_stall, time.time() - t0)
+            time.sleep(1.0)
+
+def wav_seconds(b):
+    if b[:4] != b"RIFF" or b[8:12] != b"WAVE":
+        return None
+    i = 12; rate = ch = bits = None
+    while i + 8 <= len(b):
+        cid, size = b[i:i + 4], int.from_bytes(b[i + 4:i + 8], "little")
+        if cid == b"fmt ":
+            ch = int.from_bytes(b[i + 10:i + 12], "little"); rate = int.from_bytes(b[i + 12:i + 16], "little")
+            bits = int.from_bytes(b[i + 22:i + 24], "little")
+        elif cid == b"data" and rate and ch and bits:
+            n = size if i + 8 + size <= len(b) else len(b) - i - 8
+            return n / (rate * ch * bits / 8)
+        i += 8 + size + (size & 1)
+    return None
+
+def err_text(e):
+    return re.sub(r"\s+", " ", e if isinstance(e, str) else json.dumps(e) if e else "")[:300]
+
+def clip(model, voice, script_key, text, out_dir, cold, ctx):
+    vkey, vid, _ = voice
+    ref = REF32.get((model["key"], vkey, script_key))
+    wav = out_dir / f"{model['pkg']}_{vkey}_{script_key}.wav"
+    rec = {"model": model["csv_model"], "quant": model["quant"], "voice": vkey, "script": script_key,
+           "file": wav.name, "machine_ram_gb": RAM_GB, "macos_version": OSV, "app_version": ctx["hub_ver"], "chip": CHIP,
+           "ref_32gb_seconds": ref if ref is not None else "", "cold_start": "yes" if cold else "no",
+           "source": f"Hub {ctx['hub_ver']}, worker process-tree footprint (sampled every 1 s), 8 GB test script"}
+    if not wait_idle():
+        rec.update(status="not run", error="the Mac stayed busy with other Hub jobs for 30 minutes")
+        return rec
+    swap0, fp0 = swap_gb(), worker_footprint_now()
+    rec["swap_before_gb"] = "" if swap0 is None else swap0
+    rec["footprint_before_gb"] = round(fp0 / 1e9, 2)
+    sampler = Sampler(); sampler.start()
+    t0 = time.time(); bid = None; state = None; item = {}; batch = {}; poll_max = 0.0; down_since = None
+    try:
+        env = {"modality": "voice", "model": model["repo"], "label": "tts-8gb-run", "voice_library_id": vid,
+               "clientRequestId": "tts-8gb-" + uuid.uuid4().hex[:12],
+               "items": [{"text": text, "seed": 1234, "params": {}}]}
+        s, r = call("POST", "/api/hub/jobs", env)
+        if s != 200:
+            raise RuntimeError(f"the Hub refused the job ({s}): {err_text(r)}")
+        bid = r["batch_id"]; last = None
+        while True:
+            time.sleep(1.0)
+            p0 = time.time()
+            try:
+                s, batch = call("GET", f"/api/hub/jobs/{bid}", timeout=60)
+                down_since = None
+            except HubDown as e:
+                down_since = down_since or time.time()
+                if time.time() - down_since > 300:
+                    raise RuntimeError(f"the Hub stopped answering for 5 minutes ({e})")
+                continue
+            finally:
+                poll_max = max(poll_max, time.time() - p0)
+            item = (batch.get("items") or [{}])[0] if isinstance(batch, dict) else {}
+            state = item.get("state") or (batch.get("state") if isinstance(batch, dict) else None)
+            if state != last:
+                say(f"    {state} at {time.time() - t0:.0f} s"); last = state
+            if state in ("done", "error", "cancelled", "failed", "uncertain"):
+                break
+            if time.time() - t0 > TIMEOUT:
+                call("DELETE", f"/api/hub/jobs/{bid}"); state = "timeout"; break
+        wall = time.time() - t0
+        audio_s = None
+        if state == "done":
+            s, data = call("GET", f"/api/hub/jobs/{bid}/items/0/artifact", raw=True, timeout=300)
+            if s != 200:
+                raise RuntimeError(f"the finished audio could not be fetched ({s})")
+            wav.write_bytes(data)
+            audio_s = wav_seconds(data)
+        rec["status"] = "completed" if state == "done" else "failed"
+        if state != "done":
+            rec["error"] = (f"no answer within {int(TIMEOUT)} s, job cancelled" if state == "timeout"
+                            else err_text(item.get("error") or state))
+    except KeyboardInterrupt:
+        if bid:
+            try: call("DELETE", f"/api/hub/jobs/{bid}")
+            except Exception: pass
+        sampler.halt = True
+        raise
+    except Exception as e:
+        wall = time.time() - t0; audio_s = None
+        rec["status"] = "failed"; rec["error"] = err_text(str(e))
+    sampler.halt = True; sampler.join(60)
+    swap1 = swap_gb()
+    ru = (item.get("resource_usage") or {}) if isinstance(item, dict) else {}
+    cpu = sampler.other_cpu
+    mean_cpu = sum(cpu) / len(cpu) if cpu else 0
+    stall = max(sampler.max_stall, poll_max)
+    gen = round(wall, 1)
+    rec.update(generation_seconds=gen, audio_seconds="" if audio_s is None else round(audio_s, 2),
+               rtf="" if not audio_s else round(wall / audio_s, 2),
+               peak_memory_gb=round(sampler.max_total / 1e9, 2) if sampler.max_total else "",
+               timing_clean="yes" if mean_cpu <= 150 else "no",
+               timing_note="" if mean_cpu <= 150 else f"contended: other processes avg {mean_cpu:.0f}% CPU",
+               chunks=item.get("chunk_total") or "",
+               join_notes=(f"{item['chunk_total']} chunks (joins not analysed by this script)"
+                           if (item.get("chunk_total") or 0) > 1 else "single section, no join"),
+               memory_pressure=PRESSURE_NAME.get(sampler.max_level, str(sampler.max_level)),
+               swap_after_gb="" if swap1 is None else swap1, swap_peak_gb=round(sampler.swap_peak, 3),
+               vs_32gb=round(wall / ref, 2) if ref else "",
+               slow_flag="yes" if ref and wall > SLOW_FACTOR * ref else "no",
+               responsive="yes" if stall <= STALL_S else "NO", max_stall_s=round(stall, 1),
+               worker_lifetime_peak_gb=round(sampler.lifetime_peak / 1e9, 2) if sampler.lifetime_peak else "",
+               mlx_peak_active_gb=(ru.get("mlx") or {}).get("peak_active_gb", ""),
+               mem_free_pct_min="" if sampler.min_free is None else sampler.min_free)
+    if isinstance(batch, dict) and isinstance(item, dict) and item.get("run_started") and batch.get("created_at"):
+        rec["queue_seconds"] = round(item["run_started"] - batch["created_at"], 1)
+    return rec
+
+# ---------------------------------------------------------------- summary
+def fnum(x):
+    return float(x) if x not in ("", None) else None
+
+def summarise(rows, models, title, hub_ver, started, finished_all):
+    lines = [title, f"This Mac: {CHIP}, {RAM_GB} GB memory, macOS {OSV}, Studio Hub {hub_ver}",
+             f"Run started {started}." + ("" if finished_all else " THE RUN WAS STOPPED EARLY - clips not listed were never run.")]
+    if not ON_TARGET:
+        lines.append(f"NOTE: this Mac has {RAM_GB} GB, not 8 GB. The numbers are real but are NOT 8 GB evidence.")
+    if QUICK:
+        lines.append("NOTE: quick check (S2, Chris only, one clip per model). It proves the script works; it is not the full test.")
+    lines.append("")
+    for m in models:
+        mine = [r for r in rows if r["model"] == m["csv_model"] and r["quant"] == m["quant"]]
+        if not mine:
+            continue
+        done = [r for r in mine if r["status"] == "completed"]
+        peak = max([fnum(r.get("peak_memory_gb")) or 0 for r in mine] or [0])
+        grow = max([(fnum(r.get("swap_peak_gb")) or 0) - (fnum(r.get("swap_before_gb")) or 0) for r in mine] or [0])
+        worst = {"normal": 1, "warning": 2, "critical": 4}
+        level = max([worst.get(r.get("memory_pressure"), 1) for r in mine] or [1])
+        slow = [r for r in mine if r.get("slow_flag") == "yes"]
+        stalled = [r for r in mine if r.get("responsive") == "NO"]
+        ratios = [fnum(r.get("vs_32gb")) for r in done if fnum(r.get("vs_32gb"))]
+        facts = [f"completed {len(done)}/{len(mine)}", f"peak {peak:.1f} GB" if peak else "peak not measured",
+                 f"swap +{max(grow, 0):.1f} GB", f"memory pressure {PRESSURE_NAME[level] if level in PRESSURE_NAME else level}"]
+        if ratios:
+            facts.append(f"slowest clip {max(ratios):.1f}x the 32 GB time")
+        if slow:
+            facts.append(f"{len(slow)} clip(s) over {SLOW_FACTOR:.0f}x the 32 GB time")
+        if stalled:
+            facts.append(f"Mac stopped responding for 20 s+ during {len(stalled)} clip(s)")
+        if len(done) < len(mine):
+            verdict = "did not complete on this Mac"
+        elif slow or stalled or level >= 4 or grow > 2:
+            verdict = "completed but strained this Mac"
+        else:
+            verdict = "fits" + (" 8 GB" if ON_TARGET else " this Mac (not 8 GB)")
+        lines.append(f"{m['name']}: {', '.join(facts)} -> {verdict}")
+        for r in mine:
+            if r["status"] != "completed":
+                lines.append(f"    {r['voice']} {r['script']}: {r['status']} - {r.get('error') or 'no reason given'}")
+    lines += ["", "How to read it: 'fits' means every clip completed, memory pressure never reached critical, swap grew by",
+              "no more than 2 GB, no clip took over 3x its 32 GB time and the Mac kept answering. Anything else is stated.",
+              "Peak is the largest memory the voice worker used (macOS 'footprint', sampled every second, so a very short",
+              "spike can be missed; worker_lifetime_peak_gb in results.csv is macOS's own all-time peak for that process).",
+              "The first clip of each model includes loading it. results.csv has every number per clip."]
+    return "\n".join(lines) + "\n"
+
+# ---------------------------------------------------------------- main
+def main():
+    try:   # keep the Mac awake while this runs (it ends with this script; no setting is changed)
+        subprocess.Popen(["caffeinate", "-ims", "-w", str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+    hub_ver, models, texts = precheck()
+    scripts = [(k, n, d) for k, n, d in SCRIPT_FILES if not QUICK or k == "S2"]
+    voices = VOICES[:1] if QUICK else VOICES
+    jobs = [(m, v, s) for m in models for v in voices for s in scripts]
+    ref_total = sum(REF32.get((m["key"], v[0], s[0]), 0) for m, v, s in jobs)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = ("TTS 8GB Quick Check " if QUICK else "TTS 8GB Run ") + stamp
+    for base in [Path(os.environ["TTS8_OUT"])] if os.environ.get("TTS8_OUT") else [HERE, Path.home() / "Desktop"]:
+        try:
+            out = base / name; (out).mkdir(parents=True)
+            break
+        except OSError:
+            out = None
+    if out is None:
+        stop(3, "cannot create a results folder beside the script or on the Desktop.", "Check that the drive or Desktop is writable.")
+    global LOG
+    LOG = open(out / "run.log", "a", encoding="utf-8")
+    title = "Studio Hub - text-to-speech on this Mac" + (" (QUICK CHECK)" if QUICK else "")
+    say(title); say("")
+    say(f"This Mac:       {CHIP}, {RAM_GB} GB memory, macOS {OSV}")
+    say(f"Studio Hub:     version {hub_ver} (app on disk: {app_version()})")
+    say("Models:         " + ", ".join(m["name"] for m in models) + "  (all present and verified)")
+    say("Voices:         " + ", ".join(f"{n} ({i})" for _, i, n in voices) + "  (present)")
+    pr = pressure_level()
+    say(f"Memory now:     pressure {PRESSURE_NAME.get(pr, pr)}, {free_pct()}% free, swap in use {swap_gb()} GB")
+    say("Hub activity:  checking that the Mac is not busy with fleet work ...")
+    if not wait_idle(1800):
+        say("")
+        say("STOPPED: this Mac stayed busy with other Hub jobs for 30 minutes, so nothing was measured")
+        say("(timing someone else's job would make the numbers meaningless). Run this again when the Mac is idle.")
+        return 3
+    say("                OK - no active Hub jobs.")
+    say("")
+    say(f"{len(jobs)} clip(s), one at a time. The 32 GB Mac needed about {max(ref_total / 60, 1):.0f} minute(s) of generation for the same work;")
+    if QUICK:
+        say("expect a few minutes here, mostly loading each model.")
+    else:
+        say(f"on 8 GB allow {2 * ref_total / 60:.0f}-{4 * ref_total / 60:.0f} minutes, and longer if the Mac swaps. Leave the Mac alone, close other apps,")
+        say("keep it on power. You can stop any time by closing this window; what finished is already saved.")
+    say(f"Results go to: {out}")
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    rows = []; finished = False
+    ctx = {"hub_ver": hub_ver}
+    with open(out / "results.csv", "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, COLUMNS, extrasaction="ignore"); w.writeheader()
+        seen = set()
+        try:
+            for n, (m, v, s) in enumerate(jobs, 1):
+                cold = m["key"] not in seen; seen.add(m["key"])
+                say(f"\n[{n}/{len(jobs)}] {m['name']} - {v[2]} - {s[0]} ({s[2]})" + ("  [first clip: includes loading the model]" if cold else ""))
+                rec = clip(m, v, s[0], texts[s[0]], out, cold, ctx)
+                rows.append(rec); w.writerow(rec); fh.flush()
+                if rec["status"] == "completed":
+                    say(f"    completed: {rec['generation_seconds']} s for {rec['audio_seconds']} s of audio (RTF {rec['rtf']}), "
+                        f"peak {rec['peak_memory_gb']} GB, swap {rec['swap_before_gb']} -> {rec['swap_after_gb']} GB, "
+                        f"pressure {rec['memory_pressure']}" + (f", SLOW: {rec['vs_32gb']}x the 32 GB time" if rec.get("slow_flag") == "yes" else "")
+                        + ("" if rec.get("responsive") == "yes" else ", Mac stopped responding for a while"))
+                else:
+                    say(f"    {rec['status'].upper()}: {rec.get('error')}")
+            finished = True
+        except KeyboardInterrupt:
+            say("\nStopped by you. What finished is saved.")
+    summary = summarise(rows, models, title, hub_ver, started, finished)
+    (out / "summary.txt").write_text(summary, encoding="utf-8")
+    say("\n" + "-" * 72); say(summary.rstrip()); say("-" * 72)
+    say(f"Everything is in: {out}")
+    say("  summary.txt (read this), results.csv (every number), the WAVs (listen), run.log")
+    return 0 if finished else 130
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+__PYTHON__

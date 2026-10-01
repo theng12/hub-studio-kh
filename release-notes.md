@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.124 - 2026-10-01
+
+### Chatterbox is shelved; a text-to-speech test for the 8 GB Macs
+
+**Chatterbox is shelved.** Both Chatterbox models (4-bit and 8-bit), and the small helper they need, are still listed
+and still work wherever they are installed, but the drives no longer copy them onto new Macs, and a Mac that has them
+moves them into the Hub's Trash Folder (emptied after 15 days). A Mac marked "keep all models" keeps them.
+
+**New: an 8 GB text-to-speech test.** On the kit drive, in the Technical folder, double-click `RUN-8GB-TTS.command` on
+an 8 GB Mac. It reads the same two texts in the two voices with Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit and OmniVoice
+bf16, and writes a folder with the audio files and a short plain-English summary of what fits. It changes nothing on
+the Mac.
+
+(0.6.123 was never released; this includes everything in it.)
+
 ## 0.6.123 - 2026-10-01
 
 ### Updates can no longer leave a Mac stuck; a few big models are shelved

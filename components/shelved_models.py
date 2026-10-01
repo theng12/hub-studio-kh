@@ -26,6 +26,9 @@ SHELVED_MODELS = [
     "whisper-small", "mlx-community/whisper-small-mlx",          # Whisper small
     "voxcpm2-bf16", "mlx-community/VoxCPM2-bf16",                # VoxCPM2 bf16
     "fish-audio-s2-pro-bf16", "mlx-community/fish-audio-s2-pro-bf16",   # Fish S2 Pro bf16
+    "chatterbox-4bit", "mlx-community/chatterbox-4bit",          # Chatterbox 4-bit (disqualified 2026-10-01)
+    "chatterbox-8bit", "mlx-community/chatterbox-8bit",          # Chatterbox 8-bit (disqualified 2026-10-01)
+    "s3tokenizerv2", "mlx-community/S3TokenizerV2",              # Chatterbox's companion; nothing else requires it
 ]
 
 

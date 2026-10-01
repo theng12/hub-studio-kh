@@ -1,6 +1,45 @@
 # Changelog
 
-## 0.6.123 — 2026-10-01 · An update can never leave a Mac stuck; shelved models
+## 0.6.124 — 2026-10-01 · Chatterbox is shelved; the 8 GB text-to-speech test (supersedes 0.6.123, never published)
+
+0.6.123 was never published or installed anywhere; this release carries everything in it (relaunch safety net,
+shelved models) and adds two owner-requested changes.
+
+**A. Chatterbox disqualified = shelved** (owner: "chatterbox sucks ... we don't retire it completely, just stop
+copying it ... both chatterboxes"). `components/shelved_models.py` `SHELVED_MODELS` gains `chatterbox-4bit`
+(`mlx-community/chatterbox-4bit`), `chatterbox-8bit` (`mlx-community/chatterbox-8bit`) and their companion
+`s3tokenizerv2` (`mlx-community/S3TokenizerV2`). Checked in every manifest: `s3tokenizerv2` appears in
+`requires_packages` of the two Chatterboxes and nothing else, so it goes with them (left alone, the copy step would
+still have carried it). Same semantics as the other shelved models: they stay in the catalog and work where their
+files are; the kit's copy step skips them ("Shelved, not copied"); a Hub on a Mac not marked `keep_all_models`
+moves an installed copy into its Trash Folder at start-up (15 days) and refuses to download it; the weights stay in
+the SSD model library. **Mark the owner's own Mac keep-all BEFORE it starts 0.6.124**, or its Chatterbox 4-bit /
+8-bit / S3TokenizerV2 folders move to the Trash Folder at that first start (recoverable for 15 days).
+`tests/test_shelved_models.py` seeds and the Hub-sweep script now include the three; the existing "no kept model
+requires a shelved one" test is what proves S3TokenizerV2 is safe to shelve.
+
+**B. The 8 GB text-to-speech test** (`qualification/RUN-8GB-TTS.command` + `eight-gb-tts-run.sh` +
+`README-8gb-tts.md` + `tts-script-S2.txt` / `tts-script-S4.txt`), the TTS twin of the 8 GB Z-Image run. Double-click
+on the 8 GB Mac; it runs Qwen3-TTS 0.6B 8-bit, then VoxCPM2 4-bit, then OmniVoice bf16, each reading the same two
+texts (S2 ~175 words, S4 ~3 minutes, byte-for-byte the 32 GB test's) in "Chris - Soft and Soothing" (`cd07b21a2ccf`)
+and "Christian - Slow & Calming" (`0616aec33b41`), one job at a time, through the local Hub's own
+`POST /api/hub/jobs` (modality `voice`) so scheduling, section splitting and joins are production's. Pre-checks, each
+refusing in plain words and writing nothing: RAM (`hw.memsize`; non-8 GB refuses unless `--quick` /
+`--allow-non-target`), Hub running and >= 0.6.122, the three packages `files_verified` + `eligible` and the two voices
+present (via the Hub's own model-packages / model-health / voices views), and no active Hub jobs (waits up to 30 min,
+re-checked before every clip). Per clip: status + error, wall time, audio seconds, RTF, peak `footprint` of the voice
+worker process tree (every second), memory pressure, swap before/after/peak, responsiveness, and a flag when a clip
+takes over 3x its 32 GB time. Writes a timestamped folder beside the script (Desktop if read-only) with the WAVs,
+`results.csv` (the 32 GB `summary.csv` columns plus status, error, memory pressure, swap, RAM, macOS, app version,
+chip, 32 GB reference, ratio ...) and a plain-English `summary.txt`. Changes nothing (no setting, install or delete);
+keeps the Mac awake with `caffeinate` while it runs. The program is Python embedded in the shell file and run by the
+installed app's own interpreter (no system Python needed). `--quick` = S2 in Chris's voice for each model.
+Shipped through `.build/prepare-kit.sh` (copy + `chmod` + added to the Technical folder's managed set so the prune
+keeps it). `tests/test_tts_8gb_runner.py` pins the ids against the catalog, the texts, the wrapper, and the kit step.
+Verified on the 32 GB Mac against the real local Hub 0.6.122 (`--quick`, all three models: completed, S2 audio
+68.4 / 78.8 / 68.08 s, equal to the 32 GB test's).
+
+## 0.6.123 — 2026-10-01 · An update can never leave a Mac stuck; shelved models (never published; carried in 0.6.124)
 
 Two owner-approved changes.
 

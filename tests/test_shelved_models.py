@@ -20,7 +20,9 @@ sys.path.insert(0, str(ROOT))
 from components import retired_models, shelved_models  # noqa: E402
 
 SEEDS = {"whisper-base": "mlx-community/whisper-base-mlx", "whisper-small": "mlx-community/whisper-small-mlx",
-         "voxcpm2-bf16": "mlx-community/VoxCPM2-bf16", "fish-audio-s2-pro-bf16": "mlx-community/fish-audio-s2-pro-bf16"}
+         "voxcpm2-bf16": "mlx-community/VoxCPM2-bf16", "fish-audio-s2-pro-bf16": "mlx-community/fish-audio-s2-pro-bf16",
+         "chatterbox-4bit": "mlx-community/chatterbox-4bit", "chatterbox-8bit": "mlx-community/chatterbox-8bit",
+         "s3tokenizerv2": "mlx-community/S3TokenizerV2"}
 
 
 def manifests():
@@ -28,7 +30,7 @@ def manifests():
 
 
 class ListTests(unittest.TestCase):
-    def test_the_seeds_are_the_four_the_owner_shelved_under_their_manifest_ids(self):
+    def test_the_seeds_are_the_ones_the_owner_shelved_under_their_manifest_ids(self):
         by_id = {m["package_id"]: m for m in manifests()}
         for package_id, repo in SEEDS.items():
             self.assertEqual(by_id[package_id]["model_id"], repo)
@@ -133,7 +135,8 @@ from components.hub import output_storage, standalone, standalone_config
 from fastapi import HTTPException
 
 settings = tmp / 'data' / 'device_settings.json'
-SHELVED = ['whisper-base', 'whisper-small', 'voxcpm2-bf16', 'fish-audio-s2-pro-bf16']
+SHELVED = ['whisper-base', 'whisper-small', 'voxcpm2-bf16', 'fish-audio-s2-pro-bf16',
+           'chatterbox-4bit', 'chatterbox-8bit', 's3tokenizerv2']
 
 # The default is NOT keep-all, and it is a device setting that survives "restore defaults".
 assert standalone_config.load_device_settings()['defaults']['keep_all_models'] is False
