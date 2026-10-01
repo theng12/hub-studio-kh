@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -19,8 +20,20 @@ from . import paths
 
 
 SETTINGS_FILE = paths.data_path("storage_policy.json")
-POLICY_VERSION = 2
-DEFAULTS = {"enabled": True, "retention_days": 30, "max_gb": 80.0}
+POLICY_VERSION = 3
+# The output policy of every store on a Mac: 3 days, 20 GB or 8% of the disk if that is smaller
+# (the old 30 days / 80 GB was a third of a 256 GB node). `LEGACY_DEFAULTS` are what version 2 wrote.
+DEFAULTS = {"enabled": True, "retention_days": 3, "max_gb": 20.0}
+LEGACY_DEFAULTS = {"retention_days": 30, "max_gb": 80.0}
+DEFAULT_DISK_FRACTION = 0.08
+
+
+def default_max_gb() -> float:
+    try:
+        total = shutil.disk_usage(SETTINGS_FILE.parent if SETTINGS_FILE.parent.exists() else Path.home()).total
+    except OSError:
+        return DEFAULTS["max_gb"]
+    return max(1.0, min(DEFAULTS["max_gb"], round(total * DEFAULT_DISK_FRACTION / 1024 ** 3, 1)))
 OUTPUT_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 _LOCK = threading.RLock()
 _START_LOCK = threading.Lock()
@@ -41,7 +54,17 @@ def _read() -> dict:
     except (OSError, ValueError, TypeError):
         value = {}
     saved = value if isinstance(value, dict) else {}
-    out = {**DEFAULTS, **saved}
+    try:
+        policy_version = int(saved.get("policy_version", 1))
+    except (TypeError, ValueError):
+        policy_version = 1
+    # A file still holding the old defaults was never chosen: it reads as the new ones.
+    migrate = (policy_version < POLICY_VERSION and bool(saved)
+               and saved.get("retention_days", 30) == LEGACY_DEFAULTS["retention_days"]
+               and saved.get("max_gb", 80.0) == LEGACY_DEFAULTS["max_gb"])
+    if migrate:
+        saved = {"enabled": saved.get("enabled", True)}
+    out = {**DEFAULTS, "max_gb": default_max_gb(), **saved}
     if not isinstance(out["enabled"], bool):
         out["enabled"] = True
     try:
@@ -50,19 +73,14 @@ def _read() -> dict:
     except (TypeError, ValueError):
         out.update(
             retention_days=DEFAULTS["retention_days"],
-            max_gb=DEFAULTS["max_gb"],
+            max_gb=default_max_gb(),
         )
     if not 1 <= out["retention_days"] <= 3650:
         out["retention_days"] = DEFAULTS["retention_days"]
     if not 1 <= out["max_gb"] <= 1000:
-        out["max_gb"] = 80.0
-    try:
-        policy_version = int(saved.get("policy_version", 1))
-    except (TypeError, ValueError):
-        policy_version = 1
-    if policy_version < POLICY_VERSION and out["retention_days"] == 3:
-        out["retention_days"] = DEFAULTS["retention_days"]
-        _write(out)
+        out["max_gb"] = default_max_gb()
+    if migrate:
+        _write({key: out[key] for key in DEFAULTS})
     return {key: out[key] for key in DEFAULTS}
 
 

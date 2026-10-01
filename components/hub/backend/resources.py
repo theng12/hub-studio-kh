@@ -126,6 +126,13 @@ def host_stats() -> dict:
     except OSError:
         stats["disk_free_gb"] = None
         stats["disk_total_gb"] = None
+    try:
+        # The governor's tier, the Trash Folder's physical size, the biggest consumers and the last
+        # sweep, for the Gateway's fleet view (cheap: sizes are from the last sweep).
+        from components.hub import disk_governor
+        stats["disk"] = disk_governor.snapshot(DATA_DIR)
+    except Exception:
+        stats["disk"] = None
     return stats
 
 

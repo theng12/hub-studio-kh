@@ -1264,19 +1264,25 @@ def retry_failed_item(batch_id: str, item_index: int) -> dict:
     }
 
 
+# The output policy of every Hub-side store: 3 days.
+DEFAULT_RETENTION_DAYS = 3
+
+
 def settings() -> dict:
     try:
         saved = json.loads(SETTINGS_FILE.read_text())
     except (OSError, ValueError, TypeError):
         saved = {}
-    value = saved.get("retention_days", 30)
-    value = value if value in RETENTION_CHOICES else 30
+    value = saved.get("retention_days", DEFAULT_RETENTION_DAYS)
+    value = value if value in RETENTION_CHOICES else DEFAULT_RETENTION_DAYS
     try:
         policy_version = int(saved.get("policy_version", 1))
     except (TypeError, ValueError):
         policy_version = 1
-    if policy_version < 2 and value == 3:
-        value = 30
+    if policy_version < 3 and value == 30 and saved:
+        # 30 days was the old default, so a file that still holds it was never chosen: the output
+        # policy is 3 days now (a 256 GB Mac cannot hold a month of recordings).
+        value = DEFAULT_RETENTION_DAYS
         set_retention(value)
     return {"retention_days": value}
 
@@ -1286,7 +1292,7 @@ def set_retention(days: int) -> dict:
         raise HTTPException(400, f"retention_days must be one of {sorted(RETENTION_CHOICES)}")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(
-        json.dumps({"retention_days": days, "policy_version": 2}),
+        json.dumps({"retention_days": days, "policy_version": 3}),
         encoding="utf-8",
     )
     return {"retention_days": days}

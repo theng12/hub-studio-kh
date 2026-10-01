@@ -18,6 +18,9 @@ from components.hub.backend import registry, ledger
 importlib.reload(registry); importlib.reload(ledger)
 from components.hub import output_storage
 importlib.reload(output_storage)
+# The Trash Folder is measured in physical (block) bytes; here a file's physical size is its byte count.
+from components.hub import disk_governor
+disk_governor._fs_private_size = lambda path: os.lstat(path).st_size
 out = root / 'ssd-outputs'; out.mkdir()
 hub_trash = ledger.DATA_DIR / 'trash'
 real_rename = os.rename

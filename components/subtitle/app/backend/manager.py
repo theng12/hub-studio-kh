@@ -173,6 +173,8 @@ class SubtitleManager:
     # ── persistence ────────────────────────────────────────────────────────
 
     def _persist(self) -> None:
+        from components import job_history
+        job_history.prune_daily(self, self.jobs)
         try:
             _atomic_json(self.state_file, self.jobs)
         except FileNotFoundError:
@@ -181,6 +183,7 @@ class SubtitleManager:
             return
 
     def _restore(self) -> None:
+        from components import job_history
         try:
             saved = json.loads(self.state_file.read_text())
             if not isinstance(saved, dict):
@@ -204,6 +207,8 @@ class SubtitleManager:
                     job.update(state='error', error='Subtitle artifact is unavailable after restart',
                                error_code='OUTPUT_UNAVAILABLE', artifacts={},
                                output_url=None, sha256=None, bytes=None)
+            if job_history.expired(job):
+                continue                  # finished more than 90 days ago: the record goes
             self.jobs[job_id] = job
         self._persist()
 

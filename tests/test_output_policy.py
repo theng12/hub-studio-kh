@@ -82,7 +82,8 @@ result = output_storage.enforce(machine='held-links', max_bytes=0, retention_day
 assert not protected_link.exists() and result['freed_bytes'] == 4, result
 
 # Unacknowledged files and leases remain protected and block admission.
-protected = add(voice, 'protected.wav', b'P'*10, studio='voice', job='protected', generated=1, batch='p', index=0)
+# (generated now: an unacknowledged output older than 7 days moves to the Trash Folder - see test_disk_governor)
+protected = add(voice, 'protected.wav', b'P'*10, studio='voice', job='protected', generated=__import__('time').time(), batch='p', index=0)
 blocked = output_storage.admission(machine='device-a', max_bytes=1, retention_days=1, enabled=True)
 assert blocked and blocked['code'] == 'OUTPUT_STORAGE_BLOCKED', blocked
 

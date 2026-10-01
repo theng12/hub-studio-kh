@@ -19,6 +19,9 @@ from components.hub.backend import registry, ledger
 importlib.reload(registry); importlib.reload(ledger)
 from components.hub import output_storage, standalone_config
 importlib.reload(output_storage); importlib.reload(standalone_config)
+# The Trash Folder is measured in physical (block) bytes; here a file's physical size is its byte count.
+from components.hub import disk_governor
+disk_governor._fs_private_size = lambda path: os.lstat(path).st_size
 out = root / 'out'; out.mkdir()
 trash = ledger.DATA_DIR / 'trash'
 

@@ -85,22 +85,37 @@ def test_policy_api_round_trip(tmp_path, monkeypatch):
     assert response.json()["retention_days"] == 3
 
 
-def test_legacy_three_day_policy_migrates_once_to_thirty_days(
-        tmp_path, monkeypatch):
+def test_the_default_is_the_fleet_output_policy_not_30_days_and_80_gb(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_policy, "SETTINGS_FILE", tmp_path / "config" / "policy.json")
+    value = storage_policy._read()
+    assert value["retention_days"] == 3
+    assert value["max_gb"] == 20.0 or value["max_gb"] <= 0.08 * 1024 ** 4 / 1024 ** 3
+
+
+def test_the_default_size_follows_a_small_disk(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(storage_policy, "SETTINGS_FILE", tmp_path / "config" / "policy.json")
+    monkeypatch.setattr(storage_policy.shutil, "disk_usage",
+                        lambda _p: SimpleNamespace(total=100 * 1024 ** 3, used=0, free=0))
+    assert storage_policy._read()["max_gb"] == 8.0           # 8% of 100 GB, below the 20 GB default
+    monkeypatch.setattr(storage_policy.shutil, "disk_usage",
+                        lambda _p: SimpleNamespace(total=2000 * 1024 ** 3, used=0, free=0))
+    assert storage_policy._read()["max_gb"] == 20.0
+
+
+def test_the_old_30_day_80_gb_defaults_migrate_once_and_a_chosen_value_is_kept(tmp_path, monkeypatch):
     policy_file = tmp_path / "config" / "policy.json"
     policy_file.parent.mkdir()
-    policy_file.write_text(json.dumps({
-        "enabled": True, "retention_days": 3, "max_gb": 80,
-    }))
+    policy_file.write_text(json.dumps({"enabled": True, "retention_days": 30, "max_gb": 80.0, "policy_version": 2}))
     monkeypatch.setattr(storage_policy, "SETTINGS_FILE", policy_file)
 
-    assert storage_policy._read()["retention_days"] == 30
-    migrated = json.loads(policy_file.read_text())
-    assert migrated["retention_days"] == 30
-    assert migrated["policy_version"] == storage_policy.POLICY_VERSION
-
-    storage_policy.save(True, 3, 80)
     assert storage_policy._read()["retention_days"] == 3
+    migrated = json.loads(policy_file.read_text())
+    assert migrated["retention_days"] == 3 and migrated["policy_version"] == storage_policy.POLICY_VERSION
+
+    storage_policy.save(True, 30, 80)                         # the operator chooses the big policy: kept
+    assert storage_policy._read()["retention_days"] == 30
+    assert storage_policy._read()["max_gb"] == 80.0
 
 
 def test_release_notes_follow_installed_changelog():

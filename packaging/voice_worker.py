@@ -257,6 +257,70 @@ class QuietReadAccessLog(logging.Filter):
         return True
 
 
+LOG_ROTATE_BYTES = 16 * 1024 * 1024        # one log file at most this big, plus one rotated copy: 32 MB in all
+LOG_CHECK_SECONDS = 60.0
+
+
+def rotate_log_by_size(path: Path, limit: int = LOG_ROTATE_BYTES) -> bool:
+    """Keep the service log bounded while the workers are running.
+
+    The app opens `hub-worker.log` once and hands the descriptor to the Hub and every worker as
+    stdout/stderr (append mode), so the file cannot be renamed away from under them - the app's own
+    rotation only happens when it spawns the Hub, and a Mac that stays up for weeks wrote 4-14 GB a
+    month. So it is copy-truncated: the live content moves to `<log>.1` (replacing the older copy) and
+    the live file is emptied in place; appending writers carry on at the new end. A few lines written
+    between the copy and the truncate are lost, which is the price of not needing a restart.
+    """
+    import fcntl
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size < limit:
+            return False
+        with open(path, 'rb') as live:
+            try:
+                fcntl.flock(live, fcntl.LOCK_EX | fcntl.LOCK_NB)   # one worker rotates; the others skip
+            except OSError:
+                return False
+            if os.fstat(live.fileno()).st_size < limit:            # someone else just did it
+                return False
+            previous = path.with_name(path.name + '.1')
+            temporary = path.with_name(path.name + '.1.rotating')
+            with open(temporary, 'wb') as copy:
+                os.fchmod(copy.fileno(), 0o600)
+                while chunk := live.read(1024 * 1024):
+                    copy.write(chunk)
+            os.replace(temporary, previous)
+            os.truncate(path, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _log_path_of_stderr() -> Path | None:
+    """The file stderr is writing to, when it is a regular file (macOS F_GETPATH); None for a terminal or pipe."""
+    import fcntl
+    try:
+        if not stat.S_ISREG(os.fstat(2).st_mode):
+            return None
+        raw = fcntl.fcntl(2, getattr(fcntl, 'F_GETPATH', 50), b'\0' * 1024)
+        return Path(raw.split(b'\0', 1)[0].decode())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def start_log_rotation(stop: threading.Event, path: Path | None = None,
+                       limit: int = LOG_ROTATE_BYTES, every: float = LOG_CHECK_SECONDS) -> threading.Thread | None:
+    """Check the service log's size once a minute for as long as this process runs."""
+    target = path or _log_path_of_stderr()
+    if target is None:
+        return None
+    def loop() -> None:
+        while not stop.wait(every):
+            rotate_log_by_size(target, limit)
+    thread = threading.Thread(target=loop, daemon=True, name='studiohub-log-rotation')
+    thread.start()
+    return thread
+
+
 def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
                shutdown_callback=None, host='127.0.0.1'):
     """Shared owned-process lifecycle for the private Voice worker and local Hub.
@@ -266,6 +330,7 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
     is also the point at which the Hub stops being private, so it is never inferred.
     """
     monitor_stop = threading.Event()
+    start_log_rotation(monitor_stop)
     parent_lost = threading.Event()
     readiness_lock = threading.Lock()
     parent_monitor = None

@@ -14,6 +14,10 @@ import uuid
 from .standalone_config import _atomic_write, data_dir
 
 
+class InsufficientDiskSpace(Exception):
+    """The volume cannot hold this download and still leave the Mac its working room."""
+
+
 _processes: dict[str, subprocess.Popen] = {}
 _lock = threading.RLock()
 _PARENT_WATCH = (
@@ -118,6 +122,30 @@ def reconcile() -> dict:
         return value
 
 
+def running_staging() -> set[str]:
+    """Staging folders a live download is writing into: the disk governor must leave them alone."""
+    with _lock:
+        return {run["staging"] for run in _read()["runs"].values()
+                if run.get("staging") and run.get("state") in {"running", "recovery_pending"}}
+
+
+def _free_space_check(package_id: str, needed: int, library: Path) -> None:
+    """Refuse a download that would not fit. `needed` is what is still to fetch (what a resumable
+    run already staged is not counted twice); the Mac keeps `STOP_BYTES` free afterwards, the point
+    where it would stop accepting work."""
+    from . import disk_governor
+    try:
+        free = disk_governor.disk_usage(library).free
+    except OSError:
+        return                                  # cannot tell: the downloader fails by itself if it must
+    margin = disk_governor.STOP_BYTES
+    if free < needed + margin:
+        raise InsufficientDiskSpace(
+            f"Not enough free disk space to download {package_id}: it needs about {needed / 1e9:.1f} GB "
+            f"and this Mac keeps {margin / 1e9:.0f} GB free for working room, but only {free / 1e9:.1f} GB is free. "
+            f"Free some space (or choose a model library on a larger disk) and try again. Nothing was downloaded.")
+
+
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
           sources: dict | None) -> dict:
     from components import model_packages
@@ -131,6 +159,7 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
         total_bytes = sum(int(f.get("size") or 0) for f in manifest.get("files", []))
         staging = str(Path(library).expanduser().resolve() / ".studiohub" / "staging"
                       / f"{package_id}-{model_packages.manifest_digest(manifest)}")
+        _free_space_check(package_id, max(0, total_bytes - _dir_bytes(staging)), Path(library))
         run_id = uuid.uuid4().hex
         root = data_dir() / "model-download-runs" / run_id
         root.mkdir(parents=True, mode=0o700)

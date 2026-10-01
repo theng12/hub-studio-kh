@@ -8,6 +8,7 @@ worker Studios' own protected cleanup APIs.
 
 import json
 import asyncio
+import shutil
 import threading
 from pathlib import Path
 
@@ -24,9 +25,14 @@ from .registry import DATA_DIR
 _MUTATION_LOCK = threading.RLock()
 
 SETTINGS_FILE = DATA_DIR / "job_storage_settings.json"
-POLICY_VERSION = 2
-DEFAULT_MAX_BYTES = 80 * 1024 ** 3
-DEFAULT_RETENTION_DAYS = 30
+POLICY_VERSION = 3
+# The same output policy as everything else (3 days / 20 GB), and a share of the disk where that is
+# smaller: 80 GB was a third of a 256 GB node. `LEGACY_*` are the values before version 3.
+DEFAULT_MAX_BYTES = 20 * 1000 ** 3
+DEFAULT_MAX_FRACTION = 0.08
+DEFAULT_RETENTION_DAYS = 3
+LEGACY_MAX_BYTES = 80 * 1024 ** 3
+LEGACY_RETENTION_DAYS = 30
 MIN_MAX_BYTES = 1 * 1024 ** 3
 MAX_MAX_BYTES = 1000 * 1024 ** 3
 
@@ -39,14 +45,32 @@ def _write(value: dict) -> None:
     partial.replace(SETTINGS_FILE)
 
 
+def default_max_bytes() -> int:
+    """min(20 GB, 8% of this disk), never below the smallest limit the setting accepts."""
+    try:
+        total = shutil.disk_usage(DATA_DIR).total
+    except OSError:
+        return DEFAULT_MAX_BYTES
+    return max(MIN_MAX_BYTES, min(DEFAULT_MAX_BYTES, int(total * DEFAULT_MAX_FRACTION)))
+
+
 def _read() -> dict:
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         saved = {}
-    maximum = saved.get("max_bytes", DEFAULT_MAX_BYTES)
+    try:
+        policy_version = int(saved.get("policy_version", 1))
+    except (TypeError, ValueError, AttributeError):
+        policy_version = 1
+    migrate = (policy_version < POLICY_VERSION and bool(saved)
+               and saved.get("retention_days", LEGACY_RETENTION_DAYS) == LEGACY_RETENTION_DAYS
+               and saved.get("max_bytes", LEGACY_MAX_BYTES) == LEGACY_MAX_BYTES)
+    if migrate:                     # the old defaults, never chosen: read as the new ones
+        saved = {"enabled": saved.get("enabled", True)}
+    maximum = saved.get("max_bytes", default_max_bytes())
     if not isinstance(maximum, int) or not MIN_MAX_BYTES <= maximum <= MAX_MAX_BYTES:
-        maximum = DEFAULT_MAX_BYTES
+        maximum = default_max_bytes()
     retention = saved.get("retention_days", DEFAULT_RETENTION_DAYS)
     if not isinstance(retention, int) or retention not in {1, 3, 7, 15, 30, 90}:
         retention = DEFAULT_RETENTION_DAYS
@@ -55,13 +79,13 @@ def _read() -> dict:
         "max_bytes": maximum,
         "retention_days": retention,
     }
-    try:
-        policy_version = int(saved.get("policy_version", 1))
-    except (TypeError, ValueError):
-        policy_version = 1
-    if policy_version < POLICY_VERSION and value["retention_days"] == 3:
-        value["retention_days"] = DEFAULT_RETENTION_DAYS
+    if migrate:
         _write(value)
+        try:
+            from . import transcription_jobs
+            transcription_jobs.set_retention(value["retention_days"])
+        except Exception:
+            pass
     return value
 
 

@@ -28,7 +28,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from components import shelved_models
-from . import output_storage, standalone_config
+from . import disk_governor, output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
 from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
@@ -424,6 +424,30 @@ def shelve_installed_models() -> list[str]:
     """At start-up, a Mac that is not marked keep-all moves its installed shelved models to the Trash Folder."""
     return shelved_models.shelve_installed(_model_library(), _model_catalog().values(),
                                            output_storage.trash_root(), _keep_all_models())
+
+
+def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
+    """What the disk governor needs from this Hub: its folders, the catalog, the settings, the machines."""
+    from . import model_downloads
+    from .backend import job_storage, release_delta
+    try:
+        library: Path | None = _model_library()
+    except ValueError:
+        library = None                          # no library to verify against: no model orphan is judged
+    try:
+        manifests = [item for item in _model_catalog().values() if not item.get(_MANIFEST_ERROR)]
+    except (ValueError, OSError):
+        manifests = []
+    roots = [Path(root) for worker in monitor.registry if worker.get("local") is True
+             for root in worker.get("managed_output_roots", []) if isinstance(root, str) and root]
+    return disk_governor.Context(
+        data_dir=ledger.DATA_DIR,
+        base_dir=ledger.DATA_DIR.parent if ledger.DATA_DIR.name == "hub" else None,
+        library=library, manifests=manifests, app_root=release_delta.installed_app_root(),
+        machines={worker.get("machine", "local") for worker in monitor.registry if worker.get("local") is True},
+        output_roots=roots, settings=standalone_config.load_device_settings()["effective"],
+        running_staging=model_downloads.running_staging,
+        spool_limit=lambda: job_storage._read()["max_bytes"], spool_enforce=job_storage.enforce_budget)
 
 
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
@@ -1096,6 +1120,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
+                # The disk governor takes its turn in the same thread: start-up first, then every pass.
+                after_sweep=lambda first: disk_governor.sweep(_disk_context(monitor), startup=first),
             )
             monitor.start()
             # Mint the fleet credential at startup, rather than lazily on the first request that
@@ -1153,7 +1179,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # loopback-only instead of discovering it as a timeout.
         return {"ok": True, "workers": len(monitor.registry),
                 "role": control_plane.load_settings()["role"], "bind": _bind_facts(),
-                "update_draining": update_drain.draining()}
+                "update_draining": update_drain.draining(), "disk": disk_governor.snapshot()}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
@@ -1236,7 +1262,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # The version travels with the host snapshot because it is what tells an operator
         # whether a node is running the build they think it is, and a snapshot is the only
         # thing a controller has to go on for a Mac it does not own.
-        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version()}
+        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
+                "disk": host.get("disk")}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -1503,6 +1530,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"),
+                "disk": host.get("disk"),
                 "chip": host.get("chip"),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
@@ -1537,7 +1565,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "detail": member.get("detail"),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
-                "disk_total_gb": host.get("disk_total_gb"), "chip": host.get("chip"),
+                "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
+                "chip": host.get("chip"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,
@@ -2137,6 +2166,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")
             return model_downloads.start(package_id=package_id, manifest=manifest,
                                          catalog=catalog, library=_model_library(), sources=sources)
+        except model_downloads.InsufficientDiskSpace as exc:
+            # 507, like the output-storage refusal: the disk is the reason, not the request.
+            raise HTTPException(507, str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(404, "unknown model package") from exc
         except (OSError, ValueError) as exc:

@@ -6,8 +6,11 @@ arbitrary local pathname into a deletion candidate.
 
 Cleanup never deletes an output.  It **moves** acknowledged, unleased output into the Trash Folder
 (`<data dir>/trash/<UTC date>/<batch>/`), a same-volume rename; a move that fails is skipped, never
-retried as a delete.  The Trash Folder empties itself: a dated folder older than `TRASH_DAYS` is
-removed, and that purge is the only hard delete here.  `max_bytes` counts live outputs only.
+retried as a delete.  An output nobody acknowledged is moved the same way once it is `UNACKED_DAYS`
+old (the Gateway never collected it; leased ones are never moved).  The Trash Folder empties itself:
+a dated folder older than `TRASH_DAYS` is removed, and the disk governor (`disk_governor.py`) also
+holds it to a size cap in physical bytes.  The hard deletes are that purge and, only when the disk is
+nearly full, `reclaim_acked`.  `max_bytes` counts live outputs only.
 """
 from __future__ import annotations
 
@@ -26,6 +29,8 @@ from pathlib import Path
 from .backend import ledger
 
 TRASH_DAYS = 15
+# An output the Gateway never acknowledged is not kept for ever: after this long it moves to the Trash Folder.
+UNACKED_DAYS = 7
 # Where a managed output root that is on another volume than the Hub's data folder keeps its own
 # Trash Folder: inside the root itself, so the move is always a same-volume rename.
 FALLBACK_TRASH_NAME = ".studiohub-trash"
@@ -120,7 +125,7 @@ _TRASH_SIZE: tuple[float, int] = (0.0, 0)
 
 
 def trash_bytes(max_age: float = 0.0) -> int:
-    """Disk used by the Trash Folder, for the storage screen.
+    """Disk used by the Trash Folder (physical bytes), for the storage screen.
 
     A replaced app can sit in it (about 90,000 files), so the screen, which asks on every preview,
     passes `max_age` to reuse a recent walk instead of stat-ing them all again.
@@ -128,14 +133,15 @@ def trash_bytes(max_age: float = 0.0) -> int:
     global _TRASH_SIZE
     if max_age and time.monotonic() - _TRASH_SIZE[0] < max_age:
         return _TRASH_SIZE[1]
-    total = 0
+    from . import disk_governor
+    # Physical bytes: an APFS clone (a previous app copy) shares its blocks with the live app, so
+    # its logical size is not what the disk gives back by emptying it.
+    now, total = time.time(), 0
     for day in _trash_days():
-        for base, _, names in os.walk(day):
-            for name in names:
-                try:
-                    total += os.lstat(os.path.join(base, name)).st_size
-                except OSError:
-                    pass
+        try:
+            total += sum(disk_governor.cached_physical(entry, now) for entry in day.iterdir())
+        except OSError:
+            continue
     _TRASH_SIZE = (time.monotonic(), total)
     return total
 
@@ -435,6 +441,12 @@ def _reconcile(conn, machine: str | None = None) -> None:
             conn.execute("UPDATE output_groups SET state='finalized',recoverable=0 WHERE id=?", (group_id,))
 
 
+def _collectable(row, now: float) -> bool:
+    """May the ordinary rules move this group? Acknowledged, or unacknowledged for UNACKED_DAYS; never leased."""
+    return (row["state"] == "finalized" and row["reader_leases"] == 0 and row["transfer_leases"] == 0
+            and (row["receipt_acked_at"] is not None or row["generated_at"] < now - UNACKED_DAYS * 86400))
+
+
 def preview(*, machine: str, max_bytes: int, retention_days: int,
             enabled: bool = True, now: float | None = None,
             managed_output_roots: object = None, minimum_free_bytes: int = 0) -> dict:
@@ -458,8 +470,7 @@ def preview(*, machine: str, max_bytes: int, retention_days: int,
     for row in rows:
         key = (row["device"], row["inode"])
         physical[key] = max(physical.get(key, 0), row["bytes"])
-        eligible = (enabled and row["state"] == "finalized" and row["receipt_acked_at"] is not None
-                    and row["reader_leases"] == 0 and row["transfer_leases"] == 0)
+        eligible = enabled and _collectable(row, now)
         if not eligible:
             protected[key] = max(protected.get(key, 0), row["bytes"])
         else:
@@ -509,14 +520,14 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
         cutoff = now - retention_days * 86400
         with ledger._conn() as conn:
             rows = conn.execute("""SELECT * FROM output_groups WHERE machine=? AND state='finalized'
-              AND receipt_acked_at IS NOT NULL AND reader_leases=0 AND transfer_leases=0
-              ORDER BY generated_at ASC""", (machine,)).fetchall()
+              AND (receipt_acked_at IS NOT NULL OR generated_at < ?)
+              AND reader_leases=0 AND transfer_leases=0
+              ORDER BY generated_at ASC""", (machine, now - UNACKED_DAYS * 86400)).fetchall()
             used = result["used_bytes"]
             deleted = freed = 0                 # `deleted` keeps its name: files taken out of live output
             for group in rows:
                 current = conn.execute("SELECT * FROM output_groups WHERE id=?", (group["id"],)).fetchone()
-                if (current is None or current["state"] != "finalized" or current["receipt_acked_at"] is None
-                        or current["reader_leases"] or current["transfer_leases"]):
+                if current is None or not _collectable(current, now):
                     continue
                 if group["generated_at"] >= cutoff and used <= max_bytes:
                     continue
@@ -548,6 +559,60 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
                         enabled=enabled, now=now, managed_output_roots=managed_output_roots,
                         minimum_free_bytes=minimum_free_bytes)
         return final | {"deleted": deleted, "freed_bytes": freed}
+
+
+def reclaim_acked(*, machine: str, min_age_seconds: float, done, now: float | None = None) -> tuple[int, int]:
+    """Give disk space back by DELETING acknowledged outputs, oldest first, until `done()` says enough.
+
+    Only the disk governor calls this, in amber and red: the Gateway already holds the delivered copy,
+    and a move into the Trash Folder would free nothing.  Never an unacknowledged, leased or
+    uncertain output, and never one younger than `min_age_seconds`; every file is re-checked against
+    its recorded identity and checksum first, exactly as `enforce` does before it moves one.
+    Returns (bytes freed, files deleted).
+    """
+    freed = files = 0
+    with _LOCK:
+        _schema()
+        now = time.time() if now is None else float(now)
+        with ledger._conn() as conn:
+            _reconcile(conn, machine)
+            rows = conn.execute("""SELECT id FROM output_groups WHERE machine=? AND state='finalized'
+              AND receipt_acked_at IS NOT NULL AND reader_leases=0 AND transfer_leases=0
+              AND generated_at<=? ORDER BY generated_at ASC""", (machine, now - min_age_seconds)).fetchall()
+            for row in rows:
+                if done():
+                    break
+                group = conn.execute("SELECT * FROM output_groups WHERE id=?", (row["id"],)).fetchone()
+                if (group is None or group["state"] != "finalized" or group["receipt_acked_at"] is None
+                        or group["reader_leases"] or group["transfer_leases"]):
+                    continue
+                for file in conn.execute("SELECT * FROM output_files WHERE group_id=? AND present=1",
+                                         (group["id"],)).fetchall():
+                    state, info, _ = _inspect(Path(file["path"]), [Path(file["managed_root"])])
+                    if state == "missing":
+                        conn.execute("UPDATE output_files SET present=0 WHERE id=?", (file["id"],))
+                        continue
+                    try:
+                        sound = (state == "ok" and info is not None and _same_file(info, file)
+                                 and _sha256(Path(file["path"])) == file["sha256"])
+                    except OSError:
+                        sound = False
+                    if not sound:
+                        conn.execute("UPDATE output_groups SET state='uncertain' WHERE id=?", (group["id"],))
+                        continue
+                    try:
+                        os.unlink(file["path"])
+                    except OSError:
+                        continue
+                    conn.execute("UPDATE output_files SET present=0 WHERE id=?", (file["id"],))
+                    files += 1
+                    if conn.execute("SELECT 1 FROM output_files WHERE device=? AND inode=? AND present=1",
+                                    (file["device"], file["inode"])).fetchone() is None:
+                        freed += info.st_size
+                if conn.execute("SELECT 1 FROM output_files WHERE group_id=? AND present=1",
+                                (group["id"],)).fetchone() is None:
+                    conn.execute("UPDATE output_groups SET state='deleted' WHERE id=?", (group["id"],))
+    return freed, files
 
 
 # How long an admission answer may be reused. The scheduler asks this question for every queued item
@@ -628,14 +693,19 @@ def acquire_transfer(*, batch_id: str, item_index: int):
     return _acquire_lease(batch_id=batch_id, item_index=item_index, column="transfer_leases")
 
 
-def start_background(machine_provider, settings_provider) -> None:
-    """Run the shared sweep inside the Hub process; no second service is created."""
+def start_background(machine_provider, settings_provider, after_sweep=None) -> None:
+    """Run the shared sweep inside the Hub process; no second service is created.
+
+    `after_sweep(first)` is the disk governor's turn, once per pass (`first` is True for the start-up
+    pass, which runs immediately): it reads free space and reclaims, so a Mac that is filling is
+    handled on this timer and not only when a job is submitted."""
     global _STARTED
     with _START_LOCK:
         if _STARTED:
             return
         _STARTED = True
     def loop() -> None:
+        first = True
         while True:
             settings = settings_provider()["effective"]
             for machine in machine_provider():
@@ -645,5 +715,11 @@ def start_background(machine_provider, settings_provider) -> None:
                             enabled=settings["cleanup_enabled"])
                 except Exception:
                     pass
+            if after_sweep is not None:
+                try:
+                    after_sweep(first)
+                except Exception:
+                    log.exception("disk governor pass failed (continuing)")
+            first = False
             time.sleep(settings["cleanup_interval_seconds"])
     threading.Thread(target=loop, name="hub-output-cleanup", daemon=True).start()
