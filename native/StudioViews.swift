@@ -2013,17 +2013,32 @@ struct StudioContent: View {
         }
     }
 
+    /// Connected, and the Hub publishes no video model: the state of every Hub since LTX-2.3 was
+    /// retired. Not connected is a different state (the setup banner covers it).
+    private var noVideoModel: Bool { connected && workspace.supportedModels(for: .video).isEmpty }
+
     /// Video generation, laid out like Music: the form on the left, the lane's own history on
     /// the right. Every drop-down is built from the selected model's `lane_contract`, so the page
     /// cannot offer an option its worker would refuse — and a model that publishes no geometry
     /// control gets a prompt-only form rather than an invented ladder.
     private var videoWorkspace: some View {
         VStack(alignment: .leading, spacing: 20) {
-            heading("Video Studio", "Generate a clip locally with this Mac's published video model.")
+            heading("Video Studio", noVideoModel
+                    ? "There is no video model in this version."
+                    : "Generate a clip locally with this Mac's published video model.")
             if !connected { setup }
             HSplitView {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        // The local video model (LTX-2.3) was retired, so a Hub publishes no video
+                        // model at all. That is a plain state, not a fault: say so once, above the
+                        // form, rather than showing an empty picker and a button that cannot work.
+                        if noVideoModel {
+                            Label("No video model is available. The local video model was retired because its clips were not good enough. Clips you made earlier are still listed on the right.",
+                                  systemImage: "film")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Prompt").font(.callout)
                             TextEditor(text: $workspace.videoPrompt)
@@ -2113,11 +2128,13 @@ struct StudioContent: View {
                             Text(note).font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Divider().padding(.top, 8)
-                        Text("Image-to-video is driven from Story Studio, which owns the scene images: it uploads the exact scene and submits the animation here. This page is the lane's own text-to-video surface.")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Manage Video Models") { modelFilter = "Video"; studio.select(.models) }
+                        if !noVideoModel {
+                            Divider().padding(.top, 8)
+                            Text("Image-to-video is driven from Story Studio, which owns the scene images: it uploads the exact scene and submits the animation here. This page is the lane's own text-to-video surface.")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Manage Video Models") { modelFilter = "Video"; studio.select(.models) }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.trailing, 20).padding(.bottom, 20)
@@ -2853,7 +2870,9 @@ struct StudioContent: View {
                 if models.isEmpty {
                     Text(function == .audio
                          ? (connected ? workspace.audioMode.emptyReason : "Start the services to load available models.")
-                         : (connected ? "No compatible model is available for this workspace yet." : "Start the services to load available models."))
+                         : (connected
+                            ? (function == .video ? "No video model is available." : "No compatible model is available for this workspace yet.")
+                            : "Start the services to load available models."))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

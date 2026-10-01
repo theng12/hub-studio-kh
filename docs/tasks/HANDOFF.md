@@ -2321,10 +2321,18 @@ measured; the receipts are in `qualification/` and the gateway's own receipts ar
    .build/voice-runtime/bin/python3 -B packaging/stage_voice.py \
      --runtime .build/voice-runtime --native-shell .build/StudioHub \
      --image-runtime .build/image-runtime-mflux020 \
-     --video-runtime .build/video-runtime \
      --yue2-runtime .build/yue2-runtime \
      --output ".build/StudioHub-<n>/Studio Hub.app"
    ```
+
+   **LTX-2.3 video is retired (owner, 2026-10-01), so there is no `--video-runtime` here any more.**
+   While `ltx-2-3-22b-ram-12gb-mlx` is on `components/retired_models.py`, `stage()` ignores the flag
+   (it prints a NOTE) and the release has **no `video` component** - no `runtimes/video` (517 MB), no
+   `video_worker.py`, no `components/video` - which is correct: a Video worker whose one manifest is
+   retired would stop the whole Hub at start-up. The YuE2 runtime used to be staged *inside* the Video
+   stager and is now staged by Music's (`--yue2-runtime` alone is enough). The Hub's installer table
+   (`runtimePaths`) still knows `video`, so a release with or without it installs; the BRIDGE label
+   in `_stage_video` stays until no Mac runs < 0.6.121. The paragraph below describes the pre-retirement build.
 
    **Corrected 2026-09-28.** This line showed only `--image-runtime` and `--music-runtime`, so
    following it would have produced a bundle with **no Video lane at all** — the three flags above

@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — 2026-10-01 · LTX-2.3 video is retired; the release ships no Video worker (VERSION not bumped; the coordinator bundles it)
+
+Owner: LTX-2.3 is "bad quality, can't use it" - retired exactly like Lance (0.6.120) and ACE-Step 1.5 (0.6.116), by one line in
+`components/retired_models.py`: `ltx-2-3-22b-ram-12gb-mlx` and `baa-ai/LTX-2.3-22B-RAM-12GB-MLX` (LTX-2.3 22B MLX mixed 2-8 bit, RAM-12GB).
+- **Gemma is NOT retired** (coordinator, 2026-10-01: the owner may reuse it as a chat model). `gemma-3-12b-it-4bit` (Gemma 3 12B 4-bit,
+  `mlx-community/gemma-3-12b-it-4bit`) stays in the catalog, kit listing and copy rules. Verified that nothing else used it as a text
+  encoder: the only `requires_packages` in `model-manifests/` was LTX's, and `VideoModel.requires` (video generation.py) the only code
+  reader. Chat is `qwen3-5-9b-4bit`; Music's `t5gemma` (Stable Audio 3) is a different checkpoint; Story/Gateway "gemma-4" ids are unrelated.
+  It is still engine `video-ltx` (so it is registered and routes), but no studio runs that engine now, so it appears in no picker (the
+  app builds pickers from the workers' catalogs) and a job for it is refused `STUDIO_NOT_RUNNING`.
+- **What "retired" does, from the one list:** never offered (catalog, kit listing, `release_kit`, `model_ids`, staged manifests), refused by
+  name (`MODEL_RETIRED`), dropped from the aggregate catalog a controller publishes even when a not-yet-updated node still reports it, skipped
+  by `copy_models_for_this_mac.py` (which also prunes it from a Mac that has it), dropped from the model record.
+- **No Video worker ships.** `stage_voice.stage()` ignores `--video-runtime` (NOTE printed) while the LTX package is retired, so the release
+  manifest has no `video` component: no `runtimes/video` (**517 MB**, the installed app 4.1 GB -> ~3.6 GB), no `video_worker.py`, no
+  `components/video`. A Video worker whose only manifest is retired would otherwise stop the whole Hub at start-up (`_video_spec`). The
+  Hub reports no video model, no `video.generation` capability, and refuses a video job with a named code (never a 500, never queued).
+  `components/video/`, `packaging/video-runtime/` and the LTX manifest stay in the repo, dormant, for a successor model; the manifest moved out of
+  `model-manifests/` (so no catalog, count or doc sees it) to `components/video/retired/ltx-2-3-22b-ram-12gb-mlx.json`, and its capture row left
+  `capture_model_manifests.py`.
+- **Trap fixed on the way:** the YuE2 runtime (`runtimes/music-yue2`, the sung-song engine, ~698 MB) was staged INSIDE `_stage_video`, after its
+  "no video runtime" early return - so a build without `--video-runtime` silently shipped Music with no sung songs. It is now staged by
+  `_stage_music` and recorded on `components.music` (it was `components.video.yue2_runtime_*`; nothing else read it). Also fixed: the
+  `--yue2-runtime` branch validated `video_runtime` instead of the YuE2 tree.
+- **Updates keep working both ways.** `ReleaseInstaller.verifyDeclaredComponents` (native/UpdateClient.swift) checks only the components a
+  manifest declares, and `runtimePaths` still lists `video`: an app accepts a release with or without Video (the 0.6.120 incident was a
+  release that DECLARED `video` to an installer that did not know it). The 0.6.121 BRIDGE label (`'runtime': 'voice'` in `_stage_video`) and
+  its test are untouched: today nothing declares `video`, so the label is dormant; keep it until no Mac runs < 0.6.121 in case Video returns.
+- **Native app:** the Video page, with no video model published, says so plainly ("No video model is available...") instead of an empty
+  picker and a dead Generate button; the Image-to-video blurb and "Manage Video Models" are hidden in that state. Earlier clips stay listed.
+- **Kit/docs:** kit listing 28 -> **27 packages, ~84.4 GB** (LTX 19.1 GB; Gemma's 8.1 GB stays), kit README / SSD-KIT-README / NODE-SETUP-CHECKLIST / runtime-contract / model-manifests README, model record
+  (`docs/model-benchmarks.md` regenerated; the LTX reading row removed, its evidence folders kept), HANDOFF stage command (no `--video-runtime`),
+  `docs/tasks/video-lane-plan.md` header.
+- **Tests:** `tests/test_video_retired.py` (real Hub app + the real catalog with no Video worker: package/catalog/capability routes, LTX absent,
+  Gemma present, refusals `MODEL_RETIRED` / `MODEL_NOT_PACKAGED` / not-ready for Gemma; a release without `video` spawns the other five
+  workers; installer table still knows `video`; Swift Video page state), `test_retired_models` (LTX ids + Gemma stays offered),
+  `test_voice_bundle` (retired Video not staged, YuE2 still is). Mutation-proved: removing the two ids fails three tests.
+- **A Mac sheds an installed retired model by itself:** new `retired_models.retire_installed()` (called at Hub start-up, beside the shelved
+  models' step) moves any installed retired package's folder (`<library>/<package id>`) into the self-cleaning Trash Folder
+  (`<data dir>/trash/<UTC date>/retired-models/`, purged after 15 days) - a same-volume rename, never a delete, a failed move is skipped and
+  retried at the next start. It applies to every id on the list (so a leftover ACE-Step / Lance folder goes too); Gemma is not on it.
+  (Before this, a retired model left on a Mac was only moved by the copy step's prune, into the library's own `_trash`.)
+- **Left for the coordinator when this ships:** move LTX (17.81 GiB) from each SSD's `model-library/` (the 517 MB `runtimes/video`
+  inside the old app copy goes away by itself with the app swap).
+
 ## 0.6.126 — 2026-10-01 · Long text-to-speech: even pauses between sections, short lines match their neighbours
 
 **Cause (owner: "it's glaring"; audit `_orchestra/audit-20260930/tts-samples`, 300 joins, every engine):** a long script is rendered as

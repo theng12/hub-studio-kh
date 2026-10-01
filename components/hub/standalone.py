@@ -450,6 +450,12 @@ def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
         spool_limit=lambda: job_storage._read()["max_bytes"], spool_enforce=job_storage.enforce_budget)
 
 
+def retire_installed_models() -> list[str]:
+    """At start-up, any installed retired model (`components/retired_models.py`) goes to the Trash Folder."""
+    from components import retired_models
+    return retired_models.retire_installed(_model_library(), output_storage.trash_root())
+
+
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
                  monitor: StudioMonitor,
                  lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -1115,6 +1121,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 moved = shelve_installed_models()
                 if moved:
                     print(f"[hub] moved shelved models to the Trash Folder: {', '.join(moved)}", flush=True)
+            except (OSError, ValueError):
+                pass
+            try:
+                retired = retire_installed_models()
+                if retired:
+                    print(f"[hub] moved retired models to the Trash Folder: {', '.join(retired)}", flush=True)
             except (OSError, ValueError):
                 pass
             output_storage.start_background(

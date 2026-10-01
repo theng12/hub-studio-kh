@@ -321,7 +321,7 @@ class EngineRowTests(unittest.TestCase):
     def test_a_lance_manifest_left_on_a_drive_is_not_a_video_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            ltx = json.loads((ROOT / "model-manifests/ltx-2-3-22b-ram-12gb-mlx.json").read_text())
+            ltx = json.loads((ROOT / "components/video/retired/ltx-2-3-22b-ram-12gb-mlx.json").read_text())
             (folder / "ltx.json").write_text(json.dumps(ltx))
             (folder / "lance.json").write_text(json.dumps(
                 {"package_id": "lance-3b-video-bf16", "engine": "video-lance",
