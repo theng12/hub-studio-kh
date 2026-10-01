@@ -36,6 +36,11 @@ SHARED_STUDIO_TOKEN_FILE = (
 )
 DEFAULT_HUB_PORT = 47873
 PEER_TTL_S = 12.0
+# How old a snapshot may get before the sweep reads it again. It must be well under PEER_TTL_S,
+# the age at which `dispatch_ready` stops trusting it: the sweep runs every monitor poll (5 s), so
+# refreshing only at the TTL left every remote Mac "not ready" for the last ~3 s of every ~15 s
+# cycle - a freed node sat idle, and the scarcest-first pool shrank, a fifth of the time.
+PEER_REFRESH_S = 6.0
 PEER_TIMEOUT_S = 5.0
 
 # Changes to the local fleet credential invalidate any peer response that began
@@ -160,7 +165,7 @@ _inflight = {"v": False}
 
 async def refresh(registry: list[dict], client: httpx.AsyncClient):
     """Refresh each remote machine's host+studio stats from its peer Hub.
-    TTL-guarded so it only actually hits the network every PEER_TTL_S. Safe to
+    TTL-guarded so it only actually hits the network once a snapshot is PEER_REFRESH_S old. Safe to
     fire-and-forget: an in-flight guard prevents overlap, and per-peer errors
     are swallowed so one slow machine can't break the sweep."""
     if _inflight["v"]:
@@ -168,7 +173,7 @@ async def refresh(registry: list[dict], client: httpx.AsyncClient):
     machines = _remote_machines(registry)
     now = time.time()
     stale = [m for m, studios in machines.items()
-             if now - _cache.get(m, (0, None))[0] >= PEER_TTL_S]
+             if now - _cache.get(m, (0, None))[0] >= PEER_REFRESH_S]
     if not stale:
         return
     _inflight["v"] = True
