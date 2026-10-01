@@ -15,6 +15,10 @@ for name in ("audioJobs", "imageJobs", "musicJobs"):
     needle = f"@Published private(set) var {name}: [NativeJob]"
     assert needle in text, f"{name} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {name}: [NativeJob]", 1)
+for name in ("controllerIdentity", "fleetOverview", "fleetNodes", "controllerReachable"):
+    needle = f"@Published private(set) var {name}:"
+    assert needle in text, f"{name} moved; update render_fixture_patch.py"
+    text = text.replace(needle, f"@Published var {name}:", 1)
 needle = "func imageData(for job: NativeJob) async throws -> Data {\n"
 assert needle in text, "imageData moved; update render_fixture_patch.py"
 text = text.replace(

@@ -90,6 +90,13 @@ struct PageRenderHarness {
             seedFixtures(studio.workspace, scratch: scratch)
         }
 
+        // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per
+        // role, with the Hub's identity and the fleet answers a Mac in that role would have. Needs the
+        // fixture seams: render-page.sh applies them with STUDIOHUB_RENDER_FIXTURES=1.
+        let roles: [String?] = (ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_ROLES"] ?? "")
+            .split(separator: ",").map { String($0) }
+        for role in (roles.isEmpty ? [nil] : roles) {
+        if let role { applyRole(role, to: studio.workspace) }
         for page in pages {
         studio.selection = page
         for size in sizes {
@@ -116,7 +123,7 @@ struct PageRenderHarness {
                 print("could not encode \(Int(size.0))x\(Int(size.1))")
                 continue
             }
-            let path = "\(output)/\(fileName(for: page))-\(Int(size.0))x\(Int(size.1)).png"
+            let path = "\(output)/\(fileName(for: page))\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1)).png"
             do {
                 try png.write(to: URL(fileURLWithPath: path))
                 print("wrote \(path)")
@@ -126,7 +133,33 @@ struct PageRenderHarness {
             window.orderOut(nil)
         }
         }
+        }
         try? FileManager.default.removeItem(at: scratch)
+    }
+
+    @MainActor private static func applyRole(_ role: String, to workspace: NativeWorkspaceStore) {
+        let wire = role.hasPrefix("node") ? "agent" : role
+        func decode<T: Decodable>(_ json: String) -> T {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try! decoder.decode(T.self, from: Data(json.utf8))
+        }
+        workspace.controllerIdentity = decode("""
+            {"settings": {"role": "\(wire)", "site_id": "site", "site_name": "Studio", "controller_id": "studio-mac-1503",
+                          "machine_name": "studio-mac-1503-m4-24-256", "database_mode": "sqlite"},
+             "readiness": {"ready": true}}
+            """)
+        workspace.controllerAddress = wire == "agent" ? "100.64.0.12:47873" : ""
+        workspace.controllerReachable = wire == "agent" ? role != "node-offline" : nil
+        workspace.fleetOverview = decode("""
+            {"machines": [], "summary": {"total": 0, "reachable": 0, "unreachable": 0}, "role": "\(wire)",
+             "controller": \(wire == "agent" ? "{\"machine\": \"c\", \"label\": \"studio-mac-1500-m4-16-256-controller\", \"role\": \"controller\"}" : "null")}
+            """)
+        workspace.fleetNodes = decode("""
+            {"role": "\(wire)", "summary": {"total": 2, "reachable": 2, "unreachable": 0, "error": 0},
+             "nodes": [{"id": "a", "name": "node-a", "address": "x", "state": "reachable"},
+                       {"id": "b", "name": "node-b", "address": "y", "state": "reachable"}]}
+            """)
     }
 
     private static let longPrompts = [

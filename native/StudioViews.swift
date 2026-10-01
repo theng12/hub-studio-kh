@@ -1036,6 +1036,17 @@ struct StudioContent: View {
                         }
                         Spacer(minLength: 0)
                     }
+                    // Which Mac this is, and where it stands in its group. Both come from what the
+                    // app already reads (the Hub's identity and the fleet overview), so this adds no
+                    // request. The long names are cut to the sidebar and whole in the tooltip.
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(thisMachineName).font(.caption).fontWeight(.semibold)
+                            .lineLimit(1).truncationMode(.middle)
+                        Text(groupLine).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .help("\(thisMachineName)\n\(groupLine)")
+                    .accessibilityElement(children: .combine)
                     // What this Mac can actually take: one count per kind of generator it is
                     // running, so a worker that failed to start is visible here.
                     if !generatorSummary.isEmpty {
@@ -5863,6 +5874,36 @@ struct StudioContent: View {
         case "controller": return .blue
         case "agent": return workspace.controllerReachable == true ? .green : .orange
         default: return .secondary
+        }
+    }
+
+    /// This Mac's own name. The label the owner set is authoritative (the Hub reports it as
+    /// `machine_name`, and falls back to the hostname itself when none is set); the computer's name
+    /// is only a last resort for a Hub that has not answered.
+    private var thisMachineName: String {
+        let label = workspace.controllerIdentity?.settings.machineName
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? (Host.current().localizedName ?? "This Mac") : label
+    }
+
+    /// Where this Mac stands: "Node · joined <controller>" (with "(offline)" when that controller is
+    /// not answering — the name is the last one the roster gave), "Controller · 3 nodes", or
+    /// "Standalone". The controller's name is its own label from the overview this Mac already reads,
+    /// and the address it was joined at only if that has never been read.
+    private var groupLine: String {
+        switch workspace.controllerIdentity?.settings.role {
+        case "controller":
+            let count = workspace.fleetNodes?.nodes.count ?? 0
+            return "Controller · \(count) \(count == 1 ? "node" : "nodes")"
+        case "agent":
+            let address = workspace.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = workspace.fleetOverview?.controller?.label
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let shown = (name?.isEmpty == false ? name : nil) ?? (address.isEmpty ? nil : address)
+            guard let shown else { return "Node · not joined" }
+            return "Node · joined \(shown)" + (workspace.controllerReachable == false ? " (offline)" : "")
+        case "standalone": return "Standalone"
+        default: return "Not reporting"
         }
     }
 
