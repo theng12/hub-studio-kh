@@ -3,7 +3,25 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.125** (merged into `implementation/voice-runtime` + `main`; DMG built; installed on this Mac by its own self-update; the four SSDs refreshed) over **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; 2026-10-01).
+Last updated: **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.126 - even TTS pauses + short-line level match (from `fix/tts-join-pauses`, code commit `a61c2f0`; NOT installed, NOT published).**
+> Owner: "it's glaring". Cause and fix are in `CHANGELOG.md` 0.6.126: `generation._join_long_form_wavs` (every engine) wrote each
+> section whole then added the designed pause, and every engine returns up to ~1.2 s of near-silence at section edges, so joins
+> were median ~1.0 s vs 0.12-0.6 s designed. Now each section is cut to its speech + pad (`_analyse_join_section`, `_join_cut`,
+> `_JOIN_*` constants), the zeros are designed pause minus the pads, and sections with < 4 s voiced audio are level-matched
+> (`_join_match_gains_db`, +/-6 dB, soft-knee peak guard). Pause values (`join_pause_seconds`, OmniVoice/Qwen 1.7B paragraph/sentence/soft)
+> are unchanged. The Qwen3 1.7B Base audit flag `private_edge_destructive_trim` stays False (only near-silence is cut). Proof on the
+> audit's real clips: `_orchestra/audit-20260930/join-fix/` (`results.txt`, `rejoin_demo.py`): median gap 0.85 s -> 0.14 s, worst 2.92 -> 0.60 s,
+> after-minus-designed p95 30 ms / worst 60 ms; worst short-section step 7.3 -> 2.0 dB. No live Hub generation was run for the proof.
+> **Gate:** `unittest discover -s tests` -> **1633 tests, OK (13 skipped), 662 s, exit 0**; `components/voice` pytest (`PYTHONPATH=../../.build/test-deps:../..`,
+> hub-gate python) -> **777 passed, 2 skipped**, incl. 11 new `test_long_form_join_edges.py` (7 fail on 0.6.125's joiner). `native/build.sh` NOT re-run: no
+> native/Swift change, the staged native binary is the same as 0.6.125's (the owner can re-run it). **DMG** `dist/StudioHub-0.6.126-a61c2f0.dmg`
+> (1,567,211,662 B, SHA-256 `392d99d6c3388cd11063c3be8dda37e1ed9018bcf85a5821a731f8d5c021309e`, `hdiutil verify` valid, `bytes-wasted: 0`; the first output with
+> 394 MB dead space is `_trash/dist/StudioHub-0.6.126-a61c2f0-wasted394MB.dmg`; built with `.build/make-dmg-noprune.sh` so no kit drive was touched, the 0.6.125 DMG
+> moved to `_trash/dist/`). Stage `.build/StudioHub-0126/Studio Hub.app` (manifest `0.6.126` / `a61c2f0...`); delta vs 0.6.125 is 12 small files
+> (voice `generation.py` / `CHANGELOG.md` / `VERSION`, `Info.plist`, `release-manifest.json`, `release-notes.md`, file-manifest); runtimes and native binary identical.
+> **Rollout (owner OK needed first):** this Mac -> one controller -> rest; `_orchestra/audit-20260930/update-0120/diag/publish-local-0126.py` is prepared, NOT run.
 
 > **0.6.125 - macOS free memory + measure-anyway runner (merged from `fix/macos-free-memory`, no squash; the 0.6.121 video bridge label is unchanged).**
 > `components/host_memory.py` is now the ONE answer to "what can a new job use?" (Hub `resources.host_stats`, Voice `_memory_snapshot`
