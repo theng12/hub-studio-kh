@@ -28,7 +28,7 @@ class JobRowTests(unittest.TestCase):
         self.assertIn('items", String(job.itemIndex), "retry"', API)
 
     def test_the_meta_line_names_the_machine(self):
-        meta = body(VIEWS, "private func jobMetaLine", 1800)
+        meta = body(VIEWS, "private func jobMetaParts", 1800)   # builds the line jobMetaLine draws
         self.assertIn("job.machine", meta)
         self.assertIn("fleetMachineName", meta)
 

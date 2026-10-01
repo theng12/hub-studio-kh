@@ -5209,17 +5209,15 @@ struct NativeAPITests {
                 "the installed build must become the current one so the banner clears")
         require(updateStore.currentAppVersion == "0.6.50",
                 "the installed version must become the current one too")
-        // Everything under Updates/ - the installed download and the older one - moved to the Trash
-        // Folder (a dated subfolder) rather than being deleted or left to build up.
-        let trashedNames = (FileManager.default.enumerator(at: hubTrash, includingPropertiesForKeys: nil)?
-            .compactMap { ($0 as? URL)?.lastPathComponent }) ?? []
-        require(trashedNames.contains("older.dmg") && trashedNames.contains(shaDescriptor.filename),
-                "a completed install must move every stored download to the Trash Folder: \(trashedNames)")
+        // Everything under Updates/ - the installed download and the older one - is deleted at once
+        // (0.6.127 disk governor: a 1.9 GB copy of an app that is already installed is not worth the
+        // Trash Folder's 15 days), so nothing is left and nothing goes to the Trash Folder.
         require(((try? FileManager.default.contentsOfDirectory(atPath: updatesFolder.path)) ?? []).isEmpty,
                 "nothing may be left under Updates/ after a completed install")
-        let dated = (try? FileManager.default.contentsOfDirectory(atPath: hubTrash.path)) ?? []
-        require(dated.count == 1 && dated[0].range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
-                "the Trash Folder must be filed under a UTC date the Hub's purge recognises: \(dated)")
+        require(!FileManager.default.fileExists(atPath: olderDownload.path),
+                "the older download an earlier attempt left must be deleted too")
+        require(!FileManager.default.fileExists(atPath: hubTrash.path),
+                "a completed install deletes the stored downloads; it no longer files them in the Trash Folder")
 
         // A kept partial file is found again and resumed with a Range request, completing to the
         // exact signed artifact. The Range header sent is asserted, and the bytes the swap sees.

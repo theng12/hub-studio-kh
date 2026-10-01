@@ -76,9 +76,8 @@ class GenerationTimeTests(unittest.TestCase):
                               f"{row} must draw the shared row line, which is where the generation "
                               "time - and the date - are rendered")
         # And the line itself has to keep showing what this file exists for.
-        line = VIEWS[VIEWS.index("private func jobMetaLine"):
-                     ]
-        line = line[:line.index("\n    private func", 10)]
+        # (The line's text is built by `jobMetaParts`, which sits just above `jobMetaLine`.)
+        line = VIEWS[VIEWS.index("private func jobMetaParts"):VIEWS.index("private func jobMetaLine") + 1500]
         self.assertIn("generationSuffix", line, "the shared row line must show the generation time")
 
     def test_the_dispatcher_routes_every_function_with_a_job_history_to_a_row(self) -> None:
