@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.125 — 2026-10-01 · The Hub's "free memory" matches what macOS can give; the 8 GB TTS runner measures held models (branch `fix/macos-free-memory`; not yet built or installed)
+## 0.6.125 — 2026-10-01 · The Hub's "free memory" matches what macOS can give; the 8 GB TTS runner measures held models
 
 **Cause (real 8 GB Mac "1101", Hub 0.6.122):** the Hub held Qwen3-TTS 0.6B 8-bit ~11 min ("waiting for memory: needs ~3.2GB, ~3.0GB
 free") on a Mac macOS itself called healthy (pressure normal, swap 0). `host_stats()["available_gb"]` was psutil's `available`,

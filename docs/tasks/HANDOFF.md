@@ -3,9 +3,9 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.125** on branch `fix/macos-free-memory` (not built/installed; see the first block) over **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; 2026-10-01).
+Last updated: **0.6.125** (merged into `implementation/voice-runtime` + `main`; DMG built; installed on this Mac by its own self-update; the four SSDs refreshed) over **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; 2026-10-01).
 
-> **0.6.125 on branch `fix/macos-free-memory` (VERSION bumped; DMG/install/main NOT done - the coordinator rolls it out) - macOS free memory + measure-anyway runner.**
+> **0.6.125 - macOS free memory + measure-anyway runner (merged from `fix/macos-free-memory`, no squash; the 0.6.121 video bridge label is unchanged).**
 > `components/host_memory.py` is now the ONE answer to "what can a new job use?" (Hub `resources.host_stats`, Voice `_memory_snapshot`
 > + resource telemetry, the TTS runner): max(psutil available, free + file-backed + purgeable pages) - `kern.vm_page_free_target`,
 > capped at total - wired - compressor, via sysctl counters. Measured on this 32 GB Mac: `memory_pressure -Q` / `kern.memorystatus_level`
@@ -17,6 +17,22 @@ Last updated: **0.6.125** on branch `fix/macos-free-memory` (not built/installed
 > the guard lowered (0.5 GB, safety net: swap > 1.5 GB or urgent pressure), always restores it (`tts8-guard-restore.json` beside
 > `hub-ready.json` for a dead run), and recommends measured peak + 0.25 GB. The 3.2 GB floor is unchanged. The chat-tier and z-image
 > runners still use their own (stricter) figure; harmonise if their floors start refusing healthy Macs.
+
+> **Gate / DMG / delta / proof (2026-10-01):** `unittest discover` -> **1633 tests, OK (13 skipped), 590 s, exit 0**; `native/build.sh` green
+> (boundary, API contract, lifecycle). **Delta 0.6.124 -> 0.6.125: 13 files, 13 blobs, 1,179,980 B to send** (`host_memory.py` new, hub
+> `broker.py` / `memory_admission.py` / `resources.py` / `standalone.py`, voice `generation.py` / `main.py` / `resource_telemetry.py`,
+> `Info.plist`, `release-manifest.json`, `release-notes.md`, `voice/CHANGELOG.md`, `voice/VERSION`); 0 removed; totals 77,468 files,
+> 4,202,376,666 B (the native binary is byte-identical to 0.6.124's). **DMG** `dist/StudioHub-0.6.125-468713e.dmg` (1,570,469,646 B,
+> SHA-256 `5090e8fd0151204b0047f92fd4d53cb12d7a2351a0a84b23478d751f4726dfe7`, `hdiutil verify` valid, `bytes-wasted: 0`); the first output
+> carried 519 MB of dead space (kept as `_trash/dist/StudioHub-0.6.125-468713e-wasted519MB.dmg`), re-compacted with `hdiutil convert -format
+> UDZO`. Installable app: `.build/StudioHub-0125/Studio Hub.app` (manifest `0.6.125` / `468713e2c87cf152892824593a831fa25c5f82a6`).
+> **Proved on this Mac (live fleet location, `keep_all_models` true):** published to the LOCAL Hub only (delta push, 13 blobs); the app
+> updated itself with no click and no kill: published 16:19:35, Hub down 16:21:56, back on 0.6.125 at 16:22:11 (outage ~15 s, 2 min 36 s
+> from publish). `GET /api/hub/memory/admission?model=<repo>` answers (the `model` query is required); the Hub's `host.available_gb` read
+> 24.1 GB against psutil's 19.5 GB on the same instant (Mac idle, +4.6 GB of file cache psutil leaves out); the 8 GB runner `--quick`
+> (labelled "not 8 GB evidence") ran all three models (S2 55.9 / 95.6 / 71.4 s) and wrote the new columns; no shelved folder moved. The
+> four SSDs carry 0.6.125 (kit refresh + `kit_stamp_index.py`, rsync -acn clean, runner files identical, Story/Gateway checksums OK).
+> Nothing was published to any fleet controller.
 
 > **8 GB TTS runner - memory stall handling (kit-only, after 0.6.124, 2026-10-01; no app change, no version bump).** The owner's
 > real 8 GB Mac (node 1101, Hub 0.6.122) sat forever on Qwen3-TTS 0.6B 8-bit: the Hub holds a job back until
