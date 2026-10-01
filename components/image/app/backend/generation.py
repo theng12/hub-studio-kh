@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import gc
 import importlib
 import json
 import math
@@ -608,6 +609,40 @@ def peak_mlx_bytes() -> int | None:
         return int(module.get_peak_memory()) if module is not None else None
     except Exception:  # noqa: BLE001 - reporting must never fail a finished generation
         return None
+
+
+def _mlx_call(name: str) -> None:
+    """Call one memory function of an already-imported ``mlx.core``; never fails a job."""
+    module = _loaded_mlx()
+    function = getattr(module, name, None) if module is not None else None
+    if callable(function):
+        try:
+            function()
+        except Exception:  # noqa: BLE001 - a memory report/release is best effort
+            pass
+
+
+def start_mlx_measurement() -> None:
+    """Make the next ``peak_mlx_bytes`` this job's own peak, not the process's all-time maximum.
+
+    ``get_peak_memory`` only ever rises until reset, so every job after the heaviest one reported
+    that job's number in its receipt.
+    """
+    _mlx_call('reset_peak_memory')
+
+
+def release_mlx_memory() -> None:
+    """Hand the model's memory back to macOS after a job.
+
+    MLX keeps freed buffers in a cache for reuse - by default up to the whole memory limit - so
+    a model that was deleted still occupied (measured: a 6.4 GB array, freed, left 6.4 GB cached)
+    until `clear_cache`. On a 32 GB Mac that left ~22 GB resident after an idle default-mode image
+    job and starved the TTS or chat studio that ran next. This runs after the model object is
+    dropped (clearing first frees nothing: its buffers are still referenced) and in every
+    memory mode, not only when mflux registered a MemorySaver.
+    """
+    gc.collect()
+    _mlx_call('clear_cache')
 
 
 def model_class(model: ImageModel):
@@ -1211,6 +1246,7 @@ class GenerationManager:
                 # Pinned mflux 0.20.0 path, dispatched from the registry. ST-01's verified
                 # package adds one model/ prefix to every pack (see WEIGHTS_SUBDIRECTORY).
                 memory_saver = None
+                start_mlx_measurement()
                 instance = model_class(model)(
                     model_path=str(Path(model_folder) / WEIGHTS_SUBDIRECTORY), quantize=None,
                     lora_paths=None, lora_scales=None)
@@ -1225,13 +1261,8 @@ class GenerationManager:
                     # on the model and the saver holds the model, so without breaking that cycle
                     # the weights would outlive the job until a gc pass.
                     instance.callbacks = None
-                    mlx = _loaded_mlx()
-                    if memory_saver is not None and mlx is not None:
-                        try:
-                            mlx.clear_cache()
-                        except Exception:  # noqa: BLE001 - release is best effort
-                            pass
                     del instance, memory_saver, plan
+                    release_mlx_memory()
                 if not hasattr(result, 'save'):
                     raise RuntimeError('mflux did not return a GeneratedImage')
                 result.save(str(staged), overwrite=True)

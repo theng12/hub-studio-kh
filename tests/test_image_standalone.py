@@ -256,6 +256,53 @@ class ImageStandaloneTests(unittest.TestCase):
             self.assertEqual(GenerationManager(self.data, self.library, self.manifest,
                              RUNTIME_ID).get(job_id)['state'], 'error')
 
+    def test_a_job_gives_its_model_memory_back_and_reports_its_own_peak(self):
+        """Default mode (no MemorySaver) used to leave every freed weight in MLX's buffer cache -
+        ~22 GB resident on an idle 32 GB Mac - and `get_peak_memory` is an all-time maximum, so a
+        light job after a heavy one reported the heavy one's peak."""
+        import weakref
+        mlx = types.ModuleType('mlx.core')
+        state = {'peak': 0, 'resets': 0, 'clears': [], 'alive': []}
+        mlx.get_peak_memory = lambda: state['peak']
+
+        def reset_peak_memory():
+            state['resets'] += 1
+            state['peak'] = 0
+        mlx.reset_peak_memory = reset_peak_memory
+        modules = fake_mflux()
+        flux_module = modules['mflux.models.flux2.variants.txt2img.flux2_klein']
+        original = flux_module.Flux2Klein
+        peaks = iter((9_000_000_000, 2_000_000_000))
+
+        class Tracked(original):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                state['alive'].append(weakref.ref(self))
+
+            def generate_image(self, **kwargs):
+                state['peak'] = max(state['peak'], next(peaks))
+                return super().generate_image(**kwargs)
+        flux_module.Flux2Klein = Tracked
+        mlx.clear_cache = lambda: state['clears'].append(
+            [ref() is None for ref in state['alive']])
+        jobs = []
+        with (patch.dict(sys.modules, {**modules, 'mlx.core': mlx}),
+              patch('components.image.app.backend.main._host_eligibility',
+                    return_value={'eligible': True, 'macos': '26.6.2'})):
+            for _ in range(2):
+                response = self.client.post('/api/generate/txt2img', json=self.request(),
+                                            headers=self.headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                jobs.append(self.wait(response.json()['job']['id']))
+        self.assertEqual([job['state'] for job in jobs], ['done', 'done'])
+        self.assertEqual(state['resets'], 2, 'the peak must restart for every job')
+        self.assertEqual([job['peak_mlx_bytes'] for job in jobs],
+                         [9_000_000_000, 2_000_000_000],
+                         'the second job reported the first job\'s all-time peak')
+        self.assertEqual(len(state['clears']), 2, 'the cache must be cleared after every job')
+        self.assertTrue(all(all(flags) for flags in state['clears']),
+                        'the cache was cleared while the model was still referenced')
+
     def test_cancelled_generation_never_publishes_final_png(self):
         with (patch.dict(sys.modules, fake_mflux(save_delay=0.1)),
               patch('components.image.app.backend.main._host_eligibility',
