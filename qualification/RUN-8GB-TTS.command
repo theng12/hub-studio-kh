@@ -1,7 +1,7 @@
 #!/bin/sh
 # Double-click this to run the 8 GB text-to-speech test (Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit, OmniVoice bf16).
 #
-# Why this file exists: the same reason `RUN-8GB-Z-IMAGE.command` does. Finder has no application
+# Why this file exists: Finder has no application
 # bound to a `.sh`, so double-clicking `eight-gb-tts-run.sh` opens it in TextEdit and looks broken.
 # This wrapper is the thing to double-click; the real measurement stays in its own file so there is
 # one copy of it to keep correct.
