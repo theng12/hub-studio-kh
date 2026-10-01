@@ -16,8 +16,8 @@ Labels: **[M]** measured, **[I]** inference.
 Keep `RUN-8GB-IMAGE.command`, `eight-gb-image-run.sh`, `eight_gb_image_run.py` and `ssd_wear.py` together (the kit's Technical
 folder has all four). If Finder refuses the double-click ("unidentified developer"), right-click it > Open, once.
 
-This is the image twin of `RUN-8GB-TTS.command` and measures the same way. The older `RUN-8GB-Z-IMAGE.command` (mflux run directly,
-not through Studio Hub) is unchanged; its result is the comparison line in the summary.
+This is the image twin of `RUN-8GB-TTS.command` and measures the same way. It replaces the older `RUN-8GB-Z-IMAGE.command` (mflux run
+directly, not through Studio Hub), which is retired from the kit; that run's result is the comparison line in the summary.
 
 ## What it runs
 

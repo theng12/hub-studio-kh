@@ -128,8 +128,9 @@ without saying which kind it is.
 
 So that a future test does not become the thing you cannot remember:
 
-1. **Run the harness, not a guess.** Chat has `Technical/RUN-CHAT-TIER.command` on every kit
-   drive (double-click it); the 8 GB image run is `Technical/8gb-z-image-run.sh`.
+1. **Run the harness, not a guess.** The kit drives carry the 8 GB image run
+   (`Technical/RUN-8GB-IMAGE.command`) and the 8 GB voice run (`Technical/RUN-8GB-TTS.command`);
+   the chat-tier and LTX video harnesses live in the repo's `qualification/` folder only.
 2. **Keep what it wrote.** Each harness writes a folder of results next to itself. That folder
    *is* the evidence; a number pasted into a chat without it cannot be admitted.
 3. **Record the reading** in `qualification/model-readings.json`, naming the record in

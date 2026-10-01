@@ -123,7 +123,7 @@ Open the app's menu bar icon and choose **Open Engine Log**. Or run this and sen
 the result:
 
 ```
-sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/check-everything.sh"
+sh "/Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/Technical/verify-launch.sh"
 ```
 
 **Anything else.** Send me a photo of the screen, or the text. I will sort it.

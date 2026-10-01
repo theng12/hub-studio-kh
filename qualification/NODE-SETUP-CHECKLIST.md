@@ -24,7 +24,7 @@ failure here means the machine differs, not that the step is wrong.
 | 11 | **Image**, generate one image | An image appears |
 
 If any step fails, stop and send me: the step number, a photo of the screen, and the output of
-`sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/check-everything.sh"`.
+`sh "/Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/Technical/verify-launch.sh"`.
 
 ## Before the rest of the fleet
 
