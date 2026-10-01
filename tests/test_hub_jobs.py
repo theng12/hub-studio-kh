@@ -592,10 +592,13 @@ class HubJobProofTests(unittest.TestCase):
                 return batch
 
         cancelled = asyncio.run(cancel_after_acceptance())
+        # The worker cannot be interrupted, so the Hub waits for the answer it is already producing:
+        # the outcome is then known, the item is cancelled, and nothing is fenced.
         self.assertEqual([item["state"] for item in cancelled["items"]],
-                         ["uncertain", "cancelled"])
+                         ["cancelled", "cancelled"])
         self.assertEqual([item["tries"] for item in cancelled["items"]], [1, 0])
-        self.assertEqual(transcription_jobs.summary(cancelled)["status"], "uncertain")
+        self.assertEqual(transcription_jobs.summary(cancelled)["status"], "cancelled")
+        self.assertFalse(any(item.get("manual_action_required") for item in cancelled["items"]))
         time.sleep(.75)
         self.assertEqual((self.worker.transcription_posts, self.worker.transcription_completed), (2, 2))
         transcription_jobs.batches.clear()

@@ -268,8 +268,9 @@ def test_expired_image_lease_requests_cancel_and_keeps_original_fenced(
     assert studio["machine"] not in broker.busy_machines()
 
 
-def test_user_cancel_after_image_acceptance_does_not_claim_worker_stopped(
+def test_user_cancel_after_image_acceptance_without_a_worker_answer_stays_uncertain(
         fixture_monitor, no_delivery):
+    """The stop signal landed but the worker cannot be asked what became of it: truly unknown."""
     batch, item, studio = image_attempt(fixture_monitor)
     client = WorkerClient(response(200, {"job": accepted_response(studio)}))
     original_post = client.post
@@ -281,7 +282,7 @@ def test_user_cancel_after_image_acceptance_does_not_claim_worker_stopped(
 
     client.post = accepted_then_cancel
     asyncio.run(broker._run_item(client, batch, item, studio))
-    assert client.posts == 1 and client.deletes == 1
+    assert client.posts == 1 and client.deletes >= 1
     assert item["state"] == "uncertain" and item["studio_job_id"] == "worker-1"
     assert item["tries"] == 1 and item["retry_at"] is None
     assert studio["machine"] in broker.busy_machines()

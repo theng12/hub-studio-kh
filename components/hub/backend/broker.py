@@ -1748,6 +1748,50 @@ def batch_summary(b: dict) -> dict:
     }
 
 
+#: How long a cancelled image/music/video item may stay `cancel_requested` while its worker winds
+#: down before the outcome is called uncertain. An image render cannot be interrupted mid-step, so
+#: the worker answers `cancelled` only when the render ends (tens of seconds, minutes on an 8 GB
+#: Mac); music stops at once.
+CANCEL_CONFIRM_S = 600.0
+
+
+def _await_worker_cancel(batch: dict, item: dict, studio: dict, *, lease_expired: bool,
+                         cancel_confirmed: bool, phase: str) -> bool:
+    """Settle what a cancel means for an accepted image/music/video item.
+
+    **A confirmed stop signal is not an unknown outcome.** The worker took the DELETE and answers
+    `cancelled` (or `done`, if it finished first) when it has stopped, exactly as a Voice worker
+    does — so the item waits in `cancel_requested`, is polled to the worker's own terminal state,
+    and ends `cancelled` with the Mac released the moment the worker says so. Marking every such
+    cancel `uncertain` fenced the Mac for up to 30 minutes and filed a hold nobody could resolve
+    (audit 2026-10-01).
+
+    `uncertain` stays for the cases where the Hub truly cannot tell: the signal never landed, the
+    GenStudio lease expired, or the worker did not confirm within `CANCEL_CONFIRM_S`.
+    Returns True when the caller should keep polling.
+    """
+    if cancel_confirmed and not lease_expired and item.get("studio_job_id"):
+        since = item.setdefault("cancel_requested_at", time.time())
+        try:
+            waited = time.time() - float(since)
+        except (TypeError, ValueError):
+            waited = 0.0
+        if waited <= CANCEL_CONFIRM_S:
+            if item.get("state") != "cancel_requested":
+                item["state"] = "cancel_requested"
+                ledger.save_batch(batch)
+            return True
+        reason = (f"{batch['modality'].title()} cancellation was requested {phase}, but the worker "
+                  f"did not confirm it stopped within {int(CANCEL_CONFIRM_S)} s; the original "
+                  "worker outcome must be reconciled.")
+    else:
+        reason = (f"{batch['modality'].title()} cancellation was requested {phase}; "
+                  "the original worker outcome must be reconciled.")
+    if item.get("state") != "uncertain":
+        _mark_async_uncertain(item, studio, batch["modality"], reason)
+    return False
+
+
 async def _signal_worker_cancel(client: httpx.AsyncClient, item: dict) -> bool:
     """Ask the exact Studio worker to stop its active generation job."""
     studio_id = item.get("studio")
@@ -3853,14 +3897,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if not cancel_confirmed:
                 cancel_confirmed = await _signal_worker_cancel(client, item)
             if b["modality"] in DURABLE_ASYNC_MODALITIES and durable_post_attempted:
-                if item.get("state") != "uncertain":
-                    _mark_async_uncertain(
-                        item, studio, b["modality"],
-                        f"{b['modality'].title()} cancellation was requested after submission; "
-                        "the original worker outcome must be reconciled.",
-                    )
-                return
-            if b["modality"] == "voice" and item.get("studio_job_id"):
+                if not _await_worker_cancel(
+                        b, item, studio, lease_expired=lease_expired,
+                        cancel_confirmed=cancel_confirmed,
+                        phase="after submission"):
+                    return
+                # The worker took the stop signal: fall through and poll it to its own answer.
+            elif b["modality"] == "voice" and item.get("studio_job_id"):
                 if lease_expired:
                     return
                 if not cancel_confirmed:
@@ -3890,14 +3933,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if not cancel_confirmed:
                     cancel_confirmed = await _signal_worker_cancel(client, item)
                 if b["modality"] in DURABLE_ASYNC_MODALITIES:
-                    if item.get("state") != "uncertain":
-                        _mark_async_uncertain(
-                            item, studio, b["modality"],
-                            f"{b['modality'].title()} cancellation was requested after acceptance; "
-                            "the original worker outcome must be reconciled.",
-                        )
-                    return
-                if b["modality"] == "voice" and item.get("studio_job_id"):
+                    if not _await_worker_cancel(
+                            b, item, studio, lease_expired=lease_expired,
+                            cancel_confirmed=cancel_confirmed,
+                            phase="after acceptance"):
+                        return
+                elif b["modality"] == "voice" and item.get("studio_job_id"):
                     if lease_expired:
                         return
                     if not cancel_confirmed:
@@ -3951,7 +3992,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                         state=terminal_state,
                         error=str(j.get("error") or terminal_state)[:500],
                         error_code=str(
-                            j.get("error_code") or "WORKER_TERMINAL_ERROR"
+                            j.get("error_code")
+                            or ("CANCELLED" if terminal_state == "cancelled"
+                                else "WORKER_TERMINAL_ERROR")
                         )[:128],
                         finished_at=time.time(),
                         retry_at=None,
